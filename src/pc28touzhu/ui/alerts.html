@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>pc28touzhu 异常提醒</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Noto+Sans+SC:wght@400;500;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/assets/alerts.css">
+</head>
+<body>
+    <div class="page-shell">
+        <header class="topbar">
+            <a class="brand" href="/">
+                <span class="brand-mark">P28</span>
+                <span class="brand-copy">
+                    <strong>pc28touzhu</strong>
+                    <span>异常提醒与人工处理</span>
+                </span>
+            </a>
+            <nav class="topbar-actions">
+                <button id="refreshAlertsBtn" class="nav-link nav-button" type="button">刷新告警</button>
+                <a class="nav-link" href="/">首页</a>
+                <a class="nav-link" href="/autobet">自动投注总控台</a>
+                <a class="nav-link" href="/records">执行记录</a>
+                <a class="nav-link" href="/admin#alertsSection" data-requires-auth>管理控制台</a>
+                <button id="accountMenuBtn" class="nav-link nav-button" type="button" data-auth-account-label aria-haspopup="dialog" aria-controls="accountDialog">登录</button>
+            </nav>
+        </header>
+
+        <nav class="workspace-nav" aria-label="异常提醒导航">
+            <a class="workspace-link is-active" href="#alertsOverviewSection">告警概览</a>
+            <a class="workspace-link" href="#alertsFilterSection">筛选</a>
+            <a class="workspace-link" href="#alertsListSection">告警列表</a>
+            <a class="workspace-link" href="#alertsActionsSection">处理入口</a>
+            <a class="workspace-link" href="/autobet">总控台</a>
+            <a class="workspace-link" href="/autobet/accounts#accountsSection">账号</a>
+            <a class="workspace-link" href="/autobet/targets#targetsSection">群组</a>
+            <a class="workspace-link" href="/records">记录</a>
+        </nav>
+
+        <main class="layout">
+            <section class="hero-card">
+                <div class="hero-copy">
+                    <p class="eyebrow">告警中心</p>
+                    <h1>集中查看当前账号下的异常提醒，并把需要人工介入的任务尽快处理掉。</h1>
+                    <p class="hero-text">
+                        这里聚合的是平台当前 `alerts` 视图。重点帮助你判断：
+                        哪些告警最紧急、通知是否成功、哪些失败任务还可以直接重试。
+                    </p>
+                    <div class="hero-actions">
+                        <a class="primary-link" href="#alertsListSection">查看告警列表</a>
+                        <a class="ghost-link" href="/autobet">回自动投注总控台</a>
+                    </div>
+                </div>
+                <aside class="hero-status">
+                    <div class="status-card">
+                        <span class="status-label">当前账号</span>
+                        <strong id="alertsHeroUsername">未登录</strong>
+                        <p id="alertsHeroUserMeta">登录后查看完整异常提醒和通知状态。</p>
+                    </div>
+                    <div class="status-card">
+                        <span class="status-label">当前筛选</span>
+                        <strong id="alertsFilterSummary">全部告警</strong>
+                        <p id="alertsFilterDetail">默认加载最近 50 条告警。</p>
+                    </div>
+                </aside>
+            </section>
+
+            <section id="alertsOverviewSection" class="overview-stack">
+                <section class="summary-grid">
+                    <article class="summary-card">
+                        <span class="summary-label">总告警</span>
+                        <strong id="alertsCount">0</strong>
+                        <p>当前筛选条件下命中的告警数量。</p>
+                    </article>
+                    <article class="summary-card summary-card-emphasis">
+                        <span class="summary-label">严重</span>
+                        <strong id="alertsCriticalCount">0</strong>
+                        <p>需要优先处理的 critical 告警数量。</p>
+                    </article>
+                    <article class="summary-card">
+                        <span class="summary-label">警告</span>
+                        <strong id="alertsWarningCount">0</strong>
+                        <p>warning 级别告警数量。</p>
+                    </article>
+                    <article class="summary-card">
+                        <span class="summary-label">待通知</span>
+                        <strong id="alertsPendingCount">0</strong>
+                        <p>尚未完成通知发送的告警数量。</p>
+                    </article>
+                    <article class="summary-card">
+                        <span class="summary-label">通知失败</span>
+                        <strong id="alertsFailedCount">0</strong>
+                        <p>通知发送失败、仍需关注的告警数量。</p>
+                    </article>
+                    <article class="summary-card">
+                        <span class="summary-label">可操作</span>
+                        <strong id="alertsActionableCount">0</strong>
+                        <p>当前页中可直接跳转记录或重试任务的告警数量。</p>
+                    </article>
+                </section>
+
+                <div id="statusMessage" class="status-banner" aria-live="polite"></div>
+            </section>
+
+            <section id="alertsActionsSection" class="panel">
+                <div class="panel-header">
+                    <div>
+                        <p class="panel-kicker">处理入口</p>
+                        <h2>告警页处理入口</h2>
+                    </div>
+                    <p class="panel-copy">告警页用于判断优先级；真正处理时，回到对应工作区或记录页继续操作。</p>
+                </div>
+                <section class="action-strip">
+                    <article class="action-card">
+                        <p class="panel-kicker">执行记录</p>
+                        <h2>回执行记录追任务</h2>
+                        <p>如果告警挂的是具体 job 或 signal，优先回执行记录页看最近错误和可重试状态。</p>
+                        <a class="panel-link" href="/records">去执行记录页</a>
+                    </article>
+                    <article class="action-card">
+                        <p class="panel-kicker">账号</p>
+                        <h2>处理账号链路告警</h2>
+                        <p>会话失效、账号未授权、导入失败这类告警，优先回账号工作区修复。</p>
+                        <a class="panel-link" href="/autobet/accounts#accountsSection">去账号工作区</a>
+                    </article>
+                    <article class="action-card">
+                        <p class="panel-kicker">群组</p>
+                        <h2>处理群组与模板告警</h2>
+                        <p>目标不可达、测试失败、模板不匹配等问题，优先回群组或模板工作区处理。</p>
+                        <a class="panel-link" href="/autobet/targets#targetsSection">去群组工作区</a>
+                    </article>
+                    <article class="action-card">
+                        <p class="panel-kicker">总控台</p>
+                        <h2>回总控台看链路</h2>
+                        <p>如果你不确定告警卡在哪一环，直接回总控台看执行链路摘要和工作区入口。</p>
+                        <a class="panel-link" href="/autobet">回总控台</a>
+                    </article>
+                </section>
+            </section>
+
+            <section class="content-grid alerts-grid">
+                <section id="alertsFilterSection" class="panel panel-wide">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">筛选</p>
+                            <h2>筛选条件</h2>
+                        </div>
+                    </div>
+                    <form id="alertsFilterForm" class="alerts-filter-form">
+                        <label>
+                            <span>告警级别</span>
+                            <select class="text-input" name="severity">
+                                <option value="">全部</option>
+                                <option value="critical">严重</option>
+                                <option value="warning">警告</option>
+                                <option value="info">提示</option>
+                            </select>
+                        </label>
+                        <label>
+                            <span>告警类型</span>
+                            <input class="text-input" name="alert_type" type="text" placeholder="例如 executor_offline">
+                        </label>
+                        <div class="form-actions filter-actions">
+                            <button class="primary-btn" type="submit">应用筛选</button>
+                            <button id="resetAlertsFilterBtn" class="ghost-btn" type="button">重置</button>
+                        </div>
+                    </form>
+                </section>
+
+                <section id="alertsListSection" class="panel panel-wide">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">告警列表</p>
+                            <h2>告警列表</h2>
+                        </div>
+                    </div>
+                    <div id="alertsList" class="alerts-card-list"></div>
+                </section>
+
+            </section>
+        </main>
+    </div>
+
+    <dialog id="accountDialog" class="account-dialog" aria-label="账户">
+        <div class="account-dialog-shell">
+            <div class="account-dialog-header">
+                <div>
+                    <p class="panel-kicker">账户</p>
+                    <h2 data-auth-panel-title>登录与账户</h2>
+                </div>
+                <button id="accountDialogCloseBtn" class="ghost-btn account-dialog-close" type="button">关闭</button>
+            </div>
+            <div class="account-card">
+                <strong id="currentUsername">未登录</strong>
+                <span id="currentUserMeta">请先注册或登录</span>
+            </div>
+            <form id="authForm" class="auth-form">
+                <label>
+                    <span>用户名</span>
+                    <input id="authUsername" class="text-input" type="text" autocomplete="username" required>
+                </label>
+                <label>
+                    <span>邮箱</span>
+                    <input id="authEmail" class="text-input" type="email" autocomplete="email">
+                </label>
+                <label>
+                    <span>密码</span>
+                    <input id="authPassword" class="text-input" type="password" autocomplete="current-password" required>
+                </label>
+                <div class="form-actions">
+                    <button id="registerBtn" class="ghost-btn" type="button">注册</button>
+                    <button id="loginBtn" class="primary-btn" type="button">登录</button>
+                    <button id="logoutBtn" class="ghost-btn danger-btn" type="button" hidden>退出</button>
+                </div>
+            </form>
+        </div>
+    </dialog>
+
+    <script src="/assets/ui-text.js"></script>
+    <script src="/assets/auth-panel.js"></script>
+    <script src="/assets/account-menu.js"></script>
+    <script src="/assets/auth-guard.js"></script>
+    <script src="/assets/alerts.js"></script>
+</body>
+</html>

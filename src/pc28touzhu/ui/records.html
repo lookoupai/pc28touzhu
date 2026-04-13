@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>pc28touzhu 执行记录</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Noto+Sans+SC:wght@400;500;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/assets/records.css">
+</head>
+<body>
+    <div class="page-shell">
+        <header class="topbar">
+            <a class="brand" href="/">
+                <span class="brand-mark">P28</span>
+                <span class="brand-copy">
+                    <strong>pc28touzhu</strong>
+                    <span>执行记录与异常回看</span>
+                </span>
+            </a>
+            <nav class="topbar-actions">
+                <button id="refreshRecordsBtn" class="nav-link nav-button" type="button">刷新记录</button>
+                <a class="nav-link" href="/">首页</a>
+                <a class="nav-link" href="/autobet">自动投注总控台</a>
+                <a class="nav-link" href="/alerts">异常提醒</a>
+                <a class="nav-link" href="/admin#executionJobsSection" data-requires-auth>管理控制台</a>
+                <button id="accountMenuBtn" class="nav-link nav-button" type="button" data-auth-account-label aria-haspopup="dialog" aria-controls="accountDialog">登录</button>
+            </nav>
+        </header>
+
+        <nav class="workspace-nav" aria-label="执行记录导航">
+            <a class="workspace-link is-active" href="#recordsOverviewSection">记录概览</a>
+            <a class="workspace-link" href="#recordsFilterSection">筛选</a>
+            <a class="workspace-link" href="#recordsTableSection">记录列表</a>
+            <a class="workspace-link" href="#recordsActionsSection">处理入口</a>
+            <a class="workspace-link" href="/autobet">总控台</a>
+            <a class="workspace-link" href="/autobet/accounts#accountsSection">账号</a>
+            <a class="workspace-link" href="/autobet/targets#targetsSection">群组</a>
+            <a class="workspace-link" href="/autobet/subscriptions#subscriptionsSection">跟单</a>
+            <a class="workspace-link" href="/alerts">告警</a>
+        </nav>
+
+        <main class="layout">
+            <section class="hero-card">
+                <div class="hero-copy">
+                    <p class="eyebrow">执行记录</p>
+                    <h1>集中查看你的自动执行记录、失败原因和最近重试情况。</h1>
+                    <p class="hero-text">
+                        这里直接复用平台当前的 `execution-jobs` 数据，不新造模型。优先帮助你回答三件事：
+                        最近发了什么、哪里失败了、哪些任务还能重试。
+                    </p>
+                    <div class="hero-actions">
+                        <a class="primary-link" href="#recordsTableSection">查看记录列表</a>
+                        <a class="ghost-link" href="/autobet">回自动投注总控台</a>
+                    </div>
+                </div>
+                <aside class="hero-status">
+                    <div class="status-card">
+                        <span class="status-label">当前账号</span>
+                        <strong id="recordsHeroUsername">未登录</strong>
+                        <p id="recordsHeroUserMeta">登录后查看完整执行记录和可重试任务。</p>
+                    </div>
+                    <div class="status-card">
+                        <span class="status-label">当前筛选</span>
+                        <strong id="recordsFilterSummary">全部记录</strong>
+                        <p id="recordsFilterDetail">默认加载最近 100 条执行任务。</p>
+                    </div>
+                </aside>
+            </section>
+
+            <section id="recordsOverviewSection" class="overview-stack">
+                <section class="summary-grid">
+                    <article class="summary-card">
+                        <span class="summary-label">总记录</span>
+                        <strong id="recordsCount">0</strong>
+                        <p>当前筛选条件下命中的执行记录数量。</p>
+                    </article>
+                    <article class="summary-card">
+                        <span class="summary-label">已送达</span>
+                        <strong id="recordsDeliveredCount">0</strong>
+                        <p>已经成功投递的任务数量。</p>
+                    </article>
+                    <article class="summary-card">
+                        <span class="summary-label">待执行</span>
+                        <strong id="recordsPendingCount">0</strong>
+                        <p>还未完成执行的任务数量。</p>
+                    </article>
+                    <article class="summary-card">
+                        <span class="summary-label">异常任务</span>
+                        <strong id="recordsIssueCount">0</strong>
+                        <p>失败、过期或跳过的任务数量。</p>
+                    </article>
+                    <article class="summary-card summary-card-emphasis">
+                        <span class="summary-label">可重试</span>
+                        <strong id="recordsRetryableCount">0</strong>
+                        <p>当前列表中仍然可以手动重试的任务数量。</p>
+                    </article>
+                    <article class="summary-card">
+                        <span class="summary-label">异常提醒</span>
+                        <strong id="recordsAlertCount">0</strong>
+                        <p>当前用户最新告警数量。</p>
+                    </article>
+                </section>
+
+                <div id="statusMessage" class="status-banner" aria-live="polite"></div>
+            </section>
+
+            <section id="recordsActionsSection" class="panel">
+                <div class="panel-header">
+                    <div>
+                        <p class="panel-kicker">快捷入口</p>
+                        <h2>记录页处理入口</h2>
+                    </div>
+                    <p class="panel-copy">这里负责看结果；真正修问题时，回到对应工作区处理。</p>
+                </div>
+                <section class="action-strip">
+                    <article class="action-card">
+                        <p class="panel-kicker">账号</p>
+                        <h2>会话或授权异常</h2>
+                        <p>如果失败原因集中在会话失效、未授权、验证码未完成，直接去账号工作区处理。</p>
+                        <a class="panel-link" href="/autobet/accounts#accountsSection">去账号工作区</a>
+                    </article>
+                    <article class="action-card">
+                        <p class="panel-kicker">群组</p>
+                        <h2>群组不可达或重测</h2>
+                        <p>如果失败集中在未入群、禁言、目标不可达或需要重测，直接回群组工作区。</p>
+                        <a class="panel-link" href="/autobet/targets#targetsSection">去群组工作区</a>
+                    </article>
+                    <article class="action-card">
+                        <p class="panel-kicker">跟单</p>
+                        <h2>链路没命中</h2>
+                        <p>如果这条信号根本没有展开成你预期的群组和模板，去跟单工作区查看链路摘要。</p>
+                        <a class="panel-link" href="/autobet/subscriptions#subscriptionsSection">去跟单工作区</a>
+                    </article>
+                    <article class="action-card">
+                        <p class="panel-kicker">管理端</p>
+                        <h2>更底层排障</h2>
+                        <p>需要看 execution-jobs 原始明细、执行器状态和底层重试策略时，再进入管理控制台。</p>
+                        <a class="panel-link" href="/admin#executionJobsSection">去管理端排障</a>
+                    </article>
+                </section>
+            </section>
+
+            <section class="content-grid records-grid">
+                <section id="recordsFilterSection" class="panel panel-wide">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">筛选</p>
+                            <h2>筛选条件</h2>
+                        </div>
+                    </div>
+                    <form id="recordsFilterForm" class="records-filter-form">
+                        <label>
+                            <span>任务状态</span>
+                            <select class="text-input" name="status">
+                                <option value="">全部</option>
+                                <option value="pending">待执行</option>
+                                <option value="delivered">已送达</option>
+                                <option value="failed">失败</option>
+                                <option value="expired">已过期</option>
+                                <option value="skipped">已跳过</option>
+                            </select>
+                        </label>
+                        <label>
+                            <span>信号 ID</span>
+                            <input class="text-input" name="signal_id" type="number" min="1" placeholder="可选">
+                        </label>
+                        <div class="form-actions filter-actions">
+                            <button class="primary-btn" type="submit">应用筛选</button>
+                            <button id="resetRecordsFilterBtn" class="ghost-btn" type="button">重置</button>
+                        </div>
+                    </form>
+                </section>
+
+                <section id="recordsTableSection" class="panel panel-wide">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">记录列表</p>
+                            <h2>执行记录列表</h2>
+                        </div>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>期号 / 玩法</th>
+                                    <th>投递群组</th>
+                                    <th>账号</th>
+                                    <th>状态</th>
+                                    <th>尝试次数</th>
+                                    <th>最近错误</th>
+                                    <th>更新时间</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recordsTableBody"></tbody>
+                        </table>
+                    </div>
+                    <div id="recordsCardList" class="records-card-list"></div>
+                </section>
+
+                <section id="recordsAlertsSection" class="panel panel-wide">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">异常提醒</p>
+                            <h2>异常摘要</h2>
+                        </div>
+                        <a class="panel-link" href="/alerts">查看全部</a>
+                    </div>
+                    <div id="recordsAlertList" class="alert-list"></div>
+                </section>
+            </section>
+        </main>
+    </div>
+
+    <dialog id="accountDialog" class="account-dialog" aria-label="账户">
+        <div class="account-dialog-shell">
+            <div class="account-dialog-header">
+                <div>
+                    <p class="panel-kicker">账户</p>
+                    <h2 data-auth-panel-title>登录与账户</h2>
+                </div>
+                <button id="accountDialogCloseBtn" class="ghost-btn account-dialog-close" type="button">关闭</button>
+            </div>
+            <div class="account-card">
+                <strong id="currentUsername">未登录</strong>
+                <span id="currentUserMeta">请先注册或登录</span>
+            </div>
+            <form id="authForm" class="auth-form">
+                <label>
+                    <span>用户名</span>
+                    <input id="authUsername" class="text-input" type="text" autocomplete="username" required>
+                </label>
+                <label>
+                    <span>邮箱</span>
+                    <input id="authEmail" class="text-input" type="email" autocomplete="email">
+                </label>
+                <label>
+                    <span>密码</span>
+                    <input id="authPassword" class="text-input" type="password" autocomplete="current-password" required>
+                </label>
+                <div class="form-actions">
+                    <button id="registerBtn" class="ghost-btn" type="button">注册</button>
+                    <button id="loginBtn" class="primary-btn" type="button">登录</button>
+                    <button id="logoutBtn" class="ghost-btn danger-btn" type="button" hidden>退出</button>
+                </div>
+            </form>
+        </div>
+    </dialog>
+
+    <script src="/assets/ui-text.js"></script>
+    <script src="/assets/auth-panel.js"></script>
+    <script src="/assets/account-menu.js"></script>
+    <script src="/assets/auth-guard.js"></script>
+    <script src="/assets/records.js"></script>
+</body>
+</html>

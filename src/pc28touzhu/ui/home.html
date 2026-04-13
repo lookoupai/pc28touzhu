@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>pc28touzhu 自动投注总览</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Noto+Sans+SC:wght@400;500;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/assets/home.css">
+</head>
+<body>
+    <div class="page-shell">
+        <header class="topbar">
+            <a class="brand" href="/">
+                <span class="brand-mark">P28</span>
+                <span class="brand-copy">
+                    <strong>pc28touzhu</strong>
+                    <span>自动投注总览</span>
+                </span>
+            </a>
+            <nav class="topbar-actions">
+                <button id="refreshHomeBtn" class="nav-link nav-button" type="button">刷新状态</button>
+                <a class="nav-link" href="/">首页</a>
+                <a class="nav-link" href="/autobet">进入总控台</a>
+                <a class="nav-link" href="/records">执行记录</a>
+                <a class="nav-link" href="/alerts">异常提醒</a>
+                <a class="nav-link" href="/admin" data-requires-auth>管理控制台</a>
+                <button id="accountMenuBtn" class="nav-link nav-button" type="button" data-auth-account-label aria-haspopup="dialog" aria-controls="accountDialog">登录</button>
+            </nav>
+        </header>
+
+        <nav class="workspace-nav" aria-label="用户端导航">
+            <a class="workspace-link is-active" href="#overviewSection">总览</a>
+            <a class="workspace-link" href="#nextStepSection">下一步</a>
+            <a class="workspace-link" href="#setupSection">当前链路</a>
+            <a class="workspace-link" href="#importSection">快捷导入</a>
+            <a class="workspace-link" href="/autobet">总控台</a>
+            <a class="workspace-link" href="/autobet/accounts#accountsSection">账号</a>
+            <a class="workspace-link" href="/autobet/targets#targetsSection">群组</a>
+            <a class="workspace-link" href="/autobet/templates#templatesSection">模板</a>
+            <a class="workspace-link" href="/autobet/subscriptions#subscriptionsSection">跟单</a>
+            <a class="workspace-link" href="/records">记录</a>
+            <a class="workspace-link" href="/alerts">告警</a>
+        </nav>
+
+        <main class="layout">
+            <section class="hero-card">
+                <div class="hero-copy">
+                    <p class="eyebrow">总览</p>
+                    <h1>这里看全局状态，真正的配置统一在自动投注总控台和四个工作区完成。</h1>
+                    <p class="hero-text">
+                        首页现在只负责三件事：看当前账号是否已经具备自动投注条件、查看最近执行和异常、提供进入总控台与各工作区的统一入口。
+                        账号授权、群组绑定、下注模板、跟单策略这些实际配置，统一收口到 <strong>/autobet</strong> 及其工作区。
+                    </p>
+                    <div class="hero-actions">
+                        <a class="primary-link" href="/autobet">进入自动投注总控台</a>
+                        <a class="ghost-link" href="/records">查看执行记录</a>
+                    </div>
+                    <div class="hero-notes">
+                        <span>首页只看状态与结果</span>
+                        <span>总控台统一看链路</span>
+                        <span>四个工作区分别处理</span>
+                        <span>执行记录单独查看</span>
+                        <span>异常提醒单独处理</span>
+                    </div>
+                </div>
+                <aside class="hero-status">
+                    <div class="status-card">
+                        <span class="status-label">当前账号</span>
+                        <strong id="heroUsername">未登录</strong>
+                        <p id="heroUserMeta">登录后查看自动投注总览和最近执行结果。</p>
+                    </div>
+                    <div class="status-card">
+                        <span class="status-label">自动执行准备度</span>
+                        <strong id="readinessHeadline">待配置</strong>
+                        <p id="readinessDetail">还没有达到自动执行所需的基础条件。</p>
+                    </div>
+                </aside>
+            </section>
+
+            <section id="overviewSection" class="overview-stack">
+                <section class="summary-grid">
+                    <article class="summary-card">
+                        <span class="summary-label">AI 方案</span>
+                        <strong id="aiSourceCount">0</strong>
+                        <p>已导入的 AITradingSimulator 方案来源数量。</p>
+                    </article>
+                    <article class="summary-card">
+                        <span class="summary-label">已授权账号</span>
+                        <strong id="accountCount">0</strong>
+                        <p>已完成授权、可用于发送的 Telegram 托管账号数量。</p>
+                    </article>
+                    <article class="summary-card">
+                        <span class="summary-label">跟单关系</span>
+                        <strong id="subscriptionCount">0</strong>
+                        <p>已建立的方案跟单关系数量。</p>
+                    </article>
+                    <article class="summary-card">
+                        <span class="summary-label">投递群组</span>
+                        <strong id="targetCount">0</strong>
+                        <p>可用于自动执行的目标群组数量。</p>
+                    </article>
+                    <article class="summary-card summary-card-emphasis">
+                        <span class="summary-label">最近任务</span>
+                        <strong id="jobHealthSummary">0 / 0</strong>
+                        <p id="jobHealthDetail">最近任务成功数 / 异常数。</p>
+                    </article>
+                    <article class="summary-card">
+                        <span class="summary-label">异常提醒</span>
+                        <strong id="alertCount">0</strong>
+                        <p>需要尽快处理的执行异常和告警数量。</p>
+                    </article>
+                </section>
+
+                <div id="statusMessage" class="status-banner" aria-live="polite"></div>
+
+                <section id="nextStepSection" class="next-step-card">
+                    <div class="next-step-head">
+                        <div>
+                            <p class="panel-kicker">下一步</p>
+                            <h2 id="nextStepTitle">下一步</h2>
+                        </div>
+                        <span id="nextStepBadge" class="step-pill is-pending">待处理</span>
+                    </div>
+                    <p id="nextStepDescription" class="next-step-description">系统会根据你当前缺少的关键配置，给出最直接的下一步动作。</p>
+                    <div class="next-step-actions">
+                        <a id="nextStepAction" class="primary-link" href="/admin">去处理</a>
+                        <a id="nextStepSecondaryAction" class="ghost-link" href="#checklistSection">查看接入进度</a>
+                    </div>
+                </section>
+
+                <section class="action-strip">
+                    <article class="action-card">
+                        <p class="panel-kicker">总控台</p>
+                        <h2>进入自动投注总控台</h2>
+                        <p>先看整体准备度、执行链路、健康检查和四个工作区入口，不在首页直接做重配置。</p>
+                        <a class="panel-link" href="/autobet">进入总控台</a>
+                    </article>
+                    <article class="action-card">
+                        <p class="panel-kicker">账号</p>
+                        <h2>托管账号工作区</h2>
+                        <p>处理手机号登录、Session 导入、验证码、二次密码和账号是否真的可执行。</p>
+                        <a class="panel-link" href="/autobet/accounts#accountsSection">去账号工作区</a>
+                    </article>
+                    <article class="action-card">
+                        <p class="panel-kicker">群组</p>
+                        <h2>群组运维工作区</h2>
+                        <p>群组测试、失败摘要、订阅反查和模板绑定都在这里处理。</p>
+                        <a class="panel-link" href="/autobet/targets#targetsSection">去群组工作区</a>
+                    </article>
+                    <article class="action-card">
+                        <p class="panel-kicker">模板</p>
+                        <h2>模板产品化工作区</h2>
+                        <p>从预设起步，管理草稿、启用模板、预览样例和模板绑定关系。</p>
+                        <a class="panel-link" href="/autobet/templates#templatesSection">去模板工作区</a>
+                    </article>
+                    <article class="action-card">
+                        <p class="panel-kicker">跟单</p>
+                        <h2>跟单策略工作区</h2>
+                        <p>直接看来源如何命中群组、模板和最终发言样例，再决定要修哪一环。</p>
+                        <a class="panel-link" href="/autobet/subscriptions#subscriptionsSection">去跟单工作区</a>
+                    </article>
+                </section>
+            </section>
+
+            <section class="content-grid">
+                <section id="importSection" class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">快速导入</p>
+                                <h2>快捷导入方案</h2>
+                            </div>
+                        <a class="panel-link" href="/autobet">进入总控台</a>
+                    </div>
+                    <div class="import-stack">
+                        <p class="panel-copy">
+                            这里保留一个快捷导入入口，方便你从首页直接接入 AITradingSimulator 方案。
+                            但首页不再承担完整配置职责；导入后建议直接进入总控台，再转到对应工作区完成账号、群组、模板和跟单配置。
+                        </p>
+                        <form id="importSourceForm" class="import-form">
+                            <label>
+                                <span>方案名称</span>
+                                <input id="importSourceName" class="text-input" type="text" placeholder="可选，不填则自动生成">
+                            </label>
+                            <label class="wide">
+                                <span>公开方案页链接或导出地址</span>
+                                <input id="importSourceUrl" class="text-input" type="url" placeholder="https://your-ai-platform.example.com/public/predictors/12" required>
+                            </label>
+                            <div class="form-actions">
+                                <button id="fillImportExampleBtn" class="ghost-btn" type="button">填入示例</button>
+                                <button id="importSourceBtn" class="primary-btn" type="submit">导入方案</button>
+                            </div>
+                        </form>
+                        <div class="import-note">
+                            <strong>使用建议</strong>
+                            <p>导入完成后，下一步直接进入自动投注总控台。首页主要负责总览，不再作为完整配置页使用。</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section id="checklistSection" class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">准备清单</p>
+                            <h2>总控台接入进度</h2>
+                        </div>
+                        <a class="panel-link" href="/autobet">去总控台</a>
+                    </div>
+                    <div id="checklist" class="checklist"></div>
+                </section>
+
+                <section id="setupSection" class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">当前链路</p>
+                            <h2>当前总控链路摘要</h2>
+                        </div>
+                        <a class="panel-link" href="/autobet">去总控台完善配置</a>
+                    </div>
+                    <div class="setup-grid">
+                        <article class="setup-card">
+                            <span class="setup-label">跟随方案</span>
+                            <strong id="currentSourceName">未导入方案</strong>
+                            <p id="currentSourceMeta">先从 AITradingSimulator 复制公开方案页链接，再到平台导入。</p>
+                        </article>
+                        <article class="setup-card">
+                            <span class="setup-label">托管账号</span>
+                            <strong id="currentAccountName">未绑定</strong>
+                            <p id="currentAccountMeta">当前没有可用于执行的 Telegram 托管账号。</p>
+                        </article>
+                        <article class="setup-card">
+                            <span class="setup-label">目标群组</span>
+                            <strong id="currentTargetName">未配置</strong>
+                            <p id="currentTargetMeta">需要先绑定投递群组，任务才有实际执行落点。</p>
+                        </article>
+                        <article class="setup-card">
+                            <span class="setup-label">跟单策略</span>
+                            <strong id="currentStrategyName">未建立</strong>
+                            <p id="currentStrategyMeta">建立订阅后，平台才会把标准信号展开成执行任务。</p>
+                        </article>
+                    </div>
+                </section>
+
+                <section id="jobsSection" class="panel panel-wide">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">最近任务</p>
+                            <h2>最近执行记录</h2>
+                        </div>
+                        <a class="panel-link" href="/records">查看全部</a>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>期号 / 玩法</th>
+                                    <th>群组</th>
+                                    <th>账号</th>
+                                    <th>状态</th>
+                                    <th>最近错误</th>
+                                    <th>更新时间</th>
+                                </tr>
+                            </thead>
+                            <tbody id="jobTableBody"></tbody>
+                        </table>
+                    </div>
+                    <div id="jobCardList" class="job-card-list"></div>
+                </section>
+
+                <section id="alertsSection" class="panel panel-wide">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">异常提醒</p>
+                            <h2>异常提醒</h2>
+                        </div>
+                        <a class="panel-link" href="/alerts">查看全部</a>
+                    </div>
+                    <div id="alertList" class="alert-list"></div>
+                </section>
+
+            </section>
+        </main>
+    </div>
+
+    <dialog id="accountDialog" class="account-dialog" aria-label="账户">
+        <div class="account-dialog-shell">
+            <div class="account-dialog-header">
+                <div>
+                    <p class="panel-kicker">账户</p>
+                    <h2 data-auth-panel-title>登录与账户</h2>
+                </div>
+                <button id="accountDialogCloseBtn" class="ghost-btn account-dialog-close" type="button">关闭</button>
+            </div>
+            <div class="account-card">
+                <strong id="currentUsername">未登录</strong>
+                <span id="currentUserMeta">请先注册或登录</span>
+            </div>
+            <form id="authForm" class="auth-form">
+                <label>
+                    <span>用户名</span>
+                    <input id="authUsername" class="text-input" type="text" autocomplete="username" required>
+                </label>
+                <label>
+                    <span>邮箱</span>
+                    <input id="authEmail" class="text-input" type="email" autocomplete="email">
+                </label>
+                <label>
+                    <span>密码</span>
+                    <input id="authPassword" class="text-input" type="password" autocomplete="current-password" required>
+                </label>
+                <div class="form-actions">
+                    <button id="registerBtn" class="ghost-btn" type="button">注册</button>
+                    <button id="loginBtn" class="primary-btn" type="button">登录</button>
+                    <button id="logoutBtn" class="ghost-btn danger-btn" type="button" hidden>退出</button>
+                </div>
+            </form>
+        </div>
+    </dialog>
+
+    <script src="/assets/ui-text.js"></script>
+    <script src="/assets/auth-panel.js"></script>
+    <script src="/assets/account-menu.js"></script>
+    <script src="/assets/auth-guard.js"></script>
+    <script src="/assets/home.js"></script>
+</body>
+</html>

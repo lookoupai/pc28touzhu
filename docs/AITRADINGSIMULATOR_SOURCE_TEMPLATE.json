@@ -1,0 +1,10 @@
+{
+  "fetch": {
+    "url": "https://your-ai-platform.example.com/api/export/predictors/12/signals?view=execution",
+    "headers": {
+      "Accept": "application/json"
+    },
+    "timeout": 10
+  }
+}
+

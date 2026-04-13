@@ -1,0 +1,3154 @@
+from __future__ import annotations
+
+import json
+import sys
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from pc28touzhu.auth import SESSION_COOKIE_NAME, build_session_cookie_value, hash_password
+from pc28touzhu.api.app import PlatformApiApplication, build_testing_environ
+
+
+class FakeRepository:
+    def __init__(self):
+        self.heartbeats = []
+        self.executors = []
+        self.reports = []
+        self.alert_records = {}
+        self.sources = [
+            {
+                "id": 1,
+                "owner_user_id": 1,
+                "source_type": "internal_ai",
+                "name": "demo-source",
+                "status": "active",
+                "visibility": "private",
+                "config": {},
+                "created_at": "2026-04-07T12:00:00Z",
+                "updated_at": "2026-04-07T12:00:00Z",
+            }
+        ]
+        self.users = [
+            {
+                "id": 1,
+            "username": "owner",
+            "email": "owner@example.com",
+            "password_hash": hash_password("owner-pass"),
+            "role": "user",
+            "status": "active",
+            "created_at": "2026-04-07T12:00:00Z",
+            "updated_at": "2026-04-07T12:00:00Z",
+            }
+        ]
+        self.telegram_accounts = []
+        self.message_templates = []
+        self.subscriptions = []
+        self.targets = []
+        self.signals = []
+        self.jobs = []
+        self.raw_items = []
+        self.progression_events = []
+        self.subscription_progression_states = {}
+        self.subscription_financial_states = {}
+
+    def requeue_auto_retry_jobs(self, *, max_attempts, base_delay_seconds, limit):
+        return []
+
+    def list_platform_alert_records_by_keys(self, alert_keys):
+        return {
+            str(alert_key): self.alert_records[str(alert_key)]
+            for alert_key in alert_keys
+            if str(alert_key) in self.alert_records
+        }
+
+    def sync_platform_alert_records(self, alerts, *, repeat_interval_seconds):
+        items = []
+        for alert in alerts:
+            key = str(alert["alert_key"])
+            record = self.alert_records.get(key)
+            if record is None:
+                record = {
+                    "id": len(self.alert_records) + 1,
+                    "alert_key": key,
+                    "alert_type": alert["alert_type"],
+                    "severity": alert["severity"],
+                    "title": alert["title"],
+                    "message": alert["message"],
+                    "metadata": alert.get("metadata") or {},
+                    "status": "active",
+                    "first_seen_at": "2026-04-08T12:00:00Z",
+                    "last_seen_at": "2026-04-08T12:00:00Z",
+                    "resolved_at": None,
+                    "last_sent_at": None,
+                    "send_count": 0,
+                    "occurrence_count": 1,
+                    "last_error": None,
+                    "created_at": "2026-04-08T12:00:00Z",
+                    "updated_at": "2026-04-08T12:00:00Z",
+                }
+                self.alert_records[key] = record
+            items.append({**alert, "notification_event": "firing", "record": record})
+        return items
+
+    def mark_platform_alert_sent(self, *, alert_key, error=None, sent_at=None):
+        record = self.alert_records.get(str(alert_key))
+        if not record:
+            return None
+        if error:
+            record["last_error"] = error
+        else:
+            record["last_sent_at"] = sent_at or "2026-04-08T12:00:00Z"
+            record["send_count"] += 1
+            record["last_error"] = None
+        return record
+
+    def pull_ready_jobs(self, executor_id: str, limit: int):
+        return [
+            {
+                "job_id": "job_001",
+                "signal_id": "sig_001",
+                "lottery_type": "pc28",
+                "issue_no": "20260407001",
+                "bet_type": "big_small",
+                "bet_value": "大",
+                "message_text": "大10",
+                "stake_plan": {"mode": "flat", "amount": 10},
+                "target": {"type": "telegram_group", "key": "-1001234567890", "name": "测试群"},
+                "idempotency_key": "idemp-001",
+                "execute_after": "2026-04-07T15:00:00Z",
+                "expire_at": "2026-04-07T15:01:00Z",
+            }
+        ][:limit]
+
+    def report_job_result(
+        self,
+        job_id,
+        executor_id,
+        attempt_no,
+        delivery_status,
+        remote_message_id,
+        executed_at,
+        raw_result,
+        error_message,
+    ):
+        payload = {
+            "job_id": job_id,
+            "executor_id": executor_id,
+            "attempt_no": attempt_no,
+            "delivery_status": delivery_status,
+            "remote_message_id": remote_message_id,
+            "executed_at": executed_at,
+            "raw_result": raw_result,
+            "error_message": error_message,
+        }
+        self.reports.append(payload)
+        return payload
+
+    def upsert_executor_heartbeat(self, executor_id, version, capabilities, status, last_seen_at):
+        payload = {
+            "executor_id": executor_id,
+            "version": version,
+            "capabilities": capabilities,
+            "status": status,
+            "last_seen_at": last_seen_at,
+            "updated_at": last_seen_at,
+            "total_attempt_count": 0,
+            "delivered_attempt_count": 0,
+            "failed_attempt_count": 0,
+            "last_executed_at": None,
+            "last_failure_at": None,
+            "last_failure_status": None,
+            "last_failure_error_message": None,
+        }
+        self.executors = [item for item in self.executors if item["executor_id"] != executor_id]
+        self.executors.append(payload)
+        self.heartbeats.append(payload)
+        return payload
+
+    def list_users(self):
+        return list(self.users)
+
+    def get_user(self, user_id):
+        for item in self.users:
+            if item["id"] == int(user_id):
+                return item
+        return None
+
+    def get_user_by_username(self, username):
+        for item in self.users:
+            if item["username"] == str(username):
+                return item
+        return None
+
+    def create_user_record(self, **kwargs):
+        item = {
+            "id": len(self.users) + 1,
+            "username": kwargs["username"],
+            "email": kwargs.get("email", ""),
+            "password_hash": kwargs.get("password_hash", ""),
+            "role": kwargs.get("role", "user"),
+            "status": kwargs.get("status", "active"),
+            "created_at": "2026-04-07T12:00:00Z",
+            "updated_at": "2026-04-07T12:00:00Z",
+        }
+        self.users.append(item)
+        return item
+
+    def update_user_password(self, user_id, password_hash, *, email=None):
+        user = self.get_user(user_id)
+        if not user:
+            return None
+        user["password_hash"] = password_hash
+        if email is not None:
+            user["email"] = email
+        user["updated_at"] = "2026-04-07T12:00:00Z"
+        return user
+
+    def list_sources(self, owner_user_id=None):
+        if owner_user_id is None:
+            return list(self.sources)
+        return [item for item in self.sources if item["owner_user_id"] == int(owner_user_id)]
+
+    def get_source(self, source_id):
+        for item in self.sources:
+            if item["id"] == int(source_id):
+                return item
+        return None
+
+    def list_telegram_accounts(self, user_id):
+        return [item for item in self.telegram_accounts if item["user_id"] == int(user_id)]
+
+    def get_telegram_account(self, telegram_account_id):
+        for item in self.telegram_accounts:
+            if item["id"] == int(telegram_account_id):
+                return item
+        return None
+
+    def create_telegram_account_record(self, **kwargs):
+        item = {
+            "id": len(self.telegram_accounts) + 1,
+            "user_id": kwargs["user_id"],
+            "label": kwargs["label"],
+            "phone": kwargs.get("phone", ""),
+            "session_path": kwargs["session_path"],
+            "status": kwargs.get("status", "active"),
+            "meta": kwargs.get("meta") or {},
+            "created_at": "2026-04-07T12:00:00Z",
+            "updated_at": "2026-04-07T12:00:00Z",
+        }
+        self.telegram_accounts.append(item)
+        return item
+
+    def update_telegram_account_status(self, *, telegram_account_id, user_id, status):
+        for item in self.telegram_accounts:
+            if item["id"] == int(telegram_account_id) and item["user_id"] == int(user_id):
+                item["status"] = str(status)
+                item["updated_at"] = "2026-04-07T12:00:00Z"
+                return item
+        return None
+
+    def update_telegram_account_record(self, *, telegram_account_id, user_id, label, session_path, phone="", meta=None):
+        for item in self.telegram_accounts:
+            if item["id"] == int(telegram_account_id) and item["user_id"] == int(user_id):
+                item["label"] = label
+                item["session_path"] = session_path
+                item["phone"] = phone
+                item["meta"] = meta or {}
+                item["updated_at"] = "2026-04-07T12:00:00Z"
+                return item
+        return None
+
+    def count_delivery_targets_by_telegram_account(self, telegram_account_id, *, user_id=None):
+        return sum(
+            1
+            for item in self.targets
+            if item.get("telegram_account_id") == int(telegram_account_id)
+            and (user_id is None or item["user_id"] == int(user_id))
+        )
+
+    def count_execution_jobs_by_telegram_account(self, telegram_account_id, *, user_id=None):
+        return sum(
+            1
+            for item in self.jobs
+            if item.get("telegram_account_id") == int(telegram_account_id)
+            and (user_id is None or item["user_id"] == int(user_id))
+        )
+
+    def delete_telegram_account_record(self, *, telegram_account_id, user_id):
+        for index, item in enumerate(self.telegram_accounts):
+            if item["id"] == int(telegram_account_id) and item["user_id"] == int(user_id):
+                del self.telegram_accounts[index]
+                return True
+        return False
+
+    def update_telegram_account_record(self, *, telegram_account_id, user_id, label, session_path, phone="", meta=None):
+        for item in self.telegram_accounts:
+            if item["id"] == int(telegram_account_id) and item["user_id"] == int(user_id):
+                item["label"] = label
+                item["session_path"] = session_path
+                item["phone"] = phone
+                item["meta"] = meta or {}
+                item["updated_at"] = "2026-04-07T12:00:00Z"
+                return item
+        return None
+
+    def create_source_record(self, **kwargs):
+        item = {
+            "id": len(self.sources) + 1,
+            "owner_user_id": kwargs.get("owner_user_id"),
+            "source_type": kwargs["source_type"],
+            "name": kwargs["name"],
+            "status": kwargs.get("status", "active"),
+            "visibility": kwargs.get("visibility", "private"),
+            "config": kwargs.get("config") or {},
+            "created_at": "2026-04-07T12:00:00Z",
+            "updated_at": "2026-04-07T12:00:00Z",
+        }
+        self.sources.append(item)
+        return item
+
+    def list_subscriptions(self, user_id):
+        return [self.get_subscription(item["id"]) for item in self.subscriptions if item["user_id"] == int(user_id)]
+
+    def create_subscription_record(self, **kwargs):
+        item = {
+            "id": len(self.subscriptions) + 1,
+            "user_id": kwargs["user_id"],
+            "source_id": kwargs["source_id"],
+            "status": kwargs.get("status", "active"),
+            "strategy": kwargs.get("strategy") or {},
+            "created_at": "2026-04-07T12:00:00Z",
+            "updated_at": "2026-04-07T12:00:00Z",
+        }
+        self.subscriptions.append(item)
+        return self.get_subscription(item["id"])
+
+    def list_message_templates(self, user_id):
+        return [item for item in self.message_templates if item["user_id"] == int(user_id)]
+
+    def create_message_template_record(self, **kwargs):
+        item = {
+            "id": len(self.message_templates) + 1,
+            "user_id": kwargs["user_id"],
+            "name": kwargs["name"],
+            "lottery_type": kwargs["lottery_type"],
+            "bet_type": kwargs.get("bet_type", "*"),
+            "template_text": kwargs["template_text"],
+            "config": kwargs.get("config") or {},
+            "status": kwargs.get("status", "active"),
+            "created_at": "2026-04-07T12:00:00Z",
+            "updated_at": "2026-04-07T12:00:00Z",
+        }
+        self.message_templates.append(item)
+        return item
+
+    def get_message_template(self, template_id):
+        for item in self.message_templates:
+            if item["id"] == int(template_id):
+                return item
+        return None
+
+    def update_message_template_record(self, *, template_id, user_id, name, lottery_type, bet_type, template_text, config=None):
+        for item in self.message_templates:
+            if item["id"] == int(template_id) and item["user_id"] == int(user_id):
+                item["name"] = name
+                item["lottery_type"] = lottery_type
+                item["bet_type"] = bet_type
+                item["template_text"] = template_text
+                item["config"] = config or {}
+                item["updated_at"] = "2026-04-07T12:00:00Z"
+                return item
+        return None
+
+    def update_message_template_status(self, *, template_id, user_id, status):
+        for item in self.message_templates:
+            if item["id"] == int(template_id) and item["user_id"] == int(user_id):
+                item["status"] = str(status)
+                item["updated_at"] = "2026-04-07T12:00:00Z"
+                return item
+        return None
+
+    def update_subscription_status(self, *, subscription_id, user_id, status):
+        for item in self.subscriptions:
+            if item["id"] == int(subscription_id) and item["user_id"] == int(user_id):
+                item["status"] = str(status)
+                item["updated_at"] = "2026-04-07T12:00:00Z"
+                return item
+        return None
+
+    def get_subscription(self, subscription_id):
+        for item in self.subscriptions:
+            if item["id"] == int(subscription_id):
+                data = dict(item)
+                progression = self.subscription_progression_states.get(int(subscription_id))
+                pending = next(
+                    (
+                        event for event in reversed(self.progression_events)
+                        if event["subscription_id"] == int(subscription_id) and event.get("status") in {"pending", "placed"}
+                    ),
+                    None,
+                )
+                if progression:
+                    data["progression"] = {
+                        "current_step": progression.get("current_step", 1),
+                        "last_signal_id": progression.get("last_signal_id"),
+                        "last_issue_no": progression.get("last_issue_no", ""),
+                        "last_result_type": progression.get("last_result_type", ""),
+                        "pending_event_id": pending.get("id") if pending else None,
+                        "pending_issue_no": pending.get("issue_no") if pending else "",
+                        "pending_status": pending.get("status") if pending else "",
+                    }
+                financial = self.subscription_financial_states.get(int(subscription_id))
+                data["financial"] = {
+                    "subscription_id": int(subscription_id),
+                    "user_id": item["user_id"],
+                    "realized_profit": float((financial or {}).get("realized_profit") or 0),
+                    "realized_loss": float((financial or {}).get("realized_loss") or 0),
+                    "net_profit": float((financial or {}).get("net_profit") or 0),
+                    "threshold_status": str((financial or {}).get("threshold_status") or ""),
+                    "stopped_reason": str((financial or {}).get("stopped_reason") or ""),
+                    "baseline_reset_at": (financial or {}).get("baseline_reset_at"),
+                    "baseline_reset_note": str((financial or {}).get("baseline_reset_note") or ""),
+                    "last_settled_event_id": (financial or {}).get("last_settled_event_id"),
+                    "last_settled_at": (financial or {}).get("last_settled_at"),
+                    "updated_at": (financial or {}).get("updated_at"),
+                }
+                return data
+        return None
+
+    def update_subscription_record(self, *, subscription_id, user_id, source_id, strategy=None, status=None):
+        for item in self.subscriptions:
+            if item["id"] == int(subscription_id) and item["user_id"] == int(user_id):
+                item["source_id"] = int(source_id)
+                item["strategy"] = strategy or {}
+                if status is not None:
+                    item["status"] = status
+                item["updated_at"] = "2026-04-07T12:00:00Z"
+                return item
+        return None
+
+    def delete_subscription_record(self, *, subscription_id, user_id):
+        for index, item in enumerate(self.subscriptions):
+            if item["id"] == int(subscription_id) and item["user_id"] == int(user_id):
+                del self.subscriptions[index]
+                return True
+        return False
+
+    def update_subscription_record(self, *, subscription_id, user_id, source_id, strategy=None, status=None):
+        for item in self.subscriptions:
+            if item["id"] == int(subscription_id) and item["user_id"] == int(user_id):
+                item["source_id"] = int(source_id)
+                item["strategy"] = strategy or {}
+                if status is not None:
+                    item["status"] = status
+                item["updated_at"] = "2026-04-07T12:00:00Z"
+                return item
+        return None
+
+    def list_delivery_targets(self, user_id):
+        return [item for item in self.targets if item["user_id"] == int(user_id)]
+
+    def create_delivery_target_record(self, **kwargs):
+        item = {
+            "id": len(self.targets) + 1,
+            "user_id": kwargs["user_id"],
+            "telegram_account_id": kwargs.get("telegram_account_id"),
+            "executor_type": kwargs["executor_type"],
+            "target_key": kwargs["target_key"],
+            "target_name": kwargs.get("target_name", ""),
+            "template_id": kwargs.get("template_id"),
+            "status": kwargs.get("status", "inactive"),
+            "last_test_status": kwargs.get("last_test_status", ""),
+            "last_test_error_code": kwargs.get("last_test_error_code", ""),
+            "last_test_message": kwargs.get("last_test_message", ""),
+            "last_tested_at": kwargs.get("last_tested_at"),
+            "created_at": "2026-04-07T12:00:00Z",
+            "updated_at": "2026-04-07T12:00:00Z",
+        }
+        self.targets.append(item)
+        return item
+
+    def update_delivery_target_status(self, *, delivery_target_id, user_id, status):
+        for item in self.targets:
+            if item["id"] == int(delivery_target_id) and item["user_id"] == int(user_id):
+                item["status"] = str(status)
+                item["updated_at"] = "2026-04-07T12:00:00Z"
+                return item
+        return None
+
+    def update_delivery_target_test_result(
+        self,
+        *,
+        delivery_target_id,
+        user_id,
+        last_test_status,
+        last_test_error_code="",
+        last_test_message="",
+        last_tested_at=None,
+    ):
+        for item in self.targets:
+            if item["id"] == int(delivery_target_id) and item["user_id"] == int(user_id):
+                item["last_test_status"] = str(last_test_status)
+                item["last_test_error_code"] = str(last_test_error_code or "")
+                item["last_test_message"] = str(last_test_message or "")
+                item["last_tested_at"] = last_tested_at or "2026-04-07T12:00:00Z"
+                item["updated_at"] = "2026-04-07T12:00:00Z"
+                return item
+        return None
+
+    def get_delivery_target(self, delivery_target_id):
+        for item in self.targets:
+            if item["id"] == int(delivery_target_id):
+                return item
+        return None
+
+    def update_delivery_target_record(self, *, delivery_target_id, user_id, telegram_account_id, executor_type, target_key, target_name="", template_id=None):
+        for item in self.targets:
+            if item["id"] == int(delivery_target_id) and item["user_id"] == int(user_id):
+                item["telegram_account_id"] = telegram_account_id
+                item["executor_type"] = executor_type
+                item["target_key"] = target_key
+                item["target_name"] = target_name
+                item["template_id"] = template_id
+                item["updated_at"] = "2026-04-07T12:00:00Z"
+                return item
+        return None
+
+    def count_execution_jobs_by_delivery_target(self, delivery_target_id, *, user_id=None):
+        return sum(
+            1
+            for item in self.jobs
+            if item.get("delivery_target_id") == int(delivery_target_id)
+            and (user_id is None or item["user_id"] == int(user_id))
+        )
+
+    def delete_delivery_target_record(self, *, delivery_target_id, user_id):
+        for index, item in enumerate(self.targets):
+            if item["id"] == int(delivery_target_id) and item["user_id"] == int(user_id):
+                del self.targets[index]
+                return True
+        return False
+
+    def update_delivery_target_record(self, *, delivery_target_id, user_id, telegram_account_id, executor_type, target_key, target_name="", template_id=None):
+        for item in self.targets:
+            if item["id"] == int(delivery_target_id) and item["user_id"] == int(user_id):
+                item["telegram_account_id"] = telegram_account_id
+                item["executor_type"] = executor_type
+                item["target_key"] = target_key
+                item["target_name"] = target_name
+                item["template_id"] = template_id
+                item["updated_at"] = "2026-04-07T12:00:00Z"
+                return item
+        return None
+
+    def list_signals(self, source_id=None):
+        if source_id is None:
+            return list(self.signals)
+        return [item for item in self.signals if item["source_id"] == int(source_id)]
+
+    def create_signal_record(self, **kwargs):
+        item = {
+            "id": len(self.signals) + 1,
+            "source_id": kwargs["source_id"],
+            "source_raw_item_id": kwargs.get("source_raw_item_id"),
+            "lottery_type": kwargs["lottery_type"],
+            "issue_no": kwargs["issue_no"],
+            "bet_type": kwargs["bet_type"],
+            "bet_value": kwargs["bet_value"],
+            "confidence": kwargs.get("confidence"),
+            "normalized_payload": kwargs.get("normalized_payload") or {},
+            "status": kwargs.get("status", "ready"),
+            "published_at": "2026-04-07T12:00:00Z",
+            "created_at": "2026-04-07T12:00:00Z",
+        }
+        self.signals.append(item)
+        return item
+
+    def create_raw_item_record(self, **kwargs):
+        item = {
+            "id": len(self.raw_items) + 1,
+            "source_id": kwargs["source_id"],
+            "external_item_id": kwargs.get("external_item_id"),
+            "issue_no": kwargs.get("issue_no", ""),
+            "published_at": kwargs.get("published_at") or "2026-04-07T12:00:00Z",
+            "raw_payload": kwargs.get("raw_payload") or {},
+            "parse_status": kwargs.get("parse_status", "pending"),
+            "parse_error": kwargs.get("parse_error"),
+            "created_at": "2026-04-07T12:00:00Z",
+        }
+        self.raw_items.append(item)
+        return item
+
+    def get_raw_item(self, raw_item_id):
+        for item in self.raw_items:
+            if item["id"] == int(raw_item_id):
+                return item
+        return None
+
+    def list_raw_items(self, source_id=None):
+        if source_id is None:
+            return list(self.raw_items)
+        return [item for item in self.raw_items if item["source_id"] == int(source_id)]
+
+    def update_raw_item_parse_result(self, raw_item_id, **kwargs):
+        item = self.get_raw_item(raw_item_id)
+        if not item:
+            return None
+        item["parse_status"] = kwargs.get("parse_status", item["parse_status"])
+        item["parse_error"] = kwargs.get("parse_error", item.get("parse_error"))
+        return item
+
+    def get_signal(self, signal_id):
+        for item in self.signals:
+            if item["id"] == int(signal_id):
+                return item
+        return None
+
+    def list_dispatch_candidates(self, signal_id):
+        signal = self.get_signal(signal_id)
+        if not signal:
+            return []
+        items = []
+        for subscription in self.subscriptions:
+            if subscription["source_id"] != signal["source_id"] or subscription["status"] != "active":
+                continue
+            for target in self.targets:
+                if target["user_id"] != subscription["user_id"] or target["status"] != "active":
+                    continue
+                account_id = target.get("telegram_account_id")
+                if account_id is not None:
+                    account = self.get_telegram_account(account_id)
+                    if account and account.get("status") != "active":
+                        continue
+                items.append(
+                    {
+                        "signal_id": signal["id"],
+                        "source_id": signal["source_id"],
+                        "issue_no": signal["issue_no"],
+                        "bet_type": signal["bet_type"],
+                        "bet_value": signal["bet_value"],
+                        "lottery_type": signal["lottery_type"],
+                        "normalized_payload": signal["normalized_payload"],
+                        "published_at": signal["published_at"],
+                        "subscription_id": subscription["id"],
+                        "user_id": subscription["user_id"],
+                        "strategy_json": subscription["strategy"],
+                        "delivery_target_id": target["id"],
+                        "telegram_account_id": target.get("telegram_account_id"),
+                        "template_id": target.get("template_id"),
+                        "executor_type": target["executor_type"],
+                        "target_key": target["target_key"],
+                        "target_name": target["target_name"],
+                    }
+                )
+        return items
+
+    def create_execution_job_record(self, **kwargs):
+        for item in self.jobs:
+            if item["user_id"] == kwargs["user_id"] and item["idempotency_key"] == kwargs["idempotency_key"]:
+                return {"created": False, "job": item}
+        job = {
+            "id": len(self.jobs) + 1,
+            "user_id": kwargs["user_id"],
+            "signal_id": kwargs["signal_id"],
+            "subscription_id": kwargs.get("subscription_id"),
+            "progression_event_id": kwargs.get("progression_event_id"),
+            "delivery_target_id": kwargs["delivery_target_id"],
+            "telegram_account_id": kwargs.get("telegram_account_id"),
+            "executor_type": kwargs["executor_type"],
+            "idempotency_key": kwargs["idempotency_key"],
+            "planned_message_text": kwargs["planned_message_text"],
+            "stake_plan": kwargs.get("stake_plan") or {},
+            "execute_after": kwargs["execute_after"],
+            "expire_at": kwargs["expire_at"],
+            "status": kwargs.get("status", "pending"),
+            "error_message": kwargs.get("error_message"),
+            "created_at": "2026-04-07T12:00:00Z",
+            "updated_at": "2026-04-07T12:00:00Z",
+        }
+        self.jobs.append(job)
+        return {"created": True, "job": job}
+
+    def get_subscription_progression_state(self, subscription_id):
+        return self.subscription_progression_states.get(int(subscription_id), {
+            "subscription_id": int(subscription_id),
+            "user_id": None,
+            "current_step": 1,
+            "last_signal_id": None,
+            "last_issue_no": "",
+            "last_result_type": "",
+            "updated_at": None,
+        })
+
+    def get_subscription_financial_state(self, subscription_id):
+        return self.subscription_financial_states.get(int(subscription_id), {
+            "subscription_id": int(subscription_id),
+            "user_id": None,
+            "realized_profit": 0.0,
+            "realized_loss": 0.0,
+            "net_profit": 0.0,
+            "threshold_status": "",
+            "stopped_reason": "",
+            "baseline_reset_at": None,
+            "baseline_reset_note": "",
+            "last_settled_event_id": None,
+            "last_settled_at": None,
+            "updated_at": None,
+        })
+
+    def get_progression_event_by_signal(self, *, subscription_id, signal_id):
+        for item in self.progression_events:
+            if item["subscription_id"] == int(subscription_id) and item["signal_id"] == int(signal_id):
+                return item
+        return None
+
+    def create_progression_event_record(self, **kwargs):
+        item = {"id": len(self.progression_events) + 1, **kwargs}
+        self.progression_events.append(item)
+        return item
+
+    def get_progression_event(self, progression_event_id):
+        for item in self.progression_events:
+            if item["id"] == int(progression_event_id):
+                return item
+        return None
+
+    def get_latest_pending_progression_event(self, *, subscription_id):
+        for item in reversed(self.progression_events):
+            if item["subscription_id"] == int(subscription_id) and item.get("status") in {"pending", "placed"}:
+                return item
+        return None
+
+    def upsert_subscription_progression_state(self, *, subscription_id, user_id, current_step, last_signal_id=None, last_issue_no="", last_result_type=""):
+        state = {
+            "subscription_id": int(subscription_id),
+            "user_id": int(user_id),
+            "current_step": int(current_step),
+            "last_signal_id": int(last_signal_id) if last_signal_id is not None else None,
+            "last_issue_no": str(last_issue_no or ""),
+            "last_result_type": str(last_result_type or ""),
+            "updated_at": "2026-04-07T12:00:00Z",
+        }
+        self.subscription_progression_states[int(subscription_id)] = state
+        return state
+
+    def settle_progression_event(self, *, subscription_id, user_id, result_type, progression_event_id=None):
+        event = self.get_progression_event(progression_event_id) if progression_event_id is not None else self.get_latest_pending_progression_event(subscription_id=subscription_id)
+        if not event:
+            raise ValueError("当前没有待结算的倍投状态")
+        event["status"] = "settled"
+        event["resolved_result_type"] = result_type
+        subscription = self.get_subscription(subscription_id) or {}
+        strategy = subscription.get("strategy") or {}
+        risk_control = strategy.get("risk_control") if isinstance(strategy.get("risk_control"), dict) else {}
+        win_profit_ratio = float(risk_control.get("win_profit_ratio") or 1.0)
+        max_steps = max(1, int(event.get("max_steps") or 1))
+        current_step = int(event.get("progression_step") or 1)
+        if result_type == "hit":
+            next_step = 1
+        elif result_type == "refund":
+            next_step = current_step if str(event.get("refund_action") or "hold") == "hold" else 1
+        else:
+            next_step = 1 if current_step >= max_steps else current_step + 1
+        state = self.upsert_subscription_progression_state(
+            subscription_id=subscription_id,
+            user_id=user_id,
+            current_step=next_step,
+            last_signal_id=event.get("signal_id"),
+            last_issue_no=event.get("issue_no") or "",
+            last_result_type=result_type,
+        )
+        financial = dict(self.get_subscription_financial_state(subscription_id))
+        stake_amount = float(event.get("stake_amount") or 0)
+        if result_type == "hit":
+            financial["realized_profit"] = round(float(financial.get("realized_profit") or 0) + stake_amount * win_profit_ratio, 2)
+            financial["net_profit"] = round(float(financial.get("net_profit") or 0) + stake_amount * win_profit_ratio, 2)
+        elif result_type == "miss":
+            financial["realized_loss"] = round(float(financial.get("realized_loss") or 0) + stake_amount, 2)
+            financial["net_profit"] = round(float(financial.get("net_profit") or 0) - stake_amount, 2)
+        financial["subscription_id"] = int(subscription_id)
+        financial["user_id"] = int(user_id)
+        financial["last_settled_event_id"] = event["id"]
+        financial["last_settled_at"] = "2026-04-07T12:00:00Z"
+        financial["updated_at"] = "2026-04-07T12:00:00Z"
+        threshold_status = ""
+        stopped_reason = ""
+        if bool(risk_control.get("enabled")):
+            profit_target = float(risk_control.get("profit_target") or 0)
+            loss_limit = float(risk_control.get("loss_limit") or 0)
+            if profit_target > 0 and float(financial["net_profit"]) >= profit_target:
+                threshold_status = "profit_target_hit"
+                stopped_reason = "达到止盈阈值后已自动停用"
+            elif loss_limit > 0 and float(financial["net_profit"]) <= -loss_limit:
+                threshold_status = "loss_limit_hit"
+                stopped_reason = "达到止损阈值后已自动停用"
+        financial["threshold_status"] = threshold_status
+        financial["stopped_reason"] = stopped_reason
+        self.subscription_financial_states[int(subscription_id)] = financial
+        if threshold_status:
+            self.update_subscription_status(subscription_id=subscription_id, user_id=user_id, status="inactive")
+        return {"event": event, "state": state, "financial": financial, "subscription": self.get_subscription(subscription_id)}
+
+    def reset_subscription_runtime(self, *, subscription_id, user_id, note=""):
+        current = self.get_subscription(subscription_id)
+        if not current or int(current["user_id"]) != int(user_id):
+            raise ValueError("subscription_id 对应的订阅不存在")
+        voided_event_ids = []
+        for event in self.progression_events:
+            if event["subscription_id"] == int(subscription_id) and event.get("status") in {"pending", "placed"}:
+                event["status"] = "reset"
+                event["resolved_result_type"] = "reset"
+                voided_event_ids.append(event["id"])
+        for job in self.jobs:
+            if job.get("subscription_id") == int(subscription_id) and job.get("status") == "pending":
+                job["status"] = "skipped"
+                job["error_message"] = "策略已重置，旧轮次未执行任务已跳过"
+        self.subscription_progression_states[int(subscription_id)] = {
+            "subscription_id": int(subscription_id),
+            "user_id": int(user_id),
+            "current_step": 1,
+            "last_signal_id": None,
+            "last_issue_no": "",
+            "last_result_type": "",
+            "updated_at": "2026-04-07T12:00:00Z",
+        }
+        self.subscription_financial_states[int(subscription_id)] = {
+            "subscription_id": int(subscription_id),
+            "user_id": int(user_id),
+            "realized_profit": 0.0,
+            "realized_loss": 0.0,
+            "net_profit": 0.0,
+            "threshold_status": "",
+            "stopped_reason": "",
+            "baseline_reset_at": "2026-04-07T12:00:00Z",
+            "baseline_reset_note": str(note or ""),
+            "last_settled_event_id": None,
+            "last_settled_at": None,
+            "updated_at": "2026-04-07T12:00:00Z",
+        }
+        return {
+            "item": self.get_subscription(subscription_id),
+            "progression": self.get_subscription_progression_state(subscription_id),
+            "financial": self.get_subscription_financial_state(subscription_id),
+            "reset_at": "2026-04-07T12:00:00Z",
+            "reset_note": str(note or ""),
+            "voided_event_ids": voided_event_ids,
+        }
+
+    def list_execution_jobs(self, *, user_id=None, signal_id=None, status=None, limit=100):
+        items = [item for item in self.jobs if user_id is None or item["user_id"] == int(user_id)]
+        if signal_id is not None:
+            items = [item for item in items if item["signal_id"] == int(signal_id)]
+        if status:
+            items = [item for item in items if item["status"] == status]
+
+        enriched = []
+        for item in items[:limit]:
+            signal = self.get_signal(item["signal_id"]) or {}
+            target = next((candidate for candidate in self.targets if candidate["id"] == item["delivery_target_id"]), {})
+            account = (
+                self.get_telegram_account(item["telegram_account_id"])
+                if item.get("telegram_account_id") is not None
+                else None
+            )
+            attempts = [attempt for attempt in self.reports if str(attempt["job_id"]) == str(item["id"])]
+            last_attempt = attempts[-1] if attempts else {}
+            enriched.append(
+                {
+                    **item,
+                    "lottery_type": signal.get("lottery_type", ""),
+                    "issue_no": signal.get("issue_no", ""),
+                    "bet_type": signal.get("bet_type", ""),
+                    "bet_value": signal.get("bet_value", ""),
+                    "target_key": target.get("target_key", ""),
+                    "target_name": target.get("target_name", ""),
+                    "telegram_account_label": account.get("label", "") if account else "",
+                    "attempt_count": len(attempts),
+                    "last_attempt_no": last_attempt.get("attempt_no"),
+                    "last_delivery_status": last_attempt.get("delivery_status"),
+                    "last_remote_message_id": last_attempt.get("remote_message_id"),
+                    "last_error_message": last_attempt.get("error_message"),
+                    "last_executed_at": last_attempt.get("executed_at"),
+                    "last_executor_instance_id": last_attempt.get("executor_id"),
+                }
+            )
+        return enriched
+
+    def list_executor_instances(self, *, limit=50):
+        enriched = []
+        for item in self.executors[:limit]:
+            attempts = [attempt for attempt in self.reports if attempt["executor_id"] == item["executor_id"]]
+            last_failure = next(
+                (
+                    attempt for attempt in reversed(attempts)
+                    if attempt["delivery_status"] in {"failed", "expired", "skipped"}
+                ),
+                None,
+            )
+            enriched.append(
+                {
+                    **item,
+                    "total_attempt_count": len(attempts),
+                    "delivered_attempt_count": len([attempt for attempt in attempts if attempt["delivery_status"] == "delivered"]),
+                    "failed_attempt_count": len(
+                        [attempt for attempt in attempts if attempt["delivery_status"] in {"failed", "expired", "skipped"}]
+                    ),
+                    "last_executed_at": attempts[-1]["executed_at"] if attempts else None,
+                    "last_failure_at": last_failure["executed_at"] if last_failure else None,
+                    "last_failure_status": last_failure["delivery_status"] if last_failure else None,
+                    "last_failure_error_message": last_failure["error_message"] if last_failure else None,
+                }
+            )
+        return enriched
+
+    def list_executor_attempts(self, *, executor_id, limit=20):
+        attempts = [attempt for attempt in self.reports if attempt["executor_id"] == executor_id]
+        attempts = sorted(attempts, key=lambda item: item["executed_at"], reverse=True)
+        return [
+            {
+                "id": index + 1,
+                "job_id": int(attempt["job_id"]) if str(attempt["job_id"]).isdigit() else 0,
+                "executor_instance_id": attempt["executor_id"],
+                "attempt_no": attempt["attempt_no"],
+                "delivery_status": attempt["delivery_status"],
+                "remote_message_id": attempt["remote_message_id"],
+                "raw_result": attempt["raw_result"],
+                "error_message": attempt["error_message"],
+                "executed_at": attempt["executed_at"],
+                "created_at": attempt["executed_at"],
+            }
+            for index, attempt in enumerate(attempts[:limit])
+        ]
+
+    def list_recent_execution_failures(self, *, user_id=None, limit=20):
+        items = []
+        for job in self.jobs:
+            if user_id is not None and job["user_id"] != int(user_id):
+                continue
+            if job["status"] not in {"failed", "expired", "skipped"}:
+                continue
+            signal = self.get_signal(job["signal_id"]) or {}
+            target = next((candidate for candidate in self.targets if candidate["id"] == job["delivery_target_id"]), {})
+            account = (
+                self.get_telegram_account(job["telegram_account_id"])
+                if job.get("telegram_account_id") is not None
+                else None
+            )
+            attempts = [attempt for attempt in self.reports if str(attempt["job_id"]) == str(job["id"])]
+            last_failure = next(
+                (
+                    attempt for attempt in reversed(attempts)
+                    if attempt["delivery_status"] in {"failed", "expired", "skipped"}
+                ),
+                None,
+            )
+            if not last_failure:
+                continue
+            items.append(
+                {
+                    "job_id": job["id"],
+                    "user_id": job["user_id"],
+                    "signal_id": job["signal_id"],
+                    "delivery_target_id": job["delivery_target_id"],
+                    "telegram_account_id": job.get("telegram_account_id"),
+                    "job_status": job["status"],
+                    "planned_message_text": job["planned_message_text"],
+                    "lottery_type": signal.get("lottery_type", ""),
+                    "issue_no": signal.get("issue_no", ""),
+                    "bet_type": signal.get("bet_type", ""),
+                    "bet_value": signal.get("bet_value", ""),
+                    "target_key": target.get("target_key", ""),
+                    "target_name": target.get("target_name", ""),
+                    "telegram_account_label": account.get("label", "") if account else "",
+                    "executor_instance_id": last_failure["executor_id"],
+                    "attempt_no": last_failure["attempt_no"],
+                    "delivery_status": last_failure["delivery_status"],
+                    "remote_message_id": last_failure["remote_message_id"],
+                    "error_message": last_failure["error_message"],
+                    "executed_at": last_failure["executed_at"],
+                    "attempt_count": len(attempts),
+                    "raw_result": last_failure["raw_result"],
+                }
+            )
+        items.sort(key=lambda item: item["executed_at"], reverse=True)
+        return items[:limit]
+
+    def retry_execution_job(self, *, job_id, user_id):
+        for item in self.jobs:
+            if item["id"] == int(job_id) and item["user_id"] == int(user_id):
+                if item["status"] not in {"failed", "expired", "skipped"}:
+                    raise ValueError("当前任务状态不支持重试")
+                item["status"] = "pending"
+                item["error_message"] = None
+                item["updated_at"] = "2026-04-08T12:00:00Z"
+                item["execute_after"] = "2026-04-08T12:00:00Z"
+                item["expire_at"] = "2026-04-08T12:02:00Z"
+                return item
+        raise ValueError("execution_job 不存在")
+
+
+def invoke(app, environ):
+    captured = {"status": None, "headers": None}
+
+    def start_response(status, headers):
+        captured["status"] = status
+        captured["headers"] = headers
+
+    body = b"".join(app(environ, start_response))
+    return captured["status"], dict(captured["headers"]), json.loads(body.decode("utf-8"))
+
+
+class PlatformApiApplicationTests(unittest.TestCase):
+    def setUp(self):
+        self.repository = FakeRepository()
+        self.app = PlatformApiApplication(
+            repository=self.repository,
+            executor_api_token="secret",
+            session_secret="session-secret",
+        )
+        self.executor_headers = {
+            "HTTP_AUTHORIZATION": "Bearer secret",
+            "HTTP_X_EXECUTOR_ID": "executor-001",
+        }
+        cookie_value = build_session_cookie_value(1, "session-secret")
+        self.session_headers = {
+            "HTTP_COOKIE": "%s=%s" % (SESSION_COOKIE_NAME, cookie_value),
+        }
+
+    def test_health_endpoint_does_not_require_auth(self):
+        status, headers, payload = invoke(self.app, build_testing_environ("/api/health"))
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload, {"status": "ok"})
+        self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
+
+    def test_home_page_renders_html(self):
+        captured = {"status": None, "headers": None}
+
+        def start_response(status, headers):
+            captured["status"] = status
+            captured["headers"] = dict(headers)
+
+        body = b"".join(self.app(build_testing_environ("/"), start_response)).decode("utf-8")
+        self.assertEqual(captured["status"], "200 OK")
+        self.assertEqual(captured["headers"]["Content-Type"], "text/html; charset=utf-8")
+        self.assertIn("自动投注总览", body)
+        self.assertIn("进入自动投注总控台", body)
+        self.assertIn("自动投注总控台", body)
+        self.assertIn("/autobet/accounts#accountsSection", body)
+        self.assertIn("/autobet/targets#targetsSection", body)
+        self.assertIn("/autobet/templates#templatesSection", body)
+        self.assertIn("/autobet/subscriptions#subscriptionsSection", body)
+        self.assertIn("快捷导入方案", body)
+        self.assertIn("下一步", body)
+
+    def test_admin_page_requires_authenticated_session(self):
+        captured = {"status": None, "headers": None}
+
+        def start_response(status, headers):
+            captured["status"] = status
+            captured["headers"] = dict(headers)
+
+        body = b"".join(self.app(build_testing_environ("/admin"), start_response)).decode("utf-8")
+        self.assertEqual(captured["status"], "401 Unauthorized")
+        self.assertEqual(captured["headers"]["Content-Type"], "text/html; charset=utf-8")
+        self.assertIn("后台访问受限", body)
+        self.assertIn("请先登录后再进入后台控制台", body)
+
+    def test_admin_page_renders_html_for_authenticated_session(self):
+        captured = {"status": None, "headers": None}
+
+        def start_response(status, headers):
+            captured["status"] = status
+            captured["headers"] = dict(headers)
+
+        body = b"".join(self.app(build_testing_environ("/admin", headers=self.session_headers), start_response)).decode("utf-8")
+        self.assertEqual(captured["status"], "200 OK")
+        self.assertEqual(captured["headers"]["Content-Type"], "text/html; charset=utf-8")
+        self.assertIn("值班总览", body)
+        self.assertIn("来源接入中心", body)
+        self.assertIn("执行中心", body)
+        self.assertIn("支持查询页", body)
+
+    def test_admin_subpage_renders_same_shell(self):
+        captured = {"status": None, "headers": None}
+
+        def start_response(status, headers):
+            captured["status"] = status
+            captured["headers"] = dict(headers)
+
+        body = b"".join(self.app(build_testing_environ("/admin/execution", headers=self.session_headers), start_response)).decode("utf-8")
+        self.assertEqual(captured["status"], "200 OK")
+        self.assertEqual(captured["headers"]["Content-Type"], "text/html; charset=utf-8")
+        self.assertIn("后台控制台", body)
+        self.assertIn("执行中心", body)
+
+    def test_admin_support_snapshot_returns_cross_user_objects(self):
+        user_two = self.repository.create_user_record(
+            username="support-user",
+            email="support@example.com",
+            role="user",
+            status="active",
+        )
+        source = self.repository.create_source_record(
+            owner_user_id=user_two["id"],
+            source_type="telegram_channel",
+            name="support-source",
+            visibility="private",
+            config={"chat_id": "@support"},
+        )
+        account = self.repository.create_telegram_account_record(
+            user_id=user_two["id"],
+            label="支持账号",
+            phone="+12016660000",
+            session_path="/data/support/account",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+        )
+        template = self.repository.create_message_template_record(
+            user_id=user_two["id"],
+            name="支持模板",
+            lottery_type="pc28",
+            bet_type="*",
+            template_text="{{bet_value}}{{amount}}",
+            config={"bet_rules": {}},
+        )
+        self.repository.create_subscription_record(
+            user_id=user_two["id"],
+            source_id=source["id"],
+            strategy={"mode": "follow", "stake_amount": 18},
+        )
+        self.repository.create_delivery_target_record(
+            user_id=user_two["id"],
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100555",
+            target_name="支持群",
+            template_id=template["id"],
+            status="active",
+            last_test_status="success",
+            last_tested_at="2026-04-08T12:00:00Z",
+        )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/admin/support",
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertTrue(any(item["username"] == "owner" for item in payload["users"]))
+        self.assertTrue(any(item["username"] == "support-user" for item in payload["users"]))
+        self.assertTrue(any(item["label"] == "支持账号" for item in payload["accounts"]))
+        self.assertTrue(any(item["target_name"] == "支持群" for item in payload["targets"]))
+        self.assertTrue(any(item["source_name"] == "support-source" for item in payload["subscriptions"]))
+        self.assertTrue(any(item["name"] == "支持模板" for item in payload["templates"]))
+
+    def test_records_page_renders_html(self):
+        captured = {"status": None, "headers": None}
+
+        def start_response(status, headers):
+            captured["status"] = status
+            captured["headers"] = dict(headers)
+
+        body = b"".join(self.app(build_testing_environ("/records"), start_response)).decode("utf-8")
+        self.assertEqual(captured["status"], "200 OK")
+        self.assertEqual(captured["headers"]["Content-Type"], "text/html; charset=utf-8")
+        self.assertIn("执行记录与异常回看", body)
+        self.assertIn("记录概览", body)
+        self.assertIn("执行记录列表", body)
+        self.assertIn("记录页处理入口", body)
+        self.assertIn("自动投注总控台", body)
+        self.assertIn("/autobet/accounts#accountsSection", body)
+        self.assertIn("/autobet/targets#targetsSection", body)
+        self.assertIn("/autobet/subscriptions#subscriptionsSection", body)
+
+    def test_alerts_page_renders_html(self):
+        captured = {"status": None, "headers": None}
+
+        def start_response(status, headers):
+            captured["status"] = status
+            captured["headers"] = dict(headers)
+
+        body = b"".join(self.app(build_testing_environ("/alerts"), start_response)).decode("utf-8")
+        self.assertEqual(captured["status"], "200 OK")
+        self.assertEqual(captured["headers"]["Content-Type"], "text/html; charset=utf-8")
+        self.assertIn("异常提醒与人工处理", body)
+        self.assertIn("告警概览", body)
+        self.assertIn("告警列表", body)
+        self.assertIn("告警页处理入口", body)
+        self.assertIn("自动投注总控台", body)
+        self.assertIn("/autobet/accounts#accountsSection", body)
+        self.assertIn("/autobet/targets#targetsSection", body)
+        self.assertIn("/records", body)
+
+    def test_autobet_page_renders_html(self):
+        captured = {"status": None, "headers": None}
+
+        def start_response(status, headers):
+            captured["status"] = status
+            captured["headers"] = dict(headers)
+
+        body = b"".join(self.app(build_testing_environ("/autobet"), start_response)).decode("utf-8")
+        self.assertEqual(captured["status"], "200 OK")
+        self.assertEqual(captured["headers"]["Content-Type"], "text/html; charset=utf-8")
+        self.assertIn("自动投注总控台", body)
+        self.assertIn("当前版本的配置语义", body)
+        self.assertIn("自动投注状态", body)
+        self.assertIn("运行阻塞与建议", body)
+        self.assertIn("优先处理动作", body)
+        self.assertIn("最近执行反馈", body)
+        self.assertIn("只看失败项", body)
+        self.assertIn("最近异常提醒", body)
+        self.assertIn("当前配置与运行上下文", body)
+        self.assertIn("投递群组", body)
+        self.assertIn("跟单策略", body)
+
+    def test_autobet_includes_execution_flow_and_workspaces(self):
+        captured = {"status": None, "headers": None}
+
+        def start_response(status, headers):
+            captured["status"] = status
+            captured["headers"] = dict(headers)
+
+        body = b"".join(self.app(build_testing_environ("/autobet"), start_response)).decode("utf-8")
+        self.assertEqual(captured["status"], "200 OK")
+        self.assertIn("执行链路", body)
+        self.assertIn("工作区", body)
+        self.assertIn("进入各工作区处理问题", body)
+        self.assertIn("/autobet/accounts#accountsSection", body)
+        self.assertIn("/autobet/targets#targetsSection", body)
+        self.assertIn("/autobet/templates#templatesSection", body)
+
+
+    def test_autobet_focus_routes_render_html(self):
+        for path in ("/autobet/accounts", "/autobet/templates", "/autobet/targets", "/autobet/subscriptions"):
+            captured = {"status": None, "headers": None}
+
+            def start_response(status, headers):
+                captured["status"] = status
+                captured["headers"] = dict(headers)
+
+            body = b"".join(self.app(build_testing_environ(path), start_response)).decode("utf-8")
+            self.assertEqual(captured["status"], "200 OK")
+            self.assertEqual(captured["headers"]["Content-Type"], "text/html; charset=utf-8")
+            self.assertIn("自动投注总控台", body)
+
+    def test_autobet_accounts_workspace_renders_account_copy(self):
+        captured = {"status": None, "headers": None}
+
+        def start_response(status, headers):
+            captured["status"] = status
+            captured["headers"] = dict(headers)
+
+        body = b"".join(self.app(build_testing_environ("/autobet/accounts"), start_response)).decode("utf-8")
+        self.assertEqual(captured["status"], "200 OK")
+        self.assertIn("托管账号", body)
+        self.assertIn("托管账号接入、授权进度和账号可执行状态", body)
+
+    def test_ui_assets_render(self):
+        for path, content_type in (
+            ("/assets/home.css", "text/css; charset=utf-8"),
+            ("/assets/home.js", "application/javascript; charset=utf-8"),
+            ("/assets/records.css", "text/css; charset=utf-8"),
+            ("/assets/records.js", "application/javascript; charset=utf-8"),
+            ("/assets/alerts.css", "text/css; charset=utf-8"),
+            ("/assets/alerts.js", "application/javascript; charset=utf-8"),
+            ("/assets/autobet.css", "text/css; charset=utf-8"),
+            ("/assets/autobet.js", "application/javascript; charset=utf-8"),
+            ("/assets/dashboard.css", "text/css; charset=utf-8"),
+            ("/assets/dashboard.js", "application/javascript; charset=utf-8"),
+        ):
+            captured = {"status": None, "headers": None}
+
+            def start_response(status, headers):
+                captured["status"] = status
+                captured["headers"] = dict(headers)
+
+            body = b"".join(self.app(build_testing_environ(path), start_response)).decode("utf-8")
+            self.assertEqual(captured["status"], "200 OK")
+            self.assertEqual(captured["headers"]["Content-Type"], content_type)
+            self.assertTrue(body)
+
+    def test_auth_register_and_me(self):
+        create_status, headers, create_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/auth/register",
+                method="POST",
+                body={
+                    "username": "alice",
+                    "email": "alice@example.com",
+                    "password": "secret",
+                },
+            ),
+        )
+        self.assertEqual(create_status, "200 OK")
+        self.assertEqual(create_payload["user"]["username"], "alice")
+        self.assertIn("Set-Cookie", headers)
+
+        me_status, _, me_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/auth/me",
+                headers={"HTTP_COOKIE": headers["Set-Cookie"].split(";", 1)[0]},
+            ),
+        )
+        self.assertEqual(me_status, "200 OK")
+        self.assertEqual(me_payload["user"]["username"], "alice")
+
+    def test_auth_register_can_initialize_legacy_user_without_password(self):
+        self.repository.users.append(
+            {
+                "id": 99,
+                "username": "legacy-user",
+                "email": "legacy@example.com",
+                "password_hash": "",
+                "role": "user",
+                "status": "active",
+                "created_at": "2026-04-07T12:00:00Z",
+                "updated_at": "2026-04-07T12:00:00Z",
+            }
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/auth/register",
+                method="POST",
+                body={
+                    "username": "legacy-user",
+                    "email": "legacy@example.com",
+                    "password": "secret",
+                },
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertIn("初始化", payload["message"])
+        self.assertTrue(self.repository.get_user_by_username("legacy-user")["password_hash"])
+
+    def test_auth_login_rejects_legacy_user_without_password(self):
+        self.repository.users.append(
+            {
+                "id": 100,
+                "username": "legacy-empty",
+                "email": "legacy-empty@example.com",
+                "password_hash": "",
+                "role": "user",
+                "status": "active",
+                "created_at": "2026-04-07T12:00:00Z",
+                "updated_at": "2026-04-07T12:00:00Z",
+            }
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/auth/login",
+                method="POST",
+                body={
+                    "username": "legacy-empty",
+                    "password": "secret",
+                },
+            ),
+        )
+        self.assertEqual(status, "401 Unauthorized")
+        self.assertIn("尚未设置密码", payload["error"])
+
+    def test_fetch_source_endpoint_returns_raw_item(self):
+        with patch("pc28touzhu.api.app.fetch_source") as mocked_fetch_source:
+            mocked_fetch_source.return_value = {
+                "source": {"id": 1, "name": "remote"},
+                "raw_item": {"id": 5, "source_id": 1, "parse_status": "pending"},
+            }
+            status, _, payload = invoke(
+                self.app,
+                build_testing_environ(
+                    "/api/platform/sources/1/fetch",
+                    method="POST",
+                    body={},
+                    headers=self.session_headers,
+                ),
+            )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["raw_item"]["id"], 5)
+        mocked_fetch_source.assert_called_once()
+
+    def test_pull_jobs_requires_auth(self):
+        status, _, payload = invoke(self.app, build_testing_environ("/api/executor/jobs/pull"))
+        self.assertEqual(status, "401 Unauthorized")
+        self.assertEqual(payload["error"], "unauthorized")
+
+    def test_pull_jobs_returns_items(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/executor/jobs/pull",
+                headers=self.executor_headers,
+                query="limit=1",
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertEqual(payload["items"][0]["job_id"], "job_001")
+
+    def test_heartbeat_endpoint_records_payload(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/executor/heartbeat",
+                method="POST",
+                body={"version": "0.1.0", "capabilities": {"send": True}},
+                headers=self.executor_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["executor_id"], "executor-001")
+        self.assertEqual(self.repository.heartbeats[0]["version"], "0.1.0")
+
+    def test_list_executors_returns_heartbeat_summary(self):
+        self.repository.upsert_executor_heartbeat(
+            executor_id="executor-001",
+            version="0.2.0",
+            capabilities={"send": True, "provider": "telethon"},
+            status="online",
+            last_seen_at="2026-04-08T12:00:00Z",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/executors",
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertEqual(payload["items"][0]["executor_id"], "executor-001")
+        self.assertIn("heartbeat_status", payload["items"][0])
+        self.assertIn("recent_failure_streak", payload["items"][0])
+        self.assertTrue(payload["items"][0]["capabilities"]["send"])
+
+    def test_report_endpoint_validates_payload(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/executor/jobs/job_001/report",
+                method="POST",
+                body={
+                    "executor_id": "executor-001",
+                    "attempt_no": 1,
+                    "delivery_status": "delivered",
+                    "remote_message_id": "123",
+                    "executed_at": "2026-04-07T15:00:08Z",
+                    "raw_result": {"chat_id": "-1001234567890"},
+                },
+                headers=self.executor_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["delivery_status"], "delivered")
+        self.assertEqual(self.repository.reports[0]["job_id"], "job_001")
+
+    def test_report_endpoint_rejects_invalid_status(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/executor/jobs/job_001/report",
+                method="POST",
+                body={
+                    "executor_id": "executor-001",
+                    "attempt_no": 1,
+                    "delivery_status": "unknown",
+                    "executed_at": "2026-04-07T15:00:08Z",
+                    "raw_result": {},
+                },
+                headers=self.executor_headers,
+            ),
+        )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertIn("delivery_status", payload["error"])
+
+    def test_list_sources_returns_items(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/sources",
+                headers=self.session_headers,
+                query="owner_user_id=1",
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertEqual(payload["items"][0]["name"], "demo-source")
+
+    def test_list_users_scope_all_returns_all_users(self):
+        self.repository.create_user_record(username="second", email="second@example.com", role="user", status="active")
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/users",
+                headers=self.session_headers,
+                query="scope=all",
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(len(payload["items"]), 2)
+
+    def test_list_sources_scope_all_returns_other_owner_items(self):
+        self.repository.create_source_record(
+            owner_user_id=2,
+            source_type="telegram_channel",
+            name="foreign-source",
+            visibility="public",
+            config={"chat_id": "@demo"},
+        )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/sources",
+                headers=self.session_headers,
+                query="scope=all",
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(len(payload["items"]), 2)
+        self.assertTrue(any(item["name"] == "foreign-source" for item in payload["items"]))
+
+    def test_create_source_returns_item(self):
+        self.repository.create_user_record(username="u2", email="", role="user", status="active")
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/sources",
+                method="POST",
+                body={
+                    "source_type": "telegram_channel",
+                    "name": "channel-a",
+                    "visibility": "public",
+                    "config": {"chat_id": "@demo"},
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["source_type"], "telegram_channel")
+        self.assertEqual(payload["item"]["config"]["chat_id"], "@demo")
+
+    def test_create_ai_trading_simulator_source_returns_fetch_config(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/sources",
+                method="POST",
+                body={
+                    "source_type": "ai_trading_simulator_export",
+                    "name": "AITradingSimulator 方案 #12",
+                    "visibility": "private",
+                    "config": {
+                        "fetch": {
+                            "url": "https://example.com/api/export/predictors/12/signals?view=execution",
+                            "headers": {"Accept": "application/json"},
+                            "timeout": 10,
+                        }
+                    },
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["source_type"], "ai_trading_simulator_export")
+        self.assertEqual(payload["item"]["visibility"], "private")
+        self.assertEqual(
+            payload["item"]["config"]["fetch"]["url"],
+            "https://example.com/api/export/predictors/12/signals?view=execution",
+        )
+
+    def test_create_telegram_account_and_list(self):
+        create_status, _, create_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/telegram-accounts",
+                method="POST",
+                body={
+                    "label": "主账号",
+                    "phone": "+12019362923",
+                    "auth_mode": "phone_login",
+                    "meta": {},
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(create_status, "200 OK")
+        self.assertEqual(create_payload["item"]["label"], "主账号")
+        self.assertEqual(create_payload["item"]["status"], "inactive")
+        self.assertEqual(create_payload["item"]["auth_state"], "new")
+        self.assertIn("/data/accounts/u1/", create_payload["item"]["session_path"])
+
+        list_status, _, list_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/telegram-accounts",
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(list_status, "200 OK")
+        self.assertEqual(len(list_payload["items"]), 1)
+
+    def test_list_telegram_accounts_support_query_by_user_id(self):
+        other_user = self.repository.create_user_record(username="support-user", email="", role="user", status="active")
+        self.repository.create_telegram_account_record(
+            user_id=other_user["id"],
+            label="支持账号",
+            phone="+12019990009",
+            session_path="/data/u2/support-main",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+            status="active",
+        )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/telegram-accounts",
+                headers=self.session_headers,
+                query="user_id=%s" % other_user["id"],
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertEqual(payload["items"][0]["label"], "支持账号")
+
+    def test_update_telegram_account_status_endpoint(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="主账号",
+            phone="+12019362923",
+            session_path="/data/u2/main",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/telegram-accounts/%s/status" % account["id"],
+                method="POST",
+                body={"status": "inactive"},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["status"], "inactive")
+
+    def test_update_telegram_account_endpoint(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="旧账号",
+            phone="+12019362923",
+            session_path="/data/u2/old",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/telegram-accounts/%s" % account["id"],
+                method="POST",
+                body={
+                    "label": "新账号",
+                    "phone": "+12010000000",
+                    "meta": {"note": "edited"},
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["label"], "新账号")
+        self.assertEqual(payload["item"]["session_path"], "/data/u2/old")
+        self.assertEqual(payload["item"]["meta"]["note"], "edited")
+
+    def test_update_telegram_account_status_requires_authorized_account(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="待授权账号",
+            phone="+12019362923",
+            session_path="/data/u2/pending",
+            status="inactive",
+            meta={"auth_mode": "phone_login", "auth_state": "code_sent"},
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/telegram-accounts/%s/status" % account["id"],
+                method="POST",
+                body={"status": "active"},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertIn("尚未完成授权", payload["error"])
+
+    def test_import_telegram_account_session_route(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="导入账号",
+            phone="",
+            session_path="/data/u2/import",
+            status="inactive",
+            meta={"auth_mode": "session_import", "auth_state": "pending_import"},
+        )
+        with patch("pc28touzhu.api.app.import_telegram_account_session") as mocked:
+            mocked.return_value = {
+                "item": {
+                    **account,
+                    "phone": "+12018880000",
+                    "status": "active",
+                    "auth_mode": "session_import",
+                    "auth_state": "authorized",
+                    "is_authorized": True,
+                    "meta": {"auth_mode": "session_import", "auth_state": "authorized"},
+                }
+            }
+            status, _, payload = invoke(
+                self.app,
+                build_testing_environ(
+                    "/api/platform/telegram-accounts/%s/import-session" % account["id"],
+                    method="POST",
+                    body={"file_name": "a.session", "session_file_base64": "ZmFrZQ=="},
+                    headers=self.session_headers,
+                ),
+            )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["auth_state"], "authorized")
+
+    def test_begin_telegram_account_login_route(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="登录账号",
+            phone="+12019362923",
+            session_path="/data/u2/login",
+            status="inactive",
+            meta={"auth_mode": "phone_login", "auth_state": "new"},
+        )
+        with patch("pc28touzhu.api.app.begin_telegram_account_login") as mocked:
+            mocked.return_value = {
+                "item": {
+                    **account,
+                    "auth_mode": "phone_login",
+                    "auth_state": "code_sent",
+                    "is_authorized": False,
+                    "meta": {"auth_mode": "phone_login", "auth_state": "code_sent"},
+                }
+            }
+            status, _, payload = invoke(
+                self.app,
+                build_testing_environ(
+                    "/api/platform/telegram-accounts/%s/auth/send-code" % account["id"],
+                    method="POST",
+                    body={"phone": "+12019362923"},
+                    headers=self.session_headers,
+                ),
+            )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["auth_state"], "code_sent")
+
+    def test_delete_telegram_account_endpoint_requires_archived_and_no_dependencies(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="待删账号",
+            phone="+12019360009",
+            session_path="/data/u2/delete",
+            status="archived",
+            meta={},
+        )
+        self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100909",
+            target_name="关联群",
+            status="archived",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/telegram-accounts/%s/delete" % account["id"],
+                method="POST",
+                body={},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertIn("投递群组", payload["error"])
+
+    def test_delete_telegram_account_endpoint(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="可删账号",
+            phone="+12019360010",
+            session_path="/data/u2/delete-free",
+            status="archived",
+            meta={},
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/telegram-accounts/%s/delete" % account["id"],
+                method="POST",
+                body={},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertTrue(payload["deleted"])
+        self.assertIsNone(self.repository.get_telegram_account(account["id"]))
+
+    def test_platform_route_requires_login(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/telegram-accounts",
+                method="POST",
+                body={
+                    "label": "坏数据",
+                    "session_path": "/data/u999/main",
+                    "meta": {},
+                },
+            ),
+        )
+        self.assertEqual(status, "401 Unauthorized")
+        self.assertIn("请先登录", payload["error"])
+
+    def test_create_subscription_and_list(self):
+        create_status, _, create_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions",
+                method="POST",
+                body={
+                    "source_id": 1,
+                    "strategy": {"mode": "follow"},
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(create_status, "200 OK")
+        self.assertEqual(create_payload["item"]["strategy"]["mode"], "follow")
+
+        list_status, _, list_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions",
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(list_status, "200 OK")
+        self.assertEqual(len(list_payload["items"]), 1)
+
+    def test_update_subscription_status_endpoint(self):
+        created = self.repository.create_subscription_record(
+            user_id=1,
+            source_id=1,
+            strategy={"mode": "follow"},
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions/%s/status" % created["id"],
+                method="POST",
+                body={"status": "inactive"},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["status"], "inactive")
+
+    def test_update_subscription_endpoint(self):
+        created = self.repository.create_subscription_record(
+            user_id=1,
+            source_id=1,
+            strategy={"mode": "follow", "stake_amount": 10},
+        )
+        self.repository.create_source_record(
+            owner_user_id=1,
+            source_type="ai_trading_simulator_export",
+            name="额外来源",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions/%s" % created["id"],
+                method="POST",
+                body={
+                    "source_id": 2,
+                    "strategy": {"mode": "follow", "stake_amount": 20},
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["source_id"], 2)
+        self.assertEqual(payload["item"]["strategy"]["stake_amount"], 20)
+
+    def test_settle_subscription_progression_endpoint(self):
+        created = self.repository.create_subscription_record(
+            user_id=1,
+            source_id=1,
+            strategy={"mode": "martingale", "base_stake": 10, "multiplier": 2, "max_steps": 3},
+        )
+        signal = self.repository.create_signal_record(
+            source_id=1,
+            lottery_type="pc28",
+            issue_no="20260407011",
+            bet_type="big_small",
+            bet_value="大",
+        )
+        event = self.repository.create_progression_event_record(
+            subscription_id=created["id"],
+            user_id=1,
+            signal_id=signal["id"],
+            issue_no="20260407011",
+            progression_step=1,
+            stake_amount=10,
+            base_stake=10,
+            multiplier=2,
+            max_steps=3,
+            refund_action="hold",
+            cap_action="reset",
+            status="placed",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions/%s/progression/settle" % created["id"],
+                method="POST",
+                body={
+                    "progression_event_id": event["id"],
+                    "result_type": "miss",
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["progression"]["event"]["resolved_result_type"], "miss")
+        self.assertEqual(payload["progression"]["state"]["current_step"], 2)
+
+    def test_delete_subscription_endpoint_requires_archived(self):
+        created = self.repository.create_subscription_record(
+            user_id=1,
+            source_id=1,
+            strategy={"mode": "follow"},
+            status="inactive",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions/%s/delete" % created["id"],
+                method="POST",
+                body={},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertIn("请先归档", payload["error"])
+
+    def test_delete_subscription_endpoint(self):
+        created = self.repository.create_subscription_record(
+            user_id=1,
+            source_id=1,
+            strategy={"mode": "follow"},
+            status="archived",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions/%s/delete" % created["id"],
+                method="POST",
+                body={},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertTrue(payload["deleted"])
+        self.assertIsNone(self.repository.get_subscription(created["id"]))
+
+    def test_update_subscription_endpoint(self):
+        created = self.repository.create_subscription_record(
+            user_id=1,
+            source_id=1,
+            strategy={"mode": "follow", "stake_amount": 10},
+        )
+        self.repository.create_source_record(
+            owner_user_id=1,
+            source_type="ai_trading_simulator_export",
+            name="额外来源",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions/%s" % created["id"],
+                method="POST",
+                body={
+                    "source_id": 2,
+                    "strategy": {"mode": "follow", "stake_amount": 20},
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["source_id"], 2)
+        self.assertEqual(payload["item"]["strategy"]["stake_amount"], 20)
+
+    def test_create_delivery_target_and_list(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号A",
+            phone="+12019360000",
+            session_path="/data/u7/account-a",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+        )
+        create_status, _, create_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/delivery-targets",
+                method="POST",
+                body={
+                    "telegram_account_id": account["id"],
+                    "executor_type": "telegram_group",
+                    "target_key": "-100111",
+                    "target_name": "投注群",
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(create_status, "200 OK")
+        self.assertEqual(create_payload["item"]["target_key"], "-100111")
+        self.assertEqual(create_payload["item"]["telegram_account_id"], account["id"])
+        self.assertEqual(create_payload["item"]["status"], "inactive")
+        self.assertEqual(create_payload["item"]["last_test_status"], "")
+
+        list_status, _, list_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/delivery-targets",
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(list_status, "200 OK")
+        self.assertEqual(len(list_payload["items"]), 1)
+
+    def test_delivery_targets_list_allows_extra_fields(self):
+        enhanced_target = {
+            "id": 888,
+            "user_id": 1,
+            "telegram_account_id": None,
+            "executor_type": "telegram_group",
+            "target_key": "@demo",
+            "target_name": "演示群",
+            "template_id": None,
+            "status": "active",
+            "last_test_status": "success",
+            "last_test_error_code": "",
+            "last_test_message": "",
+            "last_tested_at": "2026-04-08T12:00:00Z",
+            "created_at": "2026-04-08T12:00:00Z",
+            "updated_at": "2026-04-08T12:00:00Z",
+            "subscriptions": [55],
+            "recent_tests": [{"status": "failed", "message": "超时"}],
+        }
+        self.repository.list_delivery_targets = lambda user_id: [enhanced_target]
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/delivery-targets",
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["items"][0]["subscriptions"], [55])
+        self.assertEqual(payload["items"][0]["recent_tests"][0]["message"], "超时")
+
+    def test_create_message_template_and_list(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/message-templates",
+                method="POST",
+                body={
+                    "name": "加拿大28高倍模板",
+                    "lottery_type": "pc28",
+                    "bet_type": "*",
+                    "template_text": "{{bet_value}}{{amount}}",
+                    "config": {
+                        "bet_rules": {
+                            "number_sum": {"format": "{{bet_value}}/{{amount}}"},
+                        }
+                    },
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["name"], "加拿大28高倍模板")
+        self.assertEqual(payload["item"]["config"]["bet_rules"]["number_sum"]["format"], "{{bet_value}}/{{amount}}")
+
+        list_status, _, list_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/message-templates",
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(list_status, "200 OK")
+        self.assertEqual(len(list_payload["items"]), 1)
+
+    def test_message_templates_list_allows_extra_metadata(self):
+        enhanced_template = {
+            "id": 999,
+            "user_id": 1,
+            "name": "增强模板",
+            "lottery_type": "pc28",
+            "bet_type": "*",
+            "template_text": "{{bet_value}}{{amount}}",
+            "config": {"bet_rules": {}},
+            "status": "active",
+            "created_at": "2026-04-08T12:00:00Z",
+            "updated_at": "2026-04-08T12:00:00Z",
+            "usage_count": 5,
+            "bound_targets": [101, 102],
+        }
+        self.repository.list_message_templates = lambda user_id: [enhanced_template]
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/message-templates",
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["items"][0]["usage_count"], 5)
+        self.assertEqual(payload["items"][0]["bound_targets"], [101, 102])
+
+    def test_update_message_template_endpoint(self):
+        template = self.repository.create_message_template_record(
+            user_id=1,
+            name="旧模板",
+            lottery_type="pc28",
+            bet_type="*",
+            template_text="{{bet_value}}{{amount}}",
+            config={"bet_rules": {}},
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/message-templates/%s" % template["id"],
+                method="POST",
+                body={
+                    "name": "新模板",
+                    "lottery_type": "pc28",
+                    "bet_type": "*",
+                    "template_text": "{{bet_value}}/{{amount}}",
+                    "config": {"bet_rules": {"big_small": {"format": "{{bet_value}}{{amount}}"}}},
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["name"], "新模板")
+        self.assertEqual(payload["item"]["template_text"], "{{bet_value}}/{{amount}}")
+
+    def test_dispatch_signal_uses_message_template(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="模板账号",
+            phone="+12010000001",
+            session_path="/data/u3/template-main",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+            status="active",
+        )
+        template = self.repository.create_message_template_record(
+            user_id=1,
+            name="高倍数字模板",
+            lottery_type="pc28",
+            bet_type="*",
+            template_text="{{bet_value}}{{amount}}",
+            config={
+                "bet_rules": {
+                    "number_sum": {"format": "{{bet_value}}/{{amount}}"},
+                    "big_small": {"format": "{{bet_value}}{{amount}}"},
+                }
+            },
+        )
+        self.repository.create_subscription_record(user_id=1, source_id=1, strategy={"stake_amount": 12})
+        self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            template_id=template["id"],
+            executor_type="telegram_group",
+            target_key="-100200",
+            target_name="模板群",
+            status="active",
+        )
+        signal = self.repository.create_signal_record(
+            source_id=1,
+            lottery_type="pc28",
+            issue_no="20260407009",
+            bet_type="number_sum",
+            bet_value="0",
+            normalized_payload={},
+        )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/signals/%s/dispatch" % signal["id"],
+                method="POST",
+                body={},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["created_count"], 1)
+        self.assertEqual(self.repository.jobs[0]["planned_message_text"], "0/12")
+
+    def test_create_delivery_target_normalizes_tme_links(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号A",
+            phone="+12019360000",
+            session_path="/data/u7/account-a",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/delivery-targets",
+                method="POST",
+                body={
+                    "telegram_account_id": account["id"],
+                    "executor_type": "telegram_group",
+                    "target_key": "https://t.me/c/123456/9",
+                    "target_name": "测试群",
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["target_key"], "-100123456")
+
+        status2, _, payload2 = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/delivery-targets",
+                method="POST",
+                body={
+                    "telegram_account_id": account["id"],
+                    "executor_type": "telegram_group",
+                    "target_key": "https://t.me/s/My_Test_Chat",
+                    "target_name": "测试群2",
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status2, "200 OK")
+        self.assertEqual(payload2["item"]["target_key"], "My_Test_Chat")
+
+    def test_create_delivery_target_rejects_invite_links(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号A",
+            phone="+12019360000",
+            session_path="/data/u7/account-a",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/delivery-targets",
+                method="POST",
+                body={
+                    "telegram_account_id": account["id"],
+                    "executor_type": "telegram_group",
+                    "target_key": "https://t.me/+abcdefg",
+                    "target_name": "邀请群",
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertIn("邀请链接", payload["error"])
+
+    def test_delivery_target_test_send_requires_authorized_account(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号A",
+            phone="+12019360000",
+            session_path="/data/u7/account-a",
+            meta={"auth_mode": "phone_login", "auth_state": "code_sent"},
+        )
+        target = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100111",
+            target_name="投注群",
+            status="active",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/delivery-targets/%s/test-send" % target["id"],
+                method="POST",
+                body={"message_text": "test"},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertIn("尚未完成授权", payload["error"])
+
+    def test_delivery_target_test_send_rejects_archived_target(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号A",
+            phone="+12019360000",
+            session_path="/data/u7/account-a",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+        )
+        target = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100111",
+            target_name="投注群",
+            status="archived",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/delivery-targets/%s/test-send" % target["id"],
+                method="POST",
+                body={"message_text": "test"},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertIn("已归档", payload["error"])
+
+    def test_delivery_target_test_send_success(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号A",
+            phone="+12019360000",
+            session_path="/data/u7/account-a",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+            status="inactive",
+        )
+        target = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="https://t.me/c/123456/9",
+            target_name="投注群",
+            status="inactive",
+        )
+
+        class FakeSender:
+            def __init__(self, *, api_id, api_hash, phone, session):
+                self.api_id = api_id
+                self.api_hash = api_hash
+                self.phone = phone
+                self.session = session
+
+            def connect(self):
+                return None
+
+            def disconnect(self):
+                return None
+
+            def send_text(self, target_key, message_text):
+                return {"message_id": 1, "target_key": target_key, "text": message_text}
+
+        with patch("pc28touzhu.services.platform_service.TelethonMessageSender", FakeSender):
+            status, _, payload = invoke(
+                self.app,
+                build_testing_environ(
+                    "/api/platform/delivery-targets/%s/test-send" % target["id"],
+                    method="POST",
+                    body={"message_text": "hello"},
+                    headers=self.session_headers,
+                ),
+            )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["target_key"], "-100123456")
+        self.assertEqual(payload["result"]["message_id"], 1)
+        self.assertEqual(payload["item"]["last_test_status"], "success")
+        self.assertEqual(payload["item"]["last_test_error_code"], "")
+        self.assertIsNotNone(payload["item"]["last_tested_at"])
+
+    def test_delivery_target_test_send_returns_actionable_reason(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号A",
+            phone="+12019360000",
+            session_path="/data/u7/account-a",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+        )
+        target = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100999",
+            target_name="测试群",
+            status="inactive",
+        )
+
+        class UserNotParticipantError(Exception):
+            pass
+
+        class FakeSender:
+            def __init__(self, *, api_id, api_hash, phone, session):
+                self.api_id = api_id
+                self.api_hash = api_hash
+                self.phone = phone
+                self.session = session
+
+            def connect(self):
+                return None
+
+            def disconnect(self):
+                return None
+
+            def send_text(self, target_key, message_text):
+                raise UserNotParticipantError("user not in chat")
+
+        with patch("pc28touzhu.services.platform_service.TelethonMessageSender", FakeSender):
+            status, _, payload = invoke(
+                self.app,
+                build_testing_environ(
+                    "/api/platform/delivery-targets/%s/test-send" % target["id"],
+                    method="POST",
+                    body={"message_text": "hello"},
+                    headers=self.session_headers,
+                ),
+            )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertEqual(payload["reason_code"], "target_not_joined")
+        self.assertIn("没有进入这个群组", payload["error"])
+        updated = self.repository.get_delivery_target(target["id"])
+        self.assertEqual(updated["last_test_status"], "failed")
+        self.assertEqual(updated["last_test_error_code"], "target_not_joined")
+
+    def test_update_delivery_target_status_endpoint(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号A",
+            phone="+12019360000",
+            session_path="/data/u7/account-a",
+            meta={},
+        )
+        created = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100111",
+            target_name="投注群",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/delivery-targets/%s/status" % created["id"],
+                method="POST",
+                body={"status": "inactive"},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["status"], "inactive")
+
+    def test_update_delivery_target_status_requires_successful_test(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号A",
+            phone="+12019360000",
+            session_path="/data/u7/account-a",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+        )
+        created = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100111",
+            target_name="投注群",
+            status="inactive",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/delivery-targets/%s/status" % created["id"],
+                method="POST",
+                body={"status": "active"},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertEqual(payload["reason_code"], "target_test_required")
+
+    def test_update_delivery_target_status_allows_active_after_successful_test(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号A",
+            phone="+12019360000",
+            session_path="/data/u7/account-a",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+            status="active",
+        )
+        created = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100111",
+            target_name="投注群",
+            status="inactive",
+            last_test_status="success",
+            last_tested_at="2026-04-07T12:00:00Z",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/delivery-targets/%s/status" % created["id"],
+                method="POST",
+                body={"status": "active"},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["status"], "active")
+
+    def test_update_delivery_target_endpoint(self):
+        account_a = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号A",
+            phone="+12019360000",
+            session_path="/data/u7/account-a",
+            meta={},
+        )
+        account_b = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号B",
+            phone="+12019360001",
+            session_path="/data/u7/account-b",
+            meta={},
+        )
+        created = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account_a["id"],
+            executor_type="telegram_group",
+            target_key="-100111",
+            target_name="旧投注群",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/delivery-targets/%s" % created["id"],
+                method="POST",
+                body={
+                    "telegram_account_id": account_b["id"],
+                    "executor_type": "telegram_group",
+                    "target_key": "-100222",
+                    "target_name": "新投注群",
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["telegram_account_id"], account_b["id"])
+        self.assertEqual(payload["item"]["target_key"], "-100222")
+
+    def test_delete_delivery_target_endpoint_requires_no_execution_jobs(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号C",
+            phone="+12019360002",
+            session_path="/data/u7/account-c",
+            meta={},
+        )
+        created = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100333",
+            target_name="归档投注群",
+            status="archived",
+        )
+        self.repository.create_execution_job_record(
+            user_id=1,
+            signal_id=1,
+            delivery_target_id=created["id"],
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            idempotency_key="target-delete-job",
+            planned_message_text="大单20",
+            stake_plan={"mode": "follow", "amount": 20},
+            execute_after="2026-04-07T12:00:00Z",
+            expire_at="2026-04-07T12:02:00Z",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/delivery-targets/%s/delete" % created["id"],
+                method="POST",
+                body={},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertIn("执行记录", payload["error"])
+
+    def test_delete_delivery_target_endpoint(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号D",
+            phone="+12019360003",
+            session_path="/data/u7/account-d",
+            meta={},
+        )
+        created = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100444",
+            target_name="可删投注群",
+            status="archived",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/delivery-targets/%s/delete" % created["id"],
+                method="POST",
+                body={},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertTrue(payload["deleted"])
+        self.assertIsNone(self.repository.get_delivery_target(created["id"]))
+
+    def test_update_delivery_target_endpoint(self):
+        account_a = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号A",
+            phone="+12019360000",
+            session_path="/data/u7/account-a",
+            meta={},
+        )
+        account_b = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号B",
+            phone="+12019360001",
+            session_path="/data/u7/account-b",
+            meta={},
+        )
+        created = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account_a["id"],
+            executor_type="telegram_group",
+            target_key="-100111",
+            target_name="旧投注群",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/delivery-targets/%s" % created["id"],
+                method="POST",
+                body={
+                    "telegram_account_id": account_b["id"],
+                    "executor_type": "telegram_group",
+                    "target_key": "-100222",
+                    "target_name": "新投注群",
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["telegram_account_id"], account_b["id"])
+        self.assertEqual(payload["item"]["target_key"], "-100222")
+
+    def test_create_signal_and_list(self):
+        create_status, _, create_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/signals",
+                method="POST",
+                body={
+                    "source_id": 1,
+                    "lottery_type": "pc28",
+                    "issue_no": "20260407001",
+                    "bet_type": "big_small",
+                    "bet_value": "大",
+                    "confidence": 0.8,
+                    "normalized_payload": {"message_text": "大10"},
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(create_status, "200 OK")
+        self.assertEqual(create_payload["item"]["bet_value"], "大")
+
+        list_status, _, list_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/signals",
+                headers=self.session_headers,
+                query="source_id=1",
+            ),
+        )
+        self.assertEqual(list_status, "200 OK")
+        self.assertEqual(len(list_payload["items"]), 1)
+
+    def test_dispatch_signal_creates_jobs(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="主号",
+            phone="+12010000000",
+            session_path="/data/u3/main",
+            meta={},
+        )
+        self.repository.create_subscription_record(user_id=1, source_id=1, strategy={"stake_amount": 12})
+        self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100200",
+            target_name="跟单群",
+            status="active",
+        )
+        signal = self.repository.create_signal_record(
+            source_id=1,
+            lottery_type="pc28",
+            issue_no="20260407002",
+            bet_type="big_small",
+            bet_value="小",
+            normalized_payload={},
+        )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/signals/%s/dispatch" % signal["id"],
+                method="POST",
+                body={},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["created_count"], 1)
+        self.assertEqual(len(self.repository.jobs), 1)
+        self.assertEqual(self.repository.jobs[0]["telegram_account_id"], account["id"])
+
+    def test_list_execution_jobs_returns_filtered_items(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="任务号",
+            phone="+12012223333",
+            session_path="/data/u3/job-main",
+            meta={},
+        )
+        self.repository.create_subscription_record(user_id=1, source_id=1, strategy={"stake_amount": 10})
+        target = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100201",
+            target_name="任务群",
+        )
+        signal = self.repository.create_signal_record(
+            source_id=1,
+            lottery_type="pc28",
+            issue_no="20260407012",
+            bet_type="big_small",
+            bet_value="大",
+            normalized_payload={},
+        )
+        created = self.repository.create_execution_job_record(
+            user_id=1,
+            signal_id=signal["id"],
+            delivery_target_id=target["id"],
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            idempotency_key="signal:%s:target:%s" % (signal["id"], target["id"]),
+            planned_message_text="大10",
+            stake_plan={"mode": "flat", "amount": 10},
+            execute_after="2026-04-08T12:00:00Z",
+            expire_at="2026-04-08T12:02:00Z",
+            status="failed",
+        )
+        self.repository.report_job_result(
+            job_id=str(created["job"]["id"]),
+            executor_id="executor-001",
+            attempt_no=1,
+            delivery_status="failed",
+            remote_message_id=None,
+            executed_at="2026-04-08T12:00:08Z",
+            raw_result={"exception_type": "RuntimeError"},
+            error_message="network timeout",
+        )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/execution-jobs",
+                headers=self.session_headers,
+                query="status=failed",
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertEqual(payload["items"][0]["status"], "failed")
+        self.assertTrue(payload["items"][0]["can_retry"])
+        self.assertEqual(payload["items"][0]["last_error_message"], "network timeout")
+
+    def test_retry_execution_job_endpoint_resets_status(self):
+        self.repository.jobs.append(
+            {
+                "id": 9,
+                "user_id": 1,
+                "signal_id": 1,
+                "delivery_target_id": 1,
+                "telegram_account_id": None,
+                "executor_type": "telegram_group",
+                "idempotency_key": "job-9",
+                "planned_message_text": "大10",
+                "stake_plan": {"mode": "flat", "amount": 10},
+                "execute_after": "2026-04-07T12:00:00Z",
+                "expire_at": "2026-04-07T12:02:00Z",
+                "status": "failed",
+                "error_message": "session invalid",
+                "created_at": "2026-04-07T12:00:00Z",
+                "updated_at": "2026-04-07T12:00:00Z",
+            }
+        )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/execution-jobs/9/retry",
+                method="POST",
+                body={},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["status"], "pending")
+        self.assertTrue(payload["item"]["can_retry"] is False)
+        self.assertIsNone(payload["item"]["error_message"])
+
+    def test_list_execution_jobs_scope_all_returns_other_user_job(self):
+        self.repository.targets.append(
+            {
+                "id": 5,
+                "user_id": 2,
+                "telegram_account_id": None,
+                "executor_type": "telegram_group",
+                "target_key": "-100555",
+                "target_name": "其他用户群",
+                "template_id": None,
+                "status": "active",
+                "created_at": "2026-04-07T12:00:00Z",
+                "updated_at": "2026-04-07T12:00:00Z",
+            }
+        )
+        self.repository.signals.append(
+            {
+                "id": 5,
+                "source_id": 1,
+                "source_raw_item_id": None,
+                "lottery_type": "pc28",
+                "issue_no": "20260409001",
+                "bet_type": "big_small",
+                "bet_value": "小",
+                "confidence": 0.66,
+                "normalized_payload": {},
+                "status": "ready",
+                "published_at": "2026-04-09T12:00:00Z",
+                "created_at": "2026-04-09T12:00:00Z",
+            }
+        )
+        self.repository.jobs.append(
+            {
+                "id": 15,
+                "user_id": 2,
+                "signal_id": 5,
+                "delivery_target_id": 5,
+                "telegram_account_id": None,
+                "executor_type": "telegram_group",
+                "idempotency_key": "job-15",
+                "planned_message_text": "小10",
+                "stake_plan": {"mode": "flat", "amount": 10},
+                "execute_after": "2026-04-09T12:00:00Z",
+                "expire_at": "2026-04-09T12:02:00Z",
+                "status": "pending",
+                "error_message": None,
+                "created_at": "2026-04-09T12:00:00Z",
+                "updated_at": "2026-04-09T12:00:00Z",
+            }
+        )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/execution-jobs",
+                headers=self.session_headers,
+                query="scope=all",
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertTrue(any(item["id"] == 15 for item in payload["items"]))
+
+    def test_list_recent_execution_failures_returns_failed_jobs(self):
+        self.repository.upsert_executor_heartbeat(
+            executor_id="executor-001",
+            version="0.2.0",
+            capabilities={"send": True},
+            status="online",
+            last_seen_at="2026-04-08T12:00:00Z",
+        )
+        self.repository.targets.append(
+            {
+                "id": 1,
+                "user_id": 1,
+                "telegram_account_id": None,
+                "executor_type": "telegram_group",
+                "target_key": "-100901",
+                "target_name": "失败群",
+                "template_id": None,
+                "status": "active",
+                "created_at": "2026-04-07T12:00:00Z",
+                "updated_at": "2026-04-07T12:00:00Z",
+            }
+        )
+        self.repository.signals.append(
+            {
+                "id": 1,
+                "source_id": 1,
+                "source_raw_item_id": None,
+                "lottery_type": "pc28",
+                "issue_no": "20260408001",
+                "bet_type": "big_small",
+                "bet_value": "大",
+                "confidence": 0.8,
+                "normalized_payload": {},
+                "status": "ready",
+                "published_at": "2026-04-08T12:00:00Z",
+                "created_at": "2026-04-08T12:00:00Z",
+            }
+        )
+        self.repository.jobs.append(
+            {
+                "id": 11,
+                "user_id": 1,
+                "signal_id": 1,
+                "delivery_target_id": 1,
+                "telegram_account_id": None,
+                "executor_type": "telegram_group",
+                "idempotency_key": "job-11",
+                "planned_message_text": "大10",
+                "stake_plan": {"mode": "flat", "amount": 10},
+                "execute_after": "2026-04-08T12:00:00Z",
+                "expire_at": "2026-04-08T12:02:00Z",
+                "status": "failed",
+                "error_message": "session expired",
+                "created_at": "2026-04-08T12:00:00Z",
+                "updated_at": "2026-04-08T12:00:00Z",
+            }
+        )
+        self.repository.report_job_result(
+            job_id="11",
+            executor_id="executor-001",
+            attempt_no=1,
+            delivery_status="failed",
+            remote_message_id=None,
+            executed_at="2026-04-08T12:00:05Z",
+            raw_result={"exception_type": "RuntimeError"},
+            error_message="session expired",
+        )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/execution-failures",
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertEqual(payload["items"][0]["job_id"], 11)
+        self.assertEqual(payload["items"][0]["executor_instance_id"], "executor-001")
+        self.assertTrue(payload["items"][0]["can_retry"])
+        self.assertIn(payload["items"][0]["auto_retry_state"], {"scheduled", "due"})
+        self.assertTrue(payload["items"][0]["auto_retry_enabled"])
+
+    def test_list_alerts_returns_executor_and_retry_exhausted_alerts(self):
+        self.repository.upsert_executor_heartbeat(
+            executor_id="executor-offline",
+            version="0.2.0",
+            capabilities={"send": True},
+            status="online",
+            last_seen_at="2020-01-01T00:00:00Z",
+        )
+        self.repository.targets.append(
+            {
+                "id": 2,
+                "user_id": 1,
+                "telegram_account_id": None,
+                "executor_type": "telegram_group",
+                "target_key": "-100902",
+                "target_name": "告警群",
+                "template_id": None,
+                "status": "active",
+                "created_at": "2026-04-07T12:00:00Z",
+                "updated_at": "2026-04-07T12:00:00Z",
+            }
+        )
+        self.repository.jobs.append(
+            {
+                "id": 12,
+                "user_id": 1,
+                "signal_id": 1,
+                "delivery_target_id": 2,
+                "telegram_account_id": None,
+                "executor_type": "telegram_group",
+                "idempotency_key": "job-12",
+                "planned_message_text": "大12",
+                "stake_plan": {"mode": "flat", "amount": 12},
+                "execute_after": "2026-04-08T12:00:00Z",
+                "expire_at": "2026-04-08T12:02:00Z",
+                "status": "failed",
+                "error_message": "retry exhausted",
+                "created_at": "2026-04-08T12:00:00Z",
+                "updated_at": "2026-04-08T12:00:00Z",
+            }
+        )
+        for attempt_no in range(1, 4):
+            self.repository.report_job_result(
+                job_id="12",
+                executor_id="executor-offline",
+                attempt_no=attempt_no,
+                delivery_status="failed",
+                remote_message_id=None,
+                executed_at="2026-04-08T12:00:0%sZ" % attempt_no,
+                raw_result={"exception_type": "RuntimeError"},
+                error_message="retry exhausted",
+            )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/alerts",
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertTrue(any(item["alert_type"] == "executor_offline" for item in payload["items"]))
+        self.assertTrue(any(item["alert_type"] == "job_retry_exhausted" for item in payload["items"]))
+
+    def test_create_raw_item_and_normalize(self):
+        create_status, _, create_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/raw-items",
+                method="POST",
+                body={
+                    "source_id": 1,
+                    "issue_no": "20260407003",
+                    "raw_payload": {
+                        "signals": [
+                            {
+                                "lottery_type": "pc28",
+                                "issue_no": "20260407003",
+                                "bet_type": "big_small",
+                                "bet_value": "大",
+                                "confidence": 0.81,
+                                "message_text": "大18",
+                                "stake_amount": 18,
+                            }
+                        ]
+                    },
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(create_status, "200 OK")
+        raw_item_id = create_payload["item"]["id"]
+
+        normalize_status, _, normalize_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/raw-items/%s/normalize" % raw_item_id,
+                method="POST",
+                body={},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(normalize_status, "200 OK")
+        self.assertEqual(normalize_payload["created_count"], 1)
+        self.assertEqual(len(self.repository.signals), 1)
+        self.assertEqual(self.repository.raw_items[0]["parse_status"], "parsed")
+
+    def test_normalize_ai_trading_simulator_export_payload(self):
+        create_status, _, create_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/raw-items",
+                method="POST",
+                body={
+                    "source_id": 1,
+                    "issue_no": "20260408001",
+                    "raw_payload": {
+                        "items": [
+                            {
+                                "signal_id": "pc28-predictor-12-20260408001-big_small",
+                                "source_ref": {"predictor_id": 12, "predictor_name": "主策略A"},
+                                "lottery_type": "pc28",
+                                "issue_no": "20260408001",
+                                "published_at": "2026-04-08T12:00:00Z",
+                                "signals": [
+                                    {
+                                        "bet_type": "big_small",
+                                        "bet_value": "大",
+                                        "confidence": 0.77,
+                                        "message_text": "大10",
+                                    },
+                                    {
+                                        "bet_type": "odd_even",
+                                        "bet_value": "单",
+                                        "confidence": 0.61,
+                                    },
+                                ],
+                            }
+                        ]
+                    },
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(create_status, "200 OK")
+        raw_item_id = create_payload["item"]["id"]
+
+        normalize_status, _, normalize_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/raw-items/%s/normalize" % raw_item_id,
+                method="POST",
+                body={},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(normalize_status, "200 OK")
+        self.assertEqual(normalize_payload["created_count"], 2)
+        self.assertEqual(len(self.repository.signals), 2)
+        self.assertEqual(
+            self.repository.signals[0]["normalized_payload"]["source_ref"]["predictor_id"],
+            12,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

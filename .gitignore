@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+
+# Codex sandbox marker
+.codex
+.ace-tool/
+
+# Local env
+.env
+.env.*
+
+# OS
+.DS_Store
+
+# Runtime
+*.log
+*.sqlite3
+*.db
+*.session

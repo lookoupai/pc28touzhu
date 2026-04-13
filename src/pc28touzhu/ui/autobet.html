@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>pc28touzhu 自动投注总控台</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Noto+Sans+SC:wght@400;500;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/assets/autobet.css">
+</head>
+<body data-autobet-scope="workbench">
+    <div class="page-shell">
+        <header class="topbar">
+            <a class="brand" href="/">
+                <span class="brand-mark">P28</span>
+                <span class="brand-copy">
+                    <strong>pc28touzhu</strong>
+                    <span>自动投注总控台</span>
+                </span>
+            </a>
+            <nav class="topbar-actions">
+                <button id="refreshAutobetBtn" class="nav-link nav-button" type="button">刷新配置</button>
+                <a class="nav-link" href="/">首页</a>
+                <a class="nav-link" href="/records">执行记录</a>
+                <a class="nav-link" href="/alerts">异常提醒</a>
+                <a class="nav-link" href="/admin" data-requires-auth>管理控制台</a>
+                <button id="accountMenuBtn" class="nav-link nav-button" type="button" data-auth-account-label aria-haspopup="dialog" aria-controls="accountDialog">登录</button>
+            </nav>
+        </header>
+
+        <nav class="workspace-nav" aria-label="自动投注导航">
+            <a class="workspace-link is-active" href="/autobet#autobetQuickstartSection">总控台首页</a>
+            <a class="workspace-link" href="/autobet#autobetOverviewSection">配置概览</a>
+            <a class="workspace-link" href="/autobet/accounts#accountsSection">账号</a>
+            <a class="workspace-link" href="/autobet/targets#targetsSection">群组</a>
+            <a class="workspace-link" href="/autobet/templates#templatesSection">模板</a>
+            <a class="workspace-link" href="/autobet/subscriptions#subscriptionsSection">跟单</a>
+            <a class="workspace-link" href="/autobet#currentConfigSection">当前链路</a>
+            <a class="workspace-link" href="/records">记录</a>
+            <a class="workspace-link" href="/alerts">告警</a>
+        </nav>
+
+        <main class="layout">
+            <section class="hero-card">
+                <div class="hero-copy">
+                    <p id="autobetHeroEyebrow" class="eyebrow">总控台</p>
+                    <h1 id="autobetHeroTitle">这里是自动投注总控台，所有实际配置都在这里完成。</h1>
+                    <p id="autobetHeroText" class="hero-text">
+                        首页现在只看总览、记录和异常；账号授权、投递群组、下注模板、跟单策略这些真正的配置动作，
+                        统一收口在总控台和对应工作区里完成。
+                    </p>
+                    <div class="hero-actions">
+                        <a id="autobetHeroPrimaryAction" class="primary-link" href="#autobetQuickstartSection">开始 4 步向导</a>
+                        <a id="autobetHeroSecondaryAction" class="ghost-link" href="/">返回总览</a>
+                    </div>
+                </div>
+                <aside class="hero-status">
+                    <div class="status-card">
+                        <span class="status-label">当前账号</span>
+                        <strong id="autobetHeroUsername">未登录</strong>
+                        <p id="autobetHeroUserMeta">登录后查看当前配置并完成自动投注准备。</p>
+                    </div>
+                    <div class="status-card">
+                        <span class="status-label">配置状态</span>
+                        <strong id="autobetReadinessHeadline">待配置</strong>
+                        <p id="autobetReadinessDetail">还没有具备自动投注的基础条件。</p>
+                    </div>
+                </aside>
+            </section>
+
+            <section id="autobetQuickstartSection" class="panel onboarding-panel">
+                <div class="panel-header onboarding-panel-header">
+                    <div>
+                        <p class="panel-kicker">快速开始</p>
+                        <h2>4 步完成自动投注基础配置</h2>
+                        <p class="panel-copy">面向新手，只保留当前一步的主操作；完成后会自动进入下一步，并支持继续上次进度。</p>
+                    </div>
+                    <button id="continueOnboardingBtn" class="primary-btn" type="button">继续上次进度</button>
+                </div>
+
+                <div id="onboardingPrerequisite" class="autobet-note onboarding-prerequisite" hidden>
+                    <strong>开始前请先登录</strong>
+                    <p>向导会按当前登录用户的实际配置自动判断进度。登录后再开始导入方案、授权账号、绑定群组和建立跟单。</p>
+                </div>
+
+                <div class="onboarding-context-grid">
+                    <article class="onboarding-context-card">
+                        <span class="setup-label">当前方案</span>
+                        <strong id="autobetPrimarySource">未导入</strong>
+                        <p id="autobetPrimarySourceMeta">先从首页导入公开方案页链接。</p>
+                    </article>
+                    <article class="onboarding-context-card">
+                        <span class="setup-label">当前账号</span>
+                        <strong id="autobetPrimaryAccount">未绑定</strong>
+                        <p id="autobetPrimaryAccountMeta">当前还没有托管账号可用于执行。</p>
+                    </article>
+                </div>
+
+                <section class="onboarding-source-strip" aria-label="已导入方案预览">
+                    <div class="onboarding-source-head">
+                        <strong>已识别的方案来源</strong>
+                        <span class="field-hint">向导会优先识别 AITradingSimulator 方案来源。</span>
+                    </div>
+                    <div id="sourceCards" class="onboarding-source-grid"></div>
+                </section>
+
+                <p id="onboardingProgressMeta" class="onboarding-progress-meta">登录后查看向导进度。</p>
+                <div id="onboardingGuideSteps" class="onboarding-steps"></div>
+            </section>
+
+            <section id="autobetOverviewSection" class="overview-stack">
+                <section class="summary-grid">
+                    <article class="summary-card">
+                        <span class="summary-label">AI 方案</span>
+                        <strong id="autobetSourceCount">0</strong>
+                        <p>当前账号下已导入的 AITradingSimulator 方案来源数量。</p>
+                    </article>
+                    <article class="summary-card">
+                        <span class="summary-label">托管账号</span>
+                        <strong id="autobetAccountCount">0</strong>
+                        <p>当前账号已绑定的 Telegram 托管账号数量。</p>
+                    </article>
+                    <article class="summary-card">
+                        <span class="summary-label">投递群组</span>
+                        <strong id="autobetTargetCount">0</strong>
+                        <p>当前账号下可用于执行的投递目标数量。</p>
+                    </article>
+                    <article class="summary-card summary-card-emphasis">
+                        <span class="summary-label">跟单关系</span>
+                        <strong id="autobetSubscriptionCount">0</strong>
+                        <p>当前账号已建立的来源跟单关系数量。</p>
+                    </article>
+                </section>
+
+                <div id="statusMessage" class="status-banner" aria-live="polite"></div>
+
+                <section class="autobet-control-card">
+                    <div class="autobet-control-copy">
+                        <p class="panel-kicker">全局控制</p>
+                        <h2 id="autobetGlobalTitle">自动投注状态</h2>
+                        <p id="autobetGlobalDetail" class="panel-copy">系统会根据当前激活的账号、投递群组和跟单策略判断自动投注是否处于运行条件。</p>
+                    </div>
+                    <div class="autobet-control-actions">
+                        <span id="autobetGlobalStatus" class="config-status-pill is-inactive">已停用</span>
+                        <button id="toggleAutobetBtn" class="primary-btn" type="button">恢复自动投注</button>
+                    </div>
+                </section>
+
+                <section class="autobet-runtime-grid">
+                    <article class="runtime-card runtime-card-emphasis">
+                        <span class="setup-label">运行判定</span>
+                        <strong id="autobetRuntimeHeadline">待检查</strong>
+                        <p id="autobetRuntimeDetail">登录后查看当前自动投注是否具备运行条件。</p>
+                    </article>
+                    <article class="runtime-card">
+                        <span class="setup-label">阻塞项</span>
+                        <strong id="autobetBlockerCount">0</strong>
+                        <p id="autobetBlockerSummary">当前没有检测到阻塞项。</p>
+                    </article>
+                    <article class="runtime-card">
+                        <span class="setup-label">归档项</span>
+                        <strong id="autobetArchiveCount">0</strong>
+                        <p id="autobetArchiveSummary">当前没有已归档配置。</p>
+                    </article>
+                </section>
+
+                <section id="autobetExecutionFlowSection" class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">执行链路</p>
+                            <h2>执行链路摘要</h2>
+                        </div>
+                        <p id="autobetExecutionFlowSummaryText" class="panel-copy">这里把“来源 -> 跟单 -> 群组 -> 模板 -> 最终发言”压缩成一眼能看懂的业务链路。</p>
+                    </div>
+                    <div id="autobetExecutionFlowSummary" class="health-grid"></div>
+                    <div id="autobetExecutionFlowChains" class="checklist"></div>
+                </section>
+
+                <section id="autobetWorkspaceHubSection" class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">工作区</p>
+                            <h2>进入各工作区处理问题</h2>
+                        </div>
+                        <p class="panel-copy">主总控台只保留总览、健康和链路摘要；具体配置动作优先去对应工作区完成。</p>
+                    </div>
+                    <div id="autobetWorkspaceCards" class="action-strip"></div>
+                </section>
+
+                <section id="autobetHealthSection" class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">健康检查</p>
+                            <h2>配置健康检查</h2>
+                        </div>
+                        <p id="autobetHealthSummary" class="panel-copy">系统会按账号授权、群组可达性和最近测试时间给出健康状态。</p>
+                    </div>
+                    <div class="health-grid">
+                        <article class="health-card">
+                            <span class="setup-label">账号授权</span>
+                            <strong id="autobetHealthAccountAuthHeadline">待检查</strong>
+                            <p id="autobetHealthAccountAuthDetail">登录后查看托管账号授权状态。</p>
+                        </article>
+                        <article class="health-card">
+                            <span class="setup-label">群组可达性</span>
+                            <strong id="autobetHealthTargetReachabilityHeadline">待检查</strong>
+                            <p id="autobetHealthTargetReachabilityDetail">登录后查看投递群组测试结果和最近活动。</p>
+                        </article>
+                        <article class="health-card">
+                            <span class="setup-label">最近测试发送</span>
+                            <strong id="autobetHealthLastTestHeadline">--</strong>
+                            <p id="autobetHealthLastTestDetail">完成测试发送后，这里会显示最近一次测试时间。</p>
+                        </article>
+                    </div>
+                </section>
+
+                <section class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">运行看板</p>
+                            <h2>运行阻塞与建议</h2>
+                        </div>
+                        <p id="autobetSuggestionSummary" class="panel-copy">系统会根据当前配置给出阻塞原因和建议动作。</p>
+                    </div>
+                    <div id="autobetRunChecklist" class="checklist"></div>
+                </section>
+
+                <section id="autobetPriorityActionCard" class="next-step-card">
+                    <div class="next-step-head">
+                        <div>
+                            <p class="panel-kicker">优先处理</p>
+                            <h2 id="autobetActionTitle">优先处理动作</h2>
+                        </div>
+                        <span id="autobetActionBadge" class="step-pill is-pending">待处理</span>
+                    </div>
+                    <p id="autobetActionDescription" class="next-step-description">系统会根据当前运行状态、失败反馈和异常提醒给出首要动作。</p>
+                    <div class="next-step-actions">
+                        <a id="autobetPrimaryAction" class="primary-link" href="/records">查看执行记录</a>
+                        <a id="autobetSecondaryAction" class="ghost-link" href="/alerts">查看异常提醒</a>
+                    </div>
+                </section>
+
+                <section class="feedback-grid">
+                    <section class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">执行反馈</p>
+                                <h2>最近执行反馈</h2>
+                            </div>
+                            <div class="feedback-panel-actions">
+                                <button id="toggleRecentIssueJobsBtn" class="ghost-btn" type="button">只看失败项</button>
+                                <a class="panel-link" href="/records">查看全部记录</a>
+                            </div>
+                        </div>
+                        <div class="feedback-mini-grid">
+                            <article class="feedback-mini-card">
+                                <span class="setup-label">成功</span>
+                                <strong id="autobetRecentDeliveredCount">0</strong>
+                                <p id="autobetRecentDeliveredMeta">最近没有已送达任务。</p>
+                            </article>
+                            <article class="feedback-mini-card">
+                                <span class="setup-label">待执行</span>
+                                <strong id="autobetRecentPendingCount">0</strong>
+                                <p id="autobetRecentPendingMeta">当前没有待执行任务。</p>
+                            </article>
+                            <article class="feedback-mini-card">
+                                <span class="setup-label">失败</span>
+                                <strong id="autobetRecentIssueCount">0</strong>
+                                <p id="autobetRecentIssueMeta">最近没有失败、过期或跳过任务。</p>
+                            </article>
+                        </div>
+                        <p id="autobetFailureDigest" class="panel-copy feedback-digest">最近失败原因会在这里做简要汇总。</p>
+                        <div id="autobetRecentJobs" class="checklist"></div>
+                    </section>
+                    <section class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">异常提醒</p>
+                                <h2>最近异常提醒</h2>
+                            </div>
+                            <a class="panel-link" href="/alerts">查看全部告警</a>
+                        </div>
+                        <div id="autobetRecentAlerts" class="checklist"></div>
+                    </section>
+                </section>
+
+                <section class="autobet-note">
+                    <strong>当前版本的配置语义</strong>
+                    <p>
+                        现在的“自动投注配置完成”仅表示平台已经知道你想跟随哪些来源、用哪个账号、往哪些群组发。
+                        真正的抓取、标准化、派发仍然依赖平台当前执行流程完成。
+                        另外，当前版本中同一用户的一个订阅会向该用户所有激活的投递目标展开任务。
+                        归档后的配置项会保留历史展示，但不会参与全局恢复；真正删除前也必须先归档。
+                    </p>
+                </section>
+            </section>
+
+            <section class="content-grid autobet-grid">
+                <section class="section-stack">
+                    <section id="accountsSection" class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">托管账号</p>
+                                <h2>托管账号</h2>
+                            </div>
+                            <p id="accountWorkspaceSummaryText" class="panel-copy">这里专门处理托管账号接入、授权进度和账号可执行状态。</p>
+                        </div>
+                        <div id="accountWorkspaceSummary" class="health-grid account-summary-grid"></div>
+                        <div class="autobet-note account-setup-note">
+                            <strong id="accountModeHeadline">先选接入方式，再由系统接管 Session</strong>
+                            <p id="accountModeDescription">系统会先创建托管账号，再发送 Telegram 验证码。</p>
+                        </div>
+                        <section class="account-mode-guide" aria-label="当前接入方式说明">
+                            <div class="account-mode-guide-head">
+                                <span id="accountModeBadge" class="account-mode-badge is-phone-login">手机号登录</span>
+                                <strong id="accountModeGuideTitle">通过手机号接入 Telegram</strong>
+                            </div>
+                            <p id="accountModeGuideSummary" class="account-mode-guide-summary">适合没有现成 Session 文件的账号。系统会发送验证码，你在下方继续完成授权。</p>
+                            <div id="accountModeGuideSteps" class="account-mode-guide-steps"></div>
+                        </section>
+                        <form id="accountForm" class="autobet-form">
+                            <input name="edit_id" type="hidden">
+                            <input name="auth_mode" type="hidden" value="phone_login">
+                            <div class="account-mode-switch" role="tablist" aria-label="账号接入方式">
+                                <button class="account-mode-btn is-active" type="button" data-account-auth-mode="phone_login">手机号登录</button>
+                                <button class="account-mode-btn" type="button" data-account-auth-mode="session_import">导入 Session</button>
+                            </div>
+                            <div class="autobet-form-grid">
+                                <label>
+                                    <span>账号标签</span>
+                                    <input class="text-input" name="label" type="text" placeholder="例如：主账号" required>
+                                </label>
+                                <label class="account-phone-field">
+                                    <span>手机号</span>
+                                    <input class="text-input" name="phone" type="tel" inputmode="tel" placeholder="+12019362923">
+                                </label>
+                                <label class="wide account-session-file-field" hidden>
+                                    <span>Session 文件</span>
+                                    <input class="text-input" name="session_file" type="file" accept=".session,application/octet-stream">
+                                    <small class="field-hint">上传商家附带的 Telethon `.session` 文件，系统会自动校验并保存。</small>
+                                </label>
+                            </div>
+                            <div class="form-actions">
+                                <button id="createAccountBtn" class="primary-btn" type="submit">创建并发送验证码</button>
+                                <button id="cancelAccountEditBtn" class="ghost-btn" type="button" hidden>取消编辑</button>
+                            </div>
+                        </form>
+                        <div id="accountPostActionHint" class="account-post-action-hint">
+                            <strong id="accountPostActionTitle">提交后继续完成账号授权</strong>
+                            <p id="accountPostActionBody">发送验证码后，下方会出现“继续完成账号授权”，继续输入验证码或二次密码即可。</p>
+                        </div>
+                        <form id="accountVerifyForm" class="autobet-form account-verify-form" hidden>
+                            <input name="telegram_account_id" type="hidden">
+                            <div class="account-verify-card">
+                                <strong>继续完成账号授权</strong>
+                                <p id="accountVerifySummary">验证码已发送，请继续填写。</p>
+                                <div class="autobet-form-grid">
+                                    <label class="account-code-field">
+                                        <span>验证码</span>
+                                        <input class="text-input" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="请输入收到的验证码">
+                                    </label>
+                                    <label class="account-password-field" hidden>
+                                        <span>二次密码</span>
+                                        <input class="text-input" name="password" type="password" autocomplete="current-password" placeholder="请输入 Telegram 二次密码">
+                                    </label>
+                                </div>
+                                <div class="form-actions">
+                                    <button id="verifyAccountCodeBtn" class="primary-btn" type="submit">提交验证码</button>
+                                    <button id="verifyAccountPasswordBtn" class="primary-btn" type="submit" hidden>提交二次密码</button>
+                                </div>
+                            </div>
+                        </form>
+                        <div id="accountList" class="config-list"></div>
+                    </section>
+
+                    <section id="targetsSection" class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">投递群组</p>
+                                <h2>投递群组</h2>
+                            </div>
+                            <p id="targetWorkspaceSummaryText" class="panel-copy">这里统一处理群组绑定、模板绑定、测试发送和启停状态。</p>
+                        </div>
+                        <div id="targetWorkspaceSummary" class="health-grid"></div>
+                        <form id="targetForm" class="autobet-form">
+                            <input name="edit_id" type="hidden">
+                            <div class="autobet-form-grid">
+                                <label>
+                                    <span>选择托管账号</span>
+                                    <select class="text-input" name="telegram_account_id" required>
+                                        <option value="">请先选择账号</option>
+                                    </select>
+                                </label>
+                                <label>
+                                    <span>目标名称</span>
+                                    <input class="text-input" name="target_name" type="text" placeholder="例如：主投注群">
+                                </label>
+                                <label>
+                                    <span>下注格式模板</span>
+                                    <select class="text-input" name="template_id">
+                                        <option value="">默认格式（未绑定模板）</option>
+                                    </select>
+                                    <small class="field-hint">不同投注群、不同机器人协议不同。建议为群组绑定专用模板。</small>
+                                </label>
+                                <label class="wide">
+                                    <span>群组标识</span>
+                                    <input class="text-input" name="target_key" type="text" placeholder="粘贴 https://t.me/... 或填写 @username / -100..." required>
+                                    <small id="targetKeyPreview" class="field-hint" hidden></small>
+                                    <small class="field-hint">
+                                        不知道怎么填？可以把 Telegram 机器人 <code>@userinfobot</code> 拉进目标群组并发送任意消息，它会返回该群组的 <code>Chat ID</code>（通常是 <code>-100...</code>），把这个值填到这里即可。
+                                        注意：<code>@userinfobot</code> 属于第三方机器人，介意隐私的群请谨慎添加；如果群组有 <code>@username</code>，也可以直接尝试填写 <code>@username</code>。
+                                    </small>
+                                </label>
+                            </div>
+                            <div class="form-actions">
+                                <button id="createTargetBtn" class="primary-btn" type="submit">新增投递群组</button>
+                                <button id="cancelTargetEditBtn" class="ghost-btn" type="button" hidden>取消编辑</button>
+                            </div>
+                        </form>
+                        <div id="targetList" class="config-list"></div>
+                    </section>
+
+                    <section id="templatesSection" class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">下注模板</p>
+                                <h2>下注格式模板</h2>
+                            </div>
+                            <p id="templateWorkspaceSummaryText" class="panel-copy">这里不仅维护模板内容，也会告诉你哪些群组正在使用它。</p>
+                        </div>
+                        <div id="templateWorkspaceSummary" class="health-grid template-summary-grid"></div>
+                        <div class="autobet-note account-setup-note">
+                            <strong>不同投注平台、群组和机器人，下注口令往往不同</strong>
+                            <p>在这里维护“玩法到发言格式”的映射，再把模板绑定到具体群组。派发任务时，系统会按群组模板生成最终下注文本。</p>
+                        </div>
+                        <section class="template-preset-strip" aria-label="模板预设">
+                            <div class="template-preset-head">
+                                <strong>常用预设</strong>
+                                <span class="field-hint">直接套用后再微调，比从空白 JSON 起步更快。</span>
+                            </div>
+                            <div class="template-preset-actions">
+                                <button class="ghost-btn template-preset-btn" type="button" data-template-preset="pc28_high_roll">高倍直发</button>
+                                <button class="ghost-btn template-preset-btn" type="button" data-template-preset="number_sum_slash">和值斜杠</button>
+                                <button class="ghost-btn template-preset-btn" type="button" data-template-preset="abc_position">ABC 定位</button>
+                                <button class="ghost-btn template-preset-btn" type="button" data-template-preset="combo_matrix">组合矩阵</button>
+                            </div>
+                        </section>
+                        <form id="messageTemplateForm" class="autobet-form">
+                            <input name="edit_id" type="hidden">
+                            <div class="autobet-form-grid">
+                                <label>
+                                    <span>模板名称</span>
+                                    <input class="text-input" name="name" type="text" placeholder="例如：加拿大28高倍模板" required>
+                                </label>
+                                <label>
+                                    <span>彩种</span>
+                                    <input class="text-input" name="lottery_type" type="text" value="pc28" required>
+                                </label>
+                                <label>
+                                    <span>模板状态</span>
+                                    <select class="text-input" name="status">
+                                        <option value="inactive">草稿</option>
+                                        <option value="active" selected>启用</option>
+                                    </select>
+                                </label>
+                                <label class="wide">
+                                    <span>默认格式</span>
+                                    <input class="text-input" name="template_text" type="text" value="{{bet_value}}{{amount}}" required>
+                                    <small class="field-hint">可用变量：<code>{{bet_value}}</code>、<code>{{amount}}</code>、<code>{{issue_no}}</code>、<code>{{bet_type}}</code>，以及信号 payload 中的额外字段。</small>
+                                </label>
+                                <div class="wide template-rule-builder-panel">
+                                    <div class="template-rule-builder-head">
+                                        <div>
+                                            <span>规则填写区</span>
+                                            <small class="field-hint">默认使用填写式编辑。适合把“大双”映射成 <code>ds</code> 这种新手场景。</small>
+                                        </div>
+                                        <button id="toggleTemplateJsonBtn" class="ghost-btn" type="button">切换到高级 JSON</button>
+                                    </div>
+                                    <div id="templateRuleBuilderContent" class="template-rule-builder-content">
+                                        <div id="templateRuleBuilder" class="template-rule-builder"></div>
+                                        <div class="form-actions">
+                                            <button id="addCustomTemplateRuleBtn" class="ghost-btn" type="button">新增自定义玩法</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <label class="wide template-config-json-field" hidden>
+                                    <span>规则 JSON</span>
+                                    <textarea class="text-area" name="config" rows="12" placeholder='{"bet_rules":{"number_sum":{"format":"{{bet_value}}/{{amount}}"}}}' required></textarea>
+                                    <small class="field-hint">填写区会自动生成 JSON。只有需要特殊玩法或额外字段时，再展开高级模式手动调整。</small>
+                                </label>
+                            </div>
+                            <div class="form-actions">
+                                <button id="fillPc28TemplateBtn" class="ghost-btn" type="button">填充加拿大28高倍示例</button>
+                                <button id="createMessageTemplateBtn" class="primary-btn" type="submit">新增模板</button>
+                                <button id="cancelMessageTemplateEditBtn" class="ghost-btn" type="button" hidden>取消编辑</button>
+                            </div>
+                        </form>
+                        <section class="template-preview-panel" aria-label="模板预览">
+                            <div class="panel-header">
+                                <div>
+                                    <p class="panel-kicker">预览</p>
+                                    <h2>模板实时预览</h2>
+                                </div>
+                                <p class="panel-copy">先在这里验证某个玩法会被渲染成什么下注口令，再绑定到目标群组。</p>
+                            </div>
+                            <div class="template-sample-strip" aria-label="玩法样例">
+                                <button class="ghost-btn template-sample-btn" type="button" data-template-sample="big_small">大小单双</button>
+                                <button class="ghost-btn template-sample-btn" type="button" data-template-sample="combo">组合</button>
+                                <button class="ghost-btn template-sample-btn" type="button" data-template-sample="number_sum">和值</button>
+                                <button class="ghost-btn template-sample-btn" type="button" data-template-sample="abc">ABC</button>
+                                <button class="ghost-btn template-sample-btn" type="button" data-template-sample="special">特殊</button>
+                            </div>
+                            <div class="autobet-form-grid">
+                                <label>
+                                    <span>预览玩法类型</span>
+                                    <input id="templatePreviewBetType" class="text-input" type="text" value="big_small" placeholder="例如：big_small">
+                                </label>
+                                <label>
+                                    <span>预览投注值</span>
+                                    <input id="templatePreviewBetValue" class="text-input" type="text" value="大" placeholder="例如：大 / 豹子 / 0">
+                                </label>
+                                <label>
+                                    <span>预览金额</span>
+                                    <input id="templatePreviewAmount" class="text-input" type="number" min="0.01" step="0.01" value="10">
+                                </label>
+                                <label>
+                                    <span>预览期号</span>
+                                    <input id="templatePreviewIssueNo" class="text-input" type="text" value="20260410001" placeholder="例如：20260410001">
+                                </label>
+                                <label class="wide">
+                                    <span>额外字段 JSON</span>
+                                    <textarea id="templatePreviewPayload" class="text-area" rows="4" placeholder='{"position":"a"}'></textarea>
+                                    <small class="field-hint">用于模拟额外变量，例如 ABC 玩法中的 <code>{{position}}</code>。</small>
+                                </label>
+                            </div>
+                            <div class="template-preview-result">
+                                <span class="setup-label">最终下注文本</span>
+                                <strong id="templatePreviewOutput">--</strong>
+                                <p id="templatePreviewMeta">输入玩法、投注值和金额后，这里会显示模板渲染结果。</p>
+                            </div>
+                        </section>
+                        <div id="messageTemplateList" class="config-list"></div>
+                    </section>
+                </section>
+
+                <section class="section-stack">
+                    <section id="subscriptionsSection" class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">跟单策略</p>
+                                <h2>跟单策略</h2>
+                            </div>
+                            <p id="subscriptionWorkspaceSummaryText" class="panel-copy">这里会把“来源 -> 跟单 -> 群组 -> 模板 -> 最终发言”的链路直接展开。</p>
+                        </div>
+                        <div class="autobet-note subscription-workspace-note">
+                            <strong>这一页只回答一件事：来源信号最后会怎么发出去</strong>
+                            <p>选择来源、设置默认策略后，系统会直接告诉你当前会命中哪些群组、每个群组绑定了哪个模板，以及预估会发出的下注文本和阻塞项。</p>
+                        </div>
+                        <div id="subscriptionWorkspaceSummary" class="health-grid subscription-summary-grid"></div>
+                        <form id="subscriptionForm" class="autobet-form">
+                            <input name="edit_id" type="hidden">
+                            <div class="autobet-form-grid">
+                                <label>
+                                    <span>选择方案来源</span>
+                                    <select class="text-input" name="source_id" required>
+                                        <option value="">请先选择方案来源</option>
+                                    </select>
+                                </label>
+                                <label class="subscription-amount-field">
+                                    <span>固定金额</span>
+                                    <input class="text-input" name="stake_amount" type="number" min="0.01" step="0.01" value="10">
+                                </label>
+                                <label class="wide subscription-follow-default-field">
+                                    <span>金额策略</span>
+                                    <span class="checkbox-line">
+                                        <input id="followSourceAmountCheckbox" name="follow_source_amount" type="checkbox">
+                                        <span>跟随来源默认金额</span>
+                                    </span>
+                                    <small class="field-hint">默认使用固定金额。只有希望直接沿用来源金额时再开启。</small>
+                                </label>
+                            </div>
+                            <div class="subscription-advanced">
+                                <button id="toggleSubscriptionAdvancedBtn" class="ghost-btn" type="button" aria-expanded="false">显示高级设置</button>
+                                <div id="subscriptionAdvancedFields" class="autobet-form-grid" hidden>
+                                    <label>
+                                        <span>过期秒数</span>
+                                        <input class="text-input" name="expire_after_seconds" type="number" min="30" step="30" value="120">
+                                    </label>
+                                    <label>
+                                        <span>策略模式</span>
+                                        <input class="text-input" name="mode" type="text" value="follow" readonly>
+                                    </label>
+                                    <label class="wide">
+                                        <span>风控开关</span>
+                                        <span class="checkbox-line">
+                                            <input id="subscriptionRiskControlEnabledCheckbox" name="risk_control_enabled" type="checkbox">
+                                            <span>启用止盈 / 止损</span>
+                                        </span>
+                                        <small class="field-hint">只有在手工结算“命中 / 回本 / 未中”后，系统才会按当前轮次净盈亏判断是否自动停用策略。</small>
+                                    </label>
+                                    <label class="subscription-risk-field" hidden>
+                                        <span>止盈金额</span>
+                                        <input class="text-input" name="profit_target" type="number" min="0" step="0.01" placeholder="例如：50">
+                                    </label>
+                                    <label class="subscription-risk-field" hidden>
+                                        <span>止损金额</span>
+                                        <input class="text-input" name="loss_limit" type="number" min="0" step="0.01" placeholder="例如：30">
+                                    </label>
+                                    <label class="subscription-risk-field" hidden>
+                                        <span>命中净盈利倍数</span>
+                                        <input class="text-input" name="win_profit_ratio" type="number" min="0.01" step="0.01" value="1">
+                                        <small class="field-hint">例如输入 1 表示中一把净赚 1 倍本金；如果你的玩法净盈利不是 1 倍，请按实际收益调整。</small>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="form-actions">
+                                <button id="createSubscriptionBtn" class="primary-btn" type="submit">建立跟单关系</button>
+                                <button id="cancelSubscriptionEditBtn" class="ghost-btn" type="button" hidden>取消编辑</button>
+                            </div>
+                        </form>
+                        <div id="subscriptionList" class="config-list"></div>
+                    </section>
+
+                    <section id="currentConfigSection" class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">当前链路</p>
+                                <h2>当前配置与运行上下文</h2>
+                            </div>
+                            <p class="panel-copy">这里展示当前优先生效的来源、账号、群组和策略，方便你判断自动投注会命中哪些配置。</p>
+                        </div>
+                        <div class="config-grid">
+                            <article class="config-card">
+                                <span class="setup-label">当前方案</span>
+                                <strong id="currentSourceName">未导入方案</strong>
+                                <p id="currentSourceMeta">请先在首页导入公开方案页链接，再回来建立跟单关系。</p>
+                            </article>
+                            <article class="config-card">
+                                <span class="setup-label">当前账号</span>
+                                <strong id="currentAccountName">未绑定</strong>
+                                <p id="currentAccountMeta">当前没有可用于执行的 Telegram 托管账号。</p>
+                            </article>
+                            <article class="config-card">
+                                <span class="setup-label">当前投递群组</span>
+                                <strong id="currentTargetName">未配置</strong>
+                                <p id="currentTargetMeta">没有投递群组时，任务没有实际执行落点。</p>
+                            </article>
+                            <article class="config-card">
+                                <span class="setup-label">当前跟单策略</span>
+                                <strong id="currentStrategyName">未建立</strong>
+                                <p id="currentStrategyMeta">建立订阅后，来源信号才会进入你的执行任务视图。</p>
+                            </article>
+                        </div>
+                    </section>
+                </section>
+
+            </section>
+        </main>
+    </div>
+
+    <dialog id="accountDialog" class="account-dialog" aria-label="账户">
+        <div class="account-dialog-shell">
+            <div class="account-dialog-header">
+                <div>
+                    <p class="panel-kicker">账户</p>
+                    <h2 data-auth-panel-title>登录与账户</h2>
+                </div>
+                <button id="accountDialogCloseBtn" class="ghost-btn account-dialog-close" type="button">关闭</button>
+            </div>
+            <div class="account-card">
+                <strong id="currentUsername">未登录</strong>
+                <span id="currentUserMeta">请先注册或登录</span>
+            </div>
+            <form id="authForm" class="auth-form">
+                <label>
+                    <span>用户名</span>
+                    <input id="authUsername" class="text-input" type="text" autocomplete="username" required>
+                </label>
+                <label>
+                    <span>邮箱</span>
+                    <input id="authEmail" class="text-input" type="email" autocomplete="email">
+                </label>
+                <label>
+                    <span>密码</span>
+                    <input id="authPassword" class="text-input" type="password" autocomplete="current-password" required>
+                </label>
+                <div class="form-actions">
+                    <button id="registerBtn" class="ghost-btn" type="button">注册</button>
+                    <button id="loginBtn" class="primary-btn" type="button">登录</button>
+                    <button id="logoutBtn" class="ghost-btn danger-btn" type="button" hidden>退出</button>
+                </div>
+            </form>
+        </div>
+    </dialog>
+
+    <script src="/assets/ui-text.js"></script>
+    <script src="/assets/auth-panel.js"></script>
+    <script src="/assets/account-menu.js"></script>
+    <script src="/assets/auth-guard.js"></script>
+    <script src="/assets/autobet.js"></script>
+</body>
+</html>

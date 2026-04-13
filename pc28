@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${SCRIPT_DIR}"
+SYSTEMD_CTL="${PROJECT_ROOT}/deploy/systemd/pc28ctl.sh"
+ENV_FILE="${PROJECT_ROOT}/.env"
+
+resolve_executor_id() {
+    if [[ -n "${1:-}" ]]; then
+        printf "%s\n" "${1}"
+        return 0
+    fi
+    if [[ -n "${EXECUTOR_ID:-}" ]]; then
+        printf "%s\n" "${EXECUTOR_ID}"
+        return 0
+    fi
+    if [[ -f "${ENV_FILE}" ]]; then
+        local raw_value
+        raw_value="$(sed -n 's/^EXECUTOR_ID=//p' "${ENV_FILE}" | tail -n 1)"
+        raw_value="${raw_value%\"}"
+        raw_value="${raw_value#\"}"
+        raw_value="${raw_value%\'}"
+        raw_value="${raw_value#\'}"
+        if [[ -n "${raw_value}" ]]; then
+            printf "%s\n" "${raw_value}"
+            return 0
+        fi
+    fi
+    printf "executor-001\n"
+}
+
+usage() {
+    local default_executor_id
+    default_executor_id="$(resolve_executor_id "")"
+    cat <<EOF
+用法:
+  ./pc28 up [executor_id]
+  ./pc28 restart [executor_id]
+  ./pc28 down [executor_id]
+  ./pc28 status [executor_id]
+  ./pc28 logs [executor_id]
+  ./pc28 sync
+
+  ./pc28 api
+  ./pc28 fake [executor_id]
+  ./pc28 executor [executor_id]
+  ./pc28 alert
+  ./pc28 seed
+  ./pc28 test
+
+说明:
+  - systemd 命令默认只管 platform + alert
+  - 传入 executor_id 后会额外管理执行器实例
+  - 本地运行默认 executor_id: ${default_executor_id}
+
+示例:
+  ./pc28 up executor-001
+  ./pc28 status executor-001
+  ./pc28 api
+  ./pc28 fake
+EOF
+}
+
+run_python() {
+    cd "${PROJECT_ROOT}"
+    PYTHONPATH=src python3 "$@"
+}
+
+run_module() {
+    cd "${PROJECT_ROOT}"
+    PYTHONPATH=src python3 -m "$@"
+}
+
+run_systemd() {
+    local action="${1}"
+    local executor_id="${2:-}"
+    if [[ "${EUID}" -ne 0 ]]; then
+        exec sudo "$0" "${action}" "${executor_id}"
+    fi
+    if [[ -n "${executor_id}" ]]; then
+        exec "${SYSTEMD_CTL}" "${action}" "${executor_id}"
+    fi
+    exec "${SYSTEMD_CTL}" "${action}"
+}
+
+COMMAND="${1:-help}"
+ARG1="${2:-}"
+
+case "${COMMAND}" in
+    up|restart|down|status|logs)
+        run_systemd "${COMMAND}" "${ARG1}"
+        ;;
+    sync)
+        run_systemd "${COMMAND}"
+        ;;
+    api)
+        run_module "pc28touzhu.main"
+        ;;
+    fake)
+        exec env EXECUTOR_ID="$(resolve_executor_id "${ARG1}")" PYTHONPATH=src python3 "${PROJECT_ROOT}/fake_executor.py"
+        ;;
+    executor)
+        exec env EXECUTOR_ID="$(resolve_executor_id "${ARG1}")" ONCE=false PYTHONPATH=src python3 "${PROJECT_ROOT}/telegram_executor.py"
+        ;;
+    alert)
+        exec env ALERT_NOTIFIER_ONCE=false PYTHONPATH=src python3 "${PROJECT_ROOT}/platform_alert_notifier.py"
+        ;;
+    seed)
+        run_python "seed_demo.py"
+        ;;
+    test)
+        exec env PYTHONPATH=src python3 -m unittest discover -s tests -p "test_*.py"
+        ;;
+    help|-h|--help|"")
+        usage
+        ;;
+    *)
+        echo "不支持的命令: ${COMMAND}" >&2
+        usage
+        exit 1
+        ;;
+esac

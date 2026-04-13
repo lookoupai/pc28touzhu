@@ -1,0 +1,17 @@
+[Unit]
+Description=pc28touzhu Platform API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/www/wwwroot/pc28touzhu
+Environment=PYTHONPATH=src
+EnvironmentFile=/www/wwwroot/pc28touzhu/.env
+ExecStart=/usr/bin/env python3 -m pc28touzhu.main
+Restart=on-failure
+RestartSec=2
+User=www
+Group=www
+
+[Install]
+WantedBy=multi-user.target
