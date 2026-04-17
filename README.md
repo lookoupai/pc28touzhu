@@ -8,6 +8,7 @@ PC28 投注信号平台与 Telegram 执行器。
 - 用户侧登录会话与基础管理页面
 - Telegram 执行器拉取任务、发送、回执、心跳
 - 执行异常告警与 Telegram Bot 通知
+- Telegram Bot 绑定、收益查询、日报排行榜推送
 - `systemd` 部署脚本与基础单元测试
 
 ## 当前能力
@@ -24,6 +25,8 @@ PC28 投注信号平台与 Telegram 执行器。
 - **运行模式**：
   - 本地最小验证：`./pc28 api`、`./pc28 fake`、`./pc28 seed`
   - 真实 Telegram 执行：`./pc28 executor executor-001`
+  - 收益查询 Bot：`./pc28 bot`
+  - 日报排行榜推送：`./pc28 report`
   - `systemd` 托管：`./pc28 up executor-001`
 
 ## 目录结构
@@ -38,6 +41,8 @@ pc28                统一命令入口
 fake_executor.py    模拟执行器
 telegram_executor.py 真实 Telegram 执行器
 platform_alert_notifier.py 告警通知 worker
+telegram_profit_bot.py Telegram 收益查询 Bot worker
+telegram_daily_reporter.py Telegram 日报推送 worker
 seed_demo.py        演示数据注入脚本
 ```
 
@@ -71,6 +76,7 @@ cp ".env.example" ".env"
 ```
 
 默认会从项目根目录 `.env` 读取配置，读取逻辑在 `src/pc28touzhu/config.py`。
+对于 Telegram 告警、收益查询 Bot、日报推送，`.env` 现在只作为默认值；上线后更推荐在后台控制台 `/admin/telegram` 里维护，保存后对应 worker 会在下一轮自动热更新，无需重启。
 
 最小必填项通常是：
 
@@ -89,6 +95,22 @@ TELEGRAM_SESSION=telegram-session
 TELEGRAM_PHONE=+8613800000000
 ```
 
+如果要运行收益查询 Bot 和日报推送，还需要：
+
+```env
+TG_BOT_ENABLED=true
+TG_BOT_TOKEN=your_bot_token
+TG_BOT_POLL_INTERVAL_SECONDS=30
+TG_BOT_BIND_TOKEN_TTL_SECONDS=600
+
+TG_REPORT_ENABLED=true
+TG_REPORT_TARGET_CHAT_ID=-1001234567890
+TG_REPORT_SEND_HOUR=9
+TG_REPORT_SEND_MINUTE=0
+TG_REPORT_TOP_N=10
+TG_REPORT_TIMEZONE=Asia/Shanghai
+```
+
 ## 常用命令
 
 统一入口是仓库根目录脚本 `./pc28`：
@@ -100,6 +122,8 @@ TELEGRAM_PHONE=+8613800000000
 ./pc28 fake
 ./pc28 executor executor-001
 ./pc28 alert
+./pc28 bot
+./pc28 report
 ./pc28 test
 ```
 
@@ -116,7 +140,7 @@ TELEGRAM_PHONE=+8613800000000
 
 说明：
 
-- 不传 `executor_id` 时，仅管理 `platform + alert`
+- 不传 `executor_id` 时，仅管理 `platform + alert + telegram-bot + telegram-report`
 - 传入 `executor_id` 时，会额外管理对应执行器实例
 - `./pc28 executor executor-001` 会以常驻模式运行真实执行器
 

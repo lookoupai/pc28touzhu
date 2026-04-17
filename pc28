@@ -46,6 +46,8 @@ usage() {
   ./pc28 fake [executor_id]
   ./pc28 executor [executor_id]
   ./pc28 alert
+  ./pc28 bot
+  ./pc28 report
   ./pc28 seed
   ./pc28 test
 
@@ -105,6 +107,12 @@ case "${COMMAND}" in
         ;;
     alert)
         exec env ALERT_NOTIFIER_ONCE=false PYTHONPATH=src python3 "${PROJECT_ROOT}/platform_alert_notifier.py"
+        ;;
+    bot)
+        exec env TG_BOT_ONCE=false PYTHONPATH=src python3 "${PROJECT_ROOT}/telegram_profit_bot.py"
+        ;;
+    report)
+        exec env TG_REPORT_ONCE=false PYTHONPATH=src python3 "${PROJECT_ROOT}/telegram_daily_reporter.py"
         ;;
     seed)
         run_python "seed_demo.py"

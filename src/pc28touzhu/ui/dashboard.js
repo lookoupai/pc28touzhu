@@ -45,6 +45,15 @@
             load: loadAlertsData,
             render: renderAlertsPage,
         },
+        "/admin/telegram": {
+            key: "telegram",
+            section: "Telegram 配置",
+            eyebrow: "Telegram 运行配置",
+            title: "Telegram 配置中心",
+            description: "统一维护告警通知、收益查询 Bot 和日报推送配置。保存后对应 worker 会在下一轮自动读取新配置。",
+            load: loadTelegramData,
+            render: renderTelegramSettingsPage,
+        },
         "/admin/support": {
             key: "support",
             section: "支持查询页",
@@ -108,6 +117,7 @@
             notificationStatus: "",
             query: "",
         },
+        telegram: {},
         support: {
             userId: "",
             query: "",
@@ -608,6 +618,11 @@
                 failures: payloads[1].items || [],
             };
         });
+    }
+
+    function loadTelegramData() {
+        ensureAuthenticated();
+        return request("/api/platform/admin/telegram-settings");
     }
 
     function loadSupportData() {
@@ -1464,6 +1479,97 @@
         setStatus("已刷新告警中心。", false);
     }
 
+    function renderTelegramSettingsPage(payload) {
+        const item = payload && payload.item ? payload.item : {};
+        const alertSettings = item.alert || {};
+        const botSettings = item.bot || {};
+        const reportSettings = item.report || {};
+        adminContent.innerHTML = '' +
+            '<div class="overview-layout">' +
+                '<section class="metrics-grid">' +
+                    renderMetricCard({
+                        label: "告警通知",
+                        value: alertSettings.enabled ? "已启用" : "已停用",
+                        status: alertSettings.enabled ? "ok" : "warning",
+                        meta: "发送到 " + String(alertSettings.target_chat_id || "未配置"),
+                        footLabel: "刷新周期",
+                        footValue: String(alertSettings.interval_seconds || 0) + " 秒",
+                    }) +
+                    renderMetricCard({
+                        label: "收益查询 Bot",
+                        value: botSettings.enabled ? "已启用" : "已停用",
+                        status: botSettings.enabled ? "ok" : "warning",
+                        meta: botSettings.has_bot_token ? ("当前 Token: " + String(botSettings.bot_token_masked || "--")) : "当前未配置 Token",
+                        footLabel: "长轮询超时",
+                        footValue: String(botSettings.poll_interval_seconds || 0) + " 秒",
+                    }) +
+                    renderMetricCard({
+                        label: "日报推送",
+                        value: reportSettings.enabled ? "已启用" : "已停用",
+                        status: reportSettings.enabled ? "ok" : "warning",
+                        meta: "目标 " + String(reportSettings.target_chat_id || "未配置"),
+                        footLabel: "发送时刻",
+                        footValue: String(reportSettings.send_hour || 0) + ":" + String(reportSettings.send_minute || 0).padStart(2, "0"),
+                    }) +
+                    renderMetricCard({
+                        label: "配置来源",
+                        value: item.source === "database" ? "网页覆盖" : "环境默认",
+                        status: item.source === "database" ? "ok" : "warning",
+                        meta: "保存后后台 worker 无需重启，下一轮自动读取。",
+                        footLabel: "最近更新",
+                        footValue: formatDateTime(item.updated_at),
+                    }) +
+                "</section>" +
+                '<section class="panel">' +
+                    '<div class="panel-header"><div><p class="panel-kicker">Telegram 配置</p><h2>网页保存后自动热更新</h2></div></div>' +
+                    '<div class="status-card"><div class="status-head"><strong>热更新说明</strong>' + renderStatusPill("ok") + '</div><p class="helper-text">本页保存的是平台侧 Telegram 运行配置。`alert`、`bot`、`report` 三个独立 worker 会在下一轮循环自动读取数据库中的最新配置，不需要重启进程。</p></div>' +
+                "</section>" +
+                '<section class="panel">' +
+                    '<div class="panel-header"><div><p class="panel-kicker">配置表单</p><h2>告警、Bot、日报推送</h2></div></div>' +
+                    '<form id="telegramSettingsForm" class="settings-form">' +
+                        '<div class="settings-grid">' +
+                            '<section class="detail-card">' +
+                                '<div class="detail-card-head"><strong>告警通知</strong>' + renderStatusPill(alertSettings.enabled ? "active" : "inactive") + '</div>' +
+                                '<p class="helper-text">平台异常提醒推送。Bot Token 留空表示保持当前值。</p>' +
+                                '<div class="settings-form-grid">' +
+                                    '<label class="settings-toggle"><input type="checkbox" name="alert_enabled"' + (alertSettings.enabled ? " checked" : "") + '><span>启用告警通知</span></label>' +
+                                    '<label><span class="field-label">Bot Token</span><input class="text-input" type="password" name="alert_bot_token" value="" placeholder="' + escapeHtml(alertSettings.bot_token_masked ? ("当前: " + alertSettings.bot_token_masked + "，留空保持不变") : "留空表示未配置") + '"></label>' +
+                                    '<label><span class="field-label">目标 chat_id</span><input class="text-input" type="text" name="alert_target_chat_id" value="' + escapeHtml(alertSettings.target_chat_id || "") + '" placeholder="-1001234567890"></label>' +
+                                    '<label><span class="field-label">重复通知间隔（秒）</span><input class="text-input" type="number" min="60" name="alert_repeat_interval_seconds" value="' + escapeHtml(String(alertSettings.repeat_interval_seconds || 1800)) + '"></label>' +
+                                    '<label><span class="field-label">轮询间隔（秒）</span><input class="text-input" type="number" min="5" name="alert_interval_seconds" value="' + escapeHtml(String(alertSettings.interval_seconds || 30)) + '"></label>' +
+                                '</div>' +
+                            '</section>' +
+                            '<section class="detail-card">' +
+                                '<div class="detail-card-head"><strong>收益查询 Bot</strong>' + renderStatusPill(botSettings.enabled ? "active" : "inactive") + '</div>' +
+                                '<p class="helper-text">负责 `/bind`、`/profit`、`/plan` 命令。这里配置的是 Telegram `getUpdates` 的长轮询超时；有新消息时会立即返回，不会固定等满这段时间。Bot Token 留空表示保持当前值。</p>' +
+                                '<div class="settings-form-grid">' +
+                                    '<label class="settings-toggle"><input type="checkbox" name="bot_enabled"' + (botSettings.enabled ? " checked" : "") + '><span>启用收益查询 Bot</span></label>' +
+                                    '<label><span class="field-label">Bot Token</span><input class="text-input" type="password" name="bot_bot_token" value="" placeholder="' + escapeHtml(botSettings.bot_token_masked ? ("当前: " + botSettings.bot_token_masked + "，留空保持不变") : "输入新的 Bot Token") + '"></label>' +
+                                    '<label><span class="field-label">长轮询超时（秒）</span><input class="text-input" type="number" min="1" name="bot_poll_interval_seconds" value="' + escapeHtml(String(botSettings.poll_interval_seconds || 30)) + '"></label>' +
+                                    '<label><span class="field-label">绑定码有效期（秒）</span><input class="text-input" type="number" min="60" name="bot_bind_token_ttl_seconds" value="' + escapeHtml(String(botSettings.bind_token_ttl_seconds || 600)) + '"></label>' +
+                                '</div>' +
+                            '</section>' +
+                            '<section class="detail-card">' +
+                                '<div class="detail-card-head"><strong>日报推送</strong>' + renderStatusPill(reportSettings.enabled ? "active" : "inactive") + '</div>' +
+                                '<p class="helper-text">日报推送复用“收益查询 Bot”的 Bot Token。</p>' +
+                                '<div class="settings-form-grid">' +
+                                    '<label class="settings-toggle"><input type="checkbox" name="report_enabled"' + (reportSettings.enabled ? " checked" : "") + '><span>启用日报推送</span></label>' +
+                                    '<label><span class="field-label">目标 chat_id</span><input class="text-input" type="text" name="report_target_chat_id" value="' + escapeHtml(reportSettings.target_chat_id || "") + '" placeholder="-1001234567890"></label>' +
+                                    '<label><span class="field-label">循环检查间隔（秒）</span><input class="text-input" type="number" min="5" name="report_interval_seconds" value="' + escapeHtml(String(reportSettings.interval_seconds || 30)) + '"></label>' +
+                                    '<label><span class="field-label">发送小时</span><input class="text-input" type="number" min="0" max="23" name="report_send_hour" value="' + escapeHtml(String(reportSettings.send_hour || 9)) + '"></label>' +
+                                    '<label><span class="field-label">发送分钟</span><input class="text-input" type="number" min="0" max="59" name="report_send_minute" value="' + escapeHtml(String(reportSettings.send_minute || 0)) + '"></label>' +
+                                    '<label><span class="field-label">榜单 Top N</span><input class="text-input" type="number" min="1" max="100" name="report_top_n" value="' + escapeHtml(String(reportSettings.top_n || 10)) + '"></label>' +
+                                    '<label><span class="field-label">时区</span><select class="inline-select" name="report_timezone"><option value="Asia/Shanghai"' + (String(reportSettings.timezone || "") === "Asia/Shanghai" ? " selected" : "") + '>Asia/Shanghai</option><option value="UTC"' + (String(reportSettings.timezone || "") === "UTC" ? " selected" : "") + '>UTC</option></select></label>' +
+                                '</div>' +
+                            '</section>' +
+                        '</div>' +
+                        '<div class="form-actions wide"><button class="primary-btn" type="submit">保存 Telegram 配置</button><button class="ghost-btn" type="button" data-action="reload-telegram-settings">重新加载当前值</button></div>' +
+                    '</form>' +
+                "</section>" +
+            "</div>";
+        setStatus("已刷新 Telegram 配置中心。", false);
+    }
+
     function renderSupportPage(data) {
         const filters = getFilterState();
         const query = String(filters.query || "").trim().toLowerCase();
@@ -1552,6 +1658,7 @@
                         renderSelectField("用户过滤", "userId", filters.userId, userOptions),
                         renderInputField("全局检索", "query", filters.query, "用户名 / 手机号 / 群组 / 模板 / 期号"),
                     ], [
+                        '<a class="ghost-btn link-btn" href="/admin/telegram">去 Telegram 配置</a>',
                         '<a class="ghost-btn link-btn" href="/autobet/accounts">去账号工作区</a>',
                         '<a class="ghost-btn link-btn" href="/autobet/targets">去群组工作区</a>',
                         '<a class="ghost-btn link-btn" href="/autobet/templates">去模板工作区</a>',
@@ -1791,6 +1898,11 @@
             }
             if (action === "generate-ai-source-config") {
                 handleAiSourceConfigGenerate();
+                return;
+            }
+            if (action === "reload-telegram-settings") {
+                await refreshCurrentRoute("已重新加载 Telegram 当前配置。");
+                return;
             }
         } catch (error) {
             setStatus(error.message || "操作失败", true);
@@ -1879,6 +1991,38 @@
                 form.reset();
                 form.elements.lottery_type.value = "pc28";
                 await refreshCurrentRoute("标准信号已录入。");
+                return;
+            }
+            if (form.id === "telegramSettingsForm") {
+                await request("/api/platform/admin/telegram-settings", {
+                    method: "POST",
+                    body: {
+                        alert: {
+                            enabled: Boolean(form.elements.alert_enabled.checked),
+                            bot_token: form.elements.alert_bot_token.value,
+                            target_chat_id: form.elements.alert_target_chat_id.value,
+                            repeat_interval_seconds: Number(form.elements.alert_repeat_interval_seconds.value),
+                            interval_seconds: Number(form.elements.alert_interval_seconds.value),
+                        },
+                        bot: {
+                            enabled: Boolean(form.elements.bot_enabled.checked),
+                            bot_token: form.elements.bot_bot_token.value,
+                            poll_interval_seconds: Number(form.elements.bot_poll_interval_seconds.value),
+                            bind_token_ttl_seconds: Number(form.elements.bot_bind_token_ttl_seconds.value),
+                        },
+                        report: {
+                            enabled: Boolean(form.elements.report_enabled.checked),
+                            target_chat_id: form.elements.report_target_chat_id.value,
+                            interval_seconds: Number(form.elements.report_interval_seconds.value),
+                            send_hour: Number(form.elements.report_send_hour.value),
+                            send_minute: Number(form.elements.report_send_minute.value),
+                            top_n: Number(form.elements.report_top_n.value),
+                            timezone: form.elements.report_timezone.value,
+                        },
+                    },
+                });
+                await refreshCurrentRoute("Telegram 配置已保存，对应 worker 将在下一轮自动生效。");
+                return;
             }
         } catch (error) {
             setStatus(error.message || "提交失败", true);

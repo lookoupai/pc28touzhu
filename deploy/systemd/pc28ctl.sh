@@ -9,6 +9,8 @@ ENV_FILE="${PROJECT_ROOT}/.env"
 
 PLATFORM_SERVICE="pc28touzhu-platform.service"
 ALERT_SERVICE="pc28touzhu-alert-notifier.service"
+BOT_SERVICE="pc28touzhu-telegram-bot.service"
+REPORT_SERVICE="pc28touzhu-telegram-report.service"
 EXECUTOR_TEMPLATE="pc28touzhu-telegram-executor@.service"
 
 usage() {
@@ -22,7 +24,7 @@ usage() {
   "${PROJECT_ROOT}/deploy/systemd/pc28ctl.sh" logs [executor_id]
 
 说明:
-  - 默认管理 platform + alert 两个服务
+  - 默认管理 platform + alert + telegram-bot + telegram-report 四个服务
   - 传入 executor_id 后会额外管理对应执行器实例
   - 例如: sudo "${PROJECT_ROOT}/deploy/systemd/pc28ctl.sh" up "executor-001"
 EOF
@@ -54,6 +56,8 @@ collect_services() {
     local executor_id="${1:-}"
     printf "%s\n" "${PLATFORM_SERVICE}"
     printf "%s\n" "${ALERT_SERVICE}"
+    printf "%s\n" "${BOT_SERVICE}"
+    printf "%s\n" "${REPORT_SERVICE}"
     if [[ -n "${executor_id}" ]]; then
         executor_service_name "${executor_id}"
     fi
@@ -64,6 +68,8 @@ sync_units() {
     require_env_file
     cp -f "${SYSTEMD_SOURCE_DIR}/${PLATFORM_SERVICE}" "${SYSTEMD_TARGET_DIR}/${PLATFORM_SERVICE}"
     cp -f "${SYSTEMD_SOURCE_DIR}/${ALERT_SERVICE}" "${SYSTEMD_TARGET_DIR}/${ALERT_SERVICE}"
+    cp -f "${SYSTEMD_SOURCE_DIR}/${BOT_SERVICE}" "${SYSTEMD_TARGET_DIR}/${BOT_SERVICE}"
+    cp -f "${SYSTEMD_SOURCE_DIR}/${REPORT_SERVICE}" "${SYSTEMD_TARGET_DIR}/${REPORT_SERVICE}"
     cp -f "${SYSTEMD_SOURCE_DIR}/${EXECUTOR_TEMPLATE}" "${SYSTEMD_TARGET_DIR}/${EXECUTOR_TEMPLATE}"
     systemctl daemon-reload
 }
