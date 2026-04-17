@@ -6,6 +6,11 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+from pc28touzhu.domain.pc28_profit_rules import resolve_pc28_hit_profit
+
+
+SHANGHAI_TZ = timezone(timedelta(hours=8))
+
 
 def _utc_now_iso() -> str:
     return (
@@ -30,6 +35,10 @@ def _parse_iso8601(value: Optional[str]) -> datetime:
 
 def _format_iso8601(value: datetime) -> str:
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _shanghai_date(value: Optional[str]) -> str:
+    return _parse_iso8601(value).astimezone(SHANGHAI_TZ).strftime("%Y-%m-%d")
 
 
 def _safe_json_loads(value: Optional[str]) -> dict:
@@ -67,6 +76,23 @@ def _subscription_risk_control(strategy: Optional[dict]) -> Dict[str, Any]:
     }
 
 
+def _progression_hit_profit_delta(*, signal: Optional[Dict[str, Any]], risk_control: Dict[str, Any], stake_amount: float) -> float:
+    payload = (signal or {}).get("normalized_payload") if isinstance((signal or {}).get("normalized_payload"), dict) else {}
+    source_ref = payload.get("source_ref") if isinstance(payload.get("source_ref"), dict) else {}
+    should_use_pc28_rule = bool(payload.get("profit_rule_id")) or str(source_ref.get("platform") or "").strip() == "AITradingSimulator"
+    if should_use_pc28_rule:
+        profit_delta = resolve_pc28_hit_profit(
+            stake_amount=float(stake_amount or 0),
+            bet_type=str((signal or {}).get("bet_type") or ""),
+            bet_value=str((signal or {}).get("bet_value") or ""),
+            profit_rule_id=payload.get("profit_rule_id"),
+            odds_profile=payload.get("odds_profile"),
+        )
+        if profit_delta is not None:
+            return _round_money(profit_delta)
+    return _round_money(float(stake_amount or 0) * float(risk_control["win_profit_ratio"]))
+
+
 class DatabaseRepository:
     """最小可运行 SQLite schema + 执行器接口仓储。"""
 
@@ -79,6 +105,12 @@ class DatabaseRepository:
             password_hash TEXT NOT NULL DEFAULT '',
             role TEXT NOT NULL DEFAULT 'user',
             status TEXT NOT NULL DEFAULT 'inactive',
+            telegram_user_id INTEGER,
+            telegram_chat_id TEXT,
+            telegram_username TEXT,
+            telegram_bound_at TEXT,
+            telegram_bind_token TEXT,
+            telegram_bind_token_expire_at TEXT,
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
         )
@@ -322,6 +354,57 @@ class DatabaseRepository:
             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS subscription_daily_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            stat_date TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            subscription_id INTEGER NOT NULL,
+            source_id INTEGER NOT NULL,
+            profit_amount REAL NOT NULL DEFAULT 0,
+            loss_amount REAL NOT NULL DEFAULT 0,
+            net_profit REAL NOT NULL DEFAULT 0,
+            settled_event_count INTEGER NOT NULL DEFAULT 0,
+            hit_count INTEGER NOT NULL DEFAULT 0,
+            miss_count INTEGER NOT NULL DEFAULT 0,
+            refund_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id),
+            FOREIGN KEY(source_id) REFERENCES signal_sources(id),
+            UNIQUE(subscription_id, stat_date)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS telegram_daily_report_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_key TEXT UNIQUE NOT NULL,
+            stat_date TEXT NOT NULL,
+            target_chat_id TEXT NOT NULL,
+            report_type TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'sent',
+            send_count INTEGER NOT NULL DEFAULT 0,
+            last_sent_at TEXT,
+            last_error TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS telegram_bot_runtime_state (
+            bot_name TEXT PRIMARY KEY,
+            last_update_id INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS platform_runtime_settings (
+            setting_key TEXT PRIMARY KEY,
+            value_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+        )
+        """,
         "CREATE INDEX IF NOT EXISTS idx_execution_jobs_status_time ON execution_jobs(status, execute_after, expire_at)",
         "CREATE INDEX IF NOT EXISTS idx_execution_attempts_job ON execution_attempts(job_id, attempt_no)",
         "CREATE INDEX IF NOT EXISTS idx_platform_alert_records_status_seen ON platform_alert_records(status, last_seen_at)",
@@ -330,6 +413,8 @@ class DatabaseRepository:
         "CREATE INDEX IF NOT EXISTS idx_delivery_targets_user ON delivery_targets(user_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_user_subscriptions_user ON user_subscriptions(user_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_subscription_financial_state_user ON subscription_financial_state(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_subscription_daily_stats_date_user ON subscription_daily_stats(stat_date, user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_subscription_daily_stats_date_net ON subscription_daily_stats(stat_date, net_profit)",
     ]
 
     def __init__(self, db_path: str = "pc28touzhu.db"):
@@ -346,10 +431,43 @@ class DatabaseRepository:
             cursor = conn.cursor()
             for ddl in self.SCHEMA_SQL:
                 cursor.execute(ddl)
+            self._ensure_user_telegram_columns(conn)
             self._ensure_delivery_target_columns(conn)
             self._ensure_message_template_columns(conn)
             self._ensure_execution_job_columns(conn)
+            self._ensure_user_telegram_indexes(conn)
             conn.commit()
+
+    def _ensure_user_telegram_columns(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(users)").fetchall()
+        existing_columns = {str(row["name"]) for row in rows}
+        column_definitions = {
+            "telegram_user_id": "ALTER TABLE users ADD COLUMN telegram_user_id INTEGER",
+            "telegram_chat_id": "ALTER TABLE users ADD COLUMN telegram_chat_id TEXT",
+            "telegram_username": "ALTER TABLE users ADD COLUMN telegram_username TEXT",
+            "telegram_bound_at": "ALTER TABLE users ADD COLUMN telegram_bound_at TEXT",
+            "telegram_bind_token": "ALTER TABLE users ADD COLUMN telegram_bind_token TEXT",
+            "telegram_bind_token_expire_at": "ALTER TABLE users ADD COLUMN telegram_bind_token_expire_at TEXT",
+        }
+        for column_name, ddl in column_definitions.items():
+            if column_name not in existing_columns:
+                conn.execute(ddl)
+
+    def _ensure_user_telegram_indexes(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_users_telegram_user_id_unique
+            ON users(telegram_user_id)
+            WHERE telegram_user_id IS NOT NULL
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_users_telegram_bind_token_unique
+            ON users(telegram_bind_token)
+            WHERE telegram_bind_token IS NOT NULL AND telegram_bind_token <> ''
+            """
+        )
 
     def _ensure_delivery_target_columns(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute("PRAGMA table_info(delivery_targets)").fetchall()
@@ -424,6 +542,20 @@ class DatabaseRepository:
         data = self._serialize_user_row(row)
         data["password_hash"] = str(row.get("password_hash") or "")
         return data
+
+    def _serialize_user_telegram_binding(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        bind_token = str(row.get("telegram_bind_token") or "").strip()
+        return {
+            "user_id": int(row["id"]),
+            "is_bound": row.get("telegram_user_id") is not None and str(row.get("telegram_chat_id") or "").strip() != "",
+            "telegram_user_id": int(row["telegram_user_id"]) if row.get("telegram_user_id") is not None else None,
+            "telegram_chat_id": str(row.get("telegram_chat_id") or ""),
+            "telegram_username": str(row.get("telegram_username") or ""),
+            "telegram_bound_at": row.get("telegram_bound_at"),
+            "bind_token": bind_token,
+            "bind_token_expire_at": row.get("telegram_bind_token_expire_at"),
+            "has_active_bind_token": bool(bind_token),
+        }
 
     def _serialize_target_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
         return {
@@ -716,6 +848,46 @@ class DatabaseRepository:
             "updated_at": row.get("updated_at"),
         }
 
+    def _serialize_subscription_daily_stat_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": int(row["id"]) if row.get("id") is not None else None,
+            "stat_date": str(row.get("stat_date") or ""),
+            "user_id": int(row["user_id"]),
+            "subscription_id": int(row["subscription_id"]),
+            "source_id": int(row["source_id"]),
+            "source_name": str(row.get("source_name") or ""),
+            "profit_amount": _round_money(row.get("profit_amount")),
+            "loss_amount": _round_money(row.get("loss_amount")),
+            "net_profit": _round_money(row.get("net_profit")),
+            "settled_event_count": int(row.get("settled_event_count") or 0),
+            "hit_count": int(row.get("hit_count") or 0),
+            "miss_count": int(row.get("miss_count") or 0),
+            "refund_count": int(row.get("refund_count") or 0),
+            "updated_at": row.get("updated_at"),
+        }
+
+    def _serialize_telegram_daily_report_record_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": int(row["id"]),
+            "report_key": str(row.get("report_key") or ""),
+            "stat_date": str(row.get("stat_date") or ""),
+            "target_chat_id": str(row.get("target_chat_id") or ""),
+            "report_type": str(row.get("report_type") or ""),
+            "status": str(row.get("status") or ""),
+            "send_count": int(row.get("send_count") or 0),
+            "last_sent_at": row.get("last_sent_at"),
+            "last_error": row.get("last_error"),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+
+    def _serialize_platform_runtime_setting_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "setting_key": str(row.get("setting_key") or ""),
+            "value": _safe_json_loads(row.get("value_json")),
+            "updated_at": row.get("updated_at"),
+        }
+
     # ====== Seed helpers (tests / scripts) ======
 
     def create_user(self, username: str, *, email: str = "", password_hash: str = "") -> int:
@@ -773,6 +945,118 @@ class DatabaseRepository:
     def list_users(self) -> list[Dict[str, Any]]:
         rows = self._fetch_all("SELECT * FROM users ORDER BY id ASC")
         return [self._serialize_user_row(row) for row in rows]
+
+    def get_user_telegram_binding(self, user_id: int) -> Dict[str, Any]:
+        row = self._fetch_one("SELECT * FROM users WHERE id = ? LIMIT 1", (int(user_id),))
+        if not row:
+            raise ValueError("user_id 对应的用户不存在")
+        return self._serialize_user_telegram_binding(row)
+
+    def get_user_by_telegram_user_id(self, telegram_user_id: int) -> Optional[Dict[str, Any]]:
+        row = self._fetch_one("SELECT * FROM users WHERE telegram_user_id = ? LIMIT 1", (int(telegram_user_id),))
+        return self._serialize_user_row(row) if row else None
+
+    def get_user_by_telegram_bind_token(self, bind_token: str) -> Optional[Dict[str, Any]]:
+        normalized_token = str(bind_token or "").strip()
+        if not normalized_token:
+            return None
+        row = self._fetch_one("SELECT * FROM users WHERE telegram_bind_token = ? LIMIT 1", (normalized_token,))
+        return self._serialize_user_row(row) if row else None
+
+    def set_user_telegram_bind_token(self, *, user_id: int, bind_token: str, expire_at: str) -> Dict[str, Any]:
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE users
+                SET telegram_bind_token = ?, telegram_bind_token_expire_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (str(bind_token or "").strip(), expire_at, now, int(user_id)),
+            )
+            if cursor.rowcount <= 0:
+                raise ValueError("user_id 对应的用户不存在")
+        return self.get_user_telegram_binding(int(user_id))
+
+    def clear_user_telegram_bind_token(self, *, user_id: int) -> Dict[str, Any]:
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE users
+                SET telegram_bind_token = NULL, telegram_bind_token_expire_at = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (now, int(user_id)),
+            )
+            if cursor.rowcount <= 0:
+                raise ValueError("user_id 对应的用户不存在")
+        return self.get_user_telegram_binding(int(user_id))
+
+    def update_user_telegram_binding(
+        self,
+        *,
+        user_id: int,
+        telegram_user_id: int,
+        telegram_chat_id: str,
+        telegram_username: str = "",
+        telegram_bound_at: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        normalized_bound_at = telegram_bound_at or _utc_now_iso()
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            current = conn.execute("SELECT id FROM users WHERE id = ? LIMIT 1", (int(user_id),)).fetchone()
+            if not current:
+                raise ValueError("user_id 对应的用户不存在")
+            conflict = conn.execute(
+                "SELECT id FROM users WHERE telegram_user_id = ? AND id <> ? LIMIT 1",
+                (int(telegram_user_id), int(user_id)),
+            ).fetchone()
+            if conflict:
+                raise ValueError("该 Telegram 账号已绑定其他平台用户")
+            conn.execute(
+                """
+                UPDATE users
+                SET telegram_user_id = ?,
+                    telegram_chat_id = ?,
+                    telegram_username = ?,
+                    telegram_bound_at = ?,
+                    telegram_bind_token = NULL,
+                    telegram_bind_token_expire_at = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    int(telegram_user_id),
+                    str(telegram_chat_id or "").strip(),
+                    str(telegram_username or "").strip(),
+                    normalized_bound_at,
+                    now,
+                    int(user_id),
+                ),
+            )
+        return self.get_user_telegram_binding(int(user_id))
+
+    def clear_user_telegram_binding(self, *, user_id: int) -> Dict[str, Any]:
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE users
+                SET telegram_user_id = NULL,
+                    telegram_chat_id = NULL,
+                    telegram_username = NULL,
+                    telegram_bound_at = NULL,
+                    telegram_bind_token = NULL,
+                    telegram_bind_token_expire_at = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (now, int(user_id)),
+            )
+            if cursor.rowcount <= 0:
+                raise ValueError("user_id 对应的用户不存在")
+        return self.get_user_telegram_binding(int(user_id))
 
     def create_source(self, source_type: str, name: str, *, owner_user_id: Optional[int] = None) -> int:
         with self._connect() as conn:
@@ -1565,6 +1849,10 @@ class DatabaseRepository:
     def delete_subscription_record(self, *, subscription_id: int, user_id: int) -> bool:
         with self._connect() as conn:
             conn.execute(
+                "DELETE FROM subscription_daily_stats WHERE subscription_id = ? AND user_id = ?",
+                (int(subscription_id), int(user_id)),
+            )
+            conn.execute(
                 "DELETE FROM subscription_progression_events WHERE subscription_id = ? AND user_id = ?",
                 (int(subscription_id), int(user_id)),
             )
@@ -1615,6 +1903,295 @@ class DatabaseRepository:
         if not row:
             return self._default_subscription_financial_state(int(subscription_id))
         return self._serialize_subscription_financial_state_row(row)
+
+    def _upsert_subscription_daily_stat(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        stat_date: str,
+        user_id: int,
+        subscription_id: int,
+        source_id: int,
+        profit_delta: float,
+        loss_delta: float,
+        net_delta: float,
+        result_type: str,
+        updated_at: str,
+    ) -> None:
+        hit_count = 1 if result_type == "hit" else 0
+        miss_count = 1 if result_type == "miss" else 0
+        refund_count = 1 if result_type == "refund" else 0
+        conn.execute(
+            """
+            INSERT INTO subscription_daily_stats(
+                stat_date, user_id, subscription_id, source_id,
+                profit_amount, loss_amount, net_profit,
+                settled_event_count, hit_count, miss_count, refund_count,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(subscription_id, stat_date) DO UPDATE SET
+                user_id = excluded.user_id,
+                source_id = excluded.source_id,
+                profit_amount = ROUND(subscription_daily_stats.profit_amount + excluded.profit_amount, 2),
+                loss_amount = ROUND(subscription_daily_stats.loss_amount + excluded.loss_amount, 2),
+                net_profit = ROUND(subscription_daily_stats.net_profit + excluded.net_profit, 2),
+                settled_event_count = subscription_daily_stats.settled_event_count + excluded.settled_event_count,
+                hit_count = subscription_daily_stats.hit_count + excluded.hit_count,
+                miss_count = subscription_daily_stats.miss_count + excluded.miss_count,
+                refund_count = subscription_daily_stats.refund_count + excluded.refund_count,
+                updated_at = excluded.updated_at
+            """,
+            (
+                str(stat_date or ""),
+                int(user_id),
+                int(subscription_id),
+                int(source_id),
+                _round_money(profit_delta),
+                _round_money(loss_delta),
+                _round_money(net_delta),
+                1,
+                hit_count,
+                miss_count,
+                refund_count,
+                updated_at,
+                updated_at,
+            ),
+        )
+
+    def list_user_daily_subscription_stats(self, *, user_id: int, stat_date: str) -> list[Dict[str, Any]]:
+        rows = self._fetch_all(
+            """
+            SELECT
+                sds.*,
+                ss.name AS source_name
+            FROM subscription_daily_stats sds
+            JOIN signal_sources ss ON ss.id = sds.source_id
+            WHERE sds.user_id = ? AND sds.stat_date = ?
+            ORDER BY sds.net_profit DESC, ss.name ASC, sds.subscription_id ASC
+            """,
+            (int(user_id), str(stat_date or "").strip()),
+        )
+        return [self._serialize_subscription_daily_stat_row(row) for row in rows]
+
+    def list_user_subscription_source_names(self, *, user_id: int) -> list[str]:
+        rows = self._fetch_all(
+            """
+            SELECT DISTINCT ss.name
+            FROM user_subscriptions us
+            JOIN signal_sources ss ON ss.id = us.source_id
+            WHERE us.user_id = ?
+            ORDER BY ss.name ASC, us.id ASC
+            """,
+            (int(user_id),),
+        )
+        return [str(row.get("name") or "") for row in rows if str(row.get("name") or "").strip()]
+
+    def get_user_daily_profit_summary(self, *, user_id: int, stat_date: str) -> Dict[str, Any]:
+        row = self._fetch_one(
+            """
+            SELECT
+                COALESCE(SUM(profit_amount), 0) AS profit_amount,
+                COALESCE(SUM(loss_amount), 0) AS loss_amount,
+                COALESCE(SUM(net_profit), 0) AS net_profit,
+                COALESCE(SUM(settled_event_count), 0) AS settled_event_count,
+                COALESCE(SUM(hit_count), 0) AS hit_count,
+                COALESCE(SUM(miss_count), 0) AS miss_count,
+                COALESCE(SUM(refund_count), 0) AS refund_count,
+                COUNT(1) AS plan_count
+            FROM subscription_daily_stats
+            WHERE user_id = ? AND stat_date = ?
+            """,
+            (int(user_id), str(stat_date or "").strip()),
+        ) or {}
+        return {
+            "stat_date": str(stat_date or "").strip(),
+            "user_id": int(user_id),
+            "profit_amount": _round_money(row.get("profit_amount")),
+            "loss_amount": _round_money(row.get("loss_amount")),
+            "net_profit": _round_money(row.get("net_profit")),
+            "settled_event_count": int(row.get("settled_event_count") or 0),
+            "hit_count": int(row.get("hit_count") or 0),
+            "miss_count": int(row.get("miss_count") or 0),
+            "refund_count": int(row.get("refund_count") or 0),
+            "plan_count": int(row.get("plan_count") or 0),
+        }
+
+    def list_daily_user_profit_rankings(self, *, stat_date: str) -> list[Dict[str, Any]]:
+        rows = self._fetch_all(
+            """
+            SELECT
+                sds.user_id,
+                u.username,
+                COALESCE(SUM(sds.profit_amount), 0) AS profit_amount,
+                COALESCE(SUM(sds.loss_amount), 0) AS loss_amount,
+                COALESCE(SUM(sds.net_profit), 0) AS net_profit,
+                COALESCE(SUM(sds.settled_event_count), 0) AS settled_event_count,
+                COALESCE(SUM(sds.hit_count), 0) AS hit_count,
+                COALESCE(SUM(sds.miss_count), 0) AS miss_count,
+                COALESCE(SUM(sds.refund_count), 0) AS refund_count,
+                COUNT(1) AS plan_count
+            FROM subscription_daily_stats sds
+            JOIN users u ON u.id = sds.user_id
+            WHERE sds.stat_date = ?
+            GROUP BY sds.user_id, u.username
+            ORDER BY sds.user_id ASC
+            """,
+            (str(stat_date or "").strip(),),
+        )
+        return [
+            {
+                "stat_date": str(stat_date or "").strip(),
+                "user_id": int(row["user_id"]),
+                "username": str(row.get("username") or ""),
+                "profit_amount": _round_money(row.get("profit_amount")),
+                "loss_amount": _round_money(row.get("loss_amount")),
+                "net_profit": _round_money(row.get("net_profit")),
+                "settled_event_count": int(row.get("settled_event_count") or 0),
+                "hit_count": int(row.get("hit_count") or 0),
+                "miss_count": int(row.get("miss_count") or 0),
+                "refund_count": int(row.get("refund_count") or 0),
+                "plan_count": int(row.get("plan_count") or 0),
+            }
+            for row in rows
+        ]
+
+    def get_telegram_daily_report_record(self, report_key: str) -> Optional[Dict[str, Any]]:
+        row = self._fetch_one(
+            "SELECT * FROM telegram_daily_report_records WHERE report_key = ? LIMIT 1",
+            (str(report_key or "").strip(),),
+        )
+        return self._serialize_telegram_daily_report_record_row(row) if row else None
+
+    def mark_telegram_daily_report_sent(
+        self,
+        *,
+        report_key: str,
+        stat_date: str,
+        target_chat_id: str,
+        report_type: str,
+        sent_at: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        now = sent_at or _utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO telegram_daily_report_records(
+                    report_key, stat_date, target_chat_id, report_type, status,
+                    send_count, last_sent_at, last_error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'sent', 1, ?, NULL, ?, ?)
+                ON CONFLICT(report_key) DO UPDATE SET
+                    stat_date = excluded.stat_date,
+                    target_chat_id = excluded.target_chat_id,
+                    report_type = excluded.report_type,
+                    status = 'sent',
+                    send_count = telegram_daily_report_records.send_count + 1,
+                    last_sent_at = excluded.last_sent_at,
+                    last_error = NULL,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    str(report_key or "").strip(),
+                    str(stat_date or "").strip(),
+                    str(target_chat_id or "").strip(),
+                    str(report_type or "").strip(),
+                    now,
+                    now,
+                    now,
+                ),
+            )
+        return self.get_telegram_daily_report_record(str(report_key or "").strip()) or {}
+
+    def mark_telegram_daily_report_failed(
+        self,
+        *,
+        report_key: str,
+        stat_date: str,
+        target_chat_id: str,
+        report_type: str,
+        error_message: str,
+        failed_at: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        now = failed_at or _utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO telegram_daily_report_records(
+                    report_key, stat_date, target_chat_id, report_type, status,
+                    send_count, last_sent_at, last_error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'failed', 1, NULL, ?, ?, ?)
+                ON CONFLICT(report_key) DO UPDATE SET
+                    stat_date = excluded.stat_date,
+                    target_chat_id = excluded.target_chat_id,
+                    report_type = excluded.report_type,
+                    status = 'failed',
+                    send_count = telegram_daily_report_records.send_count + 1,
+                    last_error = excluded.last_error,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    str(report_key or "").strip(),
+                    str(stat_date or "").strip(),
+                    str(target_chat_id or "").strip(),
+                    str(report_type or "").strip(),
+                    str(error_message or "").strip(),
+                    now,
+                    now,
+                ),
+            )
+        return self.get_telegram_daily_report_record(str(report_key or "").strip()) or {}
+
+    def get_telegram_bot_runtime_state(self, *, bot_name: str = "default") -> Dict[str, Any]:
+        row = self._fetch_one(
+            "SELECT * FROM telegram_bot_runtime_state WHERE bot_name = ? LIMIT 1",
+            (str(bot_name or "default"),),
+        )
+        if not row:
+            return {"bot_name": str(bot_name or "default"), "last_update_id": 0, "updated_at": None}
+        return {
+            "bot_name": str(row.get("bot_name") or ""),
+            "last_update_id": int(row.get("last_update_id") or 0),
+            "updated_at": row.get("updated_at"),
+        }
+
+    def update_telegram_bot_runtime_state(self, *, bot_name: str = "default", last_update_id: int) -> Dict[str, Any]:
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO telegram_bot_runtime_state(bot_name, last_update_id, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(bot_name) DO UPDATE SET
+                    last_update_id = excluded.last_update_id,
+                    updated_at = excluded.updated_at
+                """,
+                (str(bot_name or "default"), int(last_update_id or 0), now),
+            )
+        return self.get_telegram_bot_runtime_state(bot_name=str(bot_name or "default"))
+
+    def get_platform_runtime_setting(self, setting_key: str) -> Optional[Dict[str, Any]]:
+        row = self._fetch_one(
+            "SELECT * FROM platform_runtime_settings WHERE setting_key = ? LIMIT 1",
+            (str(setting_key or "").strip(),),
+        )
+        return self._serialize_platform_runtime_setting_row(row) if row else None
+
+    def upsert_platform_runtime_setting(self, *, setting_key: str, value: Dict[str, Any]) -> Dict[str, Any]:
+        normalized_key = str(setting_key or "").strip()
+        if not normalized_key:
+            raise ValueError("setting_key 不能为空")
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO platform_runtime_settings(setting_key, value_json, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(setting_key) DO UPDATE SET
+                    value_json = excluded.value_json,
+                    updated_at = excluded.updated_at
+                """,
+                (normalized_key, _safe_json_dumps(value or {}), now),
+            )
+        return self.get_platform_runtime_setting(normalized_key) or {}
 
     def upsert_subscription_progression_state(
         self,
@@ -1818,11 +2395,12 @@ class DatabaseRepository:
             )
 
             subscription_row = conn.execute(
-                "SELECT strategy_json FROM user_subscriptions WHERE id = ? AND user_id = ? LIMIT 1",
+                "SELECT source_id, strategy_json FROM user_subscriptions WHERE id = ? AND user_id = ? LIMIT 1",
                 (int(subscription_id), int(user_id)),
             ).fetchone()
             strategy = _safe_json_loads(subscription_row["strategy_json"]) if subscription_row else {}
             risk_control = _subscription_risk_control(strategy)
+            source_id = int(subscription_row["source_id"]) if subscription_row and subscription_row["source_id"] is not None else None
 
             financial_row = conn.execute(
                 "SELECT * FROM subscription_financial_state WHERE subscription_id = ? LIMIT 1",
@@ -1834,12 +2412,17 @@ class DatabaseRepository:
                 else self._default_subscription_financial_state(int(subscription_id))
             )
 
+            signal = self.get_signal(int(current_event["signal_id"])) if current_event.get("signal_id") is not None else None
             stake_amount = _round_money(current_event.get("stake_amount"))
             profit_delta = 0.0
             loss_delta = 0.0
             net_delta = 0.0
             if normalized_result == "hit":
-                profit_delta = _round_money(stake_amount * float(risk_control["win_profit_ratio"]))
+                profit_delta = _progression_hit_profit_delta(
+                    signal=signal,
+                    risk_control=risk_control,
+                    stake_amount=stake_amount,
+                )
                 net_delta = profit_delta
             elif normalized_result == "miss":
                 loss_delta = stake_amount
@@ -1896,6 +2479,20 @@ class DatabaseRepository:
                     now,
                 ),
             )
+
+            if source_id is not None:
+                self._upsert_subscription_daily_stat(
+                    conn,
+                    stat_date=_shanghai_date(now),
+                    user_id=int(user_id),
+                    subscription_id=int(subscription_id),
+                    source_id=int(source_id),
+                    profit_delta=profit_delta,
+                    loss_delta=loss_delta,
+                    net_delta=net_delta,
+                    result_type=normalized_result,
+                    updated_at=now,
+                )
 
             if threshold_triggered:
                 conn.execute(

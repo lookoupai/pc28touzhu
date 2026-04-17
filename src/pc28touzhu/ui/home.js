@@ -145,20 +145,39 @@
 
     function summarizeStrategy(strategy) {
         const payload = strategy && typeof strategy === "object" ? strategy : {};
+        const mode = String(payload.mode || "").trim();
+        const betFilter = payload.bet_filter && typeof payload.bet_filter === "object" ? payload.bet_filter : {};
+        const selectedKeys = Array.isArray(betFilter.selected_keys) ? betFilter.selected_keys : [];
+        const playLabels = {
+            "big_small:大": "大",
+            "big_small:小": "小",
+            "odd_even:单": "单",
+            "odd_even:双": "双",
+            "combo:大单": "大单",
+            "combo:大双": "大双",
+            "combo:小单": "小单",
+            "combo:小双": "小双",
+        };
+        const playSummary = String(betFilter.mode || "all") === "selected" && selectedKeys.length
+            ? ("玩法 " + selectedKeys.filter(function (key) { return playLabels[key]; }).map(function (key) { return playLabels[key]; }).join("/"))
+            : "玩法 全部";
         if (payload.base_stake != null && payload.multiplier != null && payload.max_steps != null) {
-            return "策略 " + [payload.mode || "flat", "基础注 " + payload.base_stake, "倍数 " + payload.multiplier, "追手 " + payload.max_steps].join(" · ");
+            return [playSummary, "倍投", "起始 " + payload.base_stake, "每次乘 " + payload.multiplier, "最多追 " + payload.max_steps + " 手"].join(" · ");
         }
         if (payload.stake_amount) {
-            return "固定金额 " + payload.stake_amount;
+            return [playSummary, "均注", "每期 " + payload.stake_amount].join(" · ");
         }
-        if (payload.mode) {
-            return "模式 " + payload.mode;
+        if (mode === "follow") {
+            return [playSummary, "跟随来源金额"].join(" · ");
+        }
+        if (mode) {
+            return [playSummary, "方式 " + mode].join(" · ");
         }
         const keys = Object.keys(payload);
         if (keys.length) {
-            return "已配置 " + keys.length + " 项规则";
+            return [playSummary, "已配置 " + keys.length + " 项规则"].join(" · ");
         }
-        return "已建立基础跟单关系";
+        return playSummary + " · 已保存跟单策略";
     }
 
     function accountAuthState(account) {
@@ -252,20 +271,20 @@
 
         if (!state.subscriptions.length) {
             return {
-                title: "进入跟单工作区建立策略",
-                description: "账号和群组都已准备好，下一步在跟单工作区里建立策略并核对执行链路。",
+                title: "进入跟单页完成最后一步",
+                description: "账号和群组都已准备好，下一步去设置来源和金额方式，确认信号会发到哪些群。",
                 badgeText: "第 5 步",
                 badgeClass: "step-pill is-pending",
                 actionHref: "/autobet/subscriptions#subscriptionsSection",
-                actionText: "去跟单工作区",
+                actionText: "去设置跟单",
                 secondaryHref: "/autobet/targets#targetsSection",
-                secondaryText: "去群组工作区",
+                secondaryText: "去看群组",
             };
         }
 
         return {
             title: "自动投注基础条件已就绪",
-            description: "首页现在只负责汇总状态；如果要继续调整账号、群组、模板或跟单，请进入总控台或对应工作区。",
+            description: "首页只负责汇总状态；如果要继续调整账号、群组、模板或跟单，请进入总控台或对应页面。",
             badgeText: "已就绪",
             badgeClass: "step-pill is-done",
             actionHref: "/autobet",
@@ -486,11 +505,11 @@
                 actionText: "去对应工作区",
             },
             {
-                title: "建立跟单关系",
+                title: "设置跟单",
                 complete: state.subscriptions.length > 0,
-                description: "跟单、下注模板和群组绑定关系统一在总控台和对应工作区维护。",
+                description: "最后把来源、金额和群组串起来，信号才会真正变成发单任务。",
                 actionHref: "/autobet/subscriptions#subscriptionsSection",
-                actionText: "去跟单工作区",
+                actionText: "去设置跟单",
             },
         ];
 

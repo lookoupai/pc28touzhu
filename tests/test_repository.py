@@ -732,6 +732,246 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(settled["financial"]["realized_loss"], 10)
         self.assertEqual(settled["financial"]["net_profit"], -10)
 
+    def test_progression_event_settlement_updates_daily_stats(self):
+        user_id = self.repo.create_user("sub-daily-stat-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-daily",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={
+                "mode": "follow",
+                "stake_amount": 10,
+                "risk_control": {"enabled": True, "win_profit_ratio": 1.5},
+            },
+        )
+        hit_signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407011",
+            bet_type="edge",
+            bet_value="边",
+        )
+        miss_signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407012",
+            bet_type="edge",
+            bet_value="中",
+        )
+        hit_event = self.repo.create_progression_event_record(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            signal_id=hit_signal["id"],
+            issue_no="20260407011",
+            progression_step=1,
+            stake_amount=10,
+            base_stake=10,
+            multiplier=2,
+            max_steps=3,
+            refund_action="hold",
+            cap_action="reset",
+            status="placed",
+        )
+        miss_event = self.repo.create_progression_event_record(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            signal_id=miss_signal["id"],
+            issue_no="20260407012",
+            progression_step=1,
+            stake_amount=8,
+            base_stake=8,
+            multiplier=2,
+            max_steps=3,
+            refund_action="hold",
+            cap_action="reset",
+            status="placed",
+        )
+
+        self.repo.settle_progression_event(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            result_type="hit",
+            progression_event_id=hit_event["id"],
+        )
+        self.repo.settle_progression_event(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            result_type="miss",
+            progression_event_id=miss_event["id"],
+        )
+
+        stat_date = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        stats = self.repo.list_user_daily_subscription_stats(user_id=user_id, stat_date=stat_date)
+        self.assertEqual(len(stats), 1)
+        self.assertEqual(stats[0]["source_name"], "model-daily")
+        self.assertEqual(stats[0]["profit_amount"], 15)
+        self.assertEqual(stats[0]["loss_amount"], 8)
+        self.assertEqual(stats[0]["net_profit"], 7)
+        self.assertEqual(stats[0]["settled_event_count"], 2)
+        summary = self.repo.get_user_daily_profit_summary(user_id=user_id, stat_date=stat_date)
+        self.assertEqual(summary["plan_count"], 1)
+        self.assertEqual(summary["net_profit"], 7)
+
+    def test_progression_event_settlement_uses_pc28_rule_for_daxiao(self):
+        user_id = self.repo.create_user("sub-pc28-basic-profit-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-basic-profit",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={
+                "mode": "follow",
+                "stake_amount": 10,
+                "risk_control": {"enabled": True, "win_profit_ratio": 5.0},
+            },
+        )
+        signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407013",
+            bet_type="big_small",
+            bet_value="大",
+            normalized_payload={"profit_rule_id": "pc28_netdisk", "odds_profile": "regular"},
+        )
+        event = self.repo.create_progression_event_record(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            signal_id=signal["id"],
+            issue_no="20260407013",
+            progression_step=1,
+            stake_amount=10,
+            base_stake=10,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            status="placed",
+        )
+
+        settled = self.repo.settle_progression_event(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            result_type="hit",
+            progression_event_id=event["id"],
+        )
+
+        self.assertEqual(settled["financial"]["realized_profit"], 9.8)
+        self.assertEqual(settled["financial"]["net_profit"], 9.8)
+
+    def test_progression_event_settlement_uses_pc28_rule_for_combo(self):
+        user_id = self.repo.create_user("sub-pc28-combo-profit-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-combo-profit",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={
+                "mode": "follow",
+                "stake_amount": 10,
+                "risk_control": {"enabled": True, "win_profit_ratio": 1.0},
+            },
+        )
+        signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407014",
+            bet_type="combo",
+            bet_value="大单",
+            normalized_payload={"profit_rule_id": "pc28_high", "odds_profile": "regular"},
+        )
+        event = self.repo.create_progression_event_record(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            signal_id=signal["id"],
+            issue_no="20260407014",
+            progression_step=1,
+            stake_amount=10,
+            base_stake=10,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            status="placed",
+        )
+
+        settled = self.repo.settle_progression_event(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            result_type="hit",
+            progression_event_id=event["id"],
+        )
+
+        self.assertEqual(settled["financial"]["realized_profit"], 53.3)
+        self.assertEqual(settled["financial"]["net_profit"], 53.3)
+
+    def test_user_telegram_binding_token_flow(self):
+        user = self.repo.create_user_record(username="binding-user", email="", role="user", status="active")
+        token_state = self.repo.set_user_telegram_bind_token(
+            user_id=user["id"],
+            bind_token="ABC123TOKEN",
+            expire_at="2026-04-17T13:00:00Z",
+        )
+        self.assertTrue(token_state["has_active_bind_token"])
+        self.assertEqual(token_state["bind_token"], "ABC123TOKEN")
+        self.assertEqual(self.repo.get_user_by_telegram_bind_token("ABC123TOKEN")["id"], user["id"])
+
+        bound = self.repo.update_user_telegram_binding(
+            user_id=user["id"],
+            telegram_user_id=778899,
+            telegram_chat_id="778899",
+            telegram_username="tg_binding_user",
+            telegram_bound_at="2026-04-17T12:30:00Z",
+        )
+        self.assertTrue(bound["is_bound"])
+        self.assertEqual(bound["telegram_user_id"], 778899)
+        self.assertEqual(bound["telegram_chat_id"], "778899")
+        self.assertEqual(self.repo.get_user_by_telegram_user_id(778899)["id"], user["id"])
+        self.assertEqual(bound["bind_token"], "")
+
+        cleared = self.repo.clear_user_telegram_binding(user_id=user["id"])
+        self.assertFalse(cleared["is_bound"])
+        self.assertEqual(cleared["telegram_chat_id"], "")
+
+    def test_mark_telegram_daily_report_sent_and_runtime_state(self):
+        first = self.repo.mark_telegram_daily_report_sent(
+            report_key="daily:2026-04-16:-1001",
+            stat_date="2026-04-16",
+            target_chat_id="-1001",
+            report_type="daily_profit_loss",
+            sent_at="2026-04-17T01:00:00Z",
+        )
+        second = self.repo.mark_telegram_daily_report_sent(
+            report_key="daily:2026-04-16:-1001",
+            stat_date="2026-04-16",
+            target_chat_id="-1001",
+            report_type="daily_profit_loss",
+            sent_at="2026-04-17T01:01:00Z",
+        )
+        self.assertEqual(first["send_count"], 1)
+        self.assertEqual(second["send_count"], 2)
+        state = self.repo.update_telegram_bot_runtime_state(bot_name="profit-query-bot", last_update_id=123)
+        self.assertEqual(state["last_update_id"], 123)
+
+    def test_platform_runtime_setting_round_trip(self):
+        stored = self.repo.upsert_platform_runtime_setting(
+            setting_key="telegram_runtime_settings",
+            value={"bot": {"enabled": True, "poll_interval_seconds": 8}},
+        )
+        self.assertEqual(stored["setting_key"], "telegram_runtime_settings")
+        self.assertEqual(stored["value"]["bot"]["poll_interval_seconds"], 8)
+        loaded = self.repo.get_platform_runtime_setting("telegram_runtime_settings")
+        self.assertEqual(loaded["value"]["bot"]["enabled"], True)
+
     def test_progression_event_settlement_can_auto_stop_subscription(self):
         user_id = self.repo.create_user("sub-risk-user")
         source_id = self.repo.create_source_record(
@@ -1382,6 +1622,98 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIsNotNone(event)
         self.assertEqual(event["issue_no"], "20260407012")
         self.assertEqual(event["status"], "pending")
+
+    def test_dispatch_signal_skips_unselected_play_filter(self):
+        user_id = self.repo.create_user("dispatch-play-filter-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="dispatch-play-filter",
+        )["id"]
+        account_id = self.repo.create_telegram_account_record(
+            user_id=user_id,
+            label="执行号",
+            phone="+12017771235",
+            session_path="/data/dispatch-play-filter/main",
+            status="active",
+        )["id"]
+        self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={
+                "mode": "follow",
+                "stake_amount": 12,
+                "bet_filter": {"mode": "selected", "selected_keys": ["big_small:大"]},
+            },
+        )
+        self.repo.create_delivery_target_record(
+            user_id=user_id,
+            telegram_account_id=account_id,
+            executor_type="telegram_group",
+            target_key="-1004456",
+            target_name="跟随群",
+            status="active",
+        )
+        signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407013",
+            bet_type="big_small",
+            bet_value="小",
+            normalized_payload={},
+        )
+
+        result = dispatch_signal(self.repo, signal["id"])
+
+        self.assertEqual(result["candidate_count"], 0)
+        self.assertEqual(result["created_count"], 0)
+        self.assertEqual(self.repo.list_execution_jobs(), [])
+
+    def test_dispatch_signal_matches_danshuang_filter_for_big_small_signal(self):
+        user_id = self.repo.create_user("dispatch-odd-even-filter-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="dispatch-odd-even-filter",
+        )["id"]
+        account_id = self.repo.create_telegram_account_record(
+            user_id=user_id,
+            label="执行号",
+            phone="+12017771236",
+            session_path="/data/dispatch-odd-even-filter/main",
+            status="active",
+        )["id"]
+        self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={
+                "mode": "follow",
+                "stake_amount": 12,
+                "bet_filter": {"mode": "selected", "selected_keys": ["odd_even:单"]},
+            },
+        )
+        self.repo.create_delivery_target_record(
+            user_id=user_id,
+            telegram_account_id=account_id,
+            executor_type="telegram_group",
+            target_key="-1004457",
+            target_name="跟随群",
+            status="active",
+        )
+        signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407014",
+            bet_type="big_small",
+            bet_value="单",
+            normalized_payload={},
+        )
+
+        result = dispatch_signal(self.repo, signal["id"])
+
+        self.assertEqual(result["candidate_count"], 1)
+        self.assertEqual(result["created_count"], 1)
+        self.assertEqual(result["jobs"][0]["planned_message_text"], "单12")
 
     def test_dispatch_candidates_excludes_inactive_account(self):
         user_id = self.repo.create_user("dispatch-inactive-user")

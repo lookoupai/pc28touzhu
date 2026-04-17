@@ -806,8 +806,85 @@
     justify-self: flex-start;
 }
 
-.subscription-follow-default-field {
+.subscription-strategy-mode-field,
+.subscription-play-filter-mode-field,
+.subscription-follow-tip-field,
+.subscription-martingale-field,
+.subscription-martingale-advanced-field {
     align-content: flex-start;
+}
+
+.subscription-play-filter-fields {
+    display: grid;
+    gap: 10px;
+    padding: 14px 16px;
+    border: 1px solid rgba(20, 37, 45, 0.08);
+    border-radius: var(--radius-lg);
+    background: rgba(255, 255, 255, 0.76);
+}
+
+.subscription-play-filter-toolbar {
+    display: grid;
+    gap: 10px;
+}
+
+.subscription-play-filter-shortcuts {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.subscription-play-filter-shortcuts .row-button {
+    min-height: 38px;
+    padding: 0 14px;
+}
+
+.subscription-play-filter-shortcuts .row-button.is-active {
+    border-color: rgba(15, 118, 110, 0.38);
+    background: rgba(15, 118, 110, 0.12);
+    color: var(--primary-strong);
+}
+
+.subscription-play-filter-summary {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.84rem;
+    line-height: 1.6;
+}
+
+.subscription-play-filter-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.subscription-play-filter-title {
+    min-width: 52px;
+    color: var(--muted);
+    font-size: 0.82rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+}
+
+.subscription-play-filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 38px;
+    padding: 0 14px;
+    border: 1px solid rgba(20, 37, 45, 0.12);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.82);
+    color: var(--text);
+    font-size: 0.84rem;
+    font-weight: 700;
+}
+
+.subscription-play-filter-chip input {
+    width: 16px;
+    height: 16px;
+    margin: 0;
 }
 
 .subscription-runtime-note {
@@ -815,7 +892,11 @@
     color: var(--warning);
 }
 
-.subscription-amount-field[hidden],
+.subscription-fixed-field[hidden],
+.subscription-play-filter-fields[hidden],
+.subscription-follow-tip-field[hidden],
+.subscription-martingale-field[hidden],
+.subscription-martingale-advanced-field[hidden],
 #subscriptionAdvancedFields[hidden] {
     display: none;
 }

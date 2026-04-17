@@ -39,7 +39,12 @@
     const onboardingProgressMeta = document.getElementById("onboardingProgressMeta");
     const onboardingPrerequisite = document.getElementById("onboardingPrerequisite");
     const continueOnboardingBtn = document.getElementById("continueOnboardingBtn");
-    const followSourceAmountCheckbox = document.getElementById("followSourceAmountCheckbox");
+    const subscriptionBetFilterModeSelect = document.getElementById("subscriptionBetFilterModeSelect");
+    const subscriptionBetFilterHint = document.getElementById("subscriptionBetFilterHint");
+    const subscriptionBetFilterFields = document.getElementById("subscriptionBetFilterFields");
+    const subscriptionBetFilterSelectionSummary = document.getElementById("subscriptionBetFilterSelectionSummary");
+    const subscriptionStrategyModeSelect = document.getElementById("subscriptionStrategyModeSelect");
+    const subscriptionStrategyModeHint = document.getElementById("subscriptionStrategyModeHint");
     const subscriptionRiskControlEnabledCheckbox = document.getElementById("subscriptionRiskControlEnabledCheckbox");
     const toggleSubscriptionAdvancedBtn = document.getElementById("toggleSubscriptionAdvancedBtn");
     const subscriptionAdvancedFields = document.getElementById("subscriptionAdvancedFields");
@@ -48,6 +53,22 @@
     const templatePreviewBetValue = document.getElementById("templatePreviewBetValue");
     const templatePreviewAmount = document.getElementById("templatePreviewAmount");
     const templatePreviewIssueNo = document.getElementById("templatePreviewIssueNo");
+
+    const SUBSCRIPTION_PLAY_FILTER_LABELS = {
+        "big_small:大": "大",
+        "big_small:小": "小",
+        "odd_even:单": "单",
+        "odd_even:双": "双",
+        "combo:大单": "大单",
+        "combo:大双": "大双",
+        "combo:小单": "小单",
+        "combo:小双": "小双",
+    };
+    const SUBSCRIPTION_PLAY_FILTER_PRESETS = {
+        big_small: ["big_small:大", "big_small:小"],
+        odd_even: ["odd_even:单", "odd_even:双"],
+        combo: ["combo:大单", "combo:大双", "combo:小单", "combo:小双"],
+    };
     const templatePreviewPayload = document.getElementById("templatePreviewPayload");
     const templatePreviewOutput = document.getElementById("templatePreviewOutput");
     const templatePreviewMeta = document.getElementById("templatePreviewMeta");
@@ -227,12 +248,12 @@
         if (normalized === "subscriptions") {
             return {
                 eyebrow: "跟单策略",
-                title: "这里专门处理跟单策略和来源到执行链路的连接。",
-                detail: "账号、群组和模板准备好后，在这里建立跟单关系，让标准信号真正进入执行任务。",
+                title: "在这里设置一条来源收到后怎么下单、发到哪些群。",
+                detail: "选来源、定金额，再检查群组和模板，信号才会真正发出去。",
                 primaryHref: "#subscriptionsSection",
-                primaryText: "去建立跟单",
+                primaryText: "去设置跟单",
                 secondaryHref: "/autobet/targets#targetsSection",
-                secondaryText: "去群组页",
+                secondaryText: "去看群组",
                 activeHref: "/autobet/subscriptions#subscriptionsSection",
             };
         }
@@ -1462,26 +1483,251 @@
         }
         if (toggleSubscriptionAdvancedBtn instanceof HTMLButtonElement) {
             toggleSubscriptionAdvancedBtn.setAttribute("aria-expanded", expanded ? "true" : "false");
-            toggleSubscriptionAdvancedBtn.textContent = expanded ? "收起高级设置" : "显示高级设置";
+            toggleSubscriptionAdvancedBtn.textContent = expanded ? "收起更多设置" : "展开更多设置";
         }
+    }
+
+    function normalizeSubscriptionStrategyMode(value) {
+        const normalized = String(value || "fixed").trim() || "fixed";
+        if (normalized === "follow_source" || normalized === "martingale") {
+            return normalized;
+        }
+        return "fixed";
+    }
+
+    function normalizeSubscriptionBetFilterMode(value) {
+        return String(value || "all").trim() === "selected" ? "selected" : "all";
+    }
+
+    function currentSubscriptionBetFilterMode() {
+        if (!(subscriptionBetFilterModeSelect instanceof HTMLSelectElement)) {
+            return "all";
+        }
+        return normalizeSubscriptionBetFilterMode(subscriptionBetFilterModeSelect.value);
+    }
+
+    function selectedSubscriptionBetFilterKeys() {
+        if (!(subscriptionForm instanceof HTMLFormElement)) {
+            return [];
+        }
+        const selected = [];
+        Array.from(subscriptionForm.querySelectorAll("input[name='bet_filter_key']")).forEach(function (input) {
+            if (!(input instanceof HTMLInputElement) || !input.checked) {
+                return;
+            }
+            const key = String(input.value || "").trim();
+            if (SUBSCRIPTION_PLAY_FILTER_LABELS[key] && !selected.includes(key)) {
+                selected.push(key);
+            }
+        });
+        return selected;
+    }
+
+    function setSelectedSubscriptionBetFilterKeys(keys) {
+        if (!(subscriptionForm instanceof HTMLFormElement)) {
+            return;
+        }
+        const allowedKeys = Array.isArray(keys) ? keys.filter(function (key) {
+            return Boolean(SUBSCRIPTION_PLAY_FILTER_LABELS[key]);
+        }) : [];
+        Array.from(subscriptionForm.querySelectorAll("input[name='bet_filter_key']")).forEach(function (input) {
+            if (!(input instanceof HTMLInputElement)) {
+                return;
+            }
+            input.checked = allowedKeys.includes(String(input.value || "").trim());
+        });
+    }
+
+    function applySubscriptionPlayFilterPreset(presetKey) {
+        const normalizedPreset = String(presetKey || "").trim();
+        if (normalizedPreset === "custom") {
+            if (subscriptionBetFilterModeSelect instanceof HTMLSelectElement) {
+                subscriptionBetFilterModeSelect.value = "selected";
+            }
+            setSelectedSubscriptionBetFilterKeys([]);
+            syncSubscriptionBetFilterUI();
+            return;
+        }
+        const keys = SUBSCRIPTION_PLAY_FILTER_PRESETS[normalizedPreset] || [];
+        if (!keys.length) {
+            return;
+        }
+        if (subscriptionBetFilterModeSelect instanceof HTMLSelectElement) {
+            subscriptionBetFilterModeSelect.value = "selected";
+        }
+        setSelectedSubscriptionBetFilterKeys(keys);
+        syncSubscriptionBetFilterUI();
+    }
+
+    function samePlayFilterKeys(leftKeys, rightKeys) {
+        const left = Array.isArray(leftKeys) ? leftKeys.slice().sort() : [];
+        const right = Array.isArray(rightKeys) ? rightKeys.slice().sort() : [];
+        return left.length === right.length && left.every(function (item, index) {
+            return item === right[index];
+        });
+    }
+
+    function resolveSignalPlayFilterKey(signal) {
+        const item = signal && typeof signal === "object" ? signal : {};
+        const betType = String(item.bet_type || "").trim();
+        const betValue = String(item.bet_value || "").trim();
+        if (betType === "combo" && ["大单", "大双", "小单", "小双"].includes(betValue)) {
+            return "combo:" + betValue;
+        }
+        if (betType === "big_small" && ["大", "小"].includes(betValue)) {
+            return "big_small:" + betValue;
+        }
+        if ((betType === "big_small" || betType === "odd_even") && ["单", "双"].includes(betValue)) {
+            return "odd_even:" + betValue;
+        }
+        return "";
+    }
+
+    function syncSubscriptionBetFilterUI() {
+        if (!(subscriptionForm instanceof HTMLFormElement)) {
+            return;
+        }
+        const mode = currentSubscriptionBetFilterMode();
+        const isSelectedMode = mode === "selected";
+        const selectedSource = sourceById(subscriptionForm.elements.source_id.value);
+        const isAiTradingSimulatorSource = Boolean(selectedSource) && selectedSource.source_type === "ai_trading_simulator_export";
+        const selectedKeys = selectedSubscriptionBetFilterKeys();
+        if (subscriptionBetFilterFields instanceof HTMLElement) {
+            subscriptionBetFilterFields.hidden = !isSelectedMode;
+        }
+        Array.from(subscriptionForm.querySelectorAll("input[name='bet_filter_key']")).forEach(function (input) {
+            if (!(input instanceof HTMLInputElement)) {
+                return;
+            }
+            input.disabled = !isSelectedMode;
+        });
+        Array.from(document.querySelectorAll("[data-play-filter-preset]")).forEach(function (button) {
+            if (!(button instanceof HTMLButtonElement)) {
+                return;
+            }
+            const presetKey = String(button.getAttribute("data-play-filter-preset") || "").trim();
+            let isActive = false;
+            if (isSelectedMode) {
+                if (presetKey === "custom") {
+                    isActive = selectedKeys.length === 0 || !Object.keys(SUBSCRIPTION_PLAY_FILTER_PRESETS).some(function (key) {
+                        return samePlayFilterKeys(selectedKeys, SUBSCRIPTION_PLAY_FILTER_PRESETS[key]);
+                    });
+                } else {
+                    isActive = samePlayFilterKeys(selectedKeys, SUBSCRIPTION_PLAY_FILTER_PRESETS[presetKey]);
+                }
+            }
+            button.classList.toggle("is-active", isActive);
+        });
+        if (subscriptionBetFilterHint instanceof HTMLElement) {
+            if (!isSelectedMode && isAiTradingSimulatorSource) {
+                subscriptionBetFilterHint.textContent = "这个来源通常会同时导出大小、单双、组合等多条信号。全部都跟风险很高，不建议普通用户这样用。";
+            } else if (!isSelectedMode) {
+                subscriptionBetFilterHint.textContent = "不过滤玩法，来源这次导出什么就会跟什么。";
+            } else if (selectedKeys.length) {
+                subscriptionBetFilterHint.textContent = "只会跟你勾选的玩法，其他信号会自动跳过。当前已选 " + selectedKeys.length + " 项。";
+            } else {
+                subscriptionBetFilterHint.textContent = "请至少勾选一个玩法。建议先从“大小”或“组合”里选你真正想下的内容。";
+            }
+        }
+        if (subscriptionBetFilterSelectionSummary instanceof HTMLElement) {
+            if (!isSelectedMode) {
+                subscriptionBetFilterSelectionSummary.textContent = "当前设置：不过滤玩法，来源这次导出什么就跟什么。";
+            } else if (!selectedKeys.length) {
+                subscriptionBetFilterSelectionSummary.textContent = "当前还没选玩法。可以直接点上面的快捷按钮。";
+            } else {
+                subscriptionBetFilterSelectionSummary.textContent = "当前已选：" + selectedKeys.map(function (key) {
+                    return SUBSCRIPTION_PLAY_FILTER_LABELS[key];
+                }).join(" / ");
+            }
+        }
+    }
+
+    function currentSubscriptionStrategyMode() {
+        if (!(subscriptionStrategyModeSelect instanceof HTMLSelectElement)) {
+            return "fixed";
+        }
+        return normalizeSubscriptionStrategyMode(subscriptionStrategyModeSelect.value);
     }
 
     function syncSubscriptionPresetUI() {
         if (!(subscriptionForm instanceof HTMLFormElement)) {
             return;
         }
-        const amountFieldWrap = subscriptionForm.querySelector(".subscription-amount-field");
+        const strategyMode = currentSubscriptionStrategyMode();
+        const showFixed = strategyMode === "fixed";
+        const showFollowSource = strategyMode === "follow_source";
+        const showMartingale = strategyMode === "martingale";
         const amountInput = subscriptionForm.elements.stake_amount;
-        const followDefault = followSourceAmountCheckbox instanceof HTMLInputElement && followSourceAmountCheckbox.checked;
-        if (amountFieldWrap instanceof HTMLElement) {
-            amountFieldWrap.hidden = followDefault;
-        }
+        const baseStakeInput = subscriptionForm.elements.base_stake;
+        const multiplierInput = subscriptionForm.elements.multiplier;
+        const maxStepsInput = subscriptionForm.elements.max_steps;
+        const refundActionInput = subscriptionForm.elements.refund_action;
+        const capActionInput = subscriptionForm.elements.cap_action;
+
+        Array.from(subscriptionForm.querySelectorAll(".subscription-fixed-field")).forEach(function (field) {
+            if (field instanceof HTMLElement) {
+                field.hidden = !showFixed;
+            }
+        });
+        Array.from(subscriptionForm.querySelectorAll(".subscription-follow-tip-field")).forEach(function (field) {
+            if (field instanceof HTMLElement) {
+                field.hidden = !showFollowSource;
+            }
+        });
+        Array.from(subscriptionForm.querySelectorAll(".subscription-martingale-field")).forEach(function (field) {
+            if (field instanceof HTMLElement) {
+                field.hidden = !showMartingale;
+            }
+        });
+        Array.from(subscriptionForm.querySelectorAll(".subscription-martingale-advanced-field")).forEach(function (field) {
+            if (field instanceof HTMLElement) {
+                field.hidden = !showMartingale;
+            }
+        });
+
         if (amountInput instanceof HTMLInputElement) {
-            amountInput.disabled = followDefault;
-            if (followDefault) {
-                amountInput.value = "";
-            } else if (!String(amountInput.value || "").trim()) {
+            amountInput.disabled = !showFixed;
+            if (showFixed && !String(amountInput.value || "").trim()) {
                 amountInput.value = "10";
+            }
+        }
+        if (baseStakeInput instanceof HTMLInputElement) {
+            baseStakeInput.disabled = !showMartingale;
+            if (showMartingale && !String(baseStakeInput.value || "").trim()) {
+                baseStakeInput.value = "10";
+            }
+        }
+        if (multiplierInput instanceof HTMLInputElement) {
+            multiplierInput.disabled = !showMartingale;
+            if (showMartingale && !String(multiplierInput.value || "").trim()) {
+                multiplierInput.value = "2";
+            }
+        }
+        if (maxStepsInput instanceof HTMLInputElement) {
+            maxStepsInput.disabled = !showMartingale;
+            if (showMartingale && !String(maxStepsInput.value || "").trim()) {
+                maxStepsInput.value = "3";
+            }
+        }
+        if (refundActionInput instanceof HTMLSelectElement) {
+            refundActionInput.disabled = !showMartingale;
+            if (!String(refundActionInput.value || "").trim()) {
+                refundActionInput.value = "hold";
+            }
+        }
+        if (capActionInput instanceof HTMLSelectElement) {
+            capActionInput.disabled = !showMartingale;
+            if (!String(capActionInput.value || "").trim()) {
+                capActionInput.value = "reset";
+            }
+        }
+        if (subscriptionStrategyModeHint instanceof HTMLElement) {
+            if (showFixed) {
+                subscriptionStrategyModeHint.textContent = "均注最简单，适合先跑通整条链路。";
+            } else if (showFollowSource) {
+                subscriptionStrategyModeHint.textContent = "系统会直接使用来源信号里的金额，适合想完全照抄来源金额时使用。";
+            } else {
+                subscriptionStrategyModeHint.textContent = "倍投会按当前手数自动放大金额；更多设置里还能调整回本后和追顶后的处理方式。";
             }
         }
     }
@@ -1508,6 +1754,50 @@
                 input.value = "1";
             }
         });
+    }
+
+    function subscriptionStrategyModeFromStrategy(strategy) {
+        const payload = strategy && typeof strategy === "object" ? strategy : {};
+        if (String(payload.mode || "follow").trim() === "martingale") {
+            return "martingale";
+        }
+        if (payload.stake_amount != null && String(payload.stake_amount).trim() !== "") {
+            return "fixed";
+        }
+        return "follow_source";
+    }
+
+    function resetSubscriptionStrategyFormState() {
+        if (!(subscriptionForm instanceof HTMLFormElement)) {
+            return;
+        }
+        if (subscriptionBetFilterModeSelect instanceof HTMLSelectElement) {
+            subscriptionBetFilterModeSelect.value = "selected";
+        }
+        Array.from(subscriptionForm.querySelectorAll("input[name='bet_filter_key']")).forEach(function (input) {
+            if (input instanceof HTMLInputElement) {
+                input.checked = false;
+            }
+        });
+        if (subscriptionStrategyModeSelect instanceof HTMLSelectElement) {
+            subscriptionStrategyModeSelect.value = "fixed";
+        }
+        subscriptionForm.elements.stake_amount.value = "10";
+        subscriptionForm.elements.base_stake.value = "10";
+        subscriptionForm.elements.multiplier.value = "2";
+        subscriptionForm.elements.max_steps.value = "3";
+        subscriptionForm.elements.refund_action.value = "hold";
+        subscriptionForm.elements.cap_action.value = "reset";
+        if (subscriptionRiskControlEnabledCheckbox instanceof HTMLInputElement) {
+            subscriptionRiskControlEnabledCheckbox.checked = false;
+        }
+        subscriptionForm.elements.profit_target.value = "";
+        subscriptionForm.elements.loss_limit.value = "";
+        subscriptionForm.elements.win_profit_ratio.value = "1";
+        setSubscriptionAdvancedVisible(false);
+        syncSubscriptionBetFilterUI();
+        syncSubscriptionPresetUI();
+        syncSubscriptionRiskControlUI();
     }
 
     function loadAccountIntoForm(account, options) {
@@ -1689,50 +1979,82 @@
         };
     }
 
+    function summarizeStrategyMode(payload) {
+        const mode = String(payload && payload.mode || "").trim();
+        const hasStakeAmount = payload && payload.stake_amount != null && String(payload.stake_amount).trim() !== "";
+        if (mode === "martingale") {
+            return "倍投";
+        }
+        if (hasStakeAmount) {
+            return "均注";
+        }
+        if (mode === "follow" || !mode) {
+            return "跟随来源金额";
+        }
+        return mode;
+    }
+
+    function summarizeBetFilter(strategy) {
+        const payload = strategy && typeof strategy === "object" ? strategy : {};
+        const betFilter = payload.bet_filter && typeof payload.bet_filter === "object" ? payload.bet_filter : {};
+        const mode = normalizeSubscriptionBetFilterMode(betFilter.mode);
+        const selectedKeys = Array.isArray(betFilter.selected_keys)
+            ? betFilter.selected_keys.filter(function (key) { return Boolean(SUBSCRIPTION_PLAY_FILTER_LABELS[key]); })
+            : [];
+        if (mode !== "selected" || !selectedKeys.length) {
+            return "全部玩法";
+        }
+        return selectedKeys.map(function (key) {
+            return SUBSCRIPTION_PLAY_FILTER_LABELS[key];
+        }).join(" / ");
+    }
+
     function summarizeStrategy(strategy) {
         const payload = strategy && typeof strategy === "object" ? strategy : {};
         const parts = [];
         const riskControl = payload.risk_control && typeof payload.risk_control === "object"
             ? payload.risk_control
             : {};
-        if (payload.mode) {
-            parts.push("模式 " + payload.mode);
+        const modeLabel = summarizeStrategyMode(payload);
+        parts.push("玩法 " + summarizeBetFilter(payload));
+        if (modeLabel) {
+            parts.push("方式 " + modeLabel);
         }
         if (payload.base_stake != null && String(payload.base_stake).trim() !== "") {
-            parts.push("基础注 " + payload.base_stake);
+            parts.push("起始金额 " + payload.base_stake);
         }
         if (payload.stake_amount != null && String(payload.stake_amount).trim() !== "") {
-            parts.push("金额 " + payload.stake_amount);
-        } else {
-            parts.push("金额 跟随来源默认");
+            parts.push("每期 " + payload.stake_amount);
+        } else if (modeLabel !== "倍投") {
+            parts.push("金额 跟随来源");
         }
         if (payload.multiplier != null && String(payload.multiplier).trim() !== "") {
-            parts.push("倍数 " + payload.multiplier);
+            parts.push("每次乘 " + payload.multiplier);
         }
         if (payload.max_steps != null && String(payload.max_steps).trim() !== "") {
-            parts.push("追手 " + payload.max_steps);
+            parts.push("最多追 " + payload.max_steps + " 手");
         }
         if (payload.refund_action) {
-            parts.push("退本 " + payload.refund_action);
+            parts.push(payload.refund_action === "hold" ? "回本后保持当前手数" : (payload.refund_action === "reset" ? "回本后回到第 1 手" : ("回本后 " + payload.refund_action)));
         }
         if (payload.cap_action) {
-            parts.push("封顶 " + payload.cap_action);
+            parts.push(payload.cap_action === "reset" ? "到顶后回到第 1 手" : (payload.cap_action === "hold" ? "到顶后停在最高一手" : ("到顶后 " + payload.cap_action)));
         }
         if (payload.expire_after_seconds) {
-            parts.push("过期 " + payload.expire_after_seconds + " 秒");
+            parts.push("信号 " + payload.expire_after_seconds + " 秒后过期");
         }
         if (riskControl.enabled) {
             const riskParts = [];
             if (Number(riskControl.profit_target || 0) > 0) {
-                riskParts.push("止盈 " + amountText(riskControl.profit_target));
+                riskParts.push("净赚到 " + amountText(riskControl.profit_target) + " 停");
             }
             if (Number(riskControl.loss_limit || 0) > 0) {
-                riskParts.push("止损 " + amountText(riskControl.loss_limit));
+                riskParts.push("净亏到 " + amountText(riskControl.loss_limit) + " 停");
             }
-            riskParts.push("命中净利倍数 " + amountText(riskControl.win_profit_ratio || 1));
-            parts.push("风控 " + riskParts.join(" / "));
+            riskParts.push("命中按 " + amountText(riskControl.win_profit_ratio || 1) + " 倍净利计算");
+            parts.push("自动停单 " + riskParts.join(" / "));
         }
-        return parts.length ? parts.join(" · ") : "已建立基础跟单关系";
+        return parts.length ? parts.join(" · ") : "已保存跟单策略";
     }
 
     function summarizeProgression(subscription) {
@@ -1994,7 +2316,7 @@
         document.getElementById("currentSourceName").textContent = source ? source.name : "未导入方案";
         document.getElementById("currentSourceMeta").textContent = source
             ? ((source.source_type || "--") + " · " + (source.visibility || "private"))
-            : "请先在首页导入公开方案页链接，再回来建立跟单关系。";
+            : "先在首页导入一个来源，再回来设置跟单。";
 
         document.getElementById("currentAccountName").textContent = account ? account.label : "未绑定";
         document.getElementById("currentAccountMeta").textContent = account
@@ -2101,7 +2423,7 @@
                 title: "当前群组已通过校验",
                 detail: "模板、账号和群组可达性都已具备，可以继续启用并等待跟单任务进入执行链路。",
                 href: "/autobet/subscriptions#subscriptionsSection",
-                text: "去建立跟单",
+                text: "去设置跟单",
             };
         }
         const reasonLabel = targetErrorCodeLabel(item && item.last_test_error_code);
@@ -2276,19 +2598,51 @@
         };
     }
 
+    function subscriptionPreviewAmount(subscription, signal) {
+        const strategy = subscription && subscription.strategy && typeof subscription.strategy === "object"
+            ? subscription.strategy
+            : {};
+        const payload = signal && signal.normalized_payload && typeof signal.normalized_payload === "object"
+            ? signal.normalized_payload
+            : {};
+        const mode = String(strategy.mode || "follow").trim() || "follow";
+        const currentStep = Math.max(1, Number(subscription && subscription.progression && subscription.progression.current_step || 1));
+        const baseStake = Number(
+            strategy.base_stake != null && String(strategy.base_stake).trim() !== ""
+                ? strategy.base_stake
+                : (strategy.stake_amount != null && String(strategy.stake_amount).trim() !== ""
+                    ? strategy.stake_amount
+                    : ((payload.base_stake != null && String(payload.base_stake).trim() !== ""
+                        ? payload.base_stake
+                        : payload.stake_amount) || 10))
+        );
+        if (mode === "martingale") {
+            const multiplier = Number(
+                strategy.multiplier != null && String(strategy.multiplier).trim() !== ""
+                    ? strategy.multiplier
+                    : (payload.multiplier || 2)
+            );
+            return Math.round(baseStake * (multiplier ** Math.max(0, currentStep - 1)) * 100) / 100;
+        }
+        if (strategy.stake_amount != null && String(strategy.stake_amount).trim() !== "") {
+            return Number(strategy.stake_amount);
+        }
+        if (payload.stake_amount != null && String(payload.stake_amount).trim() !== "") {
+            return Number(payload.stake_amount);
+        }
+        return baseStake;
+    }
+
     function subscriptionPreviewForTarget(subscription, targetItem) {
         const template = templateById(targetItem && targetItem.template_id);
         const account = accountById(targetItem && targetItem.telegram_account_id);
         const signal = sampleSignalForTemplate(template);
-        const strategy = subscription && subscription.strategy && typeof subscription.strategy === "object"
-            ? subscription.strategy
-            : {};
-        const sampleAmount = strategy.stake_amount != null && String(strategy.stake_amount).trim() !== ""
-            ? Number(strategy.stake_amount)
-            : Number((signal.normalized_payload || {}).stake_amount || 10);
+        const sampleAmount = subscriptionPreviewAmount(subscription, signal);
         return {
             signal: signal,
             amount: sampleAmount,
+            currentStep: Math.max(1, Number(subscription && subscription.progression && subscription.progression.current_step || 1)),
+            strategyMode: summarizeStrategyMode(subscription && subscription.strategy),
             account: account,
             template: template,
             rendered: templatePreviewResult(signal, sampleAmount, template),
@@ -2312,34 +2666,34 @@
         }, 0);
 
         subscriptionWorkspaceSummary.innerHTML = [
-            '<article class="health-card"><span class="setup-label">已建立策略</span><strong>' + escapeHtml(String(subscriptions.length)) + '</strong><p>当前账号下未归档的跟单策略数量。</p></article>',
-            '<article class="health-card"><span class="setup-label">当前命中群组</span><strong>' + escapeHtml(String(activeTargetItems.length)) + '</strong><p>只有启用中的群组会进入实际派发链路。</p></article>',
-            '<article class="health-card"><span class="setup-label">已绑模板群组</span><strong>' + escapeHtml(String(templateBoundCount)) + '</strong><p>已配置专用下注模板的群组数量。</p></article>',
-            '<article class="health-card"><span class="setup-label">当前阻塞项</span><strong>' + escapeHtml(String(blockerCount)) + '</strong><p>模板、授权、测试和启用状态的阻塞统计。</p></article>',
+            '<article class="health-card"><span class="setup-label">跟单策略数</span><strong>' + escapeHtml(String(subscriptions.length)) + '</strong><p>当前账号下未归档的跟单数量。</p></article>',
+            '<article class="health-card"><span class="setup-label">会收到信号的群组</span><strong>' + escapeHtml(String(activeTargetItems.length)) + '</strong><p>只有启用且可用的群组才会真正发单。</p></article>',
+            '<article class="health-card"><span class="setup-label">已绑定模板的群组</span><strong>' + escapeHtml(String(templateBoundCount)) + '</strong><p>这些群组已经选好自己的发单格式。</p></article>',
+            '<article class="health-card"><span class="setup-label">当前问题数</span><strong>' + escapeHtml(String(blockerCount)) + '</strong><p>这里统计会挡住发单的授权、模板或群组问题。</p></article>',
         ].join("");
 
         if (!(subscriptionWorkspaceSummaryText instanceof HTMLElement)) {
             return;
         }
         if (!subscriptions.length) {
-            subscriptionWorkspaceSummaryText.textContent = "先建立第一条跟单策略，页面会直接展示来源最终会落到哪些群组。";
+            subscriptionWorkspaceSummaryText.textContent = "先建一条跟单策略。建好后，这里会显示这条来源最终会发到哪些群。";
             return;
         }
         if (!configuredTargets.length) {
-            subscriptionWorkspaceSummaryText.textContent = "已建立跟单，但当前还没有投递群组，来源信号不会进入执行链路。";
+            subscriptionWorkspaceSummaryText.textContent = "已建跟单，但还没配置投递群组，所以当前不会发单。";
             return;
         }
         if (!activeTargetItems.length) {
-            subscriptionWorkspaceSummaryText.textContent = "已配置群组，但当前没有激活群组；启用并测试成功后，跟单策略才会真正发出去。";
+            subscriptionWorkspaceSummaryText.textContent = "群组已配置，但都没启用或测试未通过，所以当前不会发单。";
             return;
         }
         if (chainState.summaries.length) {
-            subscriptionWorkspaceSummaryText.textContent = "当前主要阻塞：" + chainState.summaries.map(function (item) {
+            subscriptionWorkspaceSummaryText.textContent = "当前主要问题：" + chainState.summaries.map(function (item) {
                 return item.label + " " + item.count + " 个";
             }).join("；") + "。";
             return;
         }
-        subscriptionWorkspaceSummaryText.textContent = "当前链路已清晰：来源信号会按订阅策略展开到所有启用群组，并套用各群组自己的模板。";
+        subscriptionWorkspaceSummaryText.textContent = "当前链路正常：来源信号会发到启用中的群组，并套用各群组自己的模板。";
     }
 
     function boundTargetsForTemplate(template) {
@@ -2574,25 +2928,25 @@
             },
             {
                 kicker: "Targets",
-                title: "群组运维工作区",
+                title: "群组工作区",
                 body: "已配置 " + visibleTargets().length + " 个群组，其中 " + targetIssues + " 个存在关键阻塞。",
-                meta: "可反查哪些策略会命中这个群。",
+                meta: "可反查哪些跟单会发到这个群。",
                 href: "/autobet/targets#targetsSection",
                 text: "去群组页",
             },
             {
                 kicker: "Templates",
-                title: "模板产品化工作区",
+                title: "模板工作区",
                 body: "当前 " + templateDrafts + " 套草稿模板，" + activeTemplateCount() + " 套启用模板。",
-                meta: "可看哪些群组正在使用模板。",
+                meta: "可查看哪些群组正在使用模板。",
                 href: "/autobet/templates#templatesSection",
                 text: "去模板页",
             },
             {
                 kicker: "Follow",
-                title: "跟单策略工作区",
+                title: "跟单工作区",
                 body: "当前 " + visibleSubscriptions().length + " 条策略，其中 " + subscriptionIssues + " 条存在链路阻塞。",
-                meta: "可直接预估最终发言样例。",
+                meta: "可直接看最终发单示例。",
                 href: "/autobet/subscriptions#subscriptionsSection",
                 text: "去跟单页",
             },
@@ -3066,7 +3420,7 @@
             return item.source_type === "ai_trading_simulator_export";
         });
         renderSelectOptions(subscriptionForm.elements.source_id, items, {
-            placeholder: items.length ? "请选择方案来源" : "请先导入方案",
+            placeholder: items.length ? "请选择要跟单的来源" : "请先导入一个来源",
             value: function (item) { return String(item.id); },
             label: function (item) { return "#" + item.id + " · " + item.name; },
         });
@@ -3289,13 +3643,13 @@
             {
                 key: "subscription",
                 index: 4,
-                title: "建立跟单",
-                summary: "最后建立一个跟单策略，让方案来源真正进入你的执行链路。",
+                title: "设置跟单",
+                summary: "把来源、金额和群组串起来，信号才会真正变成发单任务。",
                 complete: subscriptions.length > 0,
                 detail: subscriptions.length
-                    ? ("已建立 " + subscriptions.length + " 条跟单关系，当前主策略是「" + summarizeStrategy(primarySubscription() ? primarySubscription().strategy : {}) + "」。")
-                    : "选择方案来源后建立跟单关系，后续标准信号才会变成你的执行任务。",
-                actionText: "去建立跟单",
+                    ? ("已建立 " + subscriptions.length + " 条跟单，当前主策略是「" + summarizeStrategy(primarySubscription() ? primarySubscription().strategy : {}) + "」。")
+                    : "选一个来源，再设置金额方式，信号才会真正变成发单任务。",
+                actionText: "去设置跟单",
             },
         ];
 
@@ -3514,7 +3868,7 @@
             return;
         }
         if (!state.subscriptions.length) {
-            subscriptionCards.innerHTML = '<article class="mini-card"><strong>当前没有跟单策略</strong><p>建立跟单关系后，平台才会把方案来源的标准信号展开成你的执行任务。</p></article>';
+            subscriptionCards.innerHTML = '<article class="mini-card"><strong>当前还没有跟单策略</strong><p>建好后，来源信号才会按你的规则生成实际发单任务。</p></article>';
             renderSubscriptionWorkspaceSummary();
             return;
         }
@@ -3528,13 +3882,13 @@
             const previewTargets = chainState.previewTargets.slice(0, 6);
             const hiddenPreviewCount = Math.max(0, chainState.previewTargets.length - previewTargets.length);
             const routeTitle = chainState.effectiveTargets.length
-                ? ("当前会命中的群组（" + chainState.effectiveTargets.length + "）")
-                : (chainState.previewTargets.length ? "启用后会进入的群组" : "还没有可命中的群组");
+                ? ("当前会收到信号的群组（" + chainState.effectiveTargets.length + "）")
+                : (chainState.previewTargets.length ? "启用后会收到信号的群组" : "还没有可用群组");
             const routeCopy = chainState.effectiveTargets.length
-                ? "这些群组会在信号到来时被展开成执行任务。"
+                ? "这些群组会在信号到来时生成实际发单任务。"
                 : (chainState.previewTargets.length
-                    ? "当前因为策略或群组状态未就绪，先展示启用后会走到的链路。"
-                    : "先去群组工作区创建并启用至少一个投递群组。");
+                    ? "现在先展示未来会走到的链路，等策略和群组都启用后才会真的发出。"
+                    : "先去群组页新增并启用至少一个投递群组。");
             const routeMarkup = previewTargets.length
                 ? previewTargets.map(function (targetItem) {
                     const preview = subscriptionPreviewForTarget(item, targetItem);
@@ -3552,23 +3906,23 @@
                         '<article class="subscription-route-card">',
                         '<div class="subscription-route-head"><strong>' + escapeHtml(targetItem.target_name || targetItem.target_key || "--") + "</strong>" + renderStatusPill(targetStatus) + "</div>",
                         '<p class="subscription-route-meta">模板：' + escapeHtml(targetTemplate ? targetTemplate.name : "默认格式") + ' · 账号：' + escapeHtml(targetAccount ? targetAccount.label : "--") + ' · 测试：' + escapeHtml(testStatusText) + "</p>",
-                        '<div class="subscription-message-preview"><span class="setup-label">预估最终发言</span><strong>' + escapeHtml(preview.rendered.text || "--") + "</strong><p>" + escapeHtml("样例：" + preview.signal.bet_type + " / " + preview.signal.bet_value + " · 金额 " + amountText(preview.amount) + " · 期号 " + preview.signal.issue_no) + "</p></div>",
+                        '<div class="subscription-message-preview"><span class="setup-label">最终发单示例</span><strong>' + escapeHtml(preview.rendered.text || "--") + "</strong><p>" + escapeHtml("玩法：" + preview.signal.bet_type + " / " + preview.signal.bet_value + " · 金额 " + amountText(preview.amount) + (preview.strategyMode === "倍投" ? (" · 当前第 " + preview.currentStep + " 手") : "") + " · 期号 " + preview.signal.issue_no) + "</p></div>",
                         '<p class="subscription-route-hint">' + escapeHtml(preview.rendered.meta || "--") + "</p>",
                         '<div class="subscription-diagnostic-row">' + diagnosticsMarkup + "</div>",
                         "</article>",
                     ].join("");
                 }).join("")
-                : '<article class="subscription-route-card"><strong>还没有目标群组</strong><p class="subscription-route-empty">先去群组工作区创建并启用至少一个投递群组，这条跟单才会真正进入执行链路。</p></article>';
+                : '<article class="subscription-route-card"><strong>还没有可用群组</strong><p class="subscription-route-empty">先去群组页新增并启用至少一个投递群组，这条跟单才会真正发出去。</p></article>';
             const blockerMarkup = chainState.summaries.length
                 ? chainState.summaries.map(function (entry) {
                     return [
                         '<a class="subscription-blocker-card" href="' + escapeHtml(entry.href) + '">',
                         '<strong>' + escapeHtml(entry.label + " · " + entry.count + " 个") + "</strong>",
-                        '<p>这类问题会影响当前跟单如何落到目标群组，建议优先处理。</p>',
+                        '<p>这类问题会挡住发单，建议优先处理。</p>',
                         "</a>",
                     ].join("");
                 }).join("")
-                : '<article class="subscription-blocker-card"><strong>当前没有阻塞项</strong><p>账号、群组测试、模板和启用状态都已具备，后续重点观察执行记录。</p></article>';
+                : '<article class="subscription-blocker-card"><strong>当前没有阻塞项</strong><p>账号、群组测试、模板和启用状态都正常，后续重点看执行记录。</p></article>';
             const progression = item.progression && typeof item.progression === "object" ? item.progression : null;
             const financial = item.financial && typeof item.financial === "object" ? item.financial : null;
             const progressionActions = progression && progression.pending_event_id && String(progression.pending_status || "") === "placed"
@@ -3590,7 +3944,7 @@
                 '<p class="cell-muted">' + escapeHtml(summarizeFinancial(item)) + "</p>",
                 stoppedReasonMarkup,
                 '<div class="subscription-chain-meta"><span class="subscription-chain-stat">当前命中 ' + escapeHtml(String(chainState.effectiveTargets.length)) + ' 个群组</span><span class="subscription-chain-stat">已配置 ' + escapeHtml(String(chainState.configuredTargets.length)) + ' 个群组</span><span class="subscription-chain-stat">阻塞 ' + escapeHtml(String(chainState.summaries.reduce(function (total, entry) { return total + entry.count; }, 0))) + ' 项</span></div>',
-                '<div class="subscription-detail-grid"><section class="subscription-routes"><strong class="subscription-section-title">' + escapeHtml(routeTitle) + '</strong><p class="subscription-section-copy">' + escapeHtml(routeCopy) + '</p><div class="subscription-route-grid">' + routeMarkup + '</div>' + (hiddenPreviewCount ? ('<p class="subscription-more-note">另有 ' + escapeHtml(String(hiddenPreviewCount)) + ' 个群组未展开，去群组工作区可查看全部详情。</p>') : "") + '</section><aside class="subscription-blockers"><strong class="subscription-section-title">当前阻塞项</strong><p class="subscription-section-copy">这部分直接提示为什么信号还不能稳定发出去，以及应该去哪一页处理。</p><div class="subscription-blocker-list">' + blockerMarkup + '</div></aside></div>',
+                '<div class="subscription-detail-grid"><section class="subscription-routes"><strong class="subscription-section-title">' + escapeHtml(routeTitle) + '</strong><p class="subscription-section-copy">' + escapeHtml(routeCopy) + '</p><div class="subscription-route-grid">' + routeMarkup + '</div>' + (hiddenPreviewCount ? ('<p class="subscription-more-note">另有 ' + escapeHtml(String(hiddenPreviewCount)) + ' 个群组未展开，去群组页可查看全部详情。</p>') : "") + '</section><aside class="subscription-blockers"><strong class="subscription-section-title">当前阻塞项</strong><p class="subscription-section-copy">这里会直接说明信号现在发不出去的原因，以及应该去哪一页处理。</p><div class="subscription-blocker-list">' + blockerMarkup + '</div></aside></div>',
                 "<div class=\"config-list-actions\"><button class=\"ghost-btn edit-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\">编辑</button><button class=\"ghost-btn toggle-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\" data-next-status=\"" + statusAction.nextStatus + "\">" + statusAction.actionText + "</button>" + resetAction + archiveAction + progressionActions + "</div>",
                 "</article>",
             ].join("");
@@ -3625,16 +3979,8 @@
             messageTemplateForm.elements.template_text.value = "{{bet_value}}{{amount}}";
             applyTemplateConfigToForm(pc28TemplateExampleConfig());
         }
-        setFormEditingState(subscriptionForm, document.getElementById("createSubscriptionBtn"), cancelSubscriptionEditBtn, false, "建立跟单关系");
-        if (followSourceAmountCheckbox instanceof HTMLInputElement) {
-            followSourceAmountCheckbox.checked = false;
-        }
-        if (subscriptionRiskControlEnabledCheckbox instanceof HTMLInputElement) {
-            subscriptionRiskControlEnabledCheckbox.checked = false;
-        }
-        setSubscriptionAdvancedVisible(false);
-        syncSubscriptionPresetUI();
-        syncSubscriptionRiskControlUI();
+        setFormEditingState(subscriptionForm, document.getElementById("createSubscriptionBtn"), cancelSubscriptionEditBtn, false, "新建跟单策略");
+        resetSubscriptionStrategyFormState();
         refreshSourceSelects();
         refreshAccountSelects();
         refreshTemplateSelects();
@@ -4630,18 +4976,56 @@
                 throw new Error("该来源已经存在跟单策略");
             }
 
-            const followSourceAmount = followSourceAmountCheckbox instanceof HTMLInputElement && followSourceAmountCheckbox.checked;
-            const stakeAmount = followSourceAmount ? null : Number(form.stake_amount.value || 10);
+            const betFilterMode = currentSubscriptionBetFilterMode();
+            const selectedBetFilterKeys = selectedSubscriptionBetFilterKeys();
+            if (betFilterMode === "selected" && !selectedBetFilterKeys.length) {
+                throw new Error("自选玩法模式下，请至少勾选一个玩法");
+            }
+            const strategyMode = currentSubscriptionStrategyMode();
+            const stakeAmount = strategyMode === "fixed" ? Number(form.stake_amount.value || 0) : null;
+            const baseStake = strategyMode === "martingale" ? Number(form.base_stake.value || 0) : null;
+            const multiplier = strategyMode === "martingale" ? Number(form.multiplier.value || 0) : null;
+            const maxSteps = strategyMode === "martingale" ? Number(form.max_steps.value || 0) : null;
+            const refundAction = strategyMode === "martingale"
+                ? String(form.refund_action.value || "hold").trim() || "hold"
+                : "hold";
+            const capAction = strategyMode === "martingale"
+                ? String(form.cap_action.value || "reset").trim() || "reset"
+                : "reset";
             const expireAfterSeconds = Number(form.expire_after_seconds.value || 120);
             const riskControlEnabled = subscriptionRiskControlEnabledCheckbox instanceof HTMLInputElement
                 && subscriptionRiskControlEnabledCheckbox.checked;
             const profitTarget = String(form.profit_target.value || "").trim();
             const lossLimit = String(form.loss_limit.value || "").trim();
             const winProfitRatio = String(form.win_profit_ratio.value || "").trim();
+            if (strategyMode === "fixed" && (!Number.isFinite(stakeAmount) || stakeAmount <= 0)) {
+                throw new Error("均注模式下，请填写大于 0 的固定金额");
+            }
+            if (strategyMode === "martingale") {
+                if (!Number.isFinite(baseStake) || baseStake <= 0) {
+                    throw new Error("倍投模式下，请填写大于 0 的起始金额");
+                }
+                if (!Number.isFinite(multiplier) || multiplier <= 1) {
+                    throw new Error("倍投模式下，倍数必须大于 1");
+                }
+                if (!Number.isInteger(maxSteps) || maxSteps < 2) {
+                    throw new Error("倍投模式下，最多追几手至少为 2");
+                }
+                if (!["hold", "reset"].includes(refundAction)) {
+                    throw new Error("回本后的处理方式不正确");
+                }
+                if (!["hold", "reset"].includes(capAction)) {
+                    throw new Error("追顶后的处理方式不正确");
+                }
+            }
             const submitButton = document.getElementById("createSubscriptionBtn");
             setButtonBusy(submitButton, true, editId ? "保存中..." : "创建中...");
             const strategyPayload = {
-                mode: "follow",
+                mode: strategyMode === "martingale" ? "martingale" : "follow",
+                bet_filter: {
+                    mode: betFilterMode,
+                    selected_keys: selectedBetFilterKeys,
+                },
                 expire_after_seconds: expireAfterSeconds,
                 risk_control: {
                     enabled: riskControlEnabled,
@@ -4652,6 +5036,13 @@
             };
             if (stakeAmount != null) {
                 strategyPayload.stake_amount = stakeAmount;
+            }
+            if (strategyMode === "martingale") {
+                strategyPayload.base_stake = baseStake;
+                strategyPayload.multiplier = multiplier;
+                strategyPayload.max_steps = maxSteps;
+                strategyPayload.refund_action = refundAction;
+                strategyPayload.cap_action = capAction;
             }
             if (editId) {
                 await request("/api/platform/subscriptions/" + editId, {
@@ -4671,22 +5062,14 @@
                 });
             }
             form.reset();
-            setFormEditingState(form, submitButton, cancelSubscriptionEditBtn, false, "建立跟单关系");
-            if (followSourceAmountCheckbox instanceof HTMLInputElement) {
-                followSourceAmountCheckbox.checked = false;
-            }
-            if (subscriptionRiskControlEnabledCheckbox instanceof HTMLInputElement) {
-                subscriptionRiskControlEnabledCheckbox.checked = false;
-            }
-            setSubscriptionAdvancedVisible(false);
-            syncSubscriptionPresetUI();
-            syncSubscriptionRiskControlUI();
+            setFormEditingState(form, submitButton, cancelSubscriptionEditBtn, false, "新建跟单策略");
+            resetSubscriptionStrategyFormState();
             await refreshAll();
             setStatus(editId ? "跟单策略已更新。" : "跟单策略已创建。", false);
         } catch (error) {
             setStatus(error.message, true);
         } finally {
-            setButtonBusy(document.getElementById("createSubscriptionBtn"), false, "建立跟单关系");
+            setButtonBusy(document.getElementById("createSubscriptionBtn"), false, "新建跟单策略");
         }
     });
 
@@ -4701,8 +5084,40 @@
                 }
                 subscriptionForm.elements.edit_id.value = String(item.id);
                 subscriptionForm.elements.source_id.value = String(item.source_id);
+                const betFilter = item.strategy && item.strategy.bet_filter && typeof item.strategy.bet_filter === "object"
+                    ? item.strategy.bet_filter
+                    : {};
+                const betFilterMode = normalizeSubscriptionBetFilterMode(betFilter.mode);
+                if (subscriptionBetFilterModeSelect instanceof HTMLSelectElement) {
+                    subscriptionBetFilterModeSelect.value = betFilterMode;
+                }
+                Array.from(subscriptionForm.querySelectorAll("input[name='bet_filter_key']")).forEach(function (input) {
+                    if (!(input instanceof HTMLInputElement)) {
+                        return;
+                    }
+                    input.checked = Array.isArray(betFilter.selected_keys) && betFilter.selected_keys.includes(input.value);
+                });
+                const strategyMode = subscriptionStrategyModeFromStrategy(item.strategy);
                 const hasStakeAmount = item.strategy && item.strategy.stake_amount != null && String(item.strategy.stake_amount).trim() !== "";
+                if (subscriptionStrategyModeSelect instanceof HTMLSelectElement) {
+                    subscriptionStrategyModeSelect.value = strategyMode;
+                }
                 subscriptionForm.elements.stake_amount.value = hasStakeAmount ? String(item.strategy.stake_amount) : "";
+                subscriptionForm.elements.base_stake.value = item.strategy && item.strategy.base_stake != null && String(item.strategy.base_stake).trim() !== ""
+                    ? String(item.strategy.base_stake)
+                    : "10";
+                subscriptionForm.elements.multiplier.value = item.strategy && item.strategy.multiplier != null && String(item.strategy.multiplier).trim() !== ""
+                    ? String(item.strategy.multiplier)
+                    : "2";
+                subscriptionForm.elements.max_steps.value = item.strategy && item.strategy.max_steps != null && String(item.strategy.max_steps).trim() !== ""
+                    ? String(item.strategy.max_steps)
+                    : "3";
+                subscriptionForm.elements.refund_action.value = item.strategy && String(item.strategy.refund_action || "hold").trim() === "reset"
+                    ? "reset"
+                    : "hold";
+                subscriptionForm.elements.cap_action.value = item.strategy && String(item.strategy.cap_action || "reset").trim() === "hold"
+                    ? "hold"
+                    : "reset";
                 subscriptionForm.elements.expire_after_seconds.value = String(item.strategy && item.strategy.expire_after_seconds ? item.strategy.expire_after_seconds : 120);
                 const riskControl = item.strategy && item.strategy.risk_control && typeof item.strategy.risk_control === "object"
                     ? item.strategy.risk_control
@@ -4717,14 +5132,16 @@
                 if (subscriptionRiskControlEnabledCheckbox instanceof HTMLInputElement) {
                     subscriptionRiskControlEnabledCheckbox.checked = Boolean(riskControl.enabled);
                 }
-                if (followSourceAmountCheckbox instanceof HTMLInputElement) {
-                    followSourceAmountCheckbox.checked = !hasStakeAmount;
-                }
+                syncSubscriptionBetFilterUI();
                 syncSubscriptionPresetUI();
                 syncSubscriptionRiskControlUI();
-                const shouldExpandAdvanced = String(item.strategy && item.strategy.mode || "follow") !== "follow"
-                    || Number(item.strategy && item.strategy.expire_after_seconds || 120) !== 120
-                    || Boolean(riskControl.enabled);
+                const shouldExpandAdvanced = Number(item.strategy && item.strategy.expire_after_seconds || 120) !== 120
+                    || Boolean(riskControl.enabled)
+                    || (strategyMode === "martingale"
+                        && (
+                            String(item.strategy && item.strategy.refund_action || "hold") !== "hold"
+                            || String(item.strategy && item.strategy.cap_action || "reset") !== "reset"
+                        ));
                 setSubscriptionAdvancedVisible(shouldExpandAdvanced);
                 setFormEditingState(subscriptionForm, document.getElementById("createSubscriptionBtn"), cancelSubscriptionEditBtn, true, "保存策略");
                 subscriptionForm.scrollIntoView({behavior: "smooth", block: "start"});
@@ -4835,23 +5252,45 @@
     cancelSubscriptionEditBtn.addEventListener("click", function () {
         subscriptionForm.reset();
         refreshSourceSelects();
-        setFormEditingState(subscriptionForm, document.getElementById("createSubscriptionBtn"), cancelSubscriptionEditBtn, false, "建立跟单关系");
-        if (followSourceAmountCheckbox instanceof HTMLInputElement) {
-            followSourceAmountCheckbox.checked = false;
-        }
-        if (subscriptionRiskControlEnabledCheckbox instanceof HTMLInputElement) {
-            subscriptionRiskControlEnabledCheckbox.checked = false;
-        }
-        setSubscriptionAdvancedVisible(false);
-        syncSubscriptionPresetUI();
-        syncSubscriptionRiskControlUI();
+        setFormEditingState(subscriptionForm, document.getElementById("createSubscriptionBtn"), cancelSubscriptionEditBtn, false, "新建跟单策略");
+        resetSubscriptionStrategyFormState();
     });
 
-    if (followSourceAmountCheckbox instanceof HTMLInputElement) {
-        followSourceAmountCheckbox.addEventListener("change", function () {
+    if (subscriptionStrategyModeSelect instanceof HTMLSelectElement) {
+        subscriptionStrategyModeSelect.addEventListener("change", function () {
             syncSubscriptionPresetUI();
         });
     }
+
+    if (subscriptionBetFilterModeSelect instanceof HTMLSelectElement) {
+        subscriptionBetFilterModeSelect.addEventListener("change", function () {
+            syncSubscriptionBetFilterUI();
+        });
+    }
+
+    if (subscriptionForm instanceof HTMLFormElement && subscriptionForm.elements.source_id instanceof HTMLSelectElement) {
+        subscriptionForm.elements.source_id.addEventListener("change", function () {
+            syncSubscriptionBetFilterUI();
+        });
+    }
+
+    Array.from(document.querySelectorAll("input[name='bet_filter_key']")).forEach(function (input) {
+        if (!(input instanceof HTMLInputElement)) {
+            return;
+        }
+        input.addEventListener("change", function () {
+            syncSubscriptionBetFilterUI();
+        });
+    });
+
+    Array.from(document.querySelectorAll("[data-play-filter-preset]")).forEach(function (button) {
+        if (!(button instanceof HTMLButtonElement)) {
+            return;
+        }
+        button.addEventListener("click", function () {
+            applySubscriptionPlayFilterPreset(button.getAttribute("data-play-filter-preset"));
+        });
+    });
 
     if (subscriptionRiskControlEnabledCheckbox instanceof HTMLInputElement) {
         subscriptionRiskControlEnabledCheckbox.addEventListener("change", function () {
@@ -5025,9 +5464,6 @@
     applyAutobetScope();
     initWorkspaceNav();
     syncAccountModeUI("phone_login");
-    setSubscriptionAdvancedVisible(false);
-    syncSubscriptionPresetUI();
-    syncSubscriptionRiskControlUI();
     if (messageTemplateForm instanceof HTMLFormElement) {
         messageTemplateForm.elements.status.value = "active";
         messageTemplateForm.elements.template_text.value = "{{bet_value}}{{amount}}";
@@ -5036,10 +5472,6 @@
     setTemplateJsonAdvancedVisible(false);
     syncTemplatePreview();
     resetAccountVerifyForm();
-    if (followSourceAmountCheckbox instanceof HTMLInputElement) {
-        followSourceAmountCheckbox.checked = false;
-    }
-    syncSubscriptionPresetUI();
-    syncSubscriptionRiskControlUI();
+    resetSubscriptionStrategyFormState();
     refreshAll();
 }());

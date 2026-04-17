@@ -112,6 +112,8 @@ class SourceFetchServiceTests(unittest.TestCase):
                                 "max_steps": 6,
                                 "refund_action": "hold",
                                 "cap_action": "reset",
+                                "profit_rule_id": "pc28_high",
+                                "odds_profile": "regular",
                                 "primary_metric": "big_small",
                                 "share_level": "records",
                             }
@@ -132,6 +134,8 @@ class SourceFetchServiceTests(unittest.TestCase):
         self.assertEqual(signal["normalized_payload"]["max_steps"], 6)
         self.assertEqual(signal["normalized_payload"]["refund_action"], "hold")
         self.assertEqual(signal["normalized_payload"]["cap_action"], "reset")
+        self.assertEqual(signal["normalized_payload"]["profit_rule_id"], "pc28_high")
+        self.assertEqual(signal["normalized_payload"]["odds_profile"], "regular")
         self.assertEqual(signal["normalized_payload"]["primary_metric"], "big_small")
         self.assertEqual(signal["normalized_payload"]["share_level"], "records")
 

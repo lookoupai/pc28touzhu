@@ -551,71 +551,163 @@
                                 <p class="panel-kicker">跟单策略</p>
                                 <h2>跟单策略</h2>
                             </div>
-                            <p id="subscriptionWorkspaceSummaryText" class="panel-copy">这里会把“来源 -> 跟单 -> 群组 -> 模板 -> 最终发言”的链路直接展开。</p>
+                            <p id="subscriptionWorkspaceSummaryText" class="panel-copy">在这里看清一条来源会发到哪些群、发多少钱、套用哪个模板。</p>
                         </div>
                         <div class="autobet-note subscription-workspace-note">
-                            <strong>这一页只回答一件事：来源信号最后会怎么发出去</strong>
-                            <p>选择来源、设置默认策略后，系统会直接告诉你当前会命中哪些群组、每个群组绑定了哪个模板，以及预估会发出的下注文本和阻塞项。</p>
+                            <strong>这一步就是把来源信号变成实际下单消息</strong>
+                            <p>选好来源后，设置均注、跟随来源金额或倍投，页面会直接显示会发到哪些群、用哪个模板，以及最终发单示例。</p>
                         </div>
                         <div id="subscriptionWorkspaceSummary" class="health-grid subscription-summary-grid"></div>
                         <form id="subscriptionForm" class="autobet-form">
                             <input name="edit_id" type="hidden">
                             <div class="autobet-form-grid">
                                 <label>
-                                    <span>选择方案来源</span>
+                                    <span>选择要跟单的来源</span>
                                     <select class="text-input" name="source_id" required>
-                                        <option value="">请先选择方案来源</option>
+                                        <option value="">请选择来源</option>
                                     </select>
                                 </label>
-                                <label class="subscription-amount-field">
-                                    <span>固定金额</span>
+                                <label class="wide subscription-play-filter-mode-field">
+                                    <span>跟单玩法</span>
+                                    <select id="subscriptionBetFilterModeSelect" class="text-input" name="bet_filter_mode">
+                                        <option value="selected">只跟选中的玩法（推荐）</option>
+                                        <option value="all">跟随来源这次导出的全部玩法</option>
+                                    </select>
+                                    <small id="subscriptionBetFilterHint" class="field-hint">建议先用自选玩法，只勾你真正想下的内容。</small>
+                                </label>
+                                <div id="subscriptionBetFilterFields" class="wide subscription-play-filter-fields" hidden>
+                                    <div class="subscription-play-filter-toolbar">
+                                        <div class="subscription-play-filter-shortcuts">
+                                            <button class="row-button" type="button" data-play-filter-preset="big_small">只玩大小</button>
+                                            <button class="row-button" type="button" data-play-filter-preset="odd_even">只玩单双</button>
+                                            <button class="row-button" type="button" data-play-filter-preset="combo">只玩组合</button>
+                                            <button class="row-button" type="button" data-play-filter-preset="custom">自己勾选</button>
+                                        </div>
+                                        <p id="subscriptionBetFilterSelectionSummary" class="subscription-play-filter-summary">当前还没选玩法</p>
+                                    </div>
+                                    <div class="subscription-play-filter-group">
+                                        <span class="subscription-play-filter-title">大小</span>
+                                        <label class="subscription-play-filter-chip">
+                                            <input type="checkbox" name="bet_filter_key" value="big_small:大">
+                                            <span>大</span>
+                                        </label>
+                                        <label class="subscription-play-filter-chip">
+                                            <input type="checkbox" name="bet_filter_key" value="big_small:小">
+                                            <span>小</span>
+                                        </label>
+                                    </div>
+                                    <div class="subscription-play-filter-group">
+                                        <span class="subscription-play-filter-title">单双</span>
+                                        <label class="subscription-play-filter-chip">
+                                            <input type="checkbox" name="bet_filter_key" value="odd_even:单">
+                                            <span>单</span>
+                                        </label>
+                                        <label class="subscription-play-filter-chip">
+                                            <input type="checkbox" name="bet_filter_key" value="odd_even:双">
+                                            <span>双</span>
+                                        </label>
+                                    </div>
+                                    <div class="subscription-play-filter-group">
+                                        <span class="subscription-play-filter-title">组合</span>
+                                        <label class="subscription-play-filter-chip">
+                                            <input type="checkbox" name="bet_filter_key" value="combo:大单">
+                                            <span>大单</span>
+                                        </label>
+                                        <label class="subscription-play-filter-chip">
+                                            <input type="checkbox" name="bet_filter_key" value="combo:大双">
+                                            <span>大双</span>
+                                        </label>
+                                        <label class="subscription-play-filter-chip">
+                                            <input type="checkbox" name="bet_filter_key" value="combo:小单">
+                                            <span>小单</span>
+                                        </label>
+                                        <label class="subscription-play-filter-chip">
+                                            <input type="checkbox" name="bet_filter_key" value="combo:小双">
+                                            <span>小双</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <label class="wide subscription-strategy-mode-field">
+                                    <span>下单方式</span>
+                                    <select id="subscriptionStrategyModeSelect" class="text-input" name="strategy_mode">
+                                        <option value="fixed">均注：每期都用固定金额</option>
+                                        <option value="follow_source">跟随来源金额</option>
+                                        <option value="martingale">倍投：未中后按倍数加注</option>
+                                    </select>
+                                    <small id="subscriptionStrategyModeHint" class="field-hint">均注最简单，适合先跑通整条链路。</small>
+                                </label>
+                                <label class="subscription-fixed-field">
+                                    <span>每期固定金额</span>
                                     <input class="text-input" name="stake_amount" type="number" min="0.01" step="0.01" value="10">
                                 </label>
-                                <label class="wide subscription-follow-default-field">
-                                    <span>金额策略</span>
-                                    <span class="checkbox-line">
-                                        <input id="followSourceAmountCheckbox" name="follow_source_amount" type="checkbox">
-                                        <span>跟随来源默认金额</span>
-                                    </span>
-                                    <small class="field-hint">默认使用固定金额。只有希望直接沿用来源金额时再开启。</small>
+                                <label class="wide subscription-follow-tip-field" hidden>
+                                    <span>跟随来源金额说明</span>
+                                    <small class="field-hint">系统会直接使用来源信号里的金额，适合你想完全照抄来源金额时使用。</small>
+                                </label>
+                                <label class="subscription-martingale-field" hidden>
+                                    <span>起始金额</span>
+                                    <input class="text-input" name="base_stake" type="number" min="0.01" step="0.01" value="10">
+                                    <small class="field-hint">第 1 手先下多少。</small>
+                                </label>
+                                <label class="subscription-martingale-field" hidden>
+                                    <span>每次乘几倍</span>
+                                    <input class="text-input" name="multiplier" type="number" min="1.01" step="0.01" value="2">
+                                    <small class="field-hint">未中后，下一手金额按这个倍数递增。</small>
+                                </label>
+                                <label class="subscription-martingale-field" hidden>
+                                    <span>最多追几手</span>
+                                    <input class="text-input" name="max_steps" type="number" min="2" step="1" value="3">
+                                    <small class="field-hint">到达这手后，再未中就按“更多设置”里的规则处理。</small>
                                 </label>
                             </div>
                             <div class="subscription-advanced">
-                                <button id="toggleSubscriptionAdvancedBtn" class="ghost-btn" type="button" aria-expanded="false">显示高级设置</button>
+                                <button id="toggleSubscriptionAdvancedBtn" class="ghost-btn" type="button" aria-expanded="false">展开更多设置</button>
                                 <div id="subscriptionAdvancedFields" class="autobet-form-grid" hidden>
                                     <label>
-                                        <span>过期秒数</span>
+                                        <span>信号过期时间（秒）</span>
                                         <input class="text-input" name="expire_after_seconds" type="number" min="30" step="30" value="120">
                                     </label>
-                                    <label>
-                                        <span>策略模式</span>
-                                        <input class="text-input" name="mode" type="text" value="follow" readonly>
+                                    <label class="subscription-martingale-advanced-field" hidden>
+                                        <span>回本后怎么走</span>
+                                        <select class="text-input" name="refund_action">
+                                            <option value="hold">保持当前手数</option>
+                                            <option value="reset">回到第 1 手</option>
+                                        </select>
+                                        <small class="field-hint">例如第 3 手回本后，是继续留在第 3 手，还是回到第 1 手。</small>
+                                    </label>
+                                    <label class="subscription-martingale-advanced-field" hidden>
+                                        <span>追到最高一手还未中</span>
+                                        <select class="text-input" name="cap_action">
+                                            <option value="reset">回到第 1 手</option>
+                                            <option value="hold">停在最高一手</option>
+                                        </select>
+                                        <small class="field-hint">达到最多追手后，如果还未中，下一次按这里的规则处理。</small>
                                     </label>
                                     <label class="wide">
-                                        <span>风控开关</span>
+                                        <span>自动停单</span>
                                         <span class="checkbox-line">
                                             <input id="subscriptionRiskControlEnabledCheckbox" name="risk_control_enabled" type="checkbox">
-                                            <span>启用止盈 / 止损</span>
+                                            <span>达到止盈或止损后自动停用</span>
                                         </span>
-                                        <small class="field-hint">只有在手工结算“命中 / 回本 / 未中”后，系统才会按当前轮次净盈亏判断是否自动停用策略。</small>
+                                        <small class="field-hint">每次手工结算为“命中 / 回本 / 未中”后，系统会按累计净盈亏判断是否停单。</small>
                                     </label>
                                     <label class="subscription-risk-field" hidden>
-                                        <span>止盈金额</span>
+                                        <span>累计净赚到多少停</span>
                                         <input class="text-input" name="profit_target" type="number" min="0" step="0.01" placeholder="例如：50">
                                     </label>
                                     <label class="subscription-risk-field" hidden>
-                                        <span>止损金额</span>
+                                        <span>累计净亏到多少停</span>
                                         <input class="text-input" name="loss_limit" type="number" min="0" step="0.01" placeholder="例如：30">
                                     </label>
                                     <label class="subscription-risk-field" hidden>
-                                        <span>命中净盈利倍数</span>
+                                        <span>每次命中的净盈利倍数</span>
                                         <input class="text-input" name="win_profit_ratio" type="number" min="0.01" step="0.01" value="1">
-                                        <small class="field-hint">例如输入 1 表示中一把净赚 1 倍本金；如果你的玩法净盈利不是 1 倍，请按实际收益调整。</small>
+                                        <small class="field-hint">填 1 表示命中一把净赚 1 倍本金。当前已支持的 PC28 大小/单双/组合会优先按赔率规则计算；其他玩法才用这个倍数估算止盈止损。</small>
                                     </label>
                                 </div>
                             </div>
                             <div class="form-actions">
-                                <button id="createSubscriptionBtn" class="primary-btn" type="submit">建立跟单关系</button>
+                                <button id="createSubscriptionBtn" class="primary-btn" type="submit">新建跟单策略</button>
                                 <button id="cancelSubscriptionEditBtn" class="ghost-btn" type="button" hidden>取消编辑</button>
                             </div>
                         </form>
@@ -634,7 +726,7 @@
                             <article class="config-card">
                                 <span class="setup-label">当前方案</span>
                                 <strong id="currentSourceName">未导入方案</strong>
-                                <p id="currentSourceMeta">请先在首页导入公开方案页链接，再回来建立跟单关系。</p>
+                                <p id="currentSourceMeta">先在首页导入一个来源，再回来设置跟单。</p>
                             </article>
                             <article class="config-card">
                                 <span class="setup-label">当前账号</span>

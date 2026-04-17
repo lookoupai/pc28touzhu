@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
+from pc28touzhu.domain.pc28_play_filter import strategy_matches_signal
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
@@ -114,7 +116,10 @@ def dispatch_signal(repository: Any, signal_id: int) -> Dict[str, Any]:
     if not signal:
         raise ValueError("signal 不存在")
 
-    candidates = repository.list_dispatch_candidates(signal_id)
+    candidates = [
+        item for item in repository.list_dispatch_candidates(signal_id)
+        if strategy_matches_signal(item.get("strategy_json"), signal)
+    ]
     now = _utc_now()
     base_execute_after = max(_parse_iso_z(signal.get("published_at")), now)
     base_expire_at = base_execute_after + timedelta(minutes=2)

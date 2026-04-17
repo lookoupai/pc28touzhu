@@ -84,6 +84,8 @@ def normalize_raw_item(repository: Any, raw_item_id: int) -> Dict[str, Any]:
             "max_steps",
             "refund_action",
             "cap_action",
+            "profit_rule_id",
+            "odds_profile",
             "primary_metric",
             "share_level",
             "source_note",

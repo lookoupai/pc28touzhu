@@ -18,6 +18,7 @@ class FakeRepository:
         self.executors = []
         self.reports = []
         self.alert_records = {}
+        self.platform_runtime_settings = {}
         self.sources = [
             {
                 "id": 1,
@@ -105,6 +106,18 @@ class FakeRepository:
             record["last_error"] = None
         return record
 
+    def get_platform_runtime_setting(self, setting_key):
+        return self.platform_runtime_settings.get(str(setting_key or ""))
+
+    def upsert_platform_runtime_setting(self, *, setting_key, value):
+        item = {
+            "setting_key": str(setting_key or ""),
+            "value": value or {},
+            "updated_at": "2026-04-17T12:00:00Z",
+        }
+        self.platform_runtime_settings[str(setting_key or "")] = item
+        return item
+
     def pull_ready_jobs(self, executor_id: str, limit: int):
         return [
             {
@@ -191,6 +204,12 @@ class FakeRepository:
             "password_hash": kwargs.get("password_hash", ""),
             "role": kwargs.get("role", "user"),
             "status": kwargs.get("status", "active"),
+            "telegram_user_id": None,
+            "telegram_chat_id": "",
+            "telegram_username": "",
+            "telegram_bound_at": None,
+            "telegram_bind_token": "",
+            "telegram_bind_token_expire_at": None,
             "created_at": "2026-04-07T12:00:00Z",
             "updated_at": "2026-04-07T12:00:00Z",
         }
@@ -206,6 +225,90 @@ class FakeRepository:
             user["email"] = email
         user["updated_at"] = "2026-04-07T12:00:00Z"
         return user
+
+    def get_user_telegram_binding(self, user_id):
+        user = self.get_user(user_id)
+        if not user:
+            raise ValueError("user_id 对应的用户不存在")
+        bind_token = str(user.get("telegram_bind_token") or "")
+        return {
+            "user_id": int(user["id"]),
+            "is_bound": user.get("telegram_user_id") is not None and str(user.get("telegram_chat_id") or "") != "",
+            "telegram_user_id": user.get("telegram_user_id"),
+            "telegram_chat_id": str(user.get("telegram_chat_id") or ""),
+            "telegram_username": str(user.get("telegram_username") or ""),
+            "telegram_bound_at": user.get("telegram_bound_at"),
+            "bind_token": bind_token,
+            "bind_token_expire_at": user.get("telegram_bind_token_expire_at"),
+            "has_active_bind_token": bool(bind_token),
+        }
+
+    def set_user_telegram_bind_token(self, *, user_id, bind_token, expire_at):
+        user = self.get_user(user_id)
+        if not user:
+            raise ValueError("user_id 对应的用户不存在")
+        user["telegram_bind_token"] = str(bind_token or "")
+        user["telegram_bind_token_expire_at"] = expire_at
+        user["updated_at"] = "2026-04-07T12:00:00Z"
+        return self.get_user_telegram_binding(user_id)
+
+    def clear_user_telegram_bind_token(self, *, user_id):
+        user = self.get_user(user_id)
+        if not user:
+            raise ValueError("user_id 对应的用户不存在")
+        user["telegram_bind_token"] = ""
+        user["telegram_bind_token_expire_at"] = None
+        user["updated_at"] = "2026-04-07T12:00:00Z"
+        return self.get_user_telegram_binding(user_id)
+
+    def get_user_by_telegram_bind_token(self, bind_token):
+        for item in self.users:
+            if str(item.get("telegram_bind_token") or "") == str(bind_token or ""):
+                return item
+        return None
+
+    def get_user_by_telegram_user_id(self, telegram_user_id):
+        for item in self.users:
+            if item.get("telegram_user_id") == int(telegram_user_id):
+                return item
+        return None
+
+    def update_user_telegram_binding(
+        self,
+        *,
+        user_id,
+        telegram_user_id,
+        telegram_chat_id,
+        telegram_username="",
+        telegram_bound_at=None,
+    ):
+        user = self.get_user(user_id)
+        if not user:
+            raise ValueError("user_id 对应的用户不存在")
+        conflict = self.get_user_by_telegram_user_id(telegram_user_id)
+        if conflict and int(conflict["id"]) != int(user_id):
+            raise ValueError("该 Telegram 账号已绑定其他平台用户")
+        user["telegram_user_id"] = int(telegram_user_id)
+        user["telegram_chat_id"] = str(telegram_chat_id or "")
+        user["telegram_username"] = str(telegram_username or "")
+        user["telegram_bound_at"] = telegram_bound_at or "2026-04-07T12:00:00Z"
+        user["telegram_bind_token"] = ""
+        user["telegram_bind_token_expire_at"] = None
+        user["updated_at"] = "2026-04-07T12:00:00Z"
+        return self.get_user_telegram_binding(user_id)
+
+    def clear_user_telegram_binding(self, *, user_id):
+        user = self.get_user(user_id)
+        if not user:
+            raise ValueError("user_id 对应的用户不存在")
+        user["telegram_user_id"] = None
+        user["telegram_chat_id"] = ""
+        user["telegram_username"] = ""
+        user["telegram_bound_at"] = None
+        user["telegram_bind_token"] = ""
+        user["telegram_bind_token_expire_at"] = None
+        user["updated_at"] = "2026-04-07T12:00:00Z"
+        return self.get_user_telegram_binding(user_id)
 
     def list_sources(self, owner_user_id=None):
         if owner_user_id is None:
@@ -1083,6 +1186,20 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(captured["status"], "200 OK")
         self.assertEqual(captured["headers"]["Content-Type"], "text/html; charset=utf-8")
         self.assertIn("后台控制台", body)
+
+    def test_admin_telegram_page_uses_versioned_assets_and_no_store(self):
+        captured = {"status": None, "headers": None}
+
+        def start_response(status, headers):
+            captured["status"] = status
+            captured["headers"] = dict(headers)
+
+        body = b"".join(self.app(build_testing_environ("/admin/telegram", headers=self.session_headers), start_response)).decode("utf-8")
+        self.assertEqual(captured["status"], "200 OK")
+        self.assertEqual(captured["headers"]["Content-Type"], "text/html; charset=utf-8")
+        self.assertEqual(captured["headers"]["Cache-Control"], "no-store, max-age=0")
+        self.assertIn("Telegram 配置", body)
+        self.assertIn("/assets/dashboard.js?v=", body)
         self.assertIn("执行中心", body)
 
     def test_admin_support_snapshot_returns_cross_user_objects(self):
@@ -1298,6 +1415,101 @@ class PlatformApiApplicationTests(unittest.TestCase):
         )
         self.assertEqual(me_status, "200 OK")
         self.assertEqual(me_payload["user"]["username"], "alice")
+
+    def test_platform_telegram_binding_endpoints(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/telegram-binding",
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertFalse(payload["item"]["is_bound"])
+
+        token_status, _, token_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/telegram-binding/token",
+                method="POST",
+                body={},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(token_status, "200 OK")
+        self.assertTrue(token_payload["item"]["has_active_bind_token"])
+        self.assertTrue(token_payload["item"]["bind_token"])
+
+        self.repository.update_user_telegram_binding(
+            user_id=1,
+            telegram_user_id=9001,
+            telegram_chat_id="9001",
+            telegram_username="owner_tg",
+            telegram_bound_at="2026-04-17T12:00:00Z",
+        )
+        unbind_status, _, unbind_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/telegram-binding/unbind",
+                method="POST",
+                body={},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(unbind_status, "200 OK")
+        self.assertFalse(unbind_payload["item"]["is_bound"])
+
+    def test_admin_telegram_settings_endpoints(self):
+        get_status, _, get_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/admin/telegram-settings",
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(get_status, "200 OK")
+        self.assertIn("alert", get_payload["item"])
+        self.assertIn("bot", get_payload["item"])
+        self.assertIn("report", get_payload["item"])
+
+        save_status, _, save_payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/admin/telegram-settings",
+                method="POST",
+                headers=self.session_headers,
+                body={
+                    "alert": {
+                        "enabled": True,
+                        "bot_token": "alert-bot-token",
+                        "target_chat_id": "-100alert",
+                        "repeat_interval_seconds": 900,
+                        "interval_seconds": 15,
+                    },
+                    "bot": {
+                        "enabled": True,
+                        "bot_token": "query-bot-token",
+                        "poll_interval_seconds": 7,
+                        "bind_token_ttl_seconds": 1200,
+                    },
+                    "report": {
+                        "enabled": True,
+                        "target_chat_id": "-100report",
+                        "interval_seconds": 45,
+                        "send_hour": 11,
+                        "send_minute": 35,
+                        "top_n": 12,
+                        "timezone": "Asia/Shanghai",
+                    },
+                },
+            ),
+        )
+        self.assertEqual(save_status, "200 OK")
+        self.assertTrue(save_payload["item"]["alert"]["has_bot_token"])
+        self.assertEqual(save_payload["item"]["report"]["target_chat_id"], "-100report")
+        stored = self.repository.get_platform_runtime_setting("telegram_runtime_settings")
+        self.assertEqual(stored["value"]["bot"]["poll_interval_seconds"], 7)
+        self.assertEqual(stored["value"]["report"]["top_n"], 12)
 
     def test_auth_register_can_initialize_legacy_user_without_password(self):
         self.repository.users.append(
@@ -1842,6 +2054,29 @@ class PlatformApiApplicationTests(unittest.TestCase):
         )
         self.assertEqual(list_status, "200 OK")
         self.assertEqual(len(list_payload["items"]), 1)
+
+    def test_create_subscription_with_selected_play_filter(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions",
+                method="POST",
+                body={
+                    "source_id": 1,
+                    "strategy": {
+                        "mode": "follow",
+                        "bet_filter": {
+                            "mode": "selected",
+                            "selected_keys": ["big_small:大", "combo:大双"],
+                        },
+                    },
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["strategy"]["bet_filter"]["mode"], "selected")
+        self.assertEqual(payload["item"]["strategy"]["bet_filter"]["selected_keys"], ["big_small:大", "combo:大双"])
 
     def test_update_subscription_status_endpoint(self):
         created = self.repository.create_subscription_record(

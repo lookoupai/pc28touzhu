@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from pc28touzhu.config import get_runtime_config
+from pc28touzhu.domain.pc28_play_filter import normalize_play_filter_keys, normalize_play_filter_mode
 from pc28touzhu.executor.telethon_sender import TelethonMessageSender
 from pc28touzhu.services.dispatch_service import dispatch_signal as dispatch_signal_jobs
 from pc28touzhu.services.normalize_service import normalize_raw_item as normalize_raw_item_to_signals
@@ -195,16 +196,66 @@ def _to_optional_non_negative_float(value: Any, field_name: str) -> Optional[flo
     return normalized
 
 
+def _normalize_subscription_bet_filter(value: Any) -> Dict[str, Any]:
+    payload = value if isinstance(value, dict) else {}
+    mode = normalize_play_filter_mode(payload.get("mode"))
+    selected_keys = normalize_play_filter_keys(payload.get("selected_keys"))
+    if mode == "selected" and not selected_keys:
+        raise ValueError("选择自定义玩法时，至少要勾选一个玩法")
+    return {
+        "mode": mode,
+        "selected_keys": selected_keys,
+    }
+
+
 def _normalize_subscription_strategy(value: Any) -> Dict[str, Any]:
     payload = _to_object(value, "strategy")
     normalized = dict(payload)
     normalized["mode"] = str(payload.get("mode") or "follow").strip() or "follow"
+    normalized["bet_filter"] = _normalize_subscription_bet_filter(payload.get("bet_filter"))
+    if normalized["mode"] not in {"follow", "martingale"}:
+        raise ValueError("strategy.mode 仅支持 follow 或 martingale")
     if payload.get("stake_amount") not in {None, ""}:
         normalized["stake_amount"] = round(float(payload.get("stake_amount")), 2)
         if normalized["stake_amount"] <= 0:
             raise ValueError("strategy.stake_amount 必须大于 0")
     if payload.get("expire_after_seconds") not in {None, ""}:
         normalized["expire_after_seconds"] = max(30, int(payload.get("expire_after_seconds") or 120))
+    if normalized["mode"] == "martingale":
+        base_stake = _to_optional_non_negative_float(payload.get("base_stake"), "strategy.base_stake")
+        if base_stake is None and payload.get("stake_amount") not in {None, ""}:
+            base_stake = _to_optional_non_negative_float(payload.get("stake_amount"), "strategy.base_stake")
+        if base_stake is None or base_stake <= 0:
+            raise ValueError("strategy.base_stake 必须大于 0")
+        multiplier = _to_optional_non_negative_float(payload.get("multiplier"), "strategy.multiplier")
+        if multiplier is None:
+            multiplier = 2.0
+        if multiplier <= 1:
+            raise ValueError("strategy.multiplier 必须大于 1")
+        try:
+            max_steps = int(payload.get("max_steps") or 1)
+        except (TypeError, ValueError):
+            raise ValueError("strategy.max_steps 必须为整数")
+        if max_steps < 1:
+            raise ValueError("strategy.max_steps 必须大于 0")
+        refund_action = str(payload.get("refund_action") or "hold").strip() or "hold"
+        cap_action = str(payload.get("cap_action") or "reset").strip() or "reset"
+        if refund_action not in {"hold", "reset"}:
+            raise ValueError("strategy.refund_action 仅支持 hold 或 reset")
+        if cap_action not in {"hold", "reset"}:
+            raise ValueError("strategy.cap_action 仅支持 hold 或 reset")
+        normalized["base_stake"] = round(float(base_stake), 2)
+        normalized["multiplier"] = round(float(multiplier), 4)
+        normalized["max_steps"] = max_steps
+        normalized["refund_action"] = refund_action
+        normalized["cap_action"] = cap_action
+        normalized.pop("stake_amount", None)
+    else:
+        normalized.pop("base_stake", None)
+        normalized.pop("multiplier", None)
+        normalized.pop("max_steps", None)
+        normalized.pop("refund_action", None)
+        normalized.pop("cap_action", None)
 
     risk_payload = payload.get("risk_control")
     if risk_payload is None:
