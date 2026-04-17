@@ -64,6 +64,35 @@ class TelegramBotSenderTests(unittest.TestCase):
 
         self.assertIn("chat not found", str(ctx.exception))
 
+    def test_get_updates_calls_bot_api(self):
+        captured = {}
+
+        def fake_urlopen(request, timeout=0):
+            captured["url"] = request.full_url
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            captured["timeout"] = timeout
+            return FakeResponse(
+                {
+                    "ok": True,
+                    "result": [
+                        {
+                            "update_id": 99,
+                            "message": {"message_id": 10, "text": "/start"},
+                        }
+                    ],
+                }
+            )
+
+        with patch("urllib.request.urlopen", fake_urlopen):
+            sender = TelegramBotSender(bot_token="bot-token")
+            result = sender.get_updates(offset=50, timeout_seconds=7, limit=20)
+
+        self.assertIn("/botbot-token/getUpdates", captured["url"])
+        self.assertEqual(captured["body"]["offset"], 50)
+        self.assertEqual(captured["body"]["timeout"], 7)
+        self.assertEqual(captured["body"]["limit"], 20)
+        self.assertEqual(result[0]["update_id"], 99)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -121,11 +121,34 @@ class AlertNotifierConfig:
 
 
 @dataclass(frozen=True)
+class TelegramBotConfig:
+    enabled: bool
+    bot_token: str
+    poll_interval_seconds: int
+    bind_token_ttl_seconds: int
+    once: bool
+
+
+@dataclass(frozen=True)
+class TelegramReportConfig:
+    enabled: bool
+    target_chat_id: str
+    interval_seconds: int
+    once: bool
+    send_hour: int
+    send_minute: int
+    top_n: int
+    timezone: str
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     platform: PlatformConfig
     executor: ExecutorConfig
     demo_seed: DemoSeedConfig
     alert_notifier: AlertNotifierConfig
+    telegram_bot: TelegramBotConfig
+    telegram_report: TelegramReportConfig
 
 
 def get_platform_config() -> PlatformConfig:
@@ -188,6 +211,29 @@ def get_alert_notifier_config() -> AlertNotifierConfig:
     )
 
 
+def get_telegram_bot_config() -> TelegramBotConfig:
+    return TelegramBotConfig(
+        enabled=_get_bool("TG_BOT_ENABLED", False),
+        bot_token=_get_str("TG_BOT_TOKEN", ""),
+        poll_interval_seconds=max(1, _get_int("TG_BOT_POLL_INTERVAL_SECONDS", 30)),
+        bind_token_ttl_seconds=max(60, _get_int("TG_BOT_BIND_TOKEN_TTL_SECONDS", 600)),
+        once=_get_bool("TG_BOT_ONCE", True),
+    )
+
+
+def get_telegram_report_config() -> TelegramReportConfig:
+    return TelegramReportConfig(
+        enabled=_get_bool("TG_REPORT_ENABLED", False),
+        target_chat_id=_get_str("TG_REPORT_TARGET_CHAT_ID", ""),
+        interval_seconds=max(5, _get_int("TG_REPORT_INTERVAL_SECONDS", 30)),
+        once=_get_bool("TG_REPORT_ONCE", True),
+        send_hour=min(max(0, _get_int("TG_REPORT_SEND_HOUR", 9)), 23),
+        send_minute=min(max(0, _get_int("TG_REPORT_SEND_MINUTE", 0)), 59),
+        top_n=max(1, _get_int("TG_REPORT_TOP_N", 10)),
+        timezone=_get_str("TG_REPORT_TIMEZONE", "Asia/Shanghai"),
+    )
+
+
 def get_runtime_config(env_path: str | os.PathLike[str] | None = None) -> RuntimeConfig:
     load_env_file(env_path)
     if env_path:
@@ -201,4 +247,6 @@ def get_runtime_config(env_path: str | os.PathLike[str] | None = None) -> Runtim
         executor=get_executor_config(),
         demo_seed=get_demo_seed_config(),
         alert_notifier=get_alert_notifier_config(),
+        telegram_bot=get_telegram_bot_config(),
+        telegram_report=get_telegram_report_config(),
     )

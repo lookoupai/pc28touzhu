@@ -15,6 +15,8 @@ def create_app(repository):
         executor_api_token=config.platform.executor_api_token,
         session_secret=config.platform.session_secret,
         platform_config=config.platform,
+        telegram_bot_config=config.telegram_bot,
+        runtime_config=config,
     )
 
 

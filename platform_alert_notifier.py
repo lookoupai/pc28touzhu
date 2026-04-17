@@ -6,27 +6,42 @@ from pc28touzhu.config import get_runtime_config
 from pc28touzhu.main import build_repository
 from pc28touzhu.services.alert_notification_service import deliver_platform_alerts
 from pc28touzhu.services.platform_service import list_platform_alerts
+from pc28touzhu.services.telegram_runtime_settings_service import get_effective_telegram_runtime_settings
 from pc28touzhu.telegram_bot_sender import TelegramBotSender
 
 
 def main() -> int:
     config = get_runtime_config()
     platform = config.platform
-    notifier = config.alert_notifier
-    if not notifier.enabled:
-        print("alert notifier disabled")
-        return 0
-    if not notifier.bot_token:
-        print("ALERT_TELEGRAM_BOT_TOKEN 未配置")
-        return 2
-    if not notifier.target_chat_id:
-        print("ALERT_TELEGRAM_TARGET_CHAT_ID 未配置")
-        return 2
-
     repo = build_repository()
-    sender = TelegramBotSender(bot_token=notifier.bot_token)
+    sender = None
+    current_token = ""
 
     while True:
+        resolved = get_effective_telegram_runtime_settings(repo, runtime_config=config)
+        notifier = resolved["item"]["alert"]
+        if not notifier["enabled"]:
+            print("alert notifier disabled")
+            if config.alert_notifier.once:
+                return 0
+            time.sleep(max(5, int(notifier.get("interval_seconds") or 5)))
+            continue
+        if not notifier["bot_token"]:
+            print("ALERT_TELEGRAM_BOT_TOKEN 未配置")
+            if config.alert_notifier.once:
+                return 2
+            time.sleep(max(5, int(notifier.get("interval_seconds") or 5)))
+            continue
+        if not notifier["target_chat_id"]:
+            print("ALERT_TELEGRAM_TARGET_CHAT_ID 未配置")
+            if config.alert_notifier.once:
+                return 2
+            time.sleep(max(5, int(notifier.get("interval_seconds") or 5)))
+            continue
+        if sender is None or current_token != notifier["bot_token"]:
+            sender = TelegramBotSender(bot_token=notifier["bot_token"])
+            current_token = notifier["bot_token"]
+
         alerts = list_platform_alerts(
             repo,
             user_id=None,
@@ -41,8 +56,8 @@ def main() -> int:
             repo,
             alerts=alerts,
             sender=sender,
-            target_chat_id=notifier.target_chat_id,
-            repeat_interval_seconds=notifier.repeat_interval_seconds,
+            target_chat_id=notifier["target_chat_id"],
+            repeat_interval_seconds=notifier["repeat_interval_seconds"],
         )
         print(
             "alert cycle total=%s pending=%s sent=%s failed=%s"
@@ -53,9 +68,9 @@ def main() -> int:
                 result["failed_count"],
             )
         )
-        if notifier.once:
+        if config.alert_notifier.once:
             return 1 if result["failed_count"] > 0 else 0
-        time.sleep(notifier.interval_seconds)
+        time.sleep(notifier["interval_seconds"])
 
 
 if __name__ == "__main__":

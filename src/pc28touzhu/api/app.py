@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple
@@ -62,6 +63,15 @@ from pc28touzhu.services.platform_service import (
     verify_telegram_account_login_code,
     verify_telegram_account_login_password,
 )
+from pc28touzhu.services.telegram_bot_service import (
+    clear_telegram_binding,
+    create_telegram_bind_token,
+    get_telegram_binding_status,
+)
+from pc28touzhu.services.telegram_runtime_settings_service import (
+    get_telegram_runtime_settings_for_admin,
+    update_telegram_runtime_settings,
+)
 
 
 StartResponse = Callable[[str, list], None]
@@ -73,6 +83,7 @@ ADMIN_PAGE_ROUTES = {
     "/admin/execution",
     "/admin/alerts",
     "/admin/support",
+    "/admin/telegram",
 }
 
 
@@ -121,6 +132,8 @@ def _text_response(
         ("Content-Type", content_type),
         ("Content-Length", str(len(data))),
     ]
+    if content_type.startswith("text/html"):
+        headers.append(("Cache-Control", "no-store, max-age=0"))
     if extra_headers:
         headers.extend(extra_headers)
     start_response(status_text, headers)
@@ -132,6 +145,25 @@ def _load_ui_file(filename: str) -> str:
     if not path.exists():
         raise FileNotFoundError(filename)
     return path.read_text(encoding="utf-8")
+
+
+def _asset_version(filename: str) -> str:
+    path = UI_DIR / filename
+    if not path.exists():
+        return "0"
+    return str(int(path.stat().st_mtime))
+
+
+def _load_ui_html_file(filename: str) -> str:
+    text = _load_ui_file(filename)
+
+    def replace_asset(match: re.Match[str]) -> str:
+        asset_name = str(match.group(1) or "").strip()
+        if not asset_name:
+            return match.group(0)
+        return '/assets/%s?v=%s' % (asset_name, _asset_version(asset_name))
+
+    return re.sub(r'/assets/([A-Za-z0-9_.-]+)', replace_asset, text)
 
 
 def _read_json_body(environ: Dict[str, Any]) -> Dict[str, Any]:
@@ -165,16 +197,29 @@ def _query_value(environ: Dict[str, Any], key: str, default: str = "") -> str:
 
 
 class PlatformApiApplication:
-    def __init__(self, repository: Any, executor_api_token: str, session_secret: str, platform_config: Any = None):
+    def __init__(
+        self,
+        repository: Any,
+        executor_api_token: str,
+        session_secret: str,
+        platform_config: Any = None,
+        telegram_bot_config: Any = None,
+        runtime_config: Any = None,
+    ):
         self.repository = repository
         self.executor_api_token = executor_api_token
         self.session_secret = session_secret
         self.platform_config = platform_config
+        self.telegram_bot_config = telegram_bot_config
+        self.runtime_config = runtime_config
         self.executor_stale_after_seconds = int(getattr(platform_config, "executor_stale_after_seconds", 60) or 60)
         self.executor_offline_after_seconds = int(getattr(platform_config, "executor_offline_after_seconds", 300) or 300)
         self.auto_retry_max_attempts = int(getattr(platform_config, "auto_retry_max_attempts", 3) or 3)
         self.auto_retry_base_delay_seconds = int(getattr(platform_config, "auto_retry_base_delay_seconds", 30) or 30)
         self.alert_failure_streak_threshold = int(getattr(platform_config, "alert_failure_streak_threshold", 3) or 3)
+        self.telegram_bind_token_ttl_seconds = int(
+            getattr(telegram_bot_config, "bind_token_ttl_seconds", 600) or 600
+        )
 
     def __call__(self, environ: Dict[str, Any], start_response: StartResponse) -> Iterable[bytes]:
         try:
@@ -197,7 +242,7 @@ class PlatformApiApplication:
         if path == "/":
             if method != "GET":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_file("home.html"), "text/html; charset=utf-8")
+            return _text_response(start_response, 200, _load_ui_html_file("home.html"), "text/html; charset=utf-8")
 
         if normalized_path in ADMIN_PAGE_ROUTES:
             if method != "GET":
@@ -212,42 +257,42 @@ class PlatformApiApplication:
                     self._render_admin_access_denied(str(exc)),
                     "text/html; charset=utf-8",
                 )
-            return _text_response(start_response, 200, _load_ui_file("dashboard.html"), "text/html; charset=utf-8")
+            return _text_response(start_response, 200, _load_ui_html_file("dashboard.html"), "text/html; charset=utf-8")
 
         if path == "/records":
             if method != "GET":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_file("records.html"), "text/html; charset=utf-8")
+            return _text_response(start_response, 200, _load_ui_html_file("records.html"), "text/html; charset=utf-8")
 
         if path == "/autobet":
             if method != "GET":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_file("autobet.html"), "text/html; charset=utf-8")
+            return _text_response(start_response, 200, _load_ui_html_file("autobet.html"), "text/html; charset=utf-8")
 
         if path == "/autobet/accounts":
             if method != "GET":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_file("autobet.html"), "text/html; charset=utf-8")
+            return _text_response(start_response, 200, _load_ui_html_file("autobet.html"), "text/html; charset=utf-8")
 
         if path == "/autobet/templates":
             if method != "GET":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_file("autobet.html"), "text/html; charset=utf-8")
+            return _text_response(start_response, 200, _load_ui_html_file("autobet.html"), "text/html; charset=utf-8")
 
         if path == "/autobet/targets":
             if method != "GET":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_file("autobet.html"), "text/html; charset=utf-8")
+            return _text_response(start_response, 200, _load_ui_html_file("autobet.html"), "text/html; charset=utf-8")
 
         if path == "/autobet/subscriptions":
             if method != "GET":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_file("autobet.html"), "text/html; charset=utf-8")
+            return _text_response(start_response, 200, _load_ui_html_file("autobet.html"), "text/html; charset=utf-8")
 
         if path == "/alerts":
             if method != "GET":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_file("alerts.html"), "text/html; charset=utf-8")
+            return _text_response(start_response, 200, _load_ui_html_file("alerts.html"), "text/html; charset=utf-8")
 
         if path == "/assets/home.css":
             if method != "GET":
@@ -475,6 +520,22 @@ class PlatformApiApplication:
             )
             return _json_response(start_response, 200, payload)
 
+        if path == "/api/platform/admin/telegram-settings":
+            if method == "GET":
+                payload = get_telegram_runtime_settings_for_admin(
+                    self.repository,
+                    runtime_config=self.runtime_config,
+                )
+                return _json_response(start_response, 200, payload)
+            if method == "POST":
+                payload = update_telegram_runtime_settings(
+                    self.repository,
+                    payload=_read_json_body(environ),
+                    runtime_config=self.runtime_config,
+                )
+                return _json_response(start_response, 200, payload)
+            return _json_response(start_response, 405, {"error": "method not allowed"})
+
         if path == "/api/executor/jobs/pull":
             if method != "GET":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
@@ -632,6 +693,35 @@ class PlatformApiApplication:
                 payload = create_subscription(self.repository, payload={**_read_json_body(environ), "user_id": current_user["id"]})
                 return _json_response(start_response, 200, payload)
             return _json_response(start_response, 405, {"error": "method not allowed"})
+
+        if path == "/api/platform/telegram-binding":
+            if method == "GET":
+                payload = get_telegram_binding_status(
+                    self.repository,
+                    user_id=current_user["id"],
+                )
+                return _json_response(start_response, 200, payload)
+            return _json_response(start_response, 405, {"error": "method not allowed"})
+
+        if path == "/api/platform/telegram-binding/token":
+            if method != "POST":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            body = _read_json_body(environ)
+            payload = create_telegram_bind_token(
+                self.repository,
+                user_id=current_user["id"],
+                ttl_seconds=body.get("ttl_seconds") or self.telegram_bind_token_ttl_seconds,
+            )
+            return _json_response(start_response, 200, payload)
+
+        if path == "/api/platform/telegram-binding/unbind":
+            if method != "POST":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            payload = clear_telegram_binding(
+                self.repository,
+                user_id=current_user["id"],
+            )
+            return _json_response(start_response, 200, payload)
 
         subscription_status_prefix = "/api/platform/subscriptions/"
         if path.startswith(subscription_status_prefix) and path.endswith("/progression/settle"):
@@ -916,7 +1006,7 @@ class PlatformApiApplication:
         return _parse_authorization(environ) == self.executor_api_token
 
     def _render_admin_access_denied(self, message: str) -> str:
-        template = _load_ui_file("admin_access_denied.html")
+        template = _load_ui_html_file("admin_access_denied.html")
         return template.replace("__ADMIN_ACCESS_MESSAGE__", str(message or "当前请求不具备后台访问权限。"))
 
     def _get_current_user(self, environ: Dict[str, Any]) -> Optional[Dict[str, Any]]:

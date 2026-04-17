@@ -26,6 +26,19 @@ class RuntimeConfigTests(unittest.TestCase):
             "ALERT_NOTIFY_REPEAT_SECONDS",
             "ALERT_NOTIFIER_INTERVAL_SECONDS",
             "ALERT_NOTIFIER_ONCE",
+            "TG_BOT_ENABLED",
+            "TG_BOT_TOKEN",
+            "TG_BOT_POLL_INTERVAL_SECONDS",
+            "TG_BOT_BIND_TOKEN_TTL_SECONDS",
+            "TG_BOT_ONCE",
+            "TG_REPORT_ENABLED",
+            "TG_REPORT_TARGET_CHAT_ID",
+            "TG_REPORT_INTERVAL_SECONDS",
+            "TG_REPORT_ONCE",
+            "TG_REPORT_SEND_HOUR",
+            "TG_REPORT_SEND_MINUTE",
+            "TG_REPORT_TOP_N",
+            "TG_REPORT_TIMEZONE",
             "PLATFORM_BASE_URL",
             "EXECUTOR_ID",
             "PULL_LIMIT",
@@ -60,6 +73,19 @@ class RuntimeConfigTests(unittest.TestCase):
                         "ALERT_NOTIFY_REPEAT_SECONDS=900",
                         "ALERT_NOTIFIER_INTERVAL_SECONDS=15",
                         "ALERT_NOTIFIER_ONCE=false",
+                        "TG_BOT_ENABLED=true",
+                        "TG_BOT_TOKEN=query-bot-token",
+                        "TG_BOT_POLL_INTERVAL_SECONDS=7",
+                        "TG_BOT_BIND_TOKEN_TTL_SECONDS=1200",
+                        "TG_BOT_ONCE=false",
+                        "TG_REPORT_ENABLED=true",
+                        "TG_REPORT_TARGET_CHAT_ID=-100report",
+                        "TG_REPORT_INTERVAL_SECONDS=45",
+                        "TG_REPORT_ONCE=false",
+                        "TG_REPORT_SEND_HOUR=11",
+                        "TG_REPORT_SEND_MINUTE=35",
+                        "TG_REPORT_TOP_N=12",
+                        "TG_REPORT_TIMEZONE=Asia/Shanghai",
                         "PLATFORM_BASE_URL=http://127.0.0.1:35200",
                         "EXECUTOR_ID=test-exec",
                         "PULL_LIMIT=25",
@@ -108,6 +134,19 @@ class RuntimeConfigTests(unittest.TestCase):
                 self.assertEqual(config.alert_notifier.repeat_interval_seconds, 900)
                 self.assertEqual(config.alert_notifier.interval_seconds, 15)
                 self.assertFalse(config.alert_notifier.once)
+                self.assertTrue(config.telegram_bot.enabled)
+                self.assertEqual(config.telegram_bot.bot_token, "query-bot-token")
+                self.assertEqual(config.telegram_bot.poll_interval_seconds, 7)
+                self.assertEqual(config.telegram_bot.bind_token_ttl_seconds, 1200)
+                self.assertFalse(config.telegram_bot.once)
+                self.assertTrue(config.telegram_report.enabled)
+                self.assertEqual(config.telegram_report.target_chat_id, "-100report")
+                self.assertEqual(config.telegram_report.interval_seconds, 45)
+                self.assertFalse(config.telegram_report.once)
+                self.assertEqual(config.telegram_report.send_hour, 11)
+                self.assertEqual(config.telegram_report.send_minute, 35)
+                self.assertEqual(config.telegram_report.top_n, 12)
+                self.assertEqual(config.telegram_report.timezone, "Asia/Shanghai")
             finally:
                 for key, value in original_env.items():
                     if value is None:
