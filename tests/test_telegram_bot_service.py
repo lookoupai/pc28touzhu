@@ -12,8 +12,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from pc28touzhu.executor.db_repository import DatabaseRepository
 from pc28touzhu.services.telegram_bot_service import (
     create_telegram_bind_token,
+    get_telegram_bot_commands,
     handle_telegram_command,
     process_telegram_bot_cycle,
+    sync_telegram_bot_commands,
 )
 
 
@@ -21,6 +23,7 @@ class FakeBotClient:
     def __init__(self, updates=None):
         self.updates = list(updates or [])
         self.sent = []
+        self.commands = []
 
     def send_text(self, target_chat_id: str, message_text: str):
         self.sent.append((target_chat_id, message_text))
@@ -30,6 +33,16 @@ class FakeBotClient:
         if offset is None:
             return list(self.updates[:limit])
         return [item for item in self.updates if int(item.get("update_id") or 0) >= int(offset)][:limit]
+
+    def set_my_commands(self, commands, *, scope=None, language_code=None):
+        self.commands.append(
+            {
+                "commands": [dict(item) for item in commands],
+                "scope": dict(scope or {}),
+                "language_code": language_code,
+            }
+        )
+        return {"ok": True}
 
 
 class TelegramBotServiceTests(unittest.TestCase):
@@ -135,6 +148,223 @@ class TelegramBotServiceTests(unittest.TestCase):
         )
         self.assertIn("方案收益", detail_text)
         self.assertIn("净利润: +10.00", detail_text)
+
+    def test_start_and_help_return_help_text(self):
+        help_text = handle_telegram_command(
+            self.repo,
+            telegram_user_id=1,
+            telegram_chat_id="1",
+            telegram_username="help_user",
+            text="/start",
+        )
+        alias_text = handle_telegram_command(
+            self.repo,
+            telegram_user_id=1,
+            telegram_chat_id="1",
+            telegram_username="help_user",
+            text="/help",
+        )
+
+        self.assertIn("/profit 查询最近有已结算数据的汇总", help_text)
+        self.assertEqual(help_text, alias_text)
+
+    def test_profit_and_plan_without_date_prefer_today_data(self):
+        user, today_stat_date = self._seed_daily_stat()
+        self.repo.update_user_telegram_binding(
+            user_id=user["id"],
+            telegram_user_id=9002,
+            telegram_chat_id="9002",
+            telegram_username="fallback_user",
+            telegram_bound_at="2026-04-18T00:00:00Z",
+        )
+        reference_time = (
+            datetime.strptime(today_stat_date, "%Y-%m-%d").replace(tzinfo=timezone(timedelta(hours=8)), hour=12)
+        ).astimezone(timezone.utc)
+
+        summary_text = handle_telegram_command(
+            self.repo,
+            telegram_user_id=9002,
+            telegram_chat_id="9002",
+            telegram_username="fallback_user",
+            text="/profit",
+            reference_time=reference_time,
+        )
+        list_text = handle_telegram_command(
+            self.repo,
+            telegram_user_id=9002,
+            telegram_chat_id="9002",
+            telegram_username="fallback_user",
+            text="/plan",
+            reference_time=reference_time,
+        )
+        detail_text = handle_telegram_command(
+            self.repo,
+            telegram_user_id=9002,
+            telegram_chat_id="9002",
+            telegram_username="fallback_user",
+            text="/plan 方案A",
+            reference_time=reference_time,
+        )
+
+        self.assertIn(today_stat_date, summary_text)
+        self.assertIn("净利润: +10.00", summary_text)
+        self.assertIn(today_stat_date, list_text)
+        self.assertIn("方案A", list_text)
+        self.assertIn(today_stat_date, detail_text)
+        self.assertIn("净利润: +10.00", detail_text)
+
+    def test_profit_and_plan_without_date_fallback_to_yesterday_data(self):
+        user, stat_date = self._seed_daily_stat()
+        self.repo.update_user_telegram_binding(
+            user_id=user["id"],
+            telegram_user_id=9003,
+            telegram_chat_id="9003",
+            telegram_username="yesterday_user",
+            telegram_bound_at="2026-04-18T00:00:00Z",
+        )
+        reference_time = (
+            datetime.strptime(stat_date, "%Y-%m-%d").replace(tzinfo=timezone(timedelta(hours=8)), hour=12)
+            + timedelta(days=1)
+        ).astimezone(timezone.utc)
+
+        summary_text = handle_telegram_command(
+            self.repo,
+            telegram_user_id=9003,
+            telegram_chat_id="9003",
+            telegram_username="yesterday_user",
+            text="/profit",
+            reference_time=reference_time,
+        )
+        list_text = handle_telegram_command(
+            self.repo,
+            telegram_user_id=9003,
+            telegram_chat_id="9003",
+            telegram_username="yesterday_user",
+            text="/plan",
+            reference_time=reference_time,
+        )
+
+        self.assertIn(stat_date, summary_text)
+        self.assertIn("净利润: +10.00", summary_text)
+        self.assertIn(stat_date, list_text)
+        self.assertIn("方案A", list_text)
+
+    def test_sync_telegram_bot_commands_uses_private_scope(self):
+        client = FakeBotClient()
+
+        result = sync_telegram_bot_commands(client)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(client.commands[0]["scope"], {})
+        self.assertEqual(client.commands[1]["scope"]["type"], "all_private_chats")
+        self.assertEqual(client.commands[0]["commands"], get_telegram_bot_commands())
+        self.assertEqual(client.commands[1]["commands"], get_telegram_bot_commands())
+
+    def test_status_command_returns_summary(self):
+        user, _ = self._seed_daily_stat()
+        self.repo.update_user_telegram_binding(
+            user_id=user["id"],
+            telegram_user_id=9010,
+            telegram_chat_id="9010",
+            telegram_username="status_user",
+            telegram_bound_at="2026-04-19T00:00:00Z",
+        )
+
+        text = handle_telegram_command(
+            self.repo,
+            telegram_user_id=9010,
+            telegram_chat_id="9010",
+            telegram_username="status_user",
+            text="/status",
+        )
+
+        self.assertIn("当前跟单状态", text)
+        self.assertIn("策略总数: 1", text)
+        self.assertIn("待结算: 0", text)
+        self.assertIn("本轮已实现净盈亏合计: +10.00", text)
+        self.assertIn("待结算金额合计: 0.00", text)
+
+    def test_status_command_returns_plan_detail(self):
+        user = self.repo.create_user_record(username="detail-user", email="", role="user", status="active")
+        source = self.repo.create_source_record(
+            owner_user_id=user["id"],
+            source_type="internal_ai",
+            name="方案B",
+        )
+        subscription = self.repo.create_subscription_record(
+            user_id=user["id"],
+            source_id=source["id"],
+            strategy={
+                "mode": "martingale",
+                "base_stake": 10,
+                "multiplier": 2,
+                "max_steps": 3,
+            },
+        )
+        signal = self.repo.create_signal_record(
+            source_id=source["id"],
+            lottery_type="pc28",
+            issue_no="20260418001",
+            bet_type="big_small",
+            bet_value="小",
+        )
+        event = self.repo.create_progression_event_record(
+            subscription_id=subscription["id"],
+            user_id=user["id"],
+            signal_id=signal["id"],
+            issue_no="20260418001",
+            progression_step=1,
+            stake_amount=10,
+            base_stake=10,
+            multiplier=2,
+            max_steps=3,
+            refund_action="hold",
+            cap_action="reset",
+            status="placed",
+        )
+        self.repo.update_user_telegram_binding(
+            user_id=user["id"],
+            telegram_user_id=9011,
+            telegram_chat_id="9011",
+            telegram_username="status_detail_user",
+            telegram_bound_at="2026-04-19T00:00:00Z",
+        )
+
+        text = handle_telegram_command(
+            self.repo,
+            telegram_user_id=9011,
+            telegram_chat_id="9011",
+            telegram_username="status_detail_user",
+            text="/status 方案B",
+        )
+
+        self.assertIn("当前方案状态", text)
+        self.assertIn("方案: 方案B", text)
+        self.assertIn("待结算期号: 20260418001", text)
+        self.assertIn("待结算状态: placed", text)
+        self.assertIn("当前待结算金额: 10.00", text)
+        self.assertIn("当前手数: 1", text)
+        self.assertIn("本轮已实现净盈亏: 0.00", text)
+
+    def test_status_command_handles_empty_subscriptions(self):
+        user = self.repo.create_user_record(username="empty-user", email="", role="user", status="active")
+        self.repo.update_user_telegram_binding(
+            user_id=user["id"],
+            telegram_user_id=9012,
+            telegram_chat_id="9012",
+            telegram_username="empty_status_user",
+            telegram_bound_at="2026-04-19T00:00:00Z",
+        )
+
+        text = handle_telegram_command(
+            self.repo,
+            telegram_user_id=9012,
+            telegram_chat_id="9012",
+            telegram_username="empty_status_user",
+            text="/status",
+        )
+
+        self.assertEqual("当前没有跟单策略。", text)
 
     def test_process_cycle_replies_and_updates_runtime_state(self):
         user = self.repo.create_user_record(username="cycle-user", email="", role="user", status="active")

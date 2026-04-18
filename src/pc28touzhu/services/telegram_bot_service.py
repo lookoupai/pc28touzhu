@@ -2,12 +2,20 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 from uuid import uuid4
 
 
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 DEFAULT_BOT_STATE_KEY = "profit-query-bot"
+TELEGRAM_BOT_COMMANDS = (
+    {"command": "start", "description": "查看帮助"},
+    {"command": "help", "description": "查看帮助"},
+    {"command": "bind", "description": "绑定平台账号"},
+    {"command": "profit", "description": "查询跟单汇总"},
+    {"command": "plan", "description": "查询单方案盈亏"},
+    {"command": "status", "description": "查询当前跟单状态"},
+)
 
 
 class TelegramBotClient(Protocol):
@@ -21,6 +29,15 @@ class TelegramBotClient(Protocol):
         timeout_seconds: int = 10,
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
+        ...
+
+    def set_my_commands(
+        self,
+        commands: List[Dict[str, Any]],
+        *,
+        scope: Optional[Dict[str, Any]] = None,
+        language_code: Optional[str] = None,
+    ) -> Dict[str, Any]:
         ...
 
 
@@ -59,6 +76,13 @@ def _normalize_stat_date(value: Optional[str], *, reference_time: Optional[datet
         raise ValueError("日期格式必须为 YYYY-MM-DD") from exc
 
 
+def _default_stat_date_candidates(*, reference_time: Optional[datetime] = None) -> List[str]:
+    local_now = (reference_time or _utc_now()).astimezone(SHANGHAI_TZ)
+    today = local_now.date().isoformat()
+    yesterday = (local_now.date() - timedelta(days=1)).isoformat()
+    return [today] if today == yesterday else [today, yesterday]
+
+
 def _signed_money(value: Any) -> str:
     amount = round(float(value or 0), 2)
     if amount > 0:
@@ -81,13 +105,42 @@ def _build_help_text() -> str:
     return "\n".join(
         [
             "可用命令：",
+            "/start 查看帮助",
+            "/help 查看帮助",
             "/bind <绑定码> 绑定平台账号",
-            "/profit 查询昨天全部方案汇总",
+            "/status 查询当前跟单状态、待结算金额",
+            "/status <方案名> 查询指定方案当前状态",
+            "/profit 查询最近有已结算数据的汇总",
             "/profit YYYY-MM-DD 查询指定日期汇总",
+            "/plan 查询最近有已结算数据的单方案列表",
             "/plan YYYY-MM-DD 查询指定日期单方案列表",
+            "/plan <方案名> 查询最近有已结算数据的指定方案盈亏",
             "/plan <方案名> YYYY-MM-DD 查询指定方案盈亏",
+            "说明：/profit 与 /plan 仅展示已结算数据，/status 展示当前状态与待结算金额。",
         ]
     )
+
+
+def get_telegram_bot_commands() -> List[Dict[str, str]]:
+    return [dict(item) for item in TELEGRAM_BOT_COMMANDS]
+
+
+def sync_telegram_bot_commands(bot_client: Any) -> Dict[str, Any]:
+    setter = getattr(bot_client, "set_my_commands", None)
+    if not callable(setter):
+        raise ValueError("bot_client 不支持 set_my_commands")
+    commands = get_telegram_bot_commands()
+    results = [
+        setter(commands),
+        setter(
+            commands,
+            scope={"type": "all_private_chats"},
+        ),
+    ]
+    return {
+        "ok": all(bool((item or {}).get("ok", True)) for item in results),
+        "results": results,
+    }
 
 
 def get_telegram_binding_status(repository: Any, *, user_id: Any) -> Dict[str, Any]:
@@ -239,6 +292,182 @@ def _build_candidate_text(stat_date: str, source_names: List[str]) -> str:
     )
 
 
+def _progression_result_text(value: Any) -> str:
+    mapping = {
+        "hit": "命中",
+        "refund": "回本",
+        "miss": "未中",
+        "reset": "已重置",
+    }
+    text = str(value or "").strip()
+    return mapping.get(text, text or "--")
+
+
+def _resolve_subscription_source_names(repository: Any, subscriptions: List[Dict[str, Any]]) -> Dict[int, str]:
+    source_ids = []
+    seen: set[int] = set()
+    for item in subscriptions:
+        source_id = int(item.get("source_id") or 0)
+        if source_id <= 0 or source_id in seen:
+            continue
+        source_ids.append(source_id)
+        seen.add(source_id)
+
+    result: Dict[int, str] = {}
+    for source_id in source_ids:
+        source = repository.get_source(source_id) if hasattr(repository, "get_source") else None
+        result[source_id] = str((source or {}).get("name") or "未命名方案")
+    return result
+
+
+def _resolve_pending_event_snapshots(repository: Any, subscriptions: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
+    pending_events: Dict[int, Dict[str, Any]] = {}
+    if not hasattr(repository, "get_progression_event"):
+        return pending_events
+    for item in subscriptions:
+        progression = item.get("progression") if isinstance(item.get("progression"), dict) else {}
+        pending_event_id = int(progression.get("pending_event_id") or 0)
+        if pending_event_id <= 0 or pending_event_id in pending_events:
+            continue
+        event = repository.get_progression_event(pending_event_id)
+        if isinstance(event, dict) and event:
+            pending_events[pending_event_id] = event
+    return pending_events
+
+
+def _build_status_summary_text(
+    user: Dict[str, Any],
+    subscriptions: List[Dict[str, Any]],
+    source_names: Dict[int, str],
+    pending_events: Dict[int, Dict[str, Any]],
+) -> str:
+    if not subscriptions:
+        return "当前没有跟单策略。"
+
+    total_count = len(subscriptions)
+    active_count = len([item for item in subscriptions if str(item.get("status") or "") == "active"])
+    pending_items = []
+    inactive_threshold_count = 0
+    total_realized_net_profit = 0.0
+    total_pending_stake = 0.0
+    for item in subscriptions:
+        progression = item.get("progression") if isinstance(item.get("progression"), dict) else {}
+        financial = item.get("financial") if isinstance(item.get("financial"), dict) else {}
+        if progression.get("pending_event_id") and str(progression.get("pending_status") or "") == "placed":
+            pending_items.append(item)
+            pending_event = pending_events.get(int(progression.get("pending_event_id") or 0)) or {}
+            total_pending_stake += round(float(pending_event.get("stake_amount") or 0), 2)
+        if str(financial.get("threshold_status") or "") in {"profit_target_hit", "loss_limit_hit"}:
+            inactive_threshold_count += 1
+        total_realized_net_profit += round(float(financial.get("net_profit") or 0), 2)
+
+    lines = [
+        "【当前跟单状态】",
+        "账号: %s" % str(user.get("username") or ""),
+        "策略总数: %s" % total_count,
+        "启用中: %s" % active_count,
+        "待结算: %s" % len(pending_items),
+        "本轮已实现净盈亏合计: %s" % _signed_money(total_realized_net_profit),
+        "待结算金额合计: %.2f" % round(total_pending_stake, 2),
+    ]
+    if inactive_threshold_count > 0:
+        lines.append("已触发止盈/止损: %s" % inactive_threshold_count)
+    if pending_items:
+        lines.append("待结算方案：")
+        for index, item in enumerate(pending_items[:5], start=1):
+            progression = item.get("progression") if isinstance(item.get("progression"), dict) else {}
+            financial = item.get("financial") if isinstance(item.get("financial"), dict) else {}
+            pending_event = pending_events.get(int(progression.get("pending_event_id") or 0)) or {}
+            source_name = source_names.get(int(item.get("source_id") or 0), "未命名方案")
+            lines.append(
+                "%s. %s | 期号 %s | 待结算 %.2f | 已实现 %s"
+                % (
+                    index,
+                    source_name,
+                    str(progression.get("pending_issue_no") or "--"),
+                    round(float(pending_event.get("stake_amount") or 0), 2),
+                    _signed_money(financial.get("net_profit")),
+                )
+            )
+        if len(pending_items) > 5:
+            lines.append("更多方案请发送 /status <方案名> 查看。")
+    else:
+        lines.append("当前没有待结算记录。")
+    return "\n".join(lines)
+
+
+def _build_status_detail_text(item: Dict[str, Any], source_name: str, pending_event: Optional[Dict[str, Any]] = None) -> str:
+    progression = item.get("progression") if isinstance(item.get("progression"), dict) else {}
+    financial = item.get("financial") if isinstance(item.get("financial"), dict) else {}
+    lines = [
+        "【当前方案状态】",
+        "方案: %s" % source_name,
+        "状态: %s" % str(item.get("status") or "--"),
+        "当前手数: %s" % int(progression.get("current_step") or 1),
+        "本轮已实现净盈亏: %s" % _signed_money(financial.get("net_profit")),
+        "累计盈利: %.2f" % round(float(financial.get("realized_profit") or 0), 2),
+        "累计亏损: %.2f" % round(float(financial.get("realized_loss") or 0), 2),
+    ]
+    if progression.get("last_result_type"):
+        lines.append("最近结果: %s" % _progression_result_text(progression.get("last_result_type")))
+    if progression.get("pending_event_id"):
+        lines.append("待结算期号: %s" % str(progression.get("pending_issue_no") or "--"))
+        lines.append("待结算状态: %s" % str(progression.get("pending_status") or "pending"))
+        lines.append("当前待结算金额: %.2f" % round(float((pending_event or {}).get("stake_amount") or 0), 2))
+    else:
+        lines.append("待结算状态: 无")
+
+    threshold_status = str(financial.get("threshold_status") or "")
+    if threshold_status == "profit_target_hit":
+        lines.append("风控状态: 已触发止盈")
+    elif threshold_status == "loss_limit_hit":
+        lines.append("风控状态: 已触发止损")
+    if str(financial.get("stopped_reason") or "").strip():
+        lines.append("停用原因: %s" % str(financial.get("stopped_reason") or "").strip())
+    if financial.get("last_settled_at"):
+        lines.append("最近结算时间: %s" % str(financial.get("last_settled_at") or ""))
+    if financial.get("baseline_reset_at"):
+        lines.append("最近重置时间: %s" % str(financial.get("baseline_reset_at") or ""))
+    return "\n".join(lines)
+
+
+def _resolve_default_profit_summary(
+    repository: Any,
+    *,
+    user_id: int,
+    reference_time: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    fallback: Optional[Dict[str, Any]] = None
+    for index, stat_date in enumerate(_default_stat_date_candidates(reference_time=reference_time)):
+        summary = repository.get_user_daily_profit_summary(user_id=int(user_id), stat_date=stat_date)
+        if index == 0:
+            fallback = summary
+        if int(summary.get("settled_event_count") or 0) > 0:
+            return summary
+    return fallback or repository.get_user_daily_profit_summary(
+        user_id=int(user_id),
+        stat_date=_default_stat_date_candidates(reference_time=reference_time)[0],
+    )
+
+
+def _resolve_default_plan_items(
+    repository: Any,
+    *,
+    user_id: int,
+    reference_time: Optional[datetime] = None,
+) -> Tuple[str, List[Dict[str, Any]]]:
+    fallback_stat_date = _default_stat_date_candidates(reference_time=reference_time)[0]
+    fallback_items: List[Dict[str, Any]] = []
+    for index, stat_date in enumerate(_default_stat_date_candidates(reference_time=reference_time)):
+        items = repository.list_user_daily_subscription_stats(user_id=int(user_id), stat_date=stat_date)
+        if index == 0:
+            fallback_stat_date = stat_date
+            fallback_items = items
+        if items:
+            return stat_date, items
+    return fallback_stat_date, fallback_items
+
+
 def handle_telegram_command(
     repository: Any,
     *,
@@ -256,7 +485,7 @@ def handle_telegram_command(
     command = parts[0].split("@", 1)[0].lower()
     args = parts[1:]
 
-    if command == "/start":
+    if command in {"/start", "/help"}:
         return _build_help_text()
 
     if command == "/bind":
@@ -275,32 +504,82 @@ def handle_telegram_command(
     user = _resolve_bound_user(repository, telegram_user_id=int(telegram_user_id))
 
     if command in {"/profit", "/profitall"}:
-        stat_date = _normalize_stat_date(args[0] if args else "", reference_time=reference_time)
-        summary = repository.get_user_daily_profit_summary(user_id=int(user["id"]), stat_date=stat_date)
+        if args:
+            stat_date = _normalize_stat_date(args[0], reference_time=reference_time)
+            summary = repository.get_user_daily_profit_summary(user_id=int(user["id"]), stat_date=stat_date)
+        else:
+            summary = _resolve_default_profit_summary(
+                repository,
+                user_id=int(user["id"]),
+                reference_time=reference_time,
+            )
         return _build_profit_summary_text(user, summary)
+
+    if command == "/status":
+        subscriptions = repository.list_subscriptions(user_id=int(user["id"]))
+        source_names = _resolve_subscription_source_names(repository, subscriptions)
+        pending_events = _resolve_pending_event_snapshots(repository, subscriptions)
+        if not args:
+            return _build_status_summary_text(user, subscriptions, source_names, pending_events)
+
+        plan_name = " ".join(args).strip()
+        matched = [
+            item
+            for item in subscriptions
+            if source_names.get(int(item.get("source_id") or 0), "未命名方案") == plan_name
+        ]
+        if len(matched) == 1:
+            item = matched[0]
+            progression = item.get("progression") if isinstance(item.get("progression"), dict) else {}
+            return _build_status_detail_text(
+                item,
+                source_names.get(int(item.get("source_id") or 0), "未命名方案"),
+                pending_events.get(int(progression.get("pending_event_id") or 0)),
+            )
+        if len(matched) > 1:
+            return "存在重名方案，请先发送 /status 查看待结算方案列表后确认名称。"
+        source_name_list = sorted(set(source_names.values()))
+        if not source_name_list:
+            return "当前没有跟单策略。"
+        return "\n".join(
+            [
+                "未找到对应方案，请确认方案名称。",
+                "可用方案：",
+                *["- %s" % name for name in source_name_list[:10]],
+            ]
+        )
 
     if command == "/plan":
         if not args:
-            stat_date = _normalize_stat_date("", reference_time=reference_time)
-            items = repository.list_user_daily_subscription_stats(user_id=int(user["id"]), stat_date=stat_date)
+            stat_date, items = _resolve_default_plan_items(
+                repository,
+                user_id=int(user["id"]),
+                reference_time=reference_time,
+            )
             return _build_plan_list_text(stat_date, items)
 
+        stat_date = ""
         plan_name = ""
         if len(args) == 1:
             try:
                 stat_date = _normalize_stat_date(args[0], reference_time=reference_time)
             except ValueError:
-                stat_date = _normalize_stat_date("", reference_time=reference_time)
                 plan_name = args[0]
         else:
             try:
                 stat_date = _normalize_stat_date(args[-1], reference_time=reference_time)
                 plan_name = " ".join(args[:-1]).strip()
             except ValueError:
-                stat_date = _normalize_stat_date("", reference_time=reference_time)
                 plan_name = " ".join(args).strip()
 
-        items = repository.list_user_daily_subscription_stats(user_id=int(user["id"]), stat_date=stat_date)
+        if stat_date:
+            items = repository.list_user_daily_subscription_stats(user_id=int(user["id"]), stat_date=stat_date)
+        else:
+            stat_date, items = _resolve_default_plan_items(
+                repository,
+                user_id=int(user["id"]),
+                reference_time=reference_time,
+            )
         if not plan_name:
             return _build_plan_list_text(stat_date, items)
 

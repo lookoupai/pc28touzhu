@@ -21,9 +21,10 @@
 ./pc28 down executor-001
 ./pc28 status executor-001
 ./pc28 logs executor-001
+./pc28 settlement
 ```
 
-不传 `executor-001` 时，默认管理 `platform + source-sync + alert + telegram-bot + telegram-report` 五个服务。
+不传 `executor-001` 时，默认管理 `platform + source-sync + auto-settlement + alert + telegram-bot + telegram-report` 六个服务。
 
 ## 手动安装
 
@@ -75,7 +76,15 @@ sudo systemctl enable --now pc28touzhu-source-sync.service
 
 `pc28touzhu-source-sync.service` 会在 `ExecStart` 中强制注入 `SOURCE_SYNC_ONCE=false`。默认会自动扫描“已被激活跟单使用的来源”，执行 `fetch -> normalize -> dispatch`。
 
-7. 启动收益查询 Bot：
+7. 启动 PC28 自动结算 worker：
+
+```bash
+sudo systemctl enable --now pc28touzhu-pc28-auto-settlement.service
+```
+
+`pc28touzhu-pc28-auto-settlement.service` 会在 `ExecStart` 中强制注入 `PC28_AUTO_SETTLEMENT_ONCE=false`。只要后台配置启用了自动结算，它就会持续拉取最近开奖并把 `placed` 状态的记录结算为 `hit/refund/miss`。
+
+8. 启动收益查询 Bot：
 
 ```bash
 sudo systemctl enable --now pc28touzhu-telegram-bot.service
@@ -83,7 +92,7 @@ sudo systemctl enable --now pc28touzhu-telegram-bot.service
 
 `pc28touzhu-telegram-bot.service` 会在 `ExecStart` 中强制注入 `TG_BOT_ONCE=false`。
 
-8. 启动日报排行榜推送：
+9. 启动日报排行榜推送：
 
 ```bash
 sudo systemctl enable --now pc28touzhu-telegram-report.service
@@ -98,6 +107,7 @@ sudo systemctl enable --now pc28touzhu-telegram-report.service
 ```bash
 journalctl -u pc28touzhu-platform.service -f
 journalctl -u pc28touzhu-source-sync.service -f
+journalctl -u pc28touzhu-pc28-auto-settlement.service -f
 journalctl -u pc28touzhu-telegram-executor@executor-001.service -f
 journalctl -u pc28touzhu-alert-notifier.service -f
 journalctl -u pc28touzhu-telegram-bot.service -f

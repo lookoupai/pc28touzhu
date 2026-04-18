@@ -22,7 +22,7 @@ from pc28touzhu.domain.subscription_strategy import (
 from pc28touzhu.executor.telethon_sender import TelethonMessageSender
 from pc28touzhu.services.dispatch_service import dispatch_signal as dispatch_signal_jobs
 from pc28touzhu.services.normalize_service import normalize_raw_item as normalize_raw_item_to_signals
-from pc28touzhu.services.pc28_draw_service import fetch_pc28_recent_draws
+from pc28touzhu.services.pc28_draw_service import fetch_pc28_recent_draws, fetch_pc28_recent_draws_deep
 from pc28touzhu.services.source_fetch_service import fetch_source_to_raw_item
 from pc28touzhu.services.telegram_account_gateway import TelethonAccountGateway
 from pc28touzhu.services.telegram_target_key import normalize_telegram_target_key
@@ -1127,29 +1127,61 @@ def _empty_batch_resolution_result() -> Dict[str, Any]:
     }
 
 
-def _collect_pending_pc28_progressions(repository: Any, *, user_id: int) -> list[Dict[str, Any]]:
-    subscriptions = repository.list_subscriptions(user_id=int(user_id))
+def _issue_sort_key(value: Any) -> tuple[int, str]:
+    text = str(value or "").strip()
+    if text.isdigit():
+        return (int(text), text)
+    return (0, text)
+
+
+def estimate_pc28_draw_fetch_limit(pending_entries: list[Dict[str, Any]], *, base_limit: int = 60) -> int:
+    normalized_base_limit = max(10, min(int(base_limit or 60), 2000))
+    issue_numbers = [str(((item.get("event") or {}).get("issue_no")) or "").strip() for item in pending_entries or []]
+    numeric_issues = [int(item) for item in issue_numbers if item.isdigit()]
+    if not numeric_issues:
+        return max(normalized_base_limit, len(issue_numbers) + 10)
+    issue_span = max(numeric_issues) - min(numeric_issues) + 1
+    return max(normalized_base_limit, issue_span + 10, len(numeric_issues) + 10)
+
+
+def collect_pending_pc28_progressions(repository: Any, *, user_id: int) -> list[Dict[str, Any]]:
+    open_events = repository.list_open_progression_events(user_id=int(user_id), statuses=["placed"], limit=5000)
+    subscription_cache: Dict[int, Dict[str, Any]] = {}
+    signal_cache: Dict[int, Dict[str, Any]] = {}
     pending_entries = []
-    for item in subscriptions:
-        progression = item.get("progression") if isinstance(item.get("progression"), dict) else {}
-        if not progression or str(progression.get("pending_status") or "") != "placed":
+    for event in open_events:
+        signal_id = int(event.get("signal_id") or 0)
+        if signal_id <= 0:
             continue
-        pending_event_id = progression.get("pending_event_id")
-        if pending_event_id is None:
-            continue
-        event = repository.get_progression_event(int(pending_event_id))
-        if not event:
-            continue
-        signal = repository.get_signal(int(event.get("signal_id") or 0))
+        signal = signal_cache.get(signal_id)
+        if signal is None:
+            signal = repository.get_signal(signal_id) or {}
+            signal_cache[signal_id] = signal
         if not signal or str(signal.get("lottery_type") or "").strip().lower() != "pc28":
+            continue
+        subscription_id = int(event.get("subscription_id") or 0)
+        if subscription_id <= 0:
+            continue
+        subscription = subscription_cache.get(subscription_id)
+        if subscription is None:
+            subscription = repository.get_subscription(subscription_id) or {}
+            subscription_cache[subscription_id] = subscription
+        if not subscription or int(subscription.get("user_id") or 0) != int(user_id):
             continue
         pending_entries.append(
             {
-                "subscription": item,
+                "subscription": subscription,
                 "event": event,
                 "signal": signal,
             }
         )
+    pending_entries.sort(
+        key=lambda item: (
+            int(item["subscription"]["id"]),
+            _issue_sort_key((item.get("event") or {}).get("issue_no")),
+            int((item.get("event") or {}).get("id") or 0),
+        )
+    )
     return pending_entries
 
 
@@ -1160,7 +1192,7 @@ def resolve_pending_pc28_progressions_from_draws(
     draw_items: list[Dict[str, Any]],
     draw_source: str = "",
 ) -> Dict[str, Any]:
-    pending_entries = _collect_pending_pc28_progressions(repository, user_id=int(user_id))
+    pending_entries = collect_pending_pc28_progressions(repository, user_id=int(user_id))
     if not pending_entries:
         result = _empty_batch_resolution_result()
         result["draw_source"] = str(draw_source or "")
@@ -1232,11 +1264,13 @@ def resolve_pending_pc28_progressions_from_draws(
 
 def resolve_pending_subscription_progressions(repository: Any, *, user_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     normalized_user_id = _to_positive_int(user_id, "user_id")
-    draw_limit = max(10, min(int(payload.get("draw_limit") or 60), 100))
-    pending_entries = _collect_pending_pc28_progressions(repository, user_id=normalized_user_id)
+    draw_limit = max(10, min(int(payload.get("draw_limit") or 60), 2000))
+    pending_entries = collect_pending_pc28_progressions(repository, user_id=normalized_user_id)
     if not pending_entries:
         return _empty_batch_resolution_result()
-    fetch_result = fetch_pc28_recent_draws(limit=max(draw_limit, len(pending_entries) * 2))
+    fetch_result = fetch_pc28_recent_draws_deep(
+        limit=estimate_pc28_draw_fetch_limit(pending_entries, base_limit=draw_limit)
+    )
     return resolve_pending_pc28_progressions_from_draws(
         repository,
         user_id=normalized_user_id,

@@ -26,6 +26,7 @@ PC28 投注信号平台与 Telegram 执行器。
   - 本地最小验证：`./pc28 api`、`./pc28 fake`、`./pc28 seed`
   - 真实 Telegram 执行：`./pc28 executor executor-001`
   - 来源自动同步：`./pc28 source-sync`
+  - PC28 自动结算：`./pc28 settlement`
   - 收益查询 Bot：`./pc28 bot`
   - 日报排行榜推送：`./pc28 report`
   - `systemd` 托管：`./pc28 up executor-001`
@@ -42,6 +43,7 @@ pc28                统一命令入口
 fake_executor.py    模拟执行器
 telegram_executor.py 真实 Telegram 执行器
 platform_alert_notifier.py 告警通知 worker
+src/pc28touzhu/pc28_auto_settlement_worker.py PC28 自动结算 worker
 telegram_profit_bot.py Telegram 收益查询 Bot worker
 telegram_daily_reporter.py Telegram 日报推送 worker
 seed_demo.py        演示数据注入脚本
@@ -124,6 +126,7 @@ TG_REPORT_TIMEZONE=Asia/Shanghai
 ./pc28 executor executor-001
 ./pc28 alert
 ./pc28 source-sync
+./pc28 settlement
 ./pc28 bot
 ./pc28 report
 ./pc28 test
@@ -142,8 +145,7 @@ TG_REPORT_TIMEZONE=Asia/Shanghai
 
 说明：
 
-- 不传 `executor_id` 时，仅管理 `platform + alert + telegram-bot + telegram-report`
-- 不传 `executor_id` 时，默认管理 `platform + source-sync + alert + telegram-bot + telegram-report`
+- 不传 `executor_id` 时，默认管理 `platform + source-sync + auto-settlement + alert + telegram-bot + telegram-report`
 - 传入 `executor_id` 时，会额外管理对应执行器实例
 - `./pc28 executor executor-001` 会以常驻模式运行真实执行器
 

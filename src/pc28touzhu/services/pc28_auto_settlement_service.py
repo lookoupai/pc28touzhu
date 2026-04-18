@@ -3,17 +3,16 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pc28touzhu.services.pc28_draw_service import Fetcher, fetch_pc28_recent_draws
-from pc28touzhu.services.platform_service import resolve_pending_pc28_progressions_from_draws
+from pc28touzhu.services.pc28_draw_service import Fetcher, fetch_pc28_recent_draws_deep
+from pc28touzhu.services.platform_service import (
+    collect_pending_pc28_progressions,
+    estimate_pc28_draw_fetch_limit,
+    resolve_pending_pc28_progressions_from_draws,
+)
 
 
-def _pending_subscription_count(repository: Any, *, user_id: int) -> int:
-    count = 0
-    for item in repository.list_subscriptions(user_id=int(user_id)):
-        progression = item.get("progression") if isinstance(item.get("progression"), dict) else {}
-        if progression and progression.get("pending_event_id") and str(progression.get("pending_status") or "") == "placed":
-            count += 1
-    return count
+def _pending_progression_entries(repository: Any, *, user_id: int) -> List[Dict[str, Any]]:
+    return collect_pending_pc28_progressions(repository, user_id=int(user_id))
 
 
 def run_pc28_auto_settlement_cycle(
@@ -25,15 +24,18 @@ def run_pc28_auto_settlement_cycle(
     users = repository.list_users() if hasattr(repository, "list_users") else []
     pending_users: List[Dict[str, Any]] = []
     pending_count = 0
+    pending_entries_all: List[Dict[str, Any]] = []
     for user in users:
         user_id = int(user.get("id") or 0)
         if user_id <= 0:
             continue
-        user_pending_count = _pending_subscription_count(repository, user_id=user_id)
+        user_pending_entries = _pending_progression_entries(repository, user_id=user_id)
+        user_pending_count = len(user_pending_entries)
         if user_pending_count <= 0:
             continue
         pending_users.append({"id": user_id, "pending_count": user_pending_count, "username": str(user.get("username") or "")})
         pending_count += user_pending_count
+        pending_entries_all.extend(user_pending_entries)
 
     if pending_count <= 0:
         return {
@@ -52,7 +54,10 @@ def run_pc28_auto_settlement_cycle(
             "draw_source": "",
         }
 
-    fetch_result = fetch_pc28_recent_draws(limit=max(10, int(draw_limit or 60)), fetcher=fetcher)
+    fetch_result = fetch_pc28_recent_draws_deep(
+        limit=estimate_pc28_draw_fetch_limit(pending_entries_all, base_limit=max(10, int(draw_limit or 60))),
+        fetcher=fetcher,
+    )
     draw_items = list(fetch_result.get("items") or [])
     draw_source = str(fetch_result.get("source") or "")
     results = []

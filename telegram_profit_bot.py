@@ -4,7 +4,7 @@ import time
 
 from pc28touzhu.config import get_runtime_config
 from pc28touzhu.main import build_repository
-from pc28touzhu.services.telegram_bot_service import process_telegram_bot_cycle
+from pc28touzhu.services.telegram_bot_service import process_telegram_bot_cycle, sync_telegram_bot_commands
 from pc28touzhu.services.telegram_runtime_settings_service import get_effective_telegram_runtime_settings
 from pc28touzhu.telegram_bot_sender import TelegramBotSender
 
@@ -15,6 +15,7 @@ def main() -> int:
     repo = build_repository()
     client = None
     current_token = ""
+    commands_synced_token = ""
 
     while True:
         resolved = get_effective_telegram_runtime_settings(repo, runtime_config=config)
@@ -34,6 +35,9 @@ def main() -> int:
         if client is None or current_token != bot["bot_token"]:
             client = TelegramBotSender(bot_token=bot["bot_token"])
             current_token = bot["bot_token"]
+        if commands_synced_token != current_token:
+            sync_telegram_bot_commands(client)
+            commands_synced_token = current_token
 
         result = process_telegram_bot_cycle(
             repo,

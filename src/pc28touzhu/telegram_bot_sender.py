@@ -78,3 +78,31 @@ class TelegramBotSender:
         )
         items = result.get("result") or []
         return [dict(item) for item in items if isinstance(item, dict)]
+
+    def set_my_commands(
+        self,
+        commands: List[Dict[str, Any]],
+        *,
+        scope: Optional[Dict[str, Any]] = None,
+        language_code: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        normalized_commands = []
+        for item in commands or []:
+            if not isinstance(item, dict):
+                continue
+            command = str(item.get("command") or "").strip()
+            description = str(item.get("description") or "").strip()
+            if not command or not description:
+                continue
+            normalized_commands.append({"command": command, "description": description})
+        if not normalized_commands:
+            raise ValueError("commands 不能为空")
+
+        payload: Dict[str, Any] = {"commands": normalized_commands}
+        if isinstance(scope, dict) and scope:
+            payload["scope"] = scope
+        if language_code is not None and str(language_code).strip():
+            payload["language_code"] = str(language_code).strip()
+
+        result = self._request("setMyCommands", payload=payload, timeout=10)
+        return {"ok": bool(result.get("result"))}

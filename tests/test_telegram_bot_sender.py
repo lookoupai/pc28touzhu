@@ -93,6 +93,30 @@ class TelegramBotSenderTests(unittest.TestCase):
         self.assertEqual(captured["body"]["limit"], 20)
         self.assertEqual(result[0]["update_id"], 99)
 
+    def test_set_my_commands_calls_bot_api(self):
+        captured = {}
+
+        def fake_urlopen(request, timeout=0):
+            captured["url"] = request.full_url
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            captured["timeout"] = timeout
+            return FakeResponse({"ok": True, "result": True})
+
+        with patch("urllib.request.urlopen", fake_urlopen):
+            sender = TelegramBotSender(bot_token="bot-token")
+            result = sender.set_my_commands(
+                [
+                    {"command": "start", "description": "查看帮助"},
+                    {"command": "profit", "description": "查询汇总"},
+                ],
+                scope={"type": "all_private_chats"},
+            )
+
+        self.assertIn("/botbot-token/setMyCommands", captured["url"])
+        self.assertEqual(captured["body"]["commands"][0]["command"], "start")
+        self.assertEqual(captured["body"]["scope"]["type"], "all_private_chats")
+        self.assertTrue(result["ok"])
+
 
 if __name__ == "__main__":
     unittest.main()

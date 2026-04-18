@@ -110,11 +110,27 @@ def _fetch_jnd_recent_draws(limit: int, *, fetcher: Optional[Fetcher]) -> list[d
 
 
 def _fetch_feiji_recent_draws(limit: int, *, fetcher: Optional[Fetcher]) -> list[dict]:
-    payload = _safe_fetch(fetcher, PC28_FEIJI_RECENT_URL, {"limit": limit, "offset": 0})
+    return _fetch_feiji_recent_draws_page(limit, offset=0, fetcher=fetcher)
+
+
+def _fetch_feiji_recent_draws_page(limit: int, *, offset: int = 0, fetcher: Optional[Fetcher]) -> list[dict]:
+    payload = _safe_fetch(fetcher, PC28_FEIJI_RECENT_URL, {"limit": limit, "offset": max(0, int(offset or 0))})
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, list):
         raise ValueError("Feiji28 开奖接口返回异常")
     return [draw for draw in (_normalize_draw(item, source="feiji") for item in data) if draw]
+
+
+def _dedupe_draws(items: list[dict]) -> list[dict]:
+    deduped = []
+    seen: set[str] = set()
+    for item in items or []:
+        issue_no = str((item or {}).get("issue_no") or "").strip()
+        if not issue_no or issue_no in seen:
+            continue
+        seen.add(issue_no)
+        deduped.append(item)
+    return deduped
 
 
 def fetch_pc28_recent_draws(limit: int = 50, *, fetcher: Optional[Fetcher] = None) -> Dict[str, Any]:
@@ -137,3 +153,51 @@ def fetch_pc28_recent_draws(limit: int = 50, *, fetcher: Optional[Fetcher] = Non
         except Exception as exc:
             errors.append("%s: %s" % (source, exc))
     raise RuntimeError("PC28 最近开奖接口全部不可用: " + " | ".join(errors))
+
+
+def fetch_pc28_recent_draws_deep(limit: int = 200, *, fetcher: Optional[Fetcher] = None) -> Dict[str, Any]:
+    normalized_limit = max(1, min(int(limit or 200), 2000))
+    errors = []
+    best_result: Optional[Dict[str, Any]] = None
+
+    for source in PC28_RECENT_SOURCE_ORDER or ("official", "jnd", "feiji"):
+        try:
+            if source == "official":
+                items = _fetch_official_recent_draws(normalized_limit, fetcher=fetcher)
+            elif source == "jnd":
+                items = _fetch_jnd_recent_draws(normalized_limit, fetcher=fetcher)
+            elif source == "feiji":
+                items = []
+                offset = 0
+                while len(items) < normalized_limit:
+                    batch_limit = min(200, normalized_limit - len(items))
+                    batch = _fetch_feiji_recent_draws_page(batch_limit, offset=offset, fetcher=fetcher)
+                    if not batch:
+                        break
+                    items.extend(batch)
+                    deduped = _dedupe_draws(items)
+                    if len(deduped) >= normalized_limit or len(batch) < batch_limit:
+                        items = deduped
+                        break
+                    items = deduped
+                    offset += max(1, len(batch) - 1)
+            else:
+                errors.append("%s: 未知数据源" % source)
+                continue
+
+            items = _dedupe_draws(items)
+            if not items:
+                errors.append("%s: 返回空数据" % source)
+                continue
+            current = {"items": items[:normalized_limit], "source": source}
+            if len(current["items"]) >= normalized_limit:
+                return current
+            if best_result is None or len(current["items"]) > len(best_result["items"]):
+                best_result = current
+            errors.append("%s: 仅返回 %s 条开奖数据" % (source, len(current["items"])))
+        except Exception as exc:
+            errors.append("%s: %s" % (source, exc))
+
+    if best_result:
+        return best_result
+    raise RuntimeError("PC28 历史开奖接口全部不可用: " + " | ".join(errors))

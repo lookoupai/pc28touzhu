@@ -2421,6 +2421,41 @@ class DatabaseRepository:
         )
         return self._serialize_progression_event_row(row) if row else None
 
+    def list_open_progression_events(
+        self,
+        *,
+        user_id: Optional[int] = None,
+        subscription_id: Optional[int] = None,
+        statuses: Optional[list[str]] = None,
+        limit: int = 5000,
+    ) -> list[Dict[str, Any]]:
+        normalized_statuses = [str(item or "").strip() for item in (statuses or ["pending", "placed"]) if str(item or "").strip()]
+        where_clauses = []
+        params: list[Any] = []
+        if user_id is not None:
+            where_clauses.append("user_id = ?")
+            params.append(int(user_id))
+        if subscription_id is not None:
+            where_clauses.append("subscription_id = ?")
+            params.append(int(subscription_id))
+        if normalized_statuses:
+            placeholders = ",".join(["?"] * len(normalized_statuses))
+            where_clauses.append("status IN (%s)" % placeholders)
+            params.extend(normalized_statuses)
+        where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+        rows = self._fetch_all(
+            """
+            SELECT *
+            FROM subscription_progression_events
+            %s
+            ORDER BY CAST(issue_no AS INTEGER) ASC, id ASC
+            LIMIT ?
+            """
+            % where_sql,
+            tuple(params + [max(1, min(int(limit or 5000), 10000))]),
+        )
+        return [self._serialize_progression_event_row(row) for row in rows]
+
     def create_progression_event_record(
         self,
         *,
