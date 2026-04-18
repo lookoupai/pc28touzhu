@@ -142,6 +142,14 @@ class TelegramReportConfig:
 
 
 @dataclass(frozen=True)
+class PC28AutoSettlementConfig:
+    enabled: bool
+    interval_seconds: int
+    once: bool
+    draw_limit: int
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     platform: PlatformConfig
     executor: ExecutorConfig
@@ -149,6 +157,7 @@ class RuntimeConfig:
     alert_notifier: AlertNotifierConfig
     telegram_bot: TelegramBotConfig
     telegram_report: TelegramReportConfig
+    pc28_auto_settlement: PC28AutoSettlementConfig
 
 
 def get_platform_config() -> PlatformConfig:
@@ -234,6 +243,15 @@ def get_telegram_report_config() -> TelegramReportConfig:
     )
 
 
+def get_pc28_auto_settlement_config() -> PC28AutoSettlementConfig:
+    return PC28AutoSettlementConfig(
+        enabled=_get_bool("PC28_AUTO_SETTLEMENT_ENABLED", False),
+        interval_seconds=max(5, _get_int("PC28_AUTO_SETTLEMENT_INTERVAL_SECONDS", 30)),
+        once=_get_bool("PC28_AUTO_SETTLEMENT_ONCE", True),
+        draw_limit=max(10, _get_int("PC28_AUTO_SETTLEMENT_DRAW_LIMIT", 60)),
+    )
+
+
 def get_runtime_config(env_path: str | os.PathLike[str] | None = None) -> RuntimeConfig:
     load_env_file(env_path)
     if env_path:
@@ -249,4 +267,5 @@ def get_runtime_config(env_path: str | os.PathLike[str] | None = None) -> Runtim
         alert_notifier=get_alert_notifier_config(),
         telegram_bot=get_telegram_bot_config(),
         telegram_report=get_telegram_report_config(),
+        pc28_auto_settlement=get_pc28_auto_settlement_config(),
     )

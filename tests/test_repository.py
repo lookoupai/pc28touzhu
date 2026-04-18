@@ -914,6 +914,98 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(settled["financial"]["realized_profit"], 53.3)
         self.assertEqual(settled["financial"]["net_profit"], 53.3)
 
+    def test_progression_event_settlement_prefers_subscription_fixed_rule(self):
+        user_id = self.repo.create_user("sub-fixed-settlement-rule-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-fixed-settlement-rule",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={
+                "play_filter": {"mode": "all", "selected_keys": []},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                "settlement_policy": {
+                    "rule_source": "subscription_fixed",
+                    "settlement_rule_id": "pc28_high_regular",
+                    "fallback_profit_ratio": 1.0,
+                },
+                "risk_control": {"enabled": False, "profit_target": 0, "loss_limit": 0},
+                "dispatch": {"expire_after_seconds": 120},
+            },
+        )
+        signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407015",
+            bet_type="big_small",
+            bet_value="大",
+            normalized_payload={"profit_rule_id": "pc28_netdisk", "odds_profile": "regular"},
+        )
+        event = self.repo.create_progression_event_record(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            signal_id=signal["id"],
+            issue_no="20260407015",
+            progression_step=1,
+            stake_amount=10,
+            base_stake=10,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            status="placed",
+        )
+
+        settled = self.repo.settle_progression_event(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            result_type="hit",
+            progression_event_id=event["id"],
+        )
+
+        self.assertEqual(settled["financial"]["realized_profit"], 18.46)
+        self.assertEqual(settled["financial"]["net_profit"], 18.46)
+        self.assertEqual(settled["event"]["settlement_rule_id"], "pc28_high_regular")
+        self.assertEqual(settled["event"]["profit_delta"], 18.46)
+        self.assertEqual(settled["event"]["loss_delta"], 0)
+        self.assertEqual(settled["event"]["net_delta"], 18.46)
+        self.assertEqual(settled["event"]["settlement_snapshot"]["settlement_rule_id"], "pc28_high_regular")
+        self.assertEqual(settled["event"]["settlement_snapshot"]["rule_source"], "subscription_fixed")
+        self.assertEqual(settled["event"]["result_context"]["result_type"], "hit")
+
+    def test_subscription_serialization_projects_strategy_v1_and_v2(self):
+        user_id = self.repo.create_user("sub-strategy-v2-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-strategy-v2",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={
+                "play_filter": {"mode": "selected", "selected_keys": ["big_small:大"]},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 12},
+                "settlement_policy": {
+                    "rule_source": "subscription_fixed",
+                    "settlement_rule_id": "pc28_high_regular",
+                    "fallback_profit_ratio": 1.2,
+                },
+                "risk_control": {"enabled": True, "profit_target": 66, "loss_limit": 33},
+                "dispatch": {"expire_after_seconds": 90},
+            },
+        )
+
+        self.assertEqual(subscription["strategy_schema_version"], 2)
+        self.assertEqual(subscription["strategy"]["bet_filter"]["selected_keys"], ["big_small:大"])
+        self.assertEqual(subscription["strategy"]["stake_amount"], 12)
+        self.assertEqual(subscription["strategy"]["risk_control"]["win_profit_ratio"], 1.2)
+        self.assertEqual(subscription["strategy_v2"]["staking_policy"]["mode"], "fixed")
+        self.assertEqual(subscription["strategy_v2"]["dispatch"]["expire_after_seconds"], 90)
+
     def test_user_telegram_binding_token_flow(self):
         user = self.repo.create_user_record(username="binding-user", email="", role="user", status="active")
         token_state = self.repo.set_user_telegram_bind_token(
@@ -1714,6 +1806,87 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(result["candidate_count"], 1)
         self.assertEqual(result["created_count"], 1)
         self.assertEqual(result["jobs"][0]["planned_message_text"], "单12")
+
+    def test_dispatch_signal_freezes_settlement_rule_on_progression_event(self):
+        user_id = self.repo.create_user("dispatch-settlement-freeze-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="dispatch-settlement-freeze",
+        )["id"]
+        account_id = self.repo.create_telegram_account_record(
+            user_id=user_id,
+            label="执行号",
+            phone="+12017771237",
+            session_path="/data/dispatch-settlement-freeze/main",
+            status="active",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={
+                "play_filter": {"mode": "all", "selected_keys": []},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                "settlement_policy": {
+                    "rule_source": "subscription_fixed",
+                    "settlement_rule_id": "pc28_high_regular",
+                    "fallback_profit_ratio": 1.0,
+                },
+                "risk_control": {"enabled": False, "profit_target": 0, "loss_limit": 0},
+                "dispatch": {"expire_after_seconds": 120},
+            },
+        )
+        self.repo.create_delivery_target_record(
+            user_id=user_id,
+            telegram_account_id=account_id,
+            executor_type="telegram_group",
+            target_key="-1004458",
+            target_name="冻结结算群",
+            status="active",
+        )
+        signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407015",
+            bet_type="big_small",
+            bet_value="大",
+            normalized_payload={"profit_rule_id": "pc28_netdisk", "odds_profile": "regular"},
+        )
+
+        result = dispatch_signal(self.repo, signal["id"])
+
+        event = self.repo.get_progression_event(result["jobs"][0]["progression_event_id"])
+        self.assertEqual(event["settlement_rule_id"], "pc28_high_regular")
+        self.assertEqual(event["settlement_snapshot"]["rule_source"], "subscription_fixed")
+
+        self.repo.update_subscription_record(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            source_id=source_id,
+            strategy={
+                "play_filter": {"mode": "all", "selected_keys": []},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                "settlement_policy": {
+                    "rule_source": "subscription_fixed",
+                    "settlement_rule_id": "pc28_netdisk_regular",
+                    "fallback_profit_ratio": 1.0,
+                },
+                "risk_control": {"enabled": False, "profit_target": 0, "loss_limit": 0},
+                "dispatch": {"expire_after_seconds": 120},
+            },
+            status="active",
+        )
+        self.repo.update_progression_event_status(progression_event_id=event["id"], status="placed")
+
+        settled = self.repo.settle_progression_event(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            result_type="hit",
+            progression_event_id=event["id"],
+        )
+
+        self.assertEqual(settled["event"]["settlement_rule_id"], "pc28_high_regular")
+        self.assertEqual(settled["financial"]["realized_profit"], 18.46)
 
     def test_dispatch_candidates_excludes_inactive_account(self):
         user_id = self.repo.create_user("dispatch-inactive-user")

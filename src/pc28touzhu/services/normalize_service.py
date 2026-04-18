@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+from pc28touzhu.domain.subscription_strategy import enrich_signal_payload_source_hints
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -92,6 +94,7 @@ def normalize_raw_item(repository: Any, raw_item_id: int) -> Dict[str, Any]:
         ):
             if key in entry and key not in normalized_payload:
                 normalized_payload[key] = entry[key]
+        normalized_payload = enrich_signal_payload_source_hints(normalized_payload)
 
         created_items.append(
             repository.create_signal_record(

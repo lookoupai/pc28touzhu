@@ -25,6 +25,7 @@
     const messageTemplateForm = document.getElementById("messageTemplateForm");
     const subscriptionForm = document.getElementById("subscriptionForm");
     const toggleAutobetBtn = document.getElementById("toggleAutobetBtn");
+    const batchResolveSubscriptionsBtn = document.getElementById("batchResolveSubscriptionsBtn");
     const workspaceLinks = Array.from(document.querySelectorAll(".workspace-link"));
     const cancelAccountEditBtn = document.getElementById("cancelAccountEditBtn");
     const cancelTargetEditBtn = document.getElementById("cancelTargetEditBtn");
@@ -45,6 +46,8 @@
     const subscriptionBetFilterSelectionSummary = document.getElementById("subscriptionBetFilterSelectionSummary");
     const subscriptionStrategyModeSelect = document.getElementById("subscriptionStrategyModeSelect");
     const subscriptionStrategyModeHint = document.getElementById("subscriptionStrategyModeHint");
+    const subscriptionSettlementRuleSourceSelect = document.getElementById("subscriptionSettlementRuleSourceSelect");
+    const subscriptionSettlementRuleHint = document.getElementById("subscriptionSettlementRuleHint");
     const subscriptionRiskControlEnabledCheckbox = document.getElementById("subscriptionRiskControlEnabledCheckbox");
     const toggleSubscriptionAdvancedBtn = document.getElementById("toggleSubscriptionAdvancedBtn");
     const subscriptionAdvancedFields = document.getElementById("subscriptionAdvancedFields");
@@ -68,6 +71,14 @@
         big_small: ["big_small:大", "big_small:小"],
         odd_even: ["odd_even:单", "odd_even:双"],
         combo: ["combo:大单", "combo:大双", "combo:小单", "combo:小双"],
+    };
+    const SUBSCRIPTION_SETTLEMENT_RULE_LABELS = {
+        follow_signal: "跟随来源规则",
+        subscription_fixed: "固定规则",
+        pc28_netdisk_regular: "网盘常规",
+        pc28_netdisk_abc: "网盘 ABC",
+        pc28_high_regular: "高赔常规",
+        pc28_high_abc: "高赔 ABC",
     };
     const templatePreviewPayload = document.getElementById("templatePreviewPayload");
     const templatePreviewOutput = document.getElementById("templatePreviewOutput");
@@ -573,6 +584,35 @@
             throw error;
         }
         return payload;
+    }
+
+    function settlementStatusMessage(item, successPrefix) {
+        const thresholdStatus = item && item.financial ? String(item.financial.threshold_status || "") : "";
+        if (thresholdStatus === "profit_target_hit") {
+            return (successPrefix || "当前待结算记录已处理，") + "策略达到止盈阈值并自动停用。";
+        }
+        if (thresholdStatus === "loss_limit_hit") {
+            return (successPrefix || "当前待结算记录已处理，") + "策略达到止损阈值并自动停用。";
+        }
+        return (successPrefix || "当前待结算记录已处理。");
+    }
+
+    function pendingPlacedSubscriptionCount() {
+        return state.subscriptions.filter(function (item) {
+            const progression = item && item.progression && typeof item.progression === "object" ? item.progression : null;
+            return Boolean(progression && progression.pending_event_id && String(progression.pending_status || "") === "placed");
+        }).length;
+    }
+
+    function syncBatchResolveButtonState() {
+        if (!(batchResolveSubscriptionsBtn instanceof HTMLElement)) {
+            return;
+        }
+        const pendingCount = pendingPlacedSubscriptionCount();
+        batchResolveSubscriptionsBtn.toggleAttribute("disabled", pendingCount <= 0);
+        batchResolveSubscriptionsBtn.textContent = pendingCount > 0
+            ? ("批量自动结算待结算记录（" + pendingCount + "）")
+            : "当前没有待结算记录";
     }
 
     async function loadCurrentUser() {
@@ -1499,6 +1539,17 @@
         return String(value || "all").trim() === "selected" ? "selected" : "all";
     }
 
+    function normalizeSubscriptionSettlementRuleSource(value) {
+        return String(value || "follow_signal").trim() === "subscription_fixed" ? "subscription_fixed" : "follow_signal";
+    }
+
+    function currentSubscriptionSettlementRuleSource() {
+        if (!(subscriptionSettlementRuleSourceSelect instanceof HTMLSelectElement)) {
+            return "follow_signal";
+        }
+        return normalizeSubscriptionSettlementRuleSource(subscriptionSettlementRuleSourceSelect.value);
+    }
+
     function currentSubscriptionBetFilterMode() {
         if (!(subscriptionBetFilterModeSelect instanceof HTMLSelectElement)) {
             return "all";
@@ -1732,6 +1783,35 @@
         }
     }
 
+    function syncSubscriptionSettlementUI() {
+        if (!(subscriptionForm instanceof HTMLFormElement)) {
+            return;
+        }
+        const ruleSource = currentSubscriptionSettlementRuleSource();
+        const isFixedRule = ruleSource === "subscription_fixed";
+        Array.from(subscriptionForm.querySelectorAll(".subscription-settlement-fixed-field")).forEach(function (field) {
+            if (field instanceof HTMLElement) {
+                field.hidden = !isFixedRule;
+            }
+        });
+        if (subscriptionForm.elements.settlement_rule_id instanceof HTMLSelectElement) {
+            subscriptionForm.elements.settlement_rule_id.disabled = !isFixedRule;
+            if (!String(subscriptionForm.elements.settlement_rule_id.value || "").trim()) {
+                subscriptionForm.elements.settlement_rule_id.value = "pc28_netdisk_regular";
+            }
+        }
+        if (subscriptionForm.elements.fallback_profit_ratio instanceof HTMLInputElement) {
+            if (!String(subscriptionForm.elements.fallback_profit_ratio.value || "").trim()) {
+                subscriptionForm.elements.fallback_profit_ratio.value = "1";
+            }
+        }
+        if (subscriptionSettlementRuleHint instanceof HTMLElement) {
+            subscriptionSettlementRuleHint.textContent = isFixedRule
+                ? "当前会强制按你指定的规则记收益盈亏，不再跟随来源信号里的结算口径。"
+                : "默认跟随来源信号里的结算规则。只有当你明确知道自己要统一按哪套口径记账时，才建议固定指定。";
+        }
+    }
+
     function syncSubscriptionRiskControlUI() {
         if (!(subscriptionForm instanceof HTMLFormElement)) {
             return;
@@ -1744,15 +1824,12 @@
             }
             field.hidden = !enabled;
         });
-        ["profit_target", "loss_limit", "win_profit_ratio"].forEach(function (name) {
+        ["profit_target", "loss_limit"].forEach(function (name) {
             const input = subscriptionForm.elements[name];
             if (!(input instanceof HTMLInputElement)) {
                 return;
             }
             input.disabled = !enabled;
-            if (enabled && name === "win_profit_ratio" && !String(input.value || "").trim()) {
-                input.value = "1";
-            }
         });
     }
 
@@ -1788,15 +1865,22 @@
         subscriptionForm.elements.max_steps.value = "3";
         subscriptionForm.elements.refund_action.value = "hold";
         subscriptionForm.elements.cap_action.value = "reset";
+        if (subscriptionSettlementRuleSourceSelect instanceof HTMLSelectElement) {
+            subscriptionSettlementRuleSourceSelect.value = "follow_signal";
+        }
+        if (subscriptionForm.elements.settlement_rule_id instanceof HTMLSelectElement) {
+            subscriptionForm.elements.settlement_rule_id.value = "pc28_netdisk_regular";
+        }
+        subscriptionForm.elements.fallback_profit_ratio.value = "1";
         if (subscriptionRiskControlEnabledCheckbox instanceof HTMLInputElement) {
             subscriptionRiskControlEnabledCheckbox.checked = false;
         }
         subscriptionForm.elements.profit_target.value = "";
         subscriptionForm.elements.loss_limit.value = "";
-        subscriptionForm.elements.win_profit_ratio.value = "1";
         setSubscriptionAdvancedVisible(false);
         syncSubscriptionBetFilterUI();
         syncSubscriptionPresetUI();
+        syncSubscriptionSettlementUI();
         syncSubscriptionRiskControlUI();
     }
 
@@ -2009,7 +2093,26 @@
         }).join(" / ");
     }
 
-    function summarizeStrategy(strategy) {
+    function summarizeSettlementPolicy(strategyV2, strategy) {
+        const v2Payload = strategyV2 && typeof strategyV2 === "object" ? strategyV2 : {};
+        const legacyPayload = strategy && typeof strategy === "object" ? strategy : {};
+        const settlementPolicy = v2Payload.settlement_policy && typeof v2Payload.settlement_policy === "object"
+            ? v2Payload.settlement_policy
+            : {};
+        const ruleSource = String(settlementPolicy.rule_source || "follow_signal").trim() || "follow_signal";
+        const settlementRuleId = String(settlementPolicy.settlement_rule_id || "").trim();
+        const fallbackProfitRatio = settlementPolicy.fallback_profit_ratio != null
+            ? settlementPolicy.fallback_profit_ratio
+            : (((legacyPayload.risk_control && legacyPayload.risk_control.win_profit_ratio) != null)
+                ? legacyPayload.risk_control.win_profit_ratio
+                : 1);
+        if (ruleSource === "subscription_fixed" && settlementRuleId) {
+            return "结算 " + (SUBSCRIPTION_SETTLEMENT_RULE_LABELS[settlementRuleId] || settlementRuleId) + " · 兜底净利 " + amountText(fallbackProfitRatio) + " 倍";
+        }
+        return "结算 跟随来源规则 · 兜底净利 " + amountText(fallbackProfitRatio) + " 倍";
+    }
+
+    function summarizeStrategy(strategy, strategyV2) {
         const payload = strategy && typeof strategy === "object" ? strategy : {};
         const parts = [];
         const riskControl = payload.risk_control && typeof payload.risk_control === "object"
@@ -2043,6 +2146,7 @@
         if (payload.expire_after_seconds) {
             parts.push("信号 " + payload.expire_after_seconds + " 秒后过期");
         }
+        parts.push(summarizeSettlementPolicy(strategyV2, payload));
         if (riskControl.enabled) {
             const riskParts = [];
             if (Number(riskControl.profit_target || 0) > 0) {
@@ -2051,7 +2155,6 @@
             if (Number(riskControl.loss_limit || 0) > 0) {
                 riskParts.push("净亏到 " + amountText(riskControl.loss_limit) + " 停");
             }
-            riskParts.push("命中按 " + amountText(riskControl.win_profit_ratio || 1) + " 倍净利计算");
             parts.push("自动停单 " + riskParts.join(" / "));
         }
         return parts.length ? parts.join(" · ") : "已保存跟单策略";
@@ -2260,7 +2363,7 @@
                 title: "跟单策略",
                 status: activeSubscriptionItems.length ? "active" : (archives.subscriptions ? "archived" : "inactive"),
                 body: activeSubscriptionItems.length
-                    ? ("当前有 " + activeSubscriptionItems.length + " 条激活策略，主策略为「" + summarizeStrategy(primarySubscription() ? primarySubscription().strategy : {}) + "」。")
+                    ? ("当前有 " + activeSubscriptionItems.length + " 条激活策略，主策略为「" + summarizeStrategy(primarySubscription() ? primarySubscription().strategy : {}, primarySubscription() ? primarySubscription().strategy_v2 : {}) + "」。")
                     : (visibleSubscriptionItems.length ? "已配置跟单策略但没有激活策略。" : "当前没有可用的跟单策略。"),
             },
             {
@@ -2330,7 +2433,7 @@
 
         document.getElementById("currentStrategyName").textContent = subscription ? ("来源 #" + subscription.source_id) : "未建立";
         document.getElementById("currentStrategyMeta").textContent = subscription
-            ? summarizeStrategy(subscription.strategy || {})
+            ? summarizeStrategy(subscription.strategy || {}, subscription.strategy_v2 || {})
             : "建立订阅后，来源信号才会进入你的执行任务视图。";
     }
 
@@ -2892,7 +2995,7 @@
                 '<article class="checklist-item">',
                 '<div class="checklist-head"><strong class="checklist-title">' + escapeHtml(source ? source.name : ("#" + subscription.source_id)) + '</strong>' + renderStatusPill(subscription.status) + '</div>',
                 '<p class="checklist-body">' + escapeHtml("来源 -> 跟单策略 -> " + chainState.previewTargets.length + " 个群组 -> " + chainState.previewTargets.filter(function (item) { return item.template_id != null; }).length + " 个模板绑定。") + '</p>',
-                '<div class="checklist-foot"><span class="cell-muted">' + escapeHtml(summarizeStrategy(subscription.strategy || {})) + '</span><span class="cell-muted">' + escapeHtml(blockers) + '</span>' + (preview ? ('<span class="cell-muted">样例：' + escapeHtml(preview.rendered.text || "--") + '</span>') : "") + '</div>',
+                '<div class="checklist-foot"><span class="cell-muted">' + escapeHtml(summarizeStrategy(subscription.strategy || {}, subscription.strategy_v2 || {})) + '</span><span class="cell-muted">' + escapeHtml(blockers) + '</span>' + (preview ? ('<span class="cell-muted">样例：' + escapeHtml(preview.rendered.text || "--") + '</span>') : "") + '</div>',
                 '</article>',
             ].join("");
         });
@@ -3647,7 +3750,7 @@
                 summary: "把来源、金额和群组串起来，信号才会真正变成发单任务。",
                 complete: subscriptions.length > 0,
                 detail: subscriptions.length
-                    ? ("已建立 " + subscriptions.length + " 条跟单，当前主策略是「" + summarizeStrategy(primarySubscription() ? primarySubscription().strategy : {}) + "」。")
+                    ? ("已建立 " + subscriptions.length + " 条跟单，当前主策略是「" + summarizeStrategy(primarySubscription() ? primarySubscription().strategy : {}, primarySubscription() ? primarySubscription().strategy_v2 : {}) + "」。")
                     : "选一个来源，再设置金额方式，信号才会真正变成发单任务。",
                 actionText: "去设置跟单",
             },
@@ -3925,6 +4028,17 @@
                 : '<article class="subscription-blocker-card"><strong>当前没有阻塞项</strong><p>账号、群组测试、模板和启用状态都正常，后续重点看执行记录。</p></article>';
             const progression = item.progression && typeof item.progression === "object" ? item.progression : null;
             const financial = item.financial && typeof item.financial === "object" ? item.financial : null;
+            const settlementPanelMarkup = progression && progression.pending_event_id && String(progression.pending_status || "") === "placed"
+                ? [
+                    '<div class="subscription-settlement-panel">',
+                    '<div class="subscription-settlement-copy"><strong>自动结算</strong><p>输入和值或三球表达式，例如 14、4+4+6、1,2,3。高赔会自动识别 13/14、豹子、顺子、对子等特殊退本。</p></div>',
+                    '<div class="subscription-settlement-form">',
+                    '<input class="text-input subscription-settlement-input" type="text" name="draw_input" placeholder="例如：4+4+6 或 14" inputmode="numeric" autocomplete="off">',
+                    '<button class="ghost-btn resolve-progression-btn" type="button" data-subscription-id="' + item.id + '" data-progression-event-id="' + progression.pending_event_id + '">自动结算</button>',
+                    '</div>',
+                    '</div>',
+                ].join("")
+                : "";
             const progressionActions = progression && progression.pending_event_id && String(progression.pending_status || "") === "placed"
                 ? [
                     '<button class="ghost-btn settle-progression-btn" type="button" data-subscription-id="' + item.id + '" data-progression-event-id="' + progression.pending_event_id + '" data-result-type="hit">命中</button>',
@@ -3939,10 +4053,11 @@
             return [
                 '<article class="mini-card">',
                 '<div class="config-list-head"><strong>' + escapeHtml(source ? source.name : ("#" + item.source_id)) + "</strong>" + renderStatusPill(item.status) + "</div>",
-                '<p>' + escapeHtml(summarizeStrategy(item.strategy || {})) + "</p>",
+                '<p>' + escapeHtml(summarizeStrategy(item.strategy || {}, item.strategy_v2 || {})) + "</p>",
                 '<p class="cell-muted">' + escapeHtml(summarizeProgression(item)) + "</p>",
                 '<p class="cell-muted">' + escapeHtml(summarizeFinancial(item)) + "</p>",
                 stoppedReasonMarkup,
+                settlementPanelMarkup,
                 '<div class="subscription-chain-meta"><span class="subscription-chain-stat">当前命中 ' + escapeHtml(String(chainState.effectiveTargets.length)) + ' 个群组</span><span class="subscription-chain-stat">已配置 ' + escapeHtml(String(chainState.configuredTargets.length)) + ' 个群组</span><span class="subscription-chain-stat">阻塞 ' + escapeHtml(String(chainState.summaries.reduce(function (total, entry) { return total + entry.count; }, 0))) + ' 项</span></div>',
                 '<div class="subscription-detail-grid"><section class="subscription-routes"><strong class="subscription-section-title">' + escapeHtml(routeTitle) + '</strong><p class="subscription-section-copy">' + escapeHtml(routeCopy) + '</p><div class="subscription-route-grid">' + routeMarkup + '</div>' + (hiddenPreviewCount ? ('<p class="subscription-more-note">另有 ' + escapeHtml(String(hiddenPreviewCount)) + ' 个群组未展开，去群组页可查看全部详情。</p>') : "") + '</section><aside class="subscription-blockers"><strong class="subscription-section-title">当前阻塞项</strong><p class="subscription-section-copy">这里会直接说明信号现在发不出去的原因，以及应该去哪一页处理。</p><div class="subscription-blocker-list">' + blockerMarkup + '</div></aside></div>',
                 "<div class=\"config-list-actions\"><button class=\"ghost-btn edit-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\">编辑</button><button class=\"ghost-btn toggle-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\" data-next-status=\"" + statusAction.nextStatus + "\">" + statusAction.actionText + "</button>" + resetAction + archiveAction + progressionActions + "</div>",
@@ -3950,6 +4065,7 @@
             ].join("");
         }).join("");
         renderSubscriptionWorkspaceSummary();
+        syncBatchResolveButtonState();
     }
 
     function resetCollections() {
@@ -3997,6 +4113,7 @@
         renderRecentJobSummary();
         renderRecentJobs();
         renderRecentAlerts();
+        syncBatchResolveButtonState();
     }
 
     async function loadPageData() {
@@ -4993,11 +5110,15 @@
                 ? String(form.cap_action.value || "reset").trim() || "reset"
                 : "reset";
             const expireAfterSeconds = Number(form.expire_after_seconds.value || 120);
+            const settlementRuleSource = currentSubscriptionSettlementRuleSource();
+            const settlementRuleId = settlementRuleSource === "subscription_fixed"
+                ? String(form.settlement_rule_id.value || "").trim()
+                : "";
+            const fallbackProfitRatio = Number(form.fallback_profit_ratio.value || 0);
             const riskControlEnabled = subscriptionRiskControlEnabledCheckbox instanceof HTMLInputElement
                 && subscriptionRiskControlEnabledCheckbox.checked;
             const profitTarget = String(form.profit_target.value || "").trim();
             const lossLimit = String(form.loss_limit.value || "").trim();
-            const winProfitRatio = String(form.win_profit_ratio.value || "").trim();
             if (strategyMode === "fixed" && (!Number.isFinite(stakeAmount) || stakeAmount <= 0)) {
                 throw new Error("均注模式下，请填写大于 0 的固定金额");
             }
@@ -5018,38 +5139,51 @@
                     throw new Error("追顶后的处理方式不正确");
                 }
             }
+            if (!["follow_signal", "subscription_fixed"].includes(settlementRuleSource)) {
+                throw new Error("收益结算规则来源不正确");
+            }
+            if (settlementRuleSource === "subscription_fixed" && !settlementRuleId) {
+                throw new Error("固定结算规则时，请选择一套规则");
+            }
+            if (!Number.isFinite(fallbackProfitRatio) || fallbackProfitRatio <= 0) {
+                throw new Error("兜底净利倍数必须大于 0");
+            }
             const submitButton = document.getElementById("createSubscriptionBtn");
             setButtonBusy(submitButton, true, editId ? "保存中..." : "创建中...");
             const strategyPayload = {
-                mode: strategyMode === "martingale" ? "martingale" : "follow",
-                bet_filter: {
+                play_filter: {
                     mode: betFilterMode,
                     selected_keys: selectedBetFilterKeys,
                 },
-                expire_after_seconds: expireAfterSeconds,
+                staking_policy: {
+                    mode: strategyMode,
+                    fixed_amount: stakeAmount,
+                    base_stake: baseStake,
+                    multiplier: multiplier,
+                    max_steps: maxSteps,
+                    refund_action: refundAction,
+                    cap_action: capAction,
+                },
+                settlement_policy: {
+                    rule_source: settlementRuleSource,
+                    settlement_rule_id: settlementRuleSource === "subscription_fixed" ? settlementRuleId : null,
+                    fallback_profit_ratio: fallbackProfitRatio,
+                },
                 risk_control: {
                     enabled: riskControlEnabled,
                     profit_target: profitTarget ? Number(profitTarget) : 0,
                     loss_limit: lossLimit ? Number(lossLimit) : 0,
-                    win_profit_ratio: winProfitRatio ? Number(winProfitRatio) : 1,
+                },
+                dispatch: {
+                    expire_after_seconds: expireAfterSeconds,
                 },
             };
-            if (stakeAmount != null) {
-                strategyPayload.stake_amount = stakeAmount;
-            }
-            if (strategyMode === "martingale") {
-                strategyPayload.base_stake = baseStake;
-                strategyPayload.multiplier = multiplier;
-                strategyPayload.max_steps = maxSteps;
-                strategyPayload.refund_action = refundAction;
-                strategyPayload.cap_action = capAction;
-            }
             if (editId) {
                 await request("/api/platform/subscriptions/" + editId, {
                     method: "POST",
                     body: {
                         source_id: Number(sourceId),
-                        strategy: strategyPayload,
+                        strategy_v2: strategyPayload,
                     },
                 });
             } else {
@@ -5057,7 +5191,7 @@
                     method: "POST",
                     body: {
                         source_id: Number(sourceId),
-                        strategy: strategyPayload,
+                        strategy_v2: strategyPayload,
                     },
                 });
             }
@@ -5098,6 +5232,12 @@
                     input.checked = Array.isArray(betFilter.selected_keys) && betFilter.selected_keys.includes(input.value);
                 });
                 const strategyMode = subscriptionStrategyModeFromStrategy(item.strategy);
+                const strategyV2 = item.strategy_v2 && typeof item.strategy_v2 === "object"
+                    ? item.strategy_v2
+                    : {};
+                const settlementPolicy = strategyV2.settlement_policy && typeof strategyV2.settlement_policy === "object"
+                    ? strategyV2.settlement_policy
+                    : {};
                 const hasStakeAmount = item.strategy && item.strategy.stake_amount != null && String(item.strategy.stake_amount).trim() !== "";
                 if (subscriptionStrategyModeSelect instanceof HTMLSelectElement) {
                     subscriptionStrategyModeSelect.value = strategyMode;
@@ -5128,15 +5268,28 @@
                 subscriptionForm.elements.loss_limit.value = riskControl.loss_limit != null && Number(riskControl.loss_limit) > 0
                     ? String(riskControl.loss_limit)
                     : "";
-                subscriptionForm.elements.win_profit_ratio.value = String(riskControl.win_profit_ratio != null ? riskControl.win_profit_ratio : 1);
+                if (subscriptionSettlementRuleSourceSelect instanceof HTMLSelectElement) {
+                    subscriptionSettlementRuleSourceSelect.value = normalizeSubscriptionSettlementRuleSource(settlementPolicy.rule_source);
+                }
+                if (subscriptionForm.elements.settlement_rule_id instanceof HTMLSelectElement) {
+                    subscriptionForm.elements.settlement_rule_id.value = String(settlementPolicy.settlement_rule_id || "pc28_netdisk_regular");
+                }
+                subscriptionForm.elements.fallback_profit_ratio.value = String(
+                    settlementPolicy.fallback_profit_ratio != null
+                        ? settlementPolicy.fallback_profit_ratio
+                        : (riskControl.win_profit_ratio != null ? riskControl.win_profit_ratio : 1)
+                );
                 if (subscriptionRiskControlEnabledCheckbox instanceof HTMLInputElement) {
                     subscriptionRiskControlEnabledCheckbox.checked = Boolean(riskControl.enabled);
                 }
                 syncSubscriptionBetFilterUI();
                 syncSubscriptionPresetUI();
+                syncSubscriptionSettlementUI();
                 syncSubscriptionRiskControlUI();
                 const shouldExpandAdvanced = Number(item.strategy && item.strategy.expire_after_seconds || 120) !== 120
                     || Boolean(riskControl.enabled)
+                    || normalizeSubscriptionSettlementRuleSource(settlementPolicy.rule_source) === "subscription_fixed"
+                    || Number(settlementPolicy.fallback_profit_ratio != null ? settlementPolicy.fallback_profit_ratio : (riskControl.win_profit_ratio != null ? riskControl.win_profit_ratio : 1)) !== 1
                     || (strategyMode === "martingale"
                         && (
                             String(item.strategy && item.strategy.refund_action || "hold") !== "hold"
@@ -5165,16 +5318,50 @@
                     const refreshed = subscriptionById(subscriptionId);
                     await refreshAll();
                     const nextItem = subscriptionById(subscriptionId) || refreshed;
-                    const thresholdStatus = nextItem && nextItem.financial ? String(nextItem.financial.threshold_status || "") : "";
-                    if (thresholdStatus === "profit_target_hit") {
-                        setStatus("当前待结算记录已处理，策略达到止盈阈值并自动停用。", false);
-                    } else if (thresholdStatus === "loss_limit_hit") {
-                        setStatus("当前待结算记录已处理，策略达到止损阈值并自动停用。", false);
-                    } else {
-                        setStatus("当前待结算记录已处理。", false);
-                    }
+                    setStatus(settlementStatusMessage(nextItem, "当前待结算记录已处理，"), false);
                 } catch (error) {
                     setStatus(error.message, true);
+                }
+                return;
+            }
+            if (target instanceof HTMLElement && target.classList.contains("resolve-progression-btn")) {
+                const subscriptionId = target.getAttribute("data-subscription-id");
+                const progressionEventId = target.getAttribute("data-progression-event-id");
+                if (!subscriptionId) {
+                    return;
+                }
+                const settlementPanel = target.closest(".subscription-settlement-panel");
+                const drawInputField = settlementPanel ? settlementPanel.querySelector("input[name='draw_input']") : null;
+                const normalizedDrawInput = String(drawInputField && "value" in drawInputField ? drawInputField.value : "").trim();
+                if (!normalizedDrawInput) {
+                    setStatus("请输入开奖结果后再自动结算。", true);
+                    return;
+                }
+                try {
+                    setButtonBusy(target, true, "结算中...");
+                    const payload = await request("/api/platform/subscriptions/" + subscriptionId + "/progression/resolve", {
+                        method: "POST",
+                        body: {
+                            progression_event_id: progressionEventId ? Number(progressionEventId) : null,
+                            draw_context: {
+                                open_code: normalizedDrawInput,
+                            },
+                        },
+                    });
+                    const refreshed = subscriptionById(subscriptionId);
+                    await refreshAll();
+                    const nextItem = subscriptionById(subscriptionId) || refreshed;
+                    const resolved = payload && payload.resolved && typeof payload.resolved === "object" ? payload.resolved : {};
+                    const refundReason = String(resolved.refund_reason || "").trim();
+                    const resultLabel = progressionResultText(resolved.result_type);
+                    const prefix = refundReason
+                        ? ("自动结算完成，结果为" + resultLabel + "（" + refundReason + "），")
+                        : ("自动结算完成，结果为" + resultLabel + "，");
+                    setStatus(settlementStatusMessage(nextItem, prefix), false);
+                } catch (error) {
+                    setStatus(error.message, true);
+                } finally {
+                    setButtonBusy(target, false, "自动结算");
                 }
                 return;
             }
@@ -5265,6 +5452,12 @@
     if (subscriptionBetFilterModeSelect instanceof HTMLSelectElement) {
         subscriptionBetFilterModeSelect.addEventListener("change", function () {
             syncSubscriptionBetFilterUI();
+        });
+    }
+
+    if (subscriptionSettlementRuleSourceSelect instanceof HTMLSelectElement) {
+        subscriptionSettlementRuleSourceSelect.addEventListener("change", function () {
+            syncSubscriptionSettlementUI();
         });
     }
 
@@ -5460,6 +5653,43 @@
             toggleAutobetBtn.toggleAttribute("disabled", Boolean(globalState.disabled));
         }
     });
+
+    if (batchResolveSubscriptionsBtn instanceof HTMLButtonElement) {
+        batchResolveSubscriptionsBtn.addEventListener("click", async function () {
+            if (batchResolveSubscriptionsBtn.hasAttribute("disabled")) {
+                return;
+            }
+            try {
+                setButtonBusy(batchResolveSubscriptionsBtn, true, "结算中...");
+                const payload = await request("/api/platform/subscriptions/progression/resolve-batch", {
+                    method: "POST",
+                    body: {},
+                });
+                await refreshAll();
+                const summary = payload && payload.summary && typeof payload.summary === "object" ? payload.summary : {};
+                const resolvedCount = Number(summary.resolved_count || 0);
+                const unmatchedCount = Number(summary.unmatched_count || 0);
+                if (resolvedCount <= 0) {
+                    setStatus("当前没有可自动结算的待结算记录，或最近开奖中还没有对应期号。", false);
+                    return;
+                }
+                const parts = [
+                    "本次批量自动结算完成",
+                    "命中 " + String(Number(summary.hit_count || 0)) + " 条",
+                    "回本 " + String(Number(summary.refund_count || 0)) + " 条",
+                    "未中 " + String(Number(summary.miss_count || 0)) + " 条",
+                ];
+                if (unmatchedCount > 0) {
+                    parts.push("仍有 " + String(unmatchedCount) + " 条未匹配到开奖");
+                }
+                setStatus(parts.join("，") + "。", false);
+            } catch (error) {
+                setStatus(error.message, true);
+            } finally {
+                syncBatchResolveButtonState();
+            }
+        });
+    }
 
     applyAutobetScope();
     initWorkspaceNav();

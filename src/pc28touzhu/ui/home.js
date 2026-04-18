@@ -143,8 +143,9 @@
         }) || null;
     }
 
-    function summarizeStrategy(strategy) {
+    function summarizeStrategy(strategy, strategyV2) {
         const payload = strategy && typeof strategy === "object" ? strategy : {};
+        const payloadV2 = strategyV2 && typeof strategyV2 === "object" ? strategyV2 : {};
         const mode = String(payload.mode || "").trim();
         const betFilter = payload.bet_filter && typeof payload.bet_filter === "object" ? payload.bet_filter : {};
         const selectedKeys = Array.isArray(betFilter.selected_keys) ? betFilter.selected_keys : [];
@@ -161,23 +162,35 @@
         const playSummary = String(betFilter.mode || "all") === "selected" && selectedKeys.length
             ? ("玩法 " + selectedKeys.filter(function (key) { return playLabels[key]; }).map(function (key) { return playLabels[key]; }).join("/"))
             : "玩法 全部";
+        const settlementPolicy = payloadV2.settlement_policy && typeof payloadV2.settlement_policy === "object"
+            ? payloadV2.settlement_policy
+            : {};
+        const settlementLabels = {
+            pc28_netdisk_regular: "网盘常规",
+            pc28_netdisk_abc: "网盘 ABC",
+            pc28_high_regular: "高赔常规",
+            pc28_high_abc: "高赔 ABC",
+        };
+        const settlementSummary = String(settlementPolicy.rule_source || "follow_signal") === "subscription_fixed" && settlementPolicy.settlement_rule_id
+            ? ("结算 " + (settlementLabels[settlementPolicy.settlement_rule_id] || settlementPolicy.settlement_rule_id))
+            : "结算 跟随来源";
         if (payload.base_stake != null && payload.multiplier != null && payload.max_steps != null) {
-            return [playSummary, "倍投", "起始 " + payload.base_stake, "每次乘 " + payload.multiplier, "最多追 " + payload.max_steps + " 手"].join(" · ");
+            return [playSummary, "倍投", "起始 " + payload.base_stake, "每次乘 " + payload.multiplier, "最多追 " + payload.max_steps + " 手", settlementSummary].join(" · ");
         }
         if (payload.stake_amount) {
-            return [playSummary, "均注", "每期 " + payload.stake_amount].join(" · ");
+            return [playSummary, "均注", "每期 " + payload.stake_amount, settlementSummary].join(" · ");
         }
         if (mode === "follow") {
-            return [playSummary, "跟随来源金额"].join(" · ");
+            return [playSummary, "跟随来源金额", settlementSummary].join(" · ");
         }
         if (mode) {
-            return [playSummary, "方式 " + mode].join(" · ");
+            return [playSummary, "方式 " + mode, settlementSummary].join(" · ");
         }
         const keys = Object.keys(payload);
         if (keys.length) {
-            return [playSummary, "已配置 " + keys.length + " 项规则"].join(" · ");
+            return [playSummary, "已配置 " + keys.length + " 项规则", settlementSummary].join(" · ");
         }
-        return playSummary + " · 已保存跟单策略";
+        return playSummary + " · " + settlementSummary + " · 已保存跟单策略";
     }
 
     function accountAuthState(account) {
@@ -553,7 +566,7 @@
 
         document.getElementById("currentStrategyName").textContent = subscription ? "已建立订阅" : "未建立";
         document.getElementById("currentStrategyMeta").textContent = subscription
-            ? summarizeStrategy(subscription.strategy || {})
+            ? summarizeStrategy(subscription.strategy || {}, subscription.strategy_v2 || {})
             : "建立订阅后，平台才会把标准信号展开成执行任务。";
     }
 

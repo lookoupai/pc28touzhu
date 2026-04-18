@@ -138,6 +138,9 @@ class SourceFetchServiceTests(unittest.TestCase):
         self.assertEqual(signal["normalized_payload"]["odds_profile"], "regular")
         self.assertEqual(signal["normalized_payload"]["primary_metric"], "big_small")
         self.assertEqual(signal["normalized_payload"]["share_level"], "records")
+        self.assertEqual(signal["normalized_payload"]["source_hints"]["stake"]["base_stake"], 10.0)
+        self.assertEqual(signal["normalized_payload"]["source_hints"]["stake"]["multiplier"], 2.0)
+        self.assertEqual(signal["normalized_payload"]["source_hints"]["settlement"]["settlement_rule_id"], "pc28_high_regular")
 
     def test_fetch_http_json_surfaces_http_403_as_readable_error(self):
         source = self.repo.create_source_record(

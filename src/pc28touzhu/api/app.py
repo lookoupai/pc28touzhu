@@ -50,6 +50,8 @@ from pc28touzhu.services.platform_service import (
     list_subscriptions,
     normalize_raw_item,
     reset_subscription_runtime,
+    resolve_subscription_progression,
+    resolve_pending_subscription_progressions,
     settle_subscription_progression,
     update_delivery_target,
     update_delivery_target_status,
@@ -723,7 +725,28 @@ class PlatformApiApplication:
             )
             return _json_response(start_response, 200, payload)
 
+        if path == "/api/platform/subscriptions/progression/resolve-batch":
+            if method != "POST":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            payload = resolve_pending_subscription_progressions(
+                self.repository,
+                user_id=current_user["id"],
+                payload=_read_json_body(environ),
+            )
+            return _json_response(start_response, 200, payload)
+
         subscription_status_prefix = "/api/platform/subscriptions/"
+        if path.startswith(subscription_status_prefix) and path.endswith("/progression/resolve"):
+            if method != "POST":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            subscription_id = path[len(subscription_status_prefix) : -len("/progression/resolve")]
+            payload = resolve_subscription_progression(
+                self.repository,
+                subscription_id=subscription_id,
+                user_id=current_user["id"],
+                payload=_read_json_body(environ),
+            )
+            return _json_response(start_response, 200, payload)
         if path.startswith(subscription_status_prefix) and path.endswith("/progression/settle"):
             if method != "POST":
                 return _json_response(start_response, 405, {"error": "method not allowed"})

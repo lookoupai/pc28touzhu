@@ -504,6 +504,16 @@ class FakeRepository:
                         "pending_issue_no": pending.get("issue_no") if pending else "",
                         "pending_status": pending.get("status") if pending else "",
                     }
+                elif pending:
+                    data["progression"] = {
+                        "current_step": 1,
+                        "last_signal_id": None,
+                        "last_issue_no": "",
+                        "last_result_type": "",
+                        "pending_event_id": pending.get("id"),
+                        "pending_issue_no": pending.get("issue_no") or "",
+                        "pending_status": pending.get("status") or "",
+                    }
                 financial = self.subscription_financial_states.get(int(subscription_id))
                 data["financial"] = {
                     "subscription_id": int(subscription_id),
@@ -838,12 +848,14 @@ class FakeRepository:
         self.subscription_progression_states[int(subscription_id)] = state
         return state
 
-    def settle_progression_event(self, *, subscription_id, user_id, result_type, progression_event_id=None):
+    def settle_progression_event(self, *, subscription_id, user_id, result_type, progression_event_id=None, result_context=None):
         event = self.get_progression_event(progression_event_id) if progression_event_id is not None else self.get_latest_pending_progression_event(subscription_id=subscription_id)
         if not event:
             raise ValueError("当前没有待结算的倍投状态")
         event["status"] = "settled"
         event["resolved_result_type"] = result_type
+        if isinstance(result_context, dict):
+            event["result_context"] = dict(result_context)
         subscription = self.get_subscription(subscription_id) or {}
         strategy = subscription.get("strategy") or {}
         risk_control = strategy.get("risk_control") if isinstance(strategy.get("risk_control"), dict) else {}
@@ -1471,6 +1483,7 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertIn("alert", get_payload["item"])
         self.assertIn("bot", get_payload["item"])
         self.assertIn("report", get_payload["item"])
+        self.assertIn("auto_settlement", get_payload["item"])
 
         save_status, _, save_payload = invoke(
             self.app,
@@ -1501,15 +1514,22 @@ class PlatformApiApplicationTests(unittest.TestCase):
                         "top_n": 12,
                         "timezone": "Asia/Shanghai",
                     },
+                    "auto_settlement": {
+                        "enabled": True,
+                        "interval_seconds": 20,
+                        "draw_limit": 80,
+                    },
                 },
             ),
         )
         self.assertEqual(save_status, "200 OK")
         self.assertTrue(save_payload["item"]["alert"]["has_bot_token"])
         self.assertEqual(save_payload["item"]["report"]["target_chat_id"], "-100report")
+        self.assertTrue(save_payload["item"]["auto_settlement"]["enabled"])
         stored = self.repository.get_platform_runtime_setting("telegram_runtime_settings")
         self.assertEqual(stored["value"]["bot"]["poll_interval_seconds"], 7)
         self.assertEqual(stored["value"]["report"]["top_n"], 12)
+        self.assertEqual(stored["value"]["auto_settlement"]["draw_limit"], 80)
 
     def test_auth_register_can_initialize_legacy_user_without_password(self):
         self.repository.users.append(
@@ -2078,6 +2098,49 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(payload["item"]["strategy"]["bet_filter"]["mode"], "selected")
         self.assertEqual(payload["item"]["strategy"]["bet_filter"]["selected_keys"], ["big_small:大", "combo:大双"])
 
+    def test_create_subscription_with_strategy_v2_returns_legacy_projection(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions",
+                method="POST",
+                body={
+                    "source_id": 1,
+                    "strategy_v2": {
+                        "play_filter": {
+                            "mode": "selected",
+                            "selected_keys": ["big_small:大"],
+                        },
+                        "staking_policy": {
+                            "mode": "fixed",
+                            "fixed_amount": 12,
+                        },
+                        "settlement_policy": {
+                            "rule_source": "subscription_fixed",
+                            "settlement_rule_id": "pc28_high_regular",
+                            "fallback_profit_ratio": 1.2,
+                        },
+                        "risk_control": {
+                            "enabled": True,
+                            "profit_target": 50,
+                            "loss_limit": 20,
+                        },
+                        "dispatch": {
+                            "expire_after_seconds": 90,
+                        },
+                    },
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["strategy_schema_version"], 2)
+        self.assertEqual(payload["item"]["strategy"]["stake_amount"], 12)
+        self.assertEqual(payload["item"]["strategy"]["bet_filter"]["selected_keys"], ["big_small:大"])
+        self.assertEqual(payload["item"]["strategy"]["risk_control"]["win_profit_ratio"], 1.2)
+        self.assertEqual(payload["item"]["strategy_v2"]["staking_policy"]["mode"], "fixed")
+        self.assertEqual(payload["item"]["strategy_v2"]["settlement_policy"]["settlement_rule_id"], "pc28_high_regular")
+
     def test_update_subscription_status_endpoint(self):
         created = self.repository.create_subscription_record(
             user_id=1,
@@ -2165,6 +2228,194 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(status, "200 OK")
         self.assertEqual(payload["progression"]["event"]["resolved_result_type"], "miss")
         self.assertEqual(payload["progression"]["state"]["current_step"], 2)
+
+    def test_resolve_subscription_progression_endpoint_refunds_high_special_cases(self):
+        created = self.repository.create_subscription_record(
+            user_id=1,
+            source_id=1,
+            strategy={
+                "play_filter": {"mode": "all", "selected_keys": []},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                "settlement_policy": {
+                    "rule_source": "subscription_fixed",
+                    "settlement_rule_id": "pc28_high_regular",
+                    "fallback_profit_ratio": 1.0,
+                },
+                "risk_control": {"enabled": False, "profit_target": 0, "loss_limit": 0},
+                "dispatch": {"expire_after_seconds": 120},
+            },
+        )
+        signal = self.repository.create_signal_record(
+            source_id=1,
+            lottery_type="pc28",
+            issue_no="20260407012",
+            bet_type="big_small",
+            bet_value="大",
+        )
+        event = self.repository.create_progression_event_record(
+            subscription_id=created["id"],
+            user_id=1,
+            signal_id=signal["id"],
+            issue_no="20260407012",
+            progression_step=1,
+            stake_amount=10,
+            base_stake=10,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            settlement_rule_id="pc28_high_regular",
+            settlement_snapshot={"rule_source": "subscription_fixed", "settlement_rule_id": "pc28_high_regular"},
+            status="placed",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions/%s/progression/resolve" % created["id"],
+                method="POST",
+                body={
+                    "progression_event_id": event["id"],
+                    "draw_context": {
+                        "result_number": 14,
+                        "triplet": [4, 4, 6],
+                    },
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["resolved"]["result_type"], "refund")
+        self.assertEqual(payload["resolved"]["refund_reason"], "13/14 退本金")
+        self.assertEqual(payload["progression"]["event"]["resolved_result_type"], "refund")
+        self.assertEqual(payload["progression"]["event"]["result_context"]["resolution_mode"], "auto")
+
+    def test_resolve_subscription_progression_endpoint_supports_pair_refund(self):
+        created = self.repository.create_subscription_record(
+            user_id=1,
+            source_id=1,
+            strategy={
+                "play_filter": {"mode": "all", "selected_keys": []},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                "settlement_policy": {
+                    "rule_source": "subscription_fixed",
+                    "settlement_rule_id": "pc28_high_regular",
+                    "fallback_profit_ratio": 1.0,
+                },
+                "risk_control": {"enabled": False, "profit_target": 0, "loss_limit": 0},
+                "dispatch": {"expire_after_seconds": 120},
+            },
+        )
+        signal = self.repository.create_signal_record(
+            source_id=1,
+            lottery_type="pc28",
+            issue_no="20260407013",
+            bet_type="big_small",
+            bet_value="小",
+        )
+        event = self.repository.create_progression_event_record(
+            subscription_id=created["id"],
+            user_id=1,
+            signal_id=signal["id"],
+            issue_no="20260407013",
+            progression_step=1,
+            stake_amount=10,
+            base_stake=10,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            settlement_rule_id="pc28_high_regular",
+            settlement_snapshot={"rule_source": "subscription_fixed", "settlement_rule_id": "pc28_high_regular"},
+            status="placed",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions/%s/progression/resolve" % created["id"],
+                method="POST",
+                body={
+                    "progression_event_id": event["id"],
+                    "draw_context": {
+                        "result_number": 8,
+                        "triplet": [1, 1, 6],
+                    },
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["resolved"]["result_type"], "refund")
+        self.assertEqual(payload["resolved"]["refund_reason"], "对子退本金")
+
+    def test_batch_resolve_subscription_progression_endpoint(self):
+        created = self.repository.create_subscription_record(
+            user_id=1,
+            source_id=1,
+            strategy={
+                "play_filter": {"mode": "all", "selected_keys": []},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                "settlement_policy": {
+                    "rule_source": "subscription_fixed",
+                    "settlement_rule_id": "pc28_high_regular",
+                    "fallback_profit_ratio": 1.0,
+                },
+                "risk_control": {"enabled": False, "profit_target": 0, "loss_limit": 0},
+                "dispatch": {"expire_after_seconds": 120},
+            },
+        )
+        signal = self.repository.create_signal_record(
+            source_id=1,
+            lottery_type="pc28",
+            issue_no="20260407014",
+            bet_type="big_small",
+            bet_value="大",
+        )
+        self.repository.create_progression_event_record(
+            subscription_id=created["id"],
+            user_id=1,
+            signal_id=signal["id"],
+            issue_no="20260407014",
+            progression_step=1,
+            stake_amount=10,
+            base_stake=10,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            settlement_rule_id="pc28_high_regular",
+            settlement_snapshot={"rule_source": "subscription_fixed", "settlement_rule_id": "pc28_high_regular"},
+            status="placed",
+        )
+        with patch("pc28touzhu.services.platform_service.fetch_pc28_recent_draws") as mocked_fetch:
+            mocked_fetch.return_value = {
+                "source": "official",
+                "items": [
+                    {
+                        "issue_no": "20260407014",
+                        "draw_context": {
+                            "open_code": "4+4+6",
+                            "result_number": 14,
+                            "triplet": [4, 4, 6],
+                            "big_small": "大",
+                            "odd_even": "双",
+                            "combo": "大双",
+                        },
+                    }
+                ],
+            }
+            status, _, payload = invoke(
+                self.app,
+                build_testing_environ(
+                    "/api/platform/subscriptions/progression/resolve-batch",
+                    method="POST",
+                    body={},
+                    headers=self.session_headers,
+                ),
+            )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["summary"]["resolved_count"], 1)
+        self.assertEqual(payload["summary"]["refund_count"], 1)
+        self.assertEqual(payload["items"][0]["result_type"], "refund")
 
     def test_delete_subscription_endpoint_requires_archived(self):
         created = self.repository.create_subscription_record(

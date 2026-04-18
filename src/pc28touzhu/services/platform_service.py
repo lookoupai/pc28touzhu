@@ -13,9 +13,16 @@ from uuid import uuid4
 
 from pc28touzhu.config import get_runtime_config
 from pc28touzhu.domain.pc28_play_filter import normalize_play_filter_keys, normalize_play_filter_mode
+from pc28touzhu.domain.settlement_rules import resolve_pc28_result_for_signal
+from pc28touzhu.domain.subscription_strategy import (
+    normalize_subscription_strategy_input,
+    present_subscription_item,
+    resolve_settlement_runtime_policy,
+)
 from pc28touzhu.executor.telethon_sender import TelethonMessageSender
 from pc28touzhu.services.dispatch_service import dispatch_signal as dispatch_signal_jobs
 from pc28touzhu.services.normalize_service import normalize_raw_item as normalize_raw_item_to_signals
+from pc28touzhu.services.pc28_draw_service import fetch_pc28_recent_draws
 from pc28touzhu.services.source_fetch_service import fetch_source_to_raw_item
 from pc28touzhu.services.telegram_account_gateway import TelethonAccountGateway
 from pc28touzhu.services.telegram_target_key import normalize_telegram_target_key
@@ -209,82 +216,17 @@ def _normalize_subscription_bet_filter(value: Any) -> Dict[str, Any]:
 
 
 def _normalize_subscription_strategy(value: Any) -> Dict[str, Any]:
-    payload = _to_object(value, "strategy")
-    normalized = dict(payload)
-    normalized["mode"] = str(payload.get("mode") or "follow").strip() or "follow"
-    normalized["bet_filter"] = _normalize_subscription_bet_filter(payload.get("bet_filter"))
-    if normalized["mode"] not in {"follow", "martingale"}:
-        raise ValueError("strategy.mode 仅支持 follow 或 martingale")
-    if payload.get("stake_amount") not in {None, ""}:
-        normalized["stake_amount"] = round(float(payload.get("stake_amount")), 2)
-        if normalized["stake_amount"] <= 0:
-            raise ValueError("strategy.stake_amount 必须大于 0")
-    if payload.get("expire_after_seconds") not in {None, ""}:
-        normalized["expire_after_seconds"] = max(30, int(payload.get("expire_after_seconds") or 120))
-    if normalized["mode"] == "martingale":
-        base_stake = _to_optional_non_negative_float(payload.get("base_stake"), "strategy.base_stake")
-        if base_stake is None and payload.get("stake_amount") not in {None, ""}:
-            base_stake = _to_optional_non_negative_float(payload.get("stake_amount"), "strategy.base_stake")
-        if base_stake is None or base_stake <= 0:
-            raise ValueError("strategy.base_stake 必须大于 0")
-        multiplier = _to_optional_non_negative_float(payload.get("multiplier"), "strategy.multiplier")
-        if multiplier is None:
-            multiplier = 2.0
-        if multiplier <= 1:
-            raise ValueError("strategy.multiplier 必须大于 1")
-        try:
-            max_steps = int(payload.get("max_steps") or 1)
-        except (TypeError, ValueError):
-            raise ValueError("strategy.max_steps 必须为整数")
-        if max_steps < 1:
-            raise ValueError("strategy.max_steps 必须大于 0")
-        refund_action = str(payload.get("refund_action") or "hold").strip() or "hold"
-        cap_action = str(payload.get("cap_action") or "reset").strip() or "reset"
-        if refund_action not in {"hold", "reset"}:
-            raise ValueError("strategy.refund_action 仅支持 hold 或 reset")
-        if cap_action not in {"hold", "reset"}:
-            raise ValueError("strategy.cap_action 仅支持 hold 或 reset")
-        normalized["base_stake"] = round(float(base_stake), 2)
-        normalized["multiplier"] = round(float(multiplier), 4)
-        normalized["max_steps"] = max_steps
-        normalized["refund_action"] = refund_action
-        normalized["cap_action"] = cap_action
-        normalized.pop("stake_amount", None)
-    else:
-        normalized.pop("base_stake", None)
-        normalized.pop("multiplier", None)
-        normalized.pop("max_steps", None)
-        normalized.pop("refund_action", None)
-        normalized.pop("cap_action", None)
+    return normalize_subscription_strategy_input(value)
 
-    risk_payload = payload.get("risk_control")
-    if risk_payload is None:
-        normalized["risk_control"] = {"enabled": False, "win_profit_ratio": 1.0}
-        return normalized
-    if not isinstance(risk_payload, dict):
-        raise ValueError("strategy.risk_control 必须为对象")
 
-    enabled = bool(risk_payload.get("enabled"))
-    profit_target = _to_optional_non_negative_float(risk_payload.get("profit_target"), "strategy.risk_control.profit_target")
-    loss_limit = _to_optional_non_negative_float(risk_payload.get("loss_limit"), "strategy.risk_control.loss_limit")
-    win_profit_ratio = _to_optional_non_negative_float(
-        risk_payload.get("win_profit_ratio"),
-        "strategy.risk_control.win_profit_ratio",
-    )
-    if win_profit_ratio is None:
-        win_profit_ratio = 1.0
-    if win_profit_ratio <= 0:
-        raise ValueError("strategy.risk_control.win_profit_ratio 必须大于 0")
-    if enabled and not ((profit_target or 0) > 0 or (loss_limit or 0) > 0):
-        raise ValueError("启用止盈止损时，止盈或止损至少要设置一个大于 0 的阈值")
+def _subscription_strategy_input_from_payload(payload: Dict[str, Any]) -> Any:
+    if isinstance(payload.get("strategy_v2"), dict):
+        return payload.get("strategy_v2")
+    return payload.get("strategy")
 
-    normalized["risk_control"] = {
-        "enabled": enabled,
-        "profit_target": round(float(profit_target or 0), 2),
-        "loss_limit": round(float(loss_limit or 0), 2),
-        "win_profit_ratio": round(float(win_profit_ratio), 4),
-    }
-    return normalized
+
+def _present_subscription_items(items: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    return [present_subscription_item(item) for item in items]
 
 
 def _normalize_entity_status(value: Any, field_name: str = "status") -> str:
@@ -957,7 +899,7 @@ def normalize_raw_item(repository: Any, raw_item_id: Any) -> Dict[str, Any]:
 
 def list_subscriptions(repository: Any, user_id: Any) -> Dict[str, Any]:
     normalized_user_id = _to_positive_int(user_id, "user_id")
-    return {"items": repository.list_subscriptions(user_id=normalized_user_id)}
+    return {"items": _present_subscription_items(repository.list_subscriptions(user_id=normalized_user_id))}
 
 
 def create_subscription(repository: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -969,9 +911,9 @@ def create_subscription(repository: Any, payload: Dict[str, Any]) -> Dict[str, A
         user_id=user_id,
         source_id=source_id,
         status=str(payload.get("status") or "active").strip() or "active",
-        strategy=_normalize_subscription_strategy(payload.get("strategy")),
+        strategy=_normalize_subscription_strategy(_subscription_strategy_input_from_payload(payload)),
     )
-    return {"item": item}
+    return {"item": present_subscription_item(item)}
 
 
 def update_subscription(repository: Any, *, subscription_id: Any, user_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -986,12 +928,12 @@ def update_subscription(repository: Any, *, subscription_id: Any, user_id: Any, 
         subscription_id=normalized_subscription_id,
         user_id=normalized_user_id,
         source_id=source_id,
-        strategy=_normalize_subscription_strategy(payload.get("strategy")),
+        strategy=_normalize_subscription_strategy(_subscription_strategy_input_from_payload(payload)),
         status=current["status"],
     )
     if not item:
         raise ValueError("subscription_id 对应的订阅不存在")
-    return {"item": item}
+    return {"item": present_subscription_item(item)}
 
 
 def update_subscription_status(repository: Any, *, subscription_id: Any, user_id: Any, status: Any) -> Dict[str, Any]:
@@ -1005,7 +947,7 @@ def update_subscription_status(repository: Any, *, subscription_id: Any, user_id
     )
     if not item:
         raise ValueError("subscription_id 对应的订阅不存在")
-    return {"item": item}
+    return {"item": present_subscription_item(item)}
 
 
 def delete_subscription(repository: Any, *, subscription_id: Any, user_id: Any) -> Dict[str, Any]:
@@ -1035,11 +977,202 @@ def settle_subscription_progression(repository: Any, *, subscription_id: Any, us
         result_type=result_type,
         progression_event_id=progression_event_id,
     )
-    item = result.get("subscription") or repository.get_subscription(normalized_subscription_id)
+    item = present_subscription_item(result.get("subscription") or repository.get_subscription(normalized_subscription_id))
     return {
         "item": item,
         "progression": result,
     }
+
+
+def resolve_subscription_progression(repository: Any, *, subscription_id: Any, user_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_subscription_id = _to_positive_int(subscription_id, "subscription_id")
+    normalized_user_id = _to_positive_int(user_id, "user_id")
+    progression_event_id = payload.get("progression_event_id")
+    if progression_event_id not in {None, ""}:
+        progression_event_id = _to_positive_int(progression_event_id, "progression_event_id")
+    draw_context = _to_object(payload.get("draw_context"), "draw_context")
+
+    current = repository.get_subscription(normalized_subscription_id)
+    if not current or int(current.get("user_id") or 0) != normalized_user_id:
+        raise ValueError("subscription_id 对应的订阅不存在")
+    current_event = (
+        repository.get_progression_event(int(progression_event_id))
+        if progression_event_id is not None
+        else repository.get_latest_pending_progression_event(subscription_id=normalized_subscription_id)
+    )
+    if not current_event or int(current_event.get("subscription_id") or 0) != normalized_subscription_id:
+        raise ValueError("当前没有待结算的倍投状态")
+    if int(current_event.get("user_id") or 0) != normalized_user_id:
+        raise ValueError("无权结算该倍投状态")
+
+    signal = repository.get_signal(int(current_event.get("signal_id") or 0))
+    if not signal:
+        raise ValueError("待结算记录对应的信号不存在")
+    if str(signal.get("lottery_type") or "").strip().lower() != "pc28":
+        raise ValueError("当前只支持 PC28 自动结算")
+
+    settlement_policy = resolve_settlement_runtime_policy(current.get("strategy_v2") or current.get("strategy"), signal.get("normalized_payload"))
+    settlement_rule_id = str(current_event.get("settlement_rule_id") or settlement_policy.get("settlement_rule_id") or "").strip()
+    resolved = resolve_pc28_result_for_signal(
+        signal=signal,
+        settlement_rule_id=settlement_rule_id,
+        draw_context=draw_context,
+    )
+    result = repository.settle_progression_event(
+        subscription_id=normalized_subscription_id,
+        user_id=normalized_user_id,
+        result_type=resolved["result_type"],
+        progression_event_id=progression_event_id,
+        result_context={
+            "resolution_mode": "auto",
+            "refund_reason": resolved.get("refund_reason"),
+            "metric": resolved.get("metric"),
+            "predicted_value": resolved.get("predicted_value"),
+            "actual_value": resolved.get("actual_value"),
+            "draw_snapshot": resolved.get("draw_snapshot"),
+        },
+    )
+    item = present_subscription_item(result.get("subscription") or repository.get_subscription(normalized_subscription_id))
+    return {
+        "item": item,
+        "progression": result,
+        "resolved": resolved,
+    }
+
+
+def _empty_batch_resolution_result() -> Dict[str, Any]:
+    return {
+        "summary": {
+            "pending_count": 0,
+            "matched_count": 0,
+            "resolved_count": 0,
+            "hit_count": 0,
+            "refund_count": 0,
+            "miss_count": 0,
+            "unmatched_count": 0,
+        },
+        "items": [],
+        "unmatched": [],
+        "draw_source": "",
+    }
+
+
+def _collect_pending_pc28_progressions(repository: Any, *, user_id: int) -> list[Dict[str, Any]]:
+    subscriptions = repository.list_subscriptions(user_id=int(user_id))
+    pending_entries = []
+    for item in subscriptions:
+        progression = item.get("progression") if isinstance(item.get("progression"), dict) else {}
+        if not progression or str(progression.get("pending_status") or "") != "placed":
+            continue
+        pending_event_id = progression.get("pending_event_id")
+        if pending_event_id is None:
+            continue
+        event = repository.get_progression_event(int(pending_event_id))
+        if not event:
+            continue
+        signal = repository.get_signal(int(event.get("signal_id") or 0))
+        if not signal or str(signal.get("lottery_type") or "").strip().lower() != "pc28":
+            continue
+        pending_entries.append(
+            {
+                "subscription": item,
+                "event": event,
+                "signal": signal,
+            }
+        )
+    return pending_entries
+
+
+def resolve_pending_pc28_progressions_from_draws(
+    repository: Any,
+    *,
+    user_id: int,
+    draw_items: list[Dict[str, Any]],
+    draw_source: str = "",
+) -> Dict[str, Any]:
+    pending_entries = _collect_pending_pc28_progressions(repository, user_id=int(user_id))
+    if not pending_entries:
+        result = _empty_batch_resolution_result()
+        result["draw_source"] = str(draw_source or "")
+        return result
+
+    draw_map = {
+        str(item.get("issue_no") or "").strip(): item
+        for item in draw_items or []
+        if str(item.get("issue_no") or "").strip()
+    }
+    resolved_items = []
+    unmatched = []
+    hit_count = 0
+    refund_count = 0
+    miss_count = 0
+    for entry in pending_entries:
+        issue_no = str((entry.get("event") or {}).get("issue_no") or "").strip()
+        draw = draw_map.get(issue_no)
+        if not draw:
+            unmatched.append(
+                {
+                    "subscription_id": int(entry["subscription"]["id"]),
+                    "progression_event_id": int(entry["event"]["id"]),
+                    "issue_no": issue_no,
+                }
+            )
+            continue
+        resolved = resolve_subscription_progression(
+            repository,
+            subscription_id=entry["subscription"]["id"],
+            user_id=int(user_id),
+            payload={
+                "progression_event_id": entry["event"]["id"],
+                "draw_context": dict(draw.get("draw_context") or {}),
+            },
+        )
+        result_type = str(((resolved.get("resolved") or {}).get("result_type")) or "").strip().lower()
+        if result_type == "hit":
+            hit_count += 1
+        elif result_type == "refund":
+            refund_count += 1
+        elif result_type == "miss":
+            miss_count += 1
+        resolved_items.append(
+            {
+                "subscription_id": int(entry["subscription"]["id"]),
+                "progression_event_id": int(entry["event"]["id"]),
+                "issue_no": issue_no,
+                "result_type": result_type,
+                "refund_reason": (resolved.get("resolved") or {}).get("refund_reason"),
+            }
+        )
+
+    return {
+        "summary": {
+            "pending_count": len(pending_entries),
+            "matched_count": len(pending_entries) - len(unmatched),
+            "resolved_count": len(resolved_items),
+            "hit_count": hit_count,
+            "refund_count": refund_count,
+            "miss_count": miss_count,
+            "unmatched_count": len(unmatched),
+        },
+        "items": resolved_items,
+        "unmatched": unmatched,
+        "draw_source": str(draw_source or ""),
+    }
+
+
+def resolve_pending_subscription_progressions(repository: Any, *, user_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_user_id = _to_positive_int(user_id, "user_id")
+    draw_limit = max(10, min(int(payload.get("draw_limit") or 60), 100))
+    pending_entries = _collect_pending_pc28_progressions(repository, user_id=normalized_user_id)
+    if not pending_entries:
+        return _empty_batch_resolution_result()
+    fetch_result = fetch_pc28_recent_draws(limit=max(draw_limit, len(pending_entries) * 2))
+    return resolve_pending_pc28_progressions_from_draws(
+        repository,
+        user_id=normalized_user_id,
+        draw_items=list(fetch_result.get("items") or []),
+        draw_source=str(fetch_result.get("source") or ""),
+    )
 
 
 def reset_subscription_runtime(repository: Any, *, subscription_id: Any, user_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1050,6 +1183,8 @@ def reset_subscription_runtime(repository: Any, *, subscription_id: Any, user_id
         user_id=normalized_user_id,
         note=str(payload.get("note") or "").strip(),
     )
+    if isinstance(result.get("item"), dict):
+        result["item"] = present_subscription_item(result.get("item"))
     return result
 
 

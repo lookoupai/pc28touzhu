@@ -7,6 +7,7 @@ from pc28touzhu.config import get_runtime_config
 
 
 TELEGRAM_RUNTIME_SETTINGS_KEY = "telegram_runtime_settings"
+PC28_AUTO_SETTLEMENT_RUNTIME_STATE_KEY = "pc28_auto_settlement_runtime_state"
 ALLOWED_REPORT_TIMEZONES = {"Asia/Shanghai", "UTC"}
 
 
@@ -79,6 +80,11 @@ def build_default_telegram_runtime_settings(runtime_config: Any = None) -> Dict[
             "top_n": int(config.telegram_report.top_n or 10),
             "timezone": str(config.telegram_report.timezone or "Asia/Shanghai"),
         },
+        "auto_settlement": {
+            "enabled": bool(config.pc28_auto_settlement.enabled),
+            "interval_seconds": int(config.pc28_auto_settlement.interval_seconds or 30),
+            "draw_limit": int(config.pc28_auto_settlement.draw_limit or 60),
+        },
     }
 
 
@@ -128,6 +134,17 @@ def _normalize_saved_settings(defaults: Dict[str, Any], overrides: Dict[str, Any
             "top_n": max(1, int((payload.get("report") or {}).get("top_n", defaults["report"]["top_n"]) or 1)),
             "timezone": str((payload.get("report") or {}).get("timezone", defaults["report"]["timezone"]) or "Asia/Shanghai"),
         },
+        "auto_settlement": {
+            "enabled": bool((payload.get("auto_settlement") or {}).get("enabled", defaults["auto_settlement"]["enabled"])),
+            "interval_seconds": max(
+                5,
+                int((payload.get("auto_settlement") or {}).get("interval_seconds", defaults["auto_settlement"]["interval_seconds"]) or 5),
+            ),
+            "draw_limit": max(
+                10,
+                int((payload.get("auto_settlement") or {}).get("draw_limit", defaults["auto_settlement"]["draw_limit"]) or 10),
+            ),
+        },
     }
 
 
@@ -145,6 +162,8 @@ def get_effective_telegram_runtime_settings(repository: Any, *, runtime_config: 
 def get_telegram_runtime_settings_for_admin(repository: Any, *, runtime_config: Any = None) -> Dict[str, Any]:
     resolved = get_effective_telegram_runtime_settings(repository, runtime_config=runtime_config)
     item = resolved["item"]
+    runtime_state_record = repository.get_platform_runtime_setting(PC28_AUTO_SETTLEMENT_RUNTIME_STATE_KEY) or {}
+    runtime_state_value = runtime_state_record.get("value") if isinstance(runtime_state_record.get("value"), dict) else {}
     return {
         "item": {
             "alert": {
@@ -171,6 +190,18 @@ def get_telegram_runtime_settings_for_admin(repository: Any, *, runtime_config: 
                 "top_n": int(item["report"]["top_n"] or 10),
                 "timezone": str(item["report"]["timezone"] or "Asia/Shanghai"),
             },
+            "auto_settlement": {
+                "enabled": bool(item["auto_settlement"]["enabled"]),
+                "interval_seconds": int(item["auto_settlement"]["interval_seconds"] or 30),
+                "draw_limit": int(item["auto_settlement"]["draw_limit"] or 60),
+                "runtime_state": {
+                    "last_run_at": runtime_state_value.get("last_run_at"),
+                    "last_status": str(runtime_state_value.get("last_status") or ""),
+                    "last_error": str(runtime_state_value.get("last_error") or ""),
+                    "last_summary": runtime_state_value.get("last_summary") if isinstance(runtime_state_value.get("last_summary"), dict) else {},
+                    "updated_at": runtime_state_record.get("updated_at"),
+                },
+            },
             "updated_at": resolved.get("updated_at"),
             "source": resolved.get("source"),
         }
@@ -190,12 +221,15 @@ def update_telegram_runtime_settings(
     alert_payload = payload.get("alert") or {}
     bot_payload = payload.get("bot") or {}
     report_payload = payload.get("report") or {}
+    auto_settlement_payload = payload.get("auto_settlement") or {}
     if not isinstance(alert_payload, dict):
         raise ValueError("alert 必须为对象")
     if not isinstance(bot_payload, dict):
         raise ValueError("bot 必须为对象")
     if not isinstance(report_payload, dict):
         raise ValueError("report 必须为对象")
+    if not isinstance(auto_settlement_payload, dict):
+        raise ValueError("auto_settlement 必须为对象")
 
     timezone_value = str(report_payload.get("timezone") or current["report"]["timezone"]).strip() or "Asia/Shanghai"
     if timezone_value not in ALLOWED_REPORT_TIMEZONES:
@@ -244,6 +278,20 @@ def update_telegram_runtime_settings(
             "top_n": _to_int(report_payload.get("top_n"), "report.top_n", minimum=1, maximum=100),
             "timezone": timezone_value,
         },
+        "auto_settlement": {
+            "enabled": _to_bool(auto_settlement_payload.get("enabled"), "auto_settlement.enabled"),
+            "interval_seconds": _to_int(
+                auto_settlement_payload.get("interval_seconds"),
+                "auto_settlement.interval_seconds",
+                minimum=5,
+            ),
+            "draw_limit": _to_int(
+                auto_settlement_payload.get("draw_limit"),
+                "auto_settlement.draw_limit",
+                minimum=10,
+                maximum=100,
+            ),
+        },
     }
     if normalized["alert"]["enabled"] and not normalized["alert"]["bot_token"]:
         raise ValueError("启用告警通知时，alert.bot_token 不能为空")
@@ -260,3 +308,22 @@ def update_telegram_runtime_settings(
         value=normalized,
     )
     return get_telegram_runtime_settings_for_admin(repository, runtime_config=runtime_config)
+
+
+def update_pc28_auto_settlement_runtime_state(
+    repository: Any,
+    *,
+    last_run_at: str,
+    last_status: str,
+    last_summary: Optional[Dict[str, Any]] = None,
+    last_error: str = "",
+) -> Dict[str, Any]:
+    return repository.upsert_platform_runtime_setting(
+        setting_key=PC28_AUTO_SETTLEMENT_RUNTIME_STATE_KEY,
+        value={
+            "last_run_at": str(last_run_at or ""),
+            "last_status": str(last_status or ""),
+            "last_error": str(last_error or ""),
+            "last_summary": dict(last_summary or {}),
+        },
+    )

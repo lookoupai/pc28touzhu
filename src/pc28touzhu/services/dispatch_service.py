@@ -5,6 +5,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 from pc28touzhu.domain.pc28_play_filter import strategy_matches_signal
+from pc28touzhu.domain.settlement_rules import build_settlement_snapshot
+from pc28touzhu.domain.subscription_strategy import (
+    resolve_dispatch_policy,
+    resolve_settlement_runtime_policy,
+    resolve_staking_runtime_policy,
+)
 
 
 def _utc_now() -> datetime:
@@ -76,22 +82,18 @@ def _message_text_from_template(signal: Dict[str, Any], amount: float, template:
 
 def _build_stake_plan(strategy: Dict[str, Any], signal: Dict[str, Any], current_step: int = 1) -> Dict[str, Any]:
     payload = signal.get("normalized_payload") or {}
-    mode = str(strategy.get("mode") or "flat").strip() or "flat"
-    base_stake = float(
-        strategy.get("base_stake")
-        or strategy.get("stake_amount")
-        or payload.get("base_stake")
-        or payload.get("stake_amount")
-        or 10.0
-    )
-    multiplier = float(strategy.get("multiplier") or payload.get("multiplier") or 2.0)
-    max_steps = int(strategy.get("max_steps") or payload.get("max_steps") or 1)
-    refund_action = str(strategy.get("refund_action") or payload.get("refund_action") or "hold").strip() or "hold"
-    cap_action = str(strategy.get("cap_action") or payload.get("cap_action") or "reset").strip() or "reset"
-    if mode == "martingale":
+    runtime_policy = resolve_staking_runtime_policy(strategy, payload)
+    raw_mode = str(runtime_policy.get("mode") or "follow_source")
+    mode = "martingale" if raw_mode == "martingale" else "follow"
+    base_stake = float(runtime_policy.get("base_stake") or runtime_policy.get("fixed_amount") or 10.0)
+    multiplier = float(runtime_policy.get("multiplier") or 2.0)
+    max_steps = int(runtime_policy.get("max_steps") or 1)
+    refund_action = str(runtime_policy.get("refund_action") or "hold").strip() or "hold"
+    cap_action = str(runtime_policy.get("cap_action") or "reset").strip() or "reset"
+    if raw_mode == "martingale":
         amount = round(base_stake * (multiplier ** max(0, int(current_step or 1) - 1)), 2)
     else:
-        amount = float(strategy.get("stake_amount") or payload.get("stake_amount") or base_stake)
+        amount = float(runtime_policy.get("fixed_amount") or base_stake)
     stake_plan = {
         "mode": mode,
         "amount": amount,
@@ -103,9 +105,8 @@ def _build_stake_plan(strategy: Dict[str, Any], signal: Dict[str, Any], current_
         "current_step": max(1, int(current_step or 1)),
     }
     meta = {
-        "legacy_stake_amount": float(strategy.get("stake_amount") or payload.get("stake_amount") or 0) if (
-            strategy.get("stake_amount") is not None or payload.get("stake_amount") is not None
-        ) else None
+        "legacy_stake_amount": float(runtime_policy.get("fixed_amount") or 0) if runtime_policy.get("fixed_amount") is not None else None,
+        "staking_policy_mode": raw_mode,
     }
     stake_plan["meta"] = {key: value for key, value in meta.items() if value is not None}
     return stake_plan
@@ -147,6 +148,7 @@ def dispatch_signal(repository: Any, signal_id: int) -> Dict[str, Any]:
             else:
                 progression_state = repository.get_subscription_progression_state(subscription_id)
                 stake_plan_preview = _build_stake_plan(strategy, signal, current_step=int(progression_state.get("current_step") or 1))
+                settlement_policy = resolve_settlement_runtime_policy(strategy, signal.get("normalized_payload"))
                 progression_event = repository.create_progression_event_record(
                     subscription_id=subscription_id,
                     user_id=int(candidate["user_id"]),
@@ -159,6 +161,14 @@ def dispatch_signal(repository: Any, signal_id: int) -> Dict[str, Any]:
                     max_steps=int(stake_plan_preview["max_steps"]),
                     refund_action=str(stake_plan_preview["refund_action"]),
                     cap_action=str(stake_plan_preview["cap_action"]),
+                    settlement_rule_id=str(settlement_policy.get("settlement_rule_id") or ""),
+                    settlement_snapshot=build_settlement_snapshot(
+                        rule_source=str(settlement_policy.get("rule_source") or ""),
+                        settlement_rule_id=settlement_policy.get("settlement_rule_id"),
+                        fallback_profit_ratio=float(settlement_policy.get("fallback_profit_ratio") or 1.0),
+                        resolved_from=str(settlement_policy.get("resolved_from") or ""),
+                        signal=signal,
+                    ),
                     status="pending",
                 )
             progression_events[subscription_id] = progression_event
@@ -175,7 +185,7 @@ def dispatch_signal(repository: Any, signal_id: int) -> Dict[str, Any]:
             template = repository.get_message_template(int(candidate["template_id"]))
         planned_message_text = _message_text_from_template(signal, float(stake_plan["amount"]), template)
         execute_after = base_execute_after
-        expire_after_seconds = int(strategy.get("expire_after_seconds") or 120)
+        expire_after_seconds = int(resolve_dispatch_policy(strategy).get("expire_after_seconds") or 120)
         expire_at = execute_after + timedelta(seconds=max(30, expire_after_seconds))
         idempotency_key = "signal:%s:target:%s" % (signal_id, candidate["delivery_target_id"])
 

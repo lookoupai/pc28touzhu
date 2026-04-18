@@ -7,6 +7,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from pc28touzhu.domain.pc28_profit_rules import resolve_pc28_hit_profit
+from pc28touzhu.domain.settlement_rules import build_settlement_snapshot
+from pc28touzhu.domain.subscription_strategy import (
+    legacy_profit_rule_args_from_settlement_rule_id,
+    present_subscription_item,
+    resolve_risk_control_policy,
+    resolve_settlement_runtime_policy,
+)
 
 
 SHANGHAI_TZ = timezone(timedelta(hours=8))
@@ -66,31 +73,71 @@ def _round_money(value: Any, digits: int = 2) -> float:
 
 
 def _subscription_risk_control(strategy: Optional[dict]) -> Dict[str, Any]:
-    payload = strategy if isinstance(strategy, dict) else {}
-    risk_control = payload.get("risk_control") if isinstance(payload.get("risk_control"), dict) else {}
+    risk_control = resolve_risk_control_policy(strategy)
     return {
         "enabled": bool(risk_control.get("enabled")),
         "profit_target": max(0.0, _round_money(risk_control.get("profit_target"))),
         "loss_limit": max(0.0, _round_money(risk_control.get("loss_limit"))),
-        "win_profit_ratio": max(0.01, _round_money(risk_control.get("win_profit_ratio") or 1.0, digits=4)),
     }
 
 
-def _progression_hit_profit_delta(*, signal: Optional[Dict[str, Any]], risk_control: Dict[str, Any], stake_amount: float) -> float:
+def _event_settlement_context(
+    *,
+    current_event: Optional[Dict[str, Any]],
+    signal: Optional[Dict[str, Any]],
+    strategy: Optional[dict],
+) -> Dict[str, Any]:
     payload = (signal or {}).get("normalized_payload") if isinstance((signal or {}).get("normalized_payload"), dict) else {}
-    source_ref = payload.get("source_ref") if isinstance(payload.get("source_ref"), dict) else {}
-    should_use_pc28_rule = bool(payload.get("profit_rule_id")) or str(source_ref.get("platform") or "").strip() == "AITradingSimulator"
-    if should_use_pc28_rule:
-        profit_delta = resolve_pc28_hit_profit(
-            stake_amount=float(stake_amount or 0),
-            bet_type=str((signal or {}).get("bet_type") or ""),
-            bet_value=str((signal or {}).get("bet_value") or ""),
-            profit_rule_id=payload.get("profit_rule_id"),
-            odds_profile=payload.get("odds_profile"),
-        )
-        if profit_delta is not None:
-            return _round_money(profit_delta)
-    return _round_money(float(stake_amount or 0) * float(risk_control["win_profit_ratio"]))
+    snapshot = (current_event or {}).get("settlement_snapshot") if isinstance((current_event or {}).get("settlement_snapshot"), dict) else {}
+    event_rule_id = str((current_event or {}).get("settlement_rule_id") or "").strip().lower()
+    if event_rule_id or snapshot:
+        normalized_rule_id = event_rule_id or str(snapshot.get("settlement_rule_id") or "").strip().lower() or None
+        fallback_profit_ratio = round(float(snapshot.get("fallback_profit_ratio") or 1.0), 4)
+        if not snapshot:
+            snapshot = build_settlement_snapshot(
+                rule_source="event_snapshot",
+                settlement_rule_id=normalized_rule_id,
+                fallback_profit_ratio=fallback_profit_ratio,
+                resolved_from="event_row",
+                signal=signal,
+            )
+        return {
+            "rule_source": str(snapshot.get("rule_source") or ""),
+            "settlement_rule_id": normalized_rule_id,
+            "fallback_profit_ratio": fallback_profit_ratio,
+            "resolved_from": str(snapshot.get("resolved_from") or "event_snapshot"),
+            "snapshot": dict(snapshot),
+        }
+    settlement_policy = resolve_settlement_runtime_policy(strategy, payload)
+    snapshot = build_settlement_snapshot(
+        rule_source=str(settlement_policy.get("rule_source") or ""),
+        settlement_rule_id=settlement_policy.get("settlement_rule_id"),
+        fallback_profit_ratio=float(settlement_policy.get("fallback_profit_ratio") or 1.0),
+        resolved_from=str(settlement_policy.get("resolved_from") or ""),
+        signal=signal,
+    )
+    return {
+        **settlement_policy,
+        "snapshot": snapshot,
+    }
+
+
+def _progression_hit_profit_delta(*, settlement_context: Dict[str, Any], signal: Optional[Dict[str, Any]], stake_amount: float) -> float:
+    settlement_rule_id = settlement_context.get("settlement_rule_id")
+    fallback_profit_ratio = settlement_context.get("fallback_profit_ratio")
+    if settlement_rule_id:
+        legacy_rule = legacy_profit_rule_args_from_settlement_rule_id(settlement_rule_id)
+        if legacy_rule:
+            profit_delta = resolve_pc28_hit_profit(
+                stake_amount=float(stake_amount or 0),
+                bet_type=str((signal or {}).get("bet_type") or ""),
+                bet_value=str((signal or {}).get("bet_value") or ""),
+                profit_rule_id=legacy_rule.get("profit_rule_id"),
+                odds_profile=legacy_rule.get("odds_profile"),
+            )
+            if profit_delta is not None:
+                return _round_money(profit_delta)
+    return _round_money(float(stake_amount or 0) * float(fallback_profit_ratio or 1.0))
 
 
 class DatabaseRepository:
@@ -256,6 +303,12 @@ class DatabaseRepository:
             cap_action TEXT NOT NULL DEFAULT 'reset',
             status TEXT NOT NULL DEFAULT 'pending',
             resolved_result_type TEXT NOT NULL DEFAULT '',
+            settlement_rule_id TEXT NOT NULL DEFAULT '',
+            profit_delta REAL NOT NULL DEFAULT 0,
+            loss_delta REAL NOT NULL DEFAULT 0,
+            net_delta REAL NOT NULL DEFAULT 0,
+            settlement_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            result_context_json TEXT NOT NULL DEFAULT '{}',
             settled_at TEXT,
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
@@ -435,6 +488,7 @@ class DatabaseRepository:
             self._ensure_delivery_target_columns(conn)
             self._ensure_message_template_columns(conn)
             self._ensure_execution_job_columns(conn)
+            self._ensure_progression_event_columns(conn)
             self._ensure_user_telegram_indexes(conn)
             conn.commit()
 
@@ -499,6 +553,21 @@ class DatabaseRepository:
         column_definitions = {
             "subscription_id": "ALTER TABLE execution_jobs ADD COLUMN subscription_id INTEGER",
             "progression_event_id": "ALTER TABLE execution_jobs ADD COLUMN progression_event_id INTEGER",
+        }
+        for column_name, ddl in column_definitions.items():
+            if column_name not in existing_columns:
+                conn.execute(ddl)
+
+    def _ensure_progression_event_columns(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(subscription_progression_events)").fetchall()
+        existing_columns = {str(row["name"]) for row in rows}
+        column_definitions = {
+            "settlement_rule_id": "ALTER TABLE subscription_progression_events ADD COLUMN settlement_rule_id TEXT NOT NULL DEFAULT ''",
+            "profit_delta": "ALTER TABLE subscription_progression_events ADD COLUMN profit_delta REAL NOT NULL DEFAULT 0",
+            "loss_delta": "ALTER TABLE subscription_progression_events ADD COLUMN loss_delta REAL NOT NULL DEFAULT 0",
+            "net_delta": "ALTER TABLE subscription_progression_events ADD COLUMN net_delta REAL NOT NULL DEFAULT 0",
+            "settlement_snapshot_json": "ALTER TABLE subscription_progression_events ADD COLUMN settlement_snapshot_json TEXT NOT NULL DEFAULT '{}'",
+            "result_context_json": "ALTER TABLE subscription_progression_events ADD COLUMN result_context_json TEXT NOT NULL DEFAULT '{}'",
         }
         for column_name, ddl in column_definitions.items():
             if column_name not in existing_columns:
@@ -589,7 +658,8 @@ class DatabaseRepository:
         }
 
     def _serialize_subscription_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
-        data = {
+        data = present_subscription_item(
+            {
             "id": int(row["id"]),
             "user_id": int(row["user_id"]),
             "source_id": int(row["source_id"]),
@@ -597,10 +667,11 @@ class DatabaseRepository:
             "strategy": _safe_json_loads(row.get("strategy_json")),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
-        }
-        if row.get("progression_current_step") is not None:
+            }
+        )
+        if row.get("progression_current_step") is not None or row.get("pending_event_id") is not None:
             data["progression"] = {
-                "current_step": int(row["progression_current_step"]),
+                "current_step": int(row["progression_current_step"]) if row.get("progression_current_step") is not None else 1,
                 "last_signal_id": int(row["progression_last_signal_id"]) if row.get("progression_last_signal_id") is not None else None,
                 "last_issue_no": str(row.get("progression_last_issue_no") or ""),
                 "last_result_type": str(row.get("progression_last_result_type") or ""),
@@ -691,6 +762,12 @@ class DatabaseRepository:
             "cap_action": str(row.get("cap_action") or "reset"),
             "status": str(row.get("status") or "pending"),
             "resolved_result_type": str(row.get("resolved_result_type") or ""),
+            "settlement_rule_id": str(row.get("settlement_rule_id") or ""),
+            "profit_delta": _round_money(row.get("profit_delta")),
+            "loss_delta": _round_money(row.get("loss_delta")),
+            "net_delta": _round_money(row.get("net_delta")),
+            "settlement_snapshot": _safe_json_loads(row.get("settlement_snapshot_json")),
+            "result_context": _safe_json_loads(row.get("result_context_json")),
             "settled_at": row.get("settled_at"),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
@@ -2267,6 +2344,8 @@ class DatabaseRepository:
         max_steps: int,
         refund_action: str,
         cap_action: str,
+        settlement_rule_id: Optional[str] = None,
+        settlement_snapshot: Optional[dict] = None,
         status: str = "pending",
     ) -> Dict[str, Any]:
         existing = self.get_progression_event_by_signal(subscription_id=subscription_id, signal_id=signal_id)
@@ -2278,8 +2357,9 @@ class DatabaseRepository:
                 """
                 INSERT INTO subscription_progression_events(
                     subscription_id, user_id, signal_id, issue_no, progression_step, stake_amount,
-                    base_stake, multiplier, max_steps, refund_action, cap_action, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    base_stake, multiplier, max_steps, refund_action, cap_action,
+                    settlement_rule_id, settlement_snapshot_json, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(subscription_id),
@@ -2293,6 +2373,8 @@ class DatabaseRepository:
                     max(1, int(max_steps or 1)),
                     str(refund_action or "hold"),
                     str(cap_action or "reset"),
+                    str(settlement_rule_id or ""),
+                    _safe_json_dumps(settlement_snapshot or {}),
                     str(status or "pending"),
                     now,
                     now,
@@ -2328,6 +2410,7 @@ class DatabaseRepository:
         user_id: int,
         result_type: str,
         progression_event_id: Optional[int] = None,
+        result_context: Optional[dict] = None,
     ) -> Dict[str, Any]:
         current_event = (
             self.get_progression_event(int(progression_event_id))
@@ -2359,6 +2442,7 @@ class DatabaseRepository:
 
         now = _utc_now_iso()
         with self._connect() as conn:
+            signal = self.get_signal(int(current_event["signal_id"])) if current_event.get("signal_id") is not None else None
             conn.execute(
                 """
                 UPDATE subscription_progression_events
@@ -2412,21 +2496,55 @@ class DatabaseRepository:
                 else self._default_subscription_financial_state(int(subscription_id))
             )
 
-            signal = self.get_signal(int(current_event["signal_id"])) if current_event.get("signal_id") is not None else None
             stake_amount = _round_money(current_event.get("stake_amount"))
+            settlement_context = _event_settlement_context(
+                current_event=current_event,
+                signal=signal,
+                strategy=strategy,
+            )
             profit_delta = 0.0
             loss_delta = 0.0
             net_delta = 0.0
             if normalized_result == "hit":
                 profit_delta = _progression_hit_profit_delta(
+                    settlement_context=settlement_context,
                     signal=signal,
-                    risk_control=risk_control,
                     stake_amount=stake_amount,
                 )
                 net_delta = profit_delta
             elif normalized_result == "miss":
                 loss_delta = stake_amount
                 net_delta = -stake_amount
+            settlement_snapshot = dict(settlement_context.get("snapshot") or {})
+            result_context_payload = {
+                "result_type": normalized_result,
+                "next_step": max(1, int(next_step or 1)),
+            }
+            if isinstance(result_context, dict):
+                result_context_payload.update(result_context)
+            conn.execute(
+                """
+                UPDATE subscription_progression_events
+                SET settlement_rule_id = ?,
+                    profit_delta = ?,
+                    loss_delta = ?,
+                    net_delta = ?,
+                    settlement_snapshot_json = ?,
+                    result_context_json = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    str(settlement_context.get("settlement_rule_id") or ""),
+                    profit_delta,
+                    loss_delta,
+                    net_delta,
+                    _safe_json_dumps(settlement_snapshot),
+                    _safe_json_dumps(result_context_payload),
+                    now,
+                    int(current_event["id"]),
+                ),
+            )
 
             next_realized_profit = _round_money(current_financial["realized_profit"] + profit_delta)
             next_realized_loss = _round_money(current_financial["realized_loss"] + loss_delta)
@@ -2542,11 +2660,12 @@ class DatabaseRepository:
                     UPDATE subscription_progression_events
                     SET status = 'reset',
                         resolved_result_type = 'reset',
+                        result_context_json = ?,
                         settled_at = ?,
                         updated_at = ?
                     WHERE id IN (""" + placeholders + """)
                     """,
-                    (now, now, *voided_event_ids),
+                    (_safe_json_dumps({"result_type": "reset", "reason": "subscription_runtime_reset"}), now, now, *voided_event_ids),
                 )
 
             conn.execute(

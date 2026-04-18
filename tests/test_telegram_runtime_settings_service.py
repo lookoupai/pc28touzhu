@@ -13,6 +13,7 @@ from pc28touzhu.executor.db_repository import DatabaseRepository
 from pc28touzhu.services.telegram_runtime_settings_service import (
     get_effective_telegram_runtime_settings,
     get_telegram_runtime_settings_for_admin,
+    update_pc28_auto_settlement_runtime_state,
     update_telegram_runtime_settings,
 )
 
@@ -44,6 +45,12 @@ def build_runtime_stub():
             top_n=10,
             timezone="Asia/Shanghai",
         ),
+        pc28_auto_settlement=SimpleNamespace(
+            enabled=False,
+            interval_seconds=30,
+            once=True,
+            draw_limit=60,
+        ),
     )
 
 
@@ -63,6 +70,7 @@ class TelegramRuntimeSettingsServiceTests(unittest.TestCase):
         self.assertEqual(payload["item"]["alert"]["bot_token"], "env-alert-token")
         self.assertEqual(payload["item"]["bot"]["bot_token"], "env-query-token")
         self.assertEqual(payload["item"]["report"]["target_chat_id"], "-100env-report")
+        self.assertEqual(payload["item"]["auto_settlement"]["draw_limit"], 60)
 
     def test_update_settings_persists_real_values_and_returns_masked_values(self):
         payload = update_telegram_runtime_settings(
@@ -91,17 +99,24 @@ class TelegramRuntimeSettingsServiceTests(unittest.TestCase):
                     "top_n": 12,
                     "timezone": "Asia/Shanghai",
                 },
+                "auto_settlement": {
+                    "enabled": True,
+                    "interval_seconds": 20,
+                    "draw_limit": 80,
+                },
             },
         )
         self.assertTrue(payload["item"]["alert"]["has_bot_token"])
         self.assertNotIn("new-alert-token-123", payload["item"]["alert"]["bot_token_masked"])
         self.assertEqual(payload["item"]["report"]["top_n"], 12)
+        self.assertTrue(payload["item"]["auto_settlement"]["enabled"])
 
         stored = get_effective_telegram_runtime_settings(self.repo, runtime_config=self.runtime)
         self.assertEqual(stored["source"], "database")
         self.assertEqual(stored["item"]["alert"]["bot_token"], "new-alert-token-123")
         self.assertEqual(stored["item"]["bot"]["bot_token"], "new-query-token-456")
         self.assertEqual(stored["item"]["report"]["send_minute"], 35)
+        self.assertEqual(stored["item"]["auto_settlement"]["draw_limit"], 80)
 
     def test_blank_token_keeps_current_effective_token(self):
         update_telegram_runtime_settings(
@@ -130,6 +145,11 @@ class TelegramRuntimeSettingsServiceTests(unittest.TestCase):
                     "top_n": 8,
                     "timezone": "Asia/Shanghai",
                 },
+                "auto_settlement": {
+                    "enabled": False,
+                    "interval_seconds": 30,
+                    "draw_limit": 60,
+                },
             },
         )
         admin_view = get_telegram_runtime_settings_for_admin(self.repo, runtime_config=self.runtime)
@@ -137,6 +157,19 @@ class TelegramRuntimeSettingsServiceTests(unittest.TestCase):
         effective = get_effective_telegram_runtime_settings(self.repo, runtime_config=self.runtime)
         self.assertEqual(effective["item"]["alert"]["bot_token"], "env-alert-token")
         self.assertEqual(effective["item"]["bot"]["bot_token"], "env-query-token")
+
+    def test_admin_view_includes_auto_settlement_runtime_state(self):
+        update_pc28_auto_settlement_runtime_state(
+            self.repo,
+            last_run_at="2026-04-18T06:00:00Z",
+            last_status="success",
+            last_summary={"resolved_count": 3},
+            last_error="",
+        )
+        admin_view = get_telegram_runtime_settings_for_admin(self.repo, runtime_config=self.runtime)
+        runtime_state = admin_view["item"]["auto_settlement"]["runtime_state"]
+        self.assertEqual(runtime_state["last_status"], "success")
+        self.assertEqual(runtime_state["last_summary"]["resolved_count"], 3)
 
 
 if __name__ == "__main__":

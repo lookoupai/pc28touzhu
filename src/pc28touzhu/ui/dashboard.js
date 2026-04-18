@@ -1484,6 +1484,8 @@
         const alertSettings = item.alert || {};
         const botSettings = item.bot || {};
         const reportSettings = item.report || {};
+        const autoSettlementSettings = item.auto_settlement || {};
+        const autoSettlementRuntime = autoSettlementSettings.runtime_state || {};
         adminContent.innerHTML = '' +
             '<div class="overview-layout">' +
                 '<section class="metrics-grid">' +
@@ -1519,13 +1521,23 @@
                         footLabel: "最近更新",
                         footValue: formatDateTime(item.updated_at),
                     }) +
+                    renderMetricCard({
+                        label: "PC28 自动结算",
+                        value: autoSettlementSettings.enabled ? "已启用" : "已停用",
+                        status: autoSettlementSettings.enabled ? "ok" : "warning",
+                        meta: autoSettlementRuntime.last_status
+                            ? ("最近状态 " + String(autoSettlementRuntime.last_status || "--"))
+                            : "尚未运行",
+                        footLabel: "最近执行",
+                        footValue: formatDateTime(autoSettlementRuntime.updated_at || autoSettlementRuntime.last_run_at),
+                    }) +
                 "</section>" +
                 '<section class="panel">' +
-                    '<div class="panel-header"><div><p class="panel-kicker">Telegram 配置</p><h2>网页保存后自动热更新</h2></div></div>' +
-                    '<div class="status-card"><div class="status-head"><strong>热更新说明</strong>' + renderStatusPill("ok") + '</div><p class="helper-text">本页保存的是平台侧 Telegram 运行配置。`alert`、`bot`、`report` 三个独立 worker 会在下一轮循环自动读取数据库中的最新配置，不需要重启进程。</p></div>' +
+                    '<div class="panel-header"><div><p class="panel-kicker">后台 Worker 配置</p><h2>网页保存后自动热更新</h2></div></div>' +
+                    '<div class="status-card"><div class="status-head"><strong>热更新说明</strong>' + renderStatusPill("ok") + '</div><p class="helper-text">本页保存的是平台侧后台 worker 运行配置。`alert`、`bot`、`report`、`auto_settlement` 四个独立 worker 会在下一轮循环自动读取数据库中的最新配置，不需要重启进程。</p></div>' +
                 "</section>" +
                 '<section class="panel">' +
-                    '<div class="panel-header"><div><p class="panel-kicker">配置表单</p><h2>告警、Bot、日报推送</h2></div></div>' +
+                    '<div class="panel-header"><div><p class="panel-kicker">配置表单</p><h2>告警、Bot、日报推送、自动结算</h2></div></div>' +
                     '<form id="telegramSettingsForm" class="settings-form">' +
                         '<div class="settings-grid">' +
                             '<section class="detail-card">' +
@@ -1562,12 +1574,22 @@
                                     '<label><span class="field-label">时区</span><select class="inline-select" name="report_timezone"><option value="Asia/Shanghai"' + (String(reportSettings.timezone || "") === "Asia/Shanghai" ? " selected" : "") + '>Asia/Shanghai</option><option value="UTC"' + (String(reportSettings.timezone || "") === "UTC" ? " selected" : "") + '>UTC</option></select></label>' +
                                 '</div>' +
                             '</section>' +
+                            '<section class="detail-card">' +
+                                '<div class="detail-card-head"><strong>PC28 自动结算</strong>' + renderStatusPill(autoSettlementSettings.enabled ? "active" : "inactive") + '</div>' +
+                                '<p class="helper-text">后台自动拉取最近开奖并批量结算已发出的待结算 PC28 记录。当前状态：' + escapeHtml(String(autoSettlementRuntime.last_status || "尚未运行")) + (autoSettlementRuntime.last_error ? ("；最近错误：" + String(autoSettlementRuntime.last_error)) : "") + '</p>' +
+                                '<div class="settings-form-grid">' +
+                                    '<label class="settings-toggle"><input type="checkbox" name="auto_settlement_enabled"' + (autoSettlementSettings.enabled ? " checked" : "") + '><span>启用 PC28 自动结算</span></label>' +
+                                    '<label><span class="field-label">轮询间隔（秒）</span><input class="text-input" type="number" min="5" name="auto_settlement_interval_seconds" value="' + escapeHtml(String(autoSettlementSettings.interval_seconds || 30)) + '"></label>' +
+                                    '<label><span class="field-label">最近开奖拉取条数</span><input class="text-input" type="number" min="10" max="100" name="auto_settlement_draw_limit" value="' + escapeHtml(String(autoSettlementSettings.draw_limit || 60)) + '"></label>' +
+                                    '<label><span class="field-label">最近执行</span><input class="text-input" type="text" value="' + escapeHtml(formatDateTime(autoSettlementRuntime.updated_at || autoSettlementRuntime.last_run_at)) + '" disabled></label>' +
+                                '</div>' +
+                            '</section>' +
                         '</div>' +
-                        '<div class="form-actions wide"><button class="primary-btn" type="submit">保存 Telegram 配置</button><button class="ghost-btn" type="button" data-action="reload-telegram-settings">重新加载当前值</button></div>' +
+                        '<div class="form-actions wide"><button class="primary-btn" type="submit">保存后台 Worker 配置</button><button class="ghost-btn" type="button" data-action="reload-telegram-settings">重新加载当前值</button></div>' +
                     '</form>' +
                 "</section>" +
             "</div>";
-        setStatus("已刷新 Telegram 配置中心。", false);
+        setStatus("已刷新后台 Worker 配置中心。", false);
     }
 
     function renderSupportPage(data) {
@@ -2019,9 +2041,14 @@
                             top_n: Number(form.elements.report_top_n.value),
                             timezone: form.elements.report_timezone.value,
                         },
+                        auto_settlement: {
+                            enabled: Boolean(form.elements.auto_settlement_enabled.checked),
+                            interval_seconds: Number(form.elements.auto_settlement_interval_seconds.value),
+                            draw_limit: Number(form.elements.auto_settlement_draw_limit.value),
+                        },
                     },
                 });
-                await refreshCurrentRoute("Telegram 配置已保存，对应 worker 将在下一轮自动生效。");
+                await refreshCurrentRoute("后台 Worker 配置已保存，对应 worker 将在下一轮自动生效。");
                 return;
             }
         } catch (error) {

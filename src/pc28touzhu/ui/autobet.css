@@ -808,6 +808,7 @@
 
 .subscription-strategy-mode-field,
 .subscription-play-filter-mode-field,
+.subscription-settlement-mode-field,
 .subscription-follow-tip-field,
 .subscription-martingale-field,
 .subscription-martingale-advanced-field {
@@ -892,8 +893,46 @@
     color: var(--warning);
 }
 
+.subscription-settlement-panel {
+    display: grid;
+    gap: 12px;
+    padding: 16px 18px;
+    border: 1px solid rgba(15, 118, 110, 0.14);
+    border-radius: var(--radius-lg);
+    background: linear-gradient(135deg, rgba(15, 118, 110, 0.08), rgba(15, 90, 118, 0.04));
+}
+
+.subscription-settlement-copy {
+    display: grid;
+    gap: 6px;
+}
+
+.subscription-settlement-copy strong {
+    font-size: 0.96rem;
+    line-height: 1.3;
+}
+
+.subscription-settlement-copy p {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.7;
+}
+
+.subscription-settlement-form {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.subscription-settlement-input {
+    flex: 1 1 220px;
+    min-width: 0;
+}
+
 .subscription-fixed-field[hidden],
 .subscription-play-filter-fields[hidden],
+.subscription-settlement-fixed-field[hidden],
 .subscription-follow-tip-field[hidden],
 .subscription-martingale-field[hidden],
 .subscription-martingale-advanced-field[hidden],
@@ -907,6 +946,16 @@
 
 .subscription-summary-grid {
     margin-bottom: 16px;
+}
+
+.subscription-panel-head-actions {
+    display: grid;
+    gap: 10px;
+    justify-items: end;
+}
+
+.subscription-panel-head-actions .panel-copy {
+    text-align: right;
 }
 
 .subscription-chain-meta {
@@ -1273,6 +1322,19 @@ body[data-autobet-scope="subscriptions"] .side-panel {
 
     .subscription-route-head {
         flex-direction: column;
+    }
+
+    .subscription-settlement-form {
+        display: grid;
+        grid-template-columns: 1fr;
+    }
+
+    .subscription-panel-head-actions {
+        justify-items: stretch;
+    }
+
+    .subscription-panel-head-actions .panel-copy {
+        text-align: left;
     }
 
     .target-repair-actions {

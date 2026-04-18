@@ -49,6 +49,8 @@ def resolve_signal_play_filter_key(*, bet_type: str, bet_value: str) -> Optional
 def strategy_matches_signal(strategy: Optional[dict], signal: Optional[dict]) -> bool:
     payload = strategy if isinstance(strategy, dict) else {}
     bet_filter = payload.get("bet_filter") if isinstance(payload.get("bet_filter"), dict) else {}
+    if not bet_filter and isinstance(payload.get("play_filter"), dict):
+        bet_filter = payload.get("play_filter") or {}
     mode = normalize_play_filter_mode(bet_filter.get("mode"))
     selected_keys = normalize_play_filter_keys(bet_filter.get("selected_keys"))
     if mode != "selected" or not selected_keys:

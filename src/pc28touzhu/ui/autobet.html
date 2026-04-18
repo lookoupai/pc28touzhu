@@ -551,7 +551,10 @@
                                 <p class="panel-kicker">跟单策略</p>
                                 <h2>跟单策略</h2>
                             </div>
-                            <p id="subscriptionWorkspaceSummaryText" class="panel-copy">在这里看清一条来源会发到哪些群、发多少钱、套用哪个模板。</p>
+                            <div class="subscription-panel-head-actions">
+                                <p id="subscriptionWorkspaceSummaryText" class="panel-copy">在这里看清一条来源会发到哪些群、发多少钱、套用哪个模板。</p>
+                                <button id="batchResolveSubscriptionsBtn" class="ghost-btn" type="button">批量自动结算待结算记录</button>
+                            </div>
                         </div>
                         <div class="autobet-note subscription-workspace-note">
                             <strong>这一步就是把来源信号变成实际下单消息</strong>
@@ -667,6 +670,28 @@
                                         <span>信号过期时间（秒）</span>
                                         <input class="text-input" name="expire_after_seconds" type="number" min="30" step="30" value="120">
                                     </label>
+                                    <label class="wide subscription-settlement-mode-field">
+                                        <span>收益结算规则</span>
+                                        <select id="subscriptionSettlementRuleSourceSelect" class="text-input" name="settlement_rule_source">
+                                            <option value="follow_signal">跟随来源规则</option>
+                                            <option value="subscription_fixed">固定指定一套规则</option>
+                                        </select>
+                                        <small id="subscriptionSettlementRuleHint" class="field-hint">默认跟随来源信号里的结算规则。只有当你明确知道自己要统一按哪套口径记账时，才建议固定指定。</small>
+                                    </label>
+                                    <label class="subscription-settlement-fixed-field" hidden>
+                                        <span>固定结算规则</span>
+                                        <select class="text-input" name="settlement_rule_id">
+                                            <option value="pc28_netdisk_regular">网盘常规</option>
+                                            <option value="pc28_netdisk_abc">网盘 ABC</option>
+                                            <option value="pc28_high_regular">高赔常规</option>
+                                            <option value="pc28_high_abc">高赔 ABC</option>
+                                        </select>
+                                    </label>
+                                    <label class="subscription-settlement-field">
+                                        <span>兜底净利倍数</span>
+                                        <input class="text-input" name="fallback_profit_ratio" type="number" min="0.01" step="0.01" value="1">
+                                        <small class="field-hint">当当前玩法没有明确赔率规则时，系统会按“本金 × 这个倍数”估算净利。这个字段只影响收益/风控口径，不影响发单文本。</small>
+                                    </label>
                                     <label class="subscription-martingale-advanced-field" hidden>
                                         <span>回本后怎么走</span>
                                         <select class="text-input" name="refund_action">
@@ -698,11 +723,6 @@
                                     <label class="subscription-risk-field" hidden>
                                         <span>累计净亏到多少停</span>
                                         <input class="text-input" name="loss_limit" type="number" min="0" step="0.01" placeholder="例如：30">
-                                    </label>
-                                    <label class="subscription-risk-field" hidden>
-                                        <span>每次命中的净盈利倍数</span>
-                                        <input class="text-input" name="win_profit_ratio" type="number" min="0.01" step="0.01" value="1">
-                                        <small class="field-hint">填 1 表示命中一把净赚 1 倍本金。当前已支持的 PC28 大小/单双/组合会优先按赔率规则计算；其他玩法才用这个倍数估算止盈止损。</small>
                                     </label>
                                 </div>
                             </div>
