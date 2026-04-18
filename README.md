@@ -25,6 +25,7 @@ PC28 投注信号平台与 Telegram 执行器。
 - **运行模式**：
   - 本地最小验证：`./pc28 api`、`./pc28 fake`、`./pc28 seed`
   - 真实 Telegram 执行：`./pc28 executor executor-001`
+  - 来源自动同步：`./pc28 source-sync`
   - 收益查询 Bot：`./pc28 bot`
   - 日报排行榜推送：`./pc28 report`
   - `systemd` 托管：`./pc28 up executor-001`
@@ -122,6 +123,7 @@ TG_REPORT_TIMEZONE=Asia/Shanghai
 ./pc28 fake
 ./pc28 executor executor-001
 ./pc28 alert
+./pc28 source-sync
 ./pc28 bot
 ./pc28 report
 ./pc28 test
@@ -141,6 +143,7 @@ TG_REPORT_TIMEZONE=Asia/Shanghai
 说明：
 
 - 不传 `executor_id` 时，仅管理 `platform + alert + telegram-bot + telegram-report`
+- 不传 `executor_id` 时，默认管理 `platform + source-sync + alert + telegram-bot + telegram-report`
 - 传入 `executor_id` 时，会额外管理对应执行器实例
 - `./pc28 executor executor-001` 会以常驻模式运行真实执行器
 

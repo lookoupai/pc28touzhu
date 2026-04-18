@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from .models import ExecutorJob
+from ..runtime_environment import build_telethon_missing_message, ensure_telethon_session_writable
 
 
 def _coerce_entity(value: str) -> Any:
@@ -45,9 +46,9 @@ class TelethonMessageSender:
         try:
             from telethon.sync import TelegramClient
         except ImportError as exc:
-            raise RuntimeError("未安装 Telethon，请先安装 `Telethon>=1.42,<2`") from exc
+            raise RuntimeError(build_telethon_missing_message()) from exc
 
-        session_path = Path(self.session).expanduser()
+        session_path = ensure_telethon_session_writable(self.session)
         session_path.parent.mkdir(parents=True, exist_ok=True)
         client = TelegramClient(self.session, self.api_id, self.api_hash)
         client.connect()

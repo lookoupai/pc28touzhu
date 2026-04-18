@@ -32,6 +32,8 @@
         <nav class="workspace-nav" aria-label="自动投注导航">
             <a class="workspace-link is-active" href="/autobet#autobetQuickstartSection">总控台首页</a>
             <a class="workspace-link" href="/autobet#autobetOverviewSection">配置概览</a>
+            <a class="workspace-link" href="/autobet/sources#sourcesSection">来源</a>
+            <a class="workspace-link" href="/autobet#botBindingSection">Bot 绑定</a>
             <a class="workspace-link" href="/autobet/accounts#accountsSection">账号</a>
             <a class="workspace-link" href="/autobet/targets#targetsSection">群组</a>
             <a class="workspace-link" href="/autobet/templates#templatesSection">模板</a>
@@ -188,6 +190,29 @@
                     <div id="autobetWorkspaceCards" class="action-strip"></div>
                 </section>
 
+                <section id="botBindingSection" class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">Telegram Bot</p>
+                            <h2>收益查询 Bot 绑定</h2>
+                        </div>
+                        <p id="botBindingSummary" class="panel-copy">登录后可在这里生成绑定码，并把当前 Telegram 私聊账号绑定到平台用户。</p>
+                    </div>
+                    <div id="botBindingMetrics" class="health-grid"></div>
+                    <div class="content-grid bot-binding-grid">
+                        <article class="health-card bot-binding-card">
+                            <span class="setup-label">绑定命令</span>
+                            <strong id="botBindingCommand" class="mono-text">/bind &lt;绑定码&gt;</strong>
+                            <p id="botBindingCommandMeta">生成绑定码后，在 Telegram 私聊收益查询 Bot 发送这条命令即可。</p>
+                            <div id="botBindingActions" class="form-actions bot-binding-actions"></div>
+                        </article>
+                        <article class="health-card bot-binding-card">
+                            <span class="setup-label">使用说明</span>
+                            <div id="botBindingInstructions" class="bot-binding-instructions"></div>
+                        </article>
+                    </div>
+                </section>
+
                 <section id="autobetHealthSection" class="panel">
                     <div class="panel-header">
                         <div>
@@ -289,7 +314,8 @@
                     <strong>当前版本的配置语义</strong>
                     <p>
                         现在的“自动投注配置完成”仅表示平台已经知道你想跟随哪些来源、用哪个账号、往哪些群组发。
-                        真正的抓取、标准化、派发仍然依赖平台当前执行流程完成。
+                        用户端总控台现在已经支持对单个来源执行一次“抓取 -> 标准化 -> 派发”的链路推进，
+                        但这仍然不是定时自动抓取 worker。
                         另外，当前版本中同一用户的一个订阅会向该用户所有激活的投递目标展开任务。
                         归档后的配置项会保留历史展示，但不会参与全局恢复；真正删除前也必须先归档。
                     </p>
@@ -298,6 +324,53 @@
 
             <section class="content-grid autobet-grid">
                 <section class="section-stack">
+                    <section id="sourcesSection" class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">方案来源</p>
+                                <h2>来源链路工作区</h2>
+                            </div>
+                            <p id="sourceWorkspaceSummaryText" class="panel-copy">这里直接告诉你一个来源有没有被跟单使用，以及它最近有没有跑到信号和任务阶段。</p>
+                        </div>
+                        <div id="sourceWorkspaceSummary" class="health-grid"></div>
+                        <div class="autobet-note source-workspace-note">
+                            <strong>这一块负责把“导入来源”真正推进到“生成信号并发到群”</strong>
+                            <p>来源本身不会自动变成下注消息。当前版本需要先让某个跟单策略使用这个来源，再抓取、标准化、派发，执行器才会往目标群发单。</p>
+                        </div>
+                        <form id="sourceForm" class="autobet-form">
+                            <input name="edit_id" type="hidden">
+                            <div class="autobet-form-grid">
+                                <label>
+                                    <span>来源名称</span>
+                                    <input id="sourceNameInput" class="text-input" name="name" type="text" placeholder="例如：找平衡" required>
+                                </label>
+                                <label>
+                                    <span>可见性</span>
+                                    <select class="text-input" name="visibility">
+                                        <option value="private">私有</option>
+                                        <option value="public">公开</option>
+                                    </select>
+                                </label>
+                                <label class="wide">
+                                    <span>公开方案页链接或导出地址</span>
+                                    <input id="sourceUrlInput" class="text-input" name="source_url" type="url" placeholder="https://your-ai-platform.example.com/public/predictors/12" required>
+                                    <small class="field-hint">这里只做用户自己的 AITradingSimulator 来源导入。链接会自动归一化成 execution 导出地址。</small>
+                                </label>
+                            </div>
+                            <div class="form-actions">
+                                <button id="fillSourceExampleBtn" class="ghost-btn" type="button">填入示例</button>
+                                <button id="createSourceBtn" class="primary-btn" type="submit">导入来源</button>
+                                <button id="cancelSourceEditBtn" class="ghost-btn" type="button" hidden>取消编辑</button>
+                            </div>
+                        </form>
+                        <div class="source-workspace-actions">
+                            <a class="ghost-btn link-btn" href="/#importSection">去首页导入新来源</a>
+                            <a class="ghost-btn link-btn" href="/autobet/subscriptions#subscriptionsSection">去跟单区</a>
+                            <a class="ghost-btn link-btn" href="/records">去执行记录</a>
+                        </div>
+                        <div id="sourceList" class="config-list"></div>
+                    </section>
+
                     <section id="accountsSection" class="panel">
                         <div class="panel-header">
                             <div>

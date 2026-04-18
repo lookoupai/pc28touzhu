@@ -11,6 +11,7 @@
 ```
 
 `./pc28` 是仓库根目录的统一入口；它会自动转发到 `deploy/systemd/pc28ctl.sh`。
+同时会优先使用项目根目录下的 `.venv/bin/python` 或 `venv/bin/python`；如果都不存在，才回退到系统 `python3`。
 
 常用命令：
 
@@ -22,7 +23,7 @@
 ./pc28 logs executor-001
 ```
 
-不传 `executor-001` 时，默认管理 `platform + alert + telegram-bot + telegram-report` 四个服务。
+不传 `executor-001` 时，默认管理 `platform + source-sync + alert + telegram-bot + telegram-report` 五个服务。
 
 ## 手动安装
 
@@ -34,6 +35,15 @@ sudo systemctl daemon-reload
 ```
 
 2. 确保 `/www/wwwroot/pc28touzhu/.env` 已配置（至少包含 `DATABASE_PATH`、`EXECUTOR_API_TOKEN` 等基础项；Telegram 相关项也可以先放 `.env` 里作为默认值，后续再通过 `/admin/telegram` 网页配置覆盖并热更新）。
+
+如果你把 Telegram 相关依赖装在虚拟环境，建议优先创建项目内 `.venv`：
+
+```bash
+cd /www/wwwroot/pc28touzhu
+python3 -m venv ".venv"
+source ".venv/bin/activate"
+pip install -e ".[telegram]"
+```
 
 3. 启动平台：
 
@@ -57,7 +67,15 @@ sudo systemctl enable --now pc28touzhu-alert-notifier.service
 
 `pc28touzhu-alert-notifier.service` 会在 `ExecStart` 中强制注入 `ALERT_NOTIFIER_ONCE=false`，避免被 `.env` 里的同名配置覆盖后退化成单次执行。
 
-6. 启动收益查询 Bot：
+6. 启动来源自动同步 worker：
+
+```bash
+sudo systemctl enable --now pc28touzhu-source-sync.service
+```
+
+`pc28touzhu-source-sync.service` 会在 `ExecStart` 中强制注入 `SOURCE_SYNC_ONCE=false`。默认会自动扫描“已被激活跟单使用的来源”，执行 `fetch -> normalize -> dispatch`。
+
+7. 启动收益查询 Bot：
 
 ```bash
 sudo systemctl enable --now pc28touzhu-telegram-bot.service
@@ -65,7 +83,7 @@ sudo systemctl enable --now pc28touzhu-telegram-bot.service
 
 `pc28touzhu-telegram-bot.service` 会在 `ExecStart` 中强制注入 `TG_BOT_ONCE=false`。
 
-7. 启动日报排行榜推送：
+8. 启动日报排行榜推送：
 
 ```bash
 sudo systemctl enable --now pc28touzhu-telegram-report.service
@@ -79,6 +97,7 @@ sudo systemctl enable --now pc28touzhu-telegram-report.service
 
 ```bash
 journalctl -u pc28touzhu-platform.service -f
+journalctl -u pc28touzhu-source-sync.service -f
 journalctl -u pc28touzhu-telegram-executor@executor-001.service -f
 journalctl -u pc28touzhu-alert-notifier.service -f
 journalctl -u pc28touzhu-telegram-bot.service -f

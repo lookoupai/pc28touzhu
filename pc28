@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${SCRIPT_DIR}"
 SYSTEMD_CTL="${PROJECT_ROOT}/deploy/systemd/pc28ctl.sh"
+PYTHON_LAUNCHER="${PROJECT_ROOT}/deploy/systemd/pc28-python.sh"
 ENV_FILE="${PROJECT_ROOT}/.env"
 
 resolve_executor_id() {
@@ -46,6 +47,7 @@ usage() {
   ./pc28 fake [executor_id]
   ./pc28 executor [executor_id]
   ./pc28 alert
+  ./pc28 source-sync
   ./pc28 bot
   ./pc28 report
   ./pc28 seed
@@ -65,13 +67,11 @@ EOF
 }
 
 run_python() {
-    cd "${PROJECT_ROOT}"
-    PYTHONPATH=src python3 "$@"
+    exec "${PYTHON_LAUNCHER}" "$@"
 }
 
 run_module() {
-    cd "${PROJECT_ROOT}"
-    PYTHONPATH=src python3 -m "$@"
+    exec "${PYTHON_LAUNCHER}" -m "$@"
 }
 
 run_systemd() {
@@ -100,25 +100,28 @@ case "${COMMAND}" in
         run_module "pc28touzhu.main"
         ;;
     fake)
-        exec env EXECUTOR_ID="$(resolve_executor_id "${ARG1}")" PYTHONPATH=src python3 "${PROJECT_ROOT}/fake_executor.py"
+        exec env EXECUTOR_ID="$(resolve_executor_id "${ARG1}")" "${PYTHON_LAUNCHER}" "fake_executor.py"
         ;;
     executor)
-        exec env EXECUTOR_ID="$(resolve_executor_id "${ARG1}")" ONCE=false PYTHONPATH=src python3 "${PROJECT_ROOT}/telegram_executor.py"
+        exec env EXECUTOR_ID="$(resolve_executor_id "${ARG1}")" ONCE=false "${PYTHON_LAUNCHER}" "telegram_executor.py"
         ;;
     alert)
-        exec env ALERT_NOTIFIER_ONCE=false PYTHONPATH=src python3 "${PROJECT_ROOT}/platform_alert_notifier.py"
+        exec env ALERT_NOTIFIER_ONCE=false "${PYTHON_LAUNCHER}" "platform_alert_notifier.py"
+        ;;
+    source-sync)
+        exec env SOURCE_SYNC_ONCE=false "${PYTHON_LAUNCHER}" "platform_source_sync.py"
         ;;
     bot)
-        exec env TG_BOT_ONCE=false PYTHONPATH=src python3 "${PROJECT_ROOT}/telegram_profit_bot.py"
+        exec env TG_BOT_ONCE=false "${PYTHON_LAUNCHER}" "telegram_profit_bot.py"
         ;;
     report)
-        exec env TG_REPORT_ONCE=false PYTHONPATH=src python3 "${PROJECT_ROOT}/telegram_daily_reporter.py"
+        exec env TG_REPORT_ONCE=false "${PYTHON_LAUNCHER}" "telegram_daily_reporter.py"
         ;;
     seed)
         run_python "seed_demo.py"
         ;;
     test)
-        exec env PYTHONPATH=src python3 -m unittest discover -s tests -p "test_*.py"
+        exec "${PYTHON_LAUNCHER}" -m unittest discover -s tests -p "test_*.py"
         ;;
     help|-h|--help|"")
         usage

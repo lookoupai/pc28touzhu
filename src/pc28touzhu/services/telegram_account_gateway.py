@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict
 
+from pc28touzhu.runtime_environment import build_telethon_missing_message, ensure_telethon_session_writable
+
 
 class TelethonAccountGateway:
     def __init__(self, *, api_id: int, api_hash: str):
@@ -17,12 +19,12 @@ class TelethonAccountGateway:
         try:
             from telethon.sync import TelegramClient
         except ImportError as exc:
-            raise RuntimeError("未安装 Telethon，请先安装 `Telethon>=1.42,<2`") from exc
+            raise RuntimeError(build_telethon_missing_message()) from exc
         return TelegramClient
 
     def _connect_client(self, session_path: str):
         client_class = self._load_client_class()
-        normalized_path = Path(str(session_path or "").strip()).expanduser()
+        normalized_path = ensure_telethon_session_writable(session_path)
         normalized_path.parent.mkdir(parents=True, exist_ok=True)
         client = client_class(str(normalized_path), self.api_id, self.api_hash)
         client.connect()

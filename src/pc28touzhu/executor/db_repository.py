@@ -1404,6 +1404,97 @@ class DatabaseRepository:
             )
         return [self._serialize_source_row(row) for row in rows]
 
+    def update_source_record(
+        self,
+        *,
+        source_id: int,
+        owner_user_id: int,
+        name: str,
+        visibility: str,
+        status: str,
+        config: Optional[dict] = None,
+    ) -> Optional[Dict[str, Any]]:
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE signal_sources
+                SET name = ?, visibility = ?, status = ?, config_json = ?, updated_at = ?
+                WHERE id = ? AND owner_user_id = ?
+                """,
+                (
+                    name,
+                    visibility,
+                    status,
+                    _safe_json_dumps(config or {}),
+                    now,
+                    int(source_id),
+                    int(owner_user_id),
+                ),
+            )
+            if cursor.rowcount <= 0:
+                return None
+        return self.get_source(source_id)
+
+    def update_source_status(self, *, source_id: int, owner_user_id: int, status: str) -> Optional[Dict[str, Any]]:
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE signal_sources
+                SET status = ?, updated_at = ?
+                WHERE id = ? AND owner_user_id = ?
+                """,
+                (
+                    status,
+                    now,
+                    int(source_id),
+                    int(owner_user_id),
+                ),
+            )
+            if cursor.rowcount <= 0:
+                return None
+        return self.get_source(source_id)
+
+    def count_raw_items_by_source(self, source_id: int) -> int:
+        row = self._fetch_one(
+            "SELECT COUNT(1) AS total FROM source_raw_items WHERE source_id = ?",
+            (int(source_id),),
+        )
+        return int((row or {}).get("total") or 0)
+
+    def count_signals_by_source(self, source_id: int) -> int:
+        row = self._fetch_one(
+            "SELECT COUNT(1) AS total FROM normalized_signals WHERE source_id = ?",
+            (int(source_id),),
+        )
+        return int((row or {}).get("total") or 0)
+
+    def count_subscriptions_by_source(self, source_id: int, *, user_id: Optional[int] = None) -> int:
+        if user_id is None:
+            row = self._fetch_one(
+                "SELECT COUNT(1) AS total FROM user_subscriptions WHERE source_id = ?",
+                (int(source_id),),
+            )
+        else:
+            row = self._fetch_one(
+                """
+                SELECT COUNT(1) AS total
+                FROM user_subscriptions
+                WHERE source_id = ? AND user_id = ?
+                """,
+                (int(source_id), int(user_id)),
+            )
+        return int((row or {}).get("total") or 0)
+
+    def delete_source_record(self, *, source_id: int, owner_user_id: int) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM signal_sources WHERE id = ? AND owner_user_id = ?",
+                (int(source_id), int(owner_user_id)),
+            )
+            return cursor.rowcount > 0
+
     def create_signal(
         self,
         *,

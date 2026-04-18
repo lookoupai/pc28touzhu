@@ -35,6 +35,7 @@ from pc28touzhu.services.platform_service import (
     create_signal,
     create_source,
     create_subscription,
+    delete_source,
     dispatch_signal,
     delete_delivery_target,
     delete_subscription,
@@ -53,6 +54,8 @@ from pc28touzhu.services.platform_service import (
     resolve_subscription_progression,
     resolve_pending_subscription_progressions,
     settle_subscription_progression,
+    update_source,
+    update_source_status,
     update_delivery_target,
     update_delivery_target_status,
     update_message_template,
@@ -267,6 +270,11 @@ class PlatformApiApplication:
             return _text_response(start_response, 200, _load_ui_html_file("records.html"), "text/html; charset=utf-8")
 
         if path == "/autobet":
+            if method != "GET":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            return _text_response(start_response, 200, _load_ui_html_file("autobet.html"), "text/html; charset=utf-8")
+
+        if path == "/autobet/sources":
             if method != "GET":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
             return _text_response(start_response, 200, _load_ui_html_file("autobet.html"), "text/html; charset=utf-8")
@@ -585,6 +593,46 @@ class PlatformApiApplication:
                 return _json_response(start_response, 200, payload)
             return _json_response(start_response, 405, {"error": "method not allowed"})
 
+        source_prefix = "/api/platform/sources/"
+        if path.startswith(source_prefix) and path.endswith("/delete"):
+            if method != "POST":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            source_id = path[len(source_prefix) : -len("/delete")]
+            payload = delete_source(
+                self.repository,
+                source_id=source_id,
+                owner_user_id=current_user["id"],
+            )
+            return _json_response(start_response, 200, payload)
+        if path.startswith(source_prefix) and path.endswith("/status"):
+            if method != "POST":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            source_id = path[len(source_prefix) : -len("/status")]
+            payload = update_source_status(
+                self.repository,
+                source_id=source_id,
+                owner_user_id=current_user["id"],
+                status=_read_json_body(environ).get("status"),
+            )
+            return _json_response(start_response, 200, payload)
+        if path.startswith(source_prefix) and path.endswith("/fetch"):
+            if method != "POST":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            source_id = path[len(source_prefix) : -len("/fetch")]
+            payload = fetch_source(self.repository, source_id=source_id)
+            return _json_response(start_response, 200, payload)
+        if path.startswith(source_prefix):
+            if method != "POST":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            source_id = path[len(source_prefix) :]
+            payload = update_source(
+                self.repository,
+                source_id=source_id,
+                owner_user_id=current_user["id"],
+                payload=_read_json_body(environ),
+            )
+            return _json_response(start_response, 200, payload)
+
         if path == "/api/platform/telegram-accounts":
             if method == "GET":
                 payload = list_telegram_accounts(
@@ -674,14 +722,6 @@ class PlatformApiApplication:
                 user_id=current_user["id"],
                 status=_read_json_body(environ).get("status"),
             )
-            return _json_response(start_response, 200, payload)
-
-        source_fetch_prefix = "/api/platform/sources/"
-        if path.startswith(source_fetch_prefix) and path.endswith("/fetch"):
-            if method != "POST":
-                return _json_response(start_response, 405, {"error": "method not allowed"})
-            source_id = path[len(source_fetch_prefix) : -len("/fetch")]
-            payload = fetch_source(self.repository, source_id=source_id)
             return _json_response(start_response, 200, payload)
 
         if path == "/api/platform/subscriptions":

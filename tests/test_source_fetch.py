@@ -48,6 +48,7 @@ class SourceFetchServiceTests(unittest.TestCase):
         self.assertEqual(result["raw_item"]["external_item_id"], "abc-001")
         self.assertEqual(result["raw_item"]["issue_no"], "20260407018")
         self.assertEqual(result["raw_item"]["parse_status"], "pending")
+        self.assertTrue(result["created"])
 
     def test_fetch_http_json_passes_default_browser_headers(self):
         source = self.repo.create_source_record(
@@ -141,6 +142,76 @@ class SourceFetchServiceTests(unittest.TestCase):
         self.assertEqual(signal["normalized_payload"]["source_hints"]["stake"]["base_stake"], 10.0)
         self.assertEqual(signal["normalized_payload"]["source_hints"]["stake"]["multiplier"], 2.0)
         self.assertEqual(signal["normalized_payload"]["source_hints"]["settlement"]["settlement_rule_id"], "pc28_high_regular")
+
+    def test_fetch_ai_trading_simulator_export_reuses_existing_raw_item(self):
+        source = self.repo.create_source_record(
+            owner_user_id=self.user_id,
+            source_type="ai_trading_simulator_export",
+            name="ai-export",
+            config={
+                "fetch": {
+                    "url": "https://example.com/export"
+                }
+            },
+        )
+
+        payload = {
+            "items": [
+                {
+                    "signal_id": "pc28-predictor-12-20260408001-big_small",
+                    "issue_no": "20260408001",
+                    "published_at": "2026-04-08T12:00:00Z",
+                    "signals": [
+                        {
+                            "bet_type": "big_small",
+                            "bet_value": "大",
+                        }
+                    ],
+                }
+            ]
+        }
+
+        result_first = fetch_source_to_raw_item(self.repo, source_id=source["id"], fetcher=lambda *args, **kwargs: payload)
+        result_second = fetch_source_to_raw_item(self.repo, source_id=source["id"], fetcher=lambda *args, **kwargs: payload)
+        self.assertTrue(result_first["created"])
+        self.assertFalse(result_second["created"])
+        self.assertEqual(result_first["raw_item"]["id"], result_second["raw_item"]["id"])
+        self.assertEqual(len(self.repo.list_raw_items(source_id=source["id"])), 1)
+
+    def test_normalize_raw_item_returns_existing_signals_when_already_parsed(self):
+        source = self.repo.create_source_record(
+            owner_user_id=self.user_id,
+            source_type="ai_trading_simulator_export",
+            name="ai-export",
+            config={
+                "fetch": {
+                    "url": "https://example.com/export"
+                }
+            },
+        )
+        raw_item = self.repo.create_raw_item_record(
+            source_id=source["id"],
+            external_item_id="signal-001",
+            issue_no="20260408001",
+            published_at="2026-04-08T12:00:00Z",
+            raw_payload={
+                "signals": [
+                    {
+                        "lottery_type": "pc28",
+                        "issue_no": "20260408001",
+                        "bet_type": "big_small",
+                        "bet_value": "大",
+                    }
+                ]
+            },
+            parse_status="pending",
+        )
+        first = normalize_raw_item(self.repo, raw_item_id=raw_item["id"])
+        second = normalize_raw_item(self.repo, raw_item_id=raw_item["id"])
+        self.assertEqual(first["created_count"], 1)
+        self.assertEqual(second["created_count"], 0)
+        self.assertEqual(len(second["items"]), 1)
+        self.assertEqual(second["items"][0]["id"], first["items"][0]["id"])
 
     def test_fetch_http_json_surfaces_http_403_as_readable_error(self):
         source = self.repo.create_source_record(

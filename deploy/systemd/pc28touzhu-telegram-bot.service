@@ -5,10 +5,9 @@ After=network.target pc28touzhu-platform.service
 [Service]
 Type=simple
 WorkingDirectory=/www/wwwroot/pc28touzhu
-Environment=PYTHONPATH=src
 EnvironmentFile=/www/wwwroot/pc28touzhu/.env
 Environment=TG_BOT_ENABLED=true
-ExecStart=/usr/bin/env TG_BOT_ONCE=false python3 telegram_profit_bot.py
+ExecStart=/usr/bin/env TG_BOT_ONCE=false /www/wwwroot/pc28touzhu/deploy/systemd/pc28-python.sh telegram_profit_bot.py
 Restart=always
 RestartSec=5
 User=www

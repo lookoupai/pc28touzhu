@@ -245,6 +245,20 @@ def _target_test_feedback_from_exception(error: Exception) -> Dict[str, str]:
     message = str(error or "").strip()
     normalized = message.lower()
 
+    if "未安装 Telethon" in message:
+        return {
+            "error": "测试发送失败：当前平台运行进程缺少 Telethon 依赖。",
+            "reason_code": "telethon_missing",
+            "why": message,
+            "next_step": "如果依赖装在虚拟环境，请让 platform / executor / bot 服务切到同一个解释器后重启；否则请直接在当前 Python 解释器安装 `Telethon>=1.42,<2` 后重试。",
+        }
+    if "Telethon session 文件不可写" in message or "Telethon session 目录不可写" in message or "readonly database" in normalized:
+        return {
+            "error": "测试发送失败：托管账号 Session 文件不可写。",
+            "reason_code": "session_readonly",
+            "why": message or "Telethon 无法写入当前账号的 session 数据库。",
+            "next_step": "把该账号 session 文件及其目录的属主/权限改到当前运行服务的用户后重试；当前部署通常应为 `www:www` 且文件至少可写。",
+        }
     if error_name in {"UserNotParticipantError"} or "无法解析目标群组实体" in message:
         return {
             "error": "测试发送失败：托管账号还没有进入这个群组。",
@@ -561,6 +575,62 @@ def create_source(repository: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
         config=_to_object(payload.get("config"), "config"),
     )
     return {"item": item}
+
+
+def update_source(repository: Any, *, source_id: Any, owner_user_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_source_id = _to_positive_int(source_id, "source_id")
+    normalized_owner_user_id = _to_positive_int(owner_user_id, "owner_user_id")
+    current = repository.get_source(normalized_source_id)
+    if not current or int(current.get("owner_user_id") or 0) != normalized_owner_user_id:
+        raise ValueError("source_id 对应的来源不存在")
+    item = repository.update_source_record(
+        source_id=normalized_source_id,
+        owner_user_id=normalized_owner_user_id,
+        name=_to_non_empty_str(payload.get("name"), "name"),
+        visibility=str(payload.get("visibility") or current.get("visibility") or "private").strip() or "private",
+        status=str(payload.get("status") or current.get("status") or "active").strip() or "active",
+        config=_to_object(payload.get("config"), "config"),
+    )
+    if not item:
+        raise ValueError("source_id 对应的来源不存在")
+    return {"item": item}
+
+
+def update_source_status(repository: Any, *, source_id: Any, owner_user_id: Any, status: Any) -> Dict[str, Any]:
+    normalized_source_id = _to_positive_int(source_id, "source_id")
+    normalized_owner_user_id = _to_positive_int(owner_user_id, "owner_user_id")
+    normalized_status = _normalize_entity_status(status)
+    current = repository.get_source(normalized_source_id)
+    if not current or int(current.get("owner_user_id") or 0) != normalized_owner_user_id:
+        raise ValueError("source_id 对应的来源不存在")
+    item = repository.update_source_status(
+        source_id=normalized_source_id,
+        owner_user_id=normalized_owner_user_id,
+        status=normalized_status,
+    )
+    if not item:
+        raise ValueError("source_id 对应的来源不存在")
+    return {"item": item}
+
+
+def delete_source(repository: Any, *, source_id: Any, owner_user_id: Any) -> Dict[str, Any]:
+    normalized_source_id = _to_positive_int(source_id, "source_id")
+    normalized_owner_user_id = _to_positive_int(owner_user_id, "owner_user_id")
+    current = repository.get_source(normalized_source_id)
+    if not current or int(current.get("owner_user_id") or 0) != normalized_owner_user_id:
+        raise ValueError("source_id 对应的来源不存在")
+    if str(current.get("status") or "") != "archived":
+        raise ValueError("请先归档来源，再执行删除")
+    if int(repository.count_subscriptions_by_source(normalized_source_id, user_id=normalized_owner_user_id) or 0) > 0:
+        raise ValueError("该来源已有跟单策略引用，暂不支持删除")
+    if int(repository.count_raw_items_by_source(normalized_source_id) or 0) > 0:
+        raise ValueError("该来源已有抓取记录，暂不支持删除")
+    if int(repository.count_signals_by_source(normalized_source_id) or 0) > 0:
+        raise ValueError("该来源已生成标准信号，暂不支持删除")
+    deleted = repository.delete_source_record(source_id=normalized_source_id, owner_user_id=normalized_owner_user_id)
+    if not deleted:
+        raise ValueError("source_id 对应的来源不存在")
+    return {"deleted": True, "id": normalized_source_id}
 
 
 def list_telegram_accounts(repository: Any, user_id: Any) -> Dict[str, Any]:

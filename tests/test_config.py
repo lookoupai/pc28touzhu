@@ -39,6 +39,9 @@ class RuntimeConfigTests(unittest.TestCase):
             "TG_REPORT_SEND_MINUTE",
             "TG_REPORT_TOP_N",
             "TG_REPORT_TIMEZONE",
+            "SOURCE_SYNC_ENABLED",
+            "SOURCE_SYNC_INTERVAL_SECONDS",
+            "SOURCE_SYNC_ONCE",
             "PLATFORM_BASE_URL",
             "EXECUTOR_ID",
             "PULL_LIMIT",
@@ -86,6 +89,9 @@ class RuntimeConfigTests(unittest.TestCase):
                         "TG_REPORT_SEND_MINUTE=35",
                         "TG_REPORT_TOP_N=12",
                         "TG_REPORT_TIMEZONE=Asia/Shanghai",
+                        "SOURCE_SYNC_ENABLED=true",
+                        "SOURCE_SYNC_INTERVAL_SECONDS=25",
+                        "SOURCE_SYNC_ONCE=false",
                         "PLATFORM_BASE_URL=http://127.0.0.1:35200",
                         "EXECUTOR_ID=test-exec",
                         "PULL_LIMIT=25",
@@ -147,6 +153,9 @@ class RuntimeConfigTests(unittest.TestCase):
                 self.assertEqual(config.telegram_report.send_minute, 35)
                 self.assertEqual(config.telegram_report.top_n, 12)
                 self.assertEqual(config.telegram_report.timezone, "Asia/Shanghai")
+                self.assertTrue(config.source_sync.enabled)
+                self.assertEqual(config.source_sync.interval_seconds, 25)
+                self.assertFalse(config.source_sync.once)
             finally:
                 for key, value in original_env.items():
                     if value is None:

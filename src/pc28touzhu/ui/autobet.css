@@ -31,6 +31,70 @@
     margin-bottom: 16px;
 }
 
+.source-workspace-note {
+    margin-bottom: 16px;
+}
+
+.source-workspace-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+.source-card-item {
+    gap: 12px;
+}
+
+.source-card-meta {
+    display: grid;
+    gap: 8px;
+}
+
+.source-card-kpis {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.source-card-kpi {
+    display: grid;
+    gap: 4px;
+    padding: 12px 14px;
+    border: 1px solid rgba(20, 37, 45, 0.08);
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.72);
+}
+
+.source-card-kpi strong {
+    font-family: "Sora", sans-serif;
+    font-size: 1rem;
+    line-height: 1.1;
+}
+
+.source-card-kpi span {
+    color: var(--muted);
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.source-card-status {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.75;
+}
+
+.source-card-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.source-card-actions .primary-btn,
+.source-card-actions .ghost-btn {
+    min-width: 0;
+}
+
 .account-mode-switch {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -509,6 +573,37 @@
     gap: 12px;
     flex-wrap: wrap;
     justify-content: flex-end;
+}
+
+.bot-binding-grid {
+    margin-top: 14px;
+}
+
+.bot-binding-card {
+    display: grid;
+    gap: 14px;
+}
+
+.bot-binding-card .mono-text {
+    display: block;
+    font-size: 1.18rem;
+    line-height: 1.4;
+    word-break: break-all;
+}
+
+.bot-binding-actions {
+    margin-top: 2px;
+}
+
+.bot-binding-instructions {
+    display: grid;
+    gap: 10px;
+}
+
+.bot-binding-instructions p {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.75;
 }
 
 .autobet-runtime-grid {
@@ -1191,30 +1286,42 @@
     gap: 18px;
 }
 
+body[data-autobet-scope="sources"] #autobetQuickstartSection,
+body[data-autobet-scope="sources"] #autobetOverviewSection,
+body[data-autobet-scope="sources"] #accountsSection,
+body[data-autobet-scope="sources"] #targetsSection,
+body[data-autobet-scope="sources"] #templatesSection,
+body[data-autobet-scope="sources"] #subscriptionsSection,
+body[data-autobet-scope="sources"] #currentConfigSection,
 body[data-autobet-scope="accounts"] #autobetQuickstartSection,
 body[data-autobet-scope="accounts"] #autobetOverviewSection,
+body[data-autobet-scope="accounts"] #sourcesSection,
 body[data-autobet-scope="accounts"] #targetsSection,
 body[data-autobet-scope="accounts"] #templatesSection,
 body[data-autobet-scope="accounts"] #subscriptionsSection,
 body[data-autobet-scope="accounts"] #currentConfigSection,
 body[data-autobet-scope="templates"] #autobetQuickstartSection,
 body[data-autobet-scope="templates"] #autobetOverviewSection,
+body[data-autobet-scope="templates"] #sourcesSection,
 body[data-autobet-scope="templates"] #accountsSection,
 body[data-autobet-scope="templates"] #targetsSection,
 body[data-autobet-scope="templates"] #subscriptionsSection,
 body[data-autobet-scope="templates"] #currentConfigSection,
+body[data-autobet-scope="workbench"] #sourcesSection,
 body[data-autobet-scope="workbench"] #accountsSection,
 body[data-autobet-scope="workbench"] #targetsSection,
 body[data-autobet-scope="workbench"] #templatesSection,
 body[data-autobet-scope="workbench"] #subscriptionsSection,
 body[data-autobet-scope="targets"] #autobetQuickstartSection,
 body[data-autobet-scope="targets"] #autobetOverviewSection,
+body[data-autobet-scope="targets"] #sourcesSection,
 body[data-autobet-scope="targets"] #accountsSection,
 body[data-autobet-scope="targets"] #templatesSection,
 body[data-autobet-scope="targets"] #subscriptionsSection,
 body[data-autobet-scope="targets"] #currentConfigSection,
 body[data-autobet-scope="subscriptions"] #autobetQuickstartSection,
 body[data-autobet-scope="subscriptions"] #autobetOverviewSection,
+body[data-autobet-scope="subscriptions"] #sourcesSection,
 body[data-autobet-scope="subscriptions"] #accountsSection,
 body[data-autobet-scope="subscriptions"] #targetsSection,
 body[data-autobet-scope="subscriptions"] #templatesSection,
@@ -1222,6 +1329,7 @@ body[data-autobet-scope="subscriptions"] #currentConfigSection {
     display: none;
 }
 
+body[data-autobet-scope="sources"] .autobet-grid,
 body[data-autobet-scope="accounts"] .autobet-grid,
 body[data-autobet-scope="templates"] .autobet-grid,
 body[data-autobet-scope="targets"] .autobet-grid,
@@ -1229,6 +1337,7 @@ body[data-autobet-scope="subscriptions"] .autobet-grid {
     grid-template-columns: 1fr;
 }
 
+body[data-autobet-scope="sources"] .side-panel,
 body[data-autobet-scope="accounts"] .side-panel,
 body[data-autobet-scope="templates"] .side-panel,
 body[data-autobet-scope="targets"] .side-panel,
@@ -1253,6 +1362,7 @@ body[data-autobet-scope="subscriptions"] .side-panel {
     .health-grid,
     .onboarding-context-grid,
     .autobet-form-grid,
+    .source-card-kpis,
     .template-rule-mapping-grid,
     .template-custom-mapping-row {
         grid-template-columns: 1fr;
@@ -1274,6 +1384,7 @@ body[data-autobet-scope="subscriptions"] .side-panel {
     .onboarding-source-head,
     .onboarding-step-head,
     .onboarding-step-title-row,
+    .source-workspace-actions,
     .template-preset-head,
     .template-preset-actions,
     .template-sample-strip {
@@ -1313,7 +1424,21 @@ body[data-autobet-scope="subscriptions"] .side-panel {
         width: 100%;
     }
 
+    #sourcesSection .config-list-actions,
+    .source-card-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    #sourcesSection .config-list-actions .ghost-btn,
+    #sourcesSection .config-list-actions .primary-btn,
+    .source-card-actions .ghost-btn,
+    .source-card-actions .primary-btn {
+        width: 100%;
+    }
+
     #targetsSection .mini-card,
+    #sourcesSection .mini-card,
     #subscriptionsSection .mini-card,
     #templatesSection .mini-card {
         gap: 12px;
@@ -1348,7 +1473,8 @@ body[data-autobet-scope="subscriptions"] .side-panel {
 
     #targetForm .form-actions,
     #subscriptionForm .form-actions,
-    #messageTemplateForm .form-actions {
+    #messageTemplateForm .form-actions,
+    .bot-binding-actions {
         grid-template-columns: 1fr;
     }
 
@@ -1358,7 +1484,9 @@ body[data-autobet-scope="subscriptions"] .side-panel {
     #subscriptionForm .form-actions .ghost-btn,
     #messageTemplateForm .form-actions .primary-btn,
     #messageTemplateForm .form-actions .ghost-btn,
-    .subscription-advanced > .ghost-btn {
+    .subscription-advanced > .ghost-btn,
+    .bot-binding-actions .primary-btn,
+    .bot-binding-actions .ghost-btn {
         width: 100%;
     }
 }

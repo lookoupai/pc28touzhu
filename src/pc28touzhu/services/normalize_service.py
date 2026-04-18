@@ -59,6 +59,18 @@ def normalize_raw_item(repository: Any, raw_item_id: int) -> Dict[str, Any]:
     if not raw_item:
         raise ValueError("raw_item 不存在")
 
+    existing_items = [
+        item
+        for item in repository.list_signals(source_id=int(raw_item["source_id"]))
+        if int(item.get("source_raw_item_id") or 0) == int(raw_item_id)
+    ]
+    if str(raw_item.get("parse_status") or "") == "parsed" and existing_items:
+        return {
+            "raw_item": raw_item,
+            "created_count": 0,
+            "items": existing_items,
+        }
+
     entries = _as_signal_entries(raw_item)
     if not entries:
         repository.update_raw_item_parse_result(

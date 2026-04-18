@@ -5,9 +5,8 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/www/wwwroot/pc28touzhu
-Environment=PYTHONPATH=src
 EnvironmentFile=/www/wwwroot/pc28touzhu/.env
-ExecStart=/usr/bin/env python3 -m pc28touzhu.main
+ExecStart=/usr/bin/env /www/wwwroot/pc28touzhu/deploy/systemd/pc28-python.sh -m pc28touzhu.main
 Restart=on-failure
 RestartSec=2
 User=www

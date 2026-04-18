@@ -413,6 +413,45 @@ class FakeRepository:
         self.sources.append(item)
         return item
 
+    def update_source_record(self, *, source_id, owner_user_id, name, visibility, status, config=None):
+        for item in self.sources:
+            if item["id"] == int(source_id) and item["owner_user_id"] == int(owner_user_id):
+                item["name"] = name
+                item["visibility"] = visibility
+                item["status"] = status
+                item["config"] = config or {}
+                item["updated_at"] = "2026-04-07T12:00:00Z"
+                return item
+        return None
+
+    def update_source_status(self, *, source_id, owner_user_id, status):
+        for item in self.sources:
+            if item["id"] == int(source_id) and item["owner_user_id"] == int(owner_user_id):
+                item["status"] = str(status)
+                item["updated_at"] = "2026-04-07T12:00:00Z"
+                return item
+        return None
+
+    def count_raw_items_by_source(self, source_id):
+        return sum(1 for item in self.raw_items if item["source_id"] == int(source_id))
+
+    def count_signals_by_source(self, source_id):
+        return sum(1 for item in self.signals if item["source_id"] == int(source_id))
+
+    def count_subscriptions_by_source(self, source_id, *, user_id=None):
+        return sum(
+            1
+            for item in self.subscriptions
+            if item["source_id"] == int(source_id) and (user_id is None or item["user_id"] == int(user_id))
+        )
+
+    def delete_source_record(self, *, source_id, owner_user_id):
+        for index, item in enumerate(self.sources):
+            if item["id"] == int(source_id) and item["owner_user_id"] == int(owner_user_id):
+                del self.sources[index]
+                return True
+        return False
+
     def list_subscriptions(self, user_id):
         return [self.get_subscription(item["id"]) for item in self.subscriptions if item["user_id"] == int(user_id)]
 
@@ -1152,6 +1191,7 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertIn("自动投注总览", body)
         self.assertIn("进入自动投注总控台", body)
         self.assertIn("自动投注总控台", body)
+        self.assertIn("/autobet/sources#sourcesSection", body)
         self.assertIn("/autobet/accounts#accountsSection", body)
         self.assertIn("/autobet/targets#targetsSection", body)
         self.assertIn("/autobet/templates#templatesSection", body)
@@ -1290,6 +1330,7 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertIn("执行记录列表", body)
         self.assertIn("记录页处理入口", body)
         self.assertIn("自动投注总控台", body)
+        self.assertIn("/autobet/sources#sourcesSection", body)
         self.assertIn("/autobet/accounts#accountsSection", body)
         self.assertIn("/autobet/targets#targetsSection", body)
         self.assertIn("/autobet/subscriptions#subscriptionsSection", body)
@@ -1309,6 +1350,7 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertIn("告警列表", body)
         self.assertIn("告警页处理入口", body)
         self.assertIn("自动投注总控台", body)
+        self.assertIn("/autobet/sources#sourcesSection", body)
         self.assertIn("/autobet/accounts#accountsSection", body)
         self.assertIn("/autobet/targets#targetsSection", body)
         self.assertIn("/records", body)
@@ -1347,13 +1389,14 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertIn("执行链路", body)
         self.assertIn("工作区", body)
         self.assertIn("进入各工作区处理问题", body)
+        self.assertIn("/autobet/sources#sourcesSection", body)
         self.assertIn("/autobet/accounts#accountsSection", body)
         self.assertIn("/autobet/targets#targetsSection", body)
         self.assertIn("/autobet/templates#templatesSection", body)
 
 
     def test_autobet_focus_routes_render_html(self):
-        for path in ("/autobet/accounts", "/autobet/templates", "/autobet/targets", "/autobet/subscriptions"):
+        for path in ("/autobet/sources", "/autobet/accounts", "/autobet/templates", "/autobet/targets", "/autobet/subscriptions"):
             captured = {"status": None, "headers": None}
 
             def start_response(status, headers):
@@ -1364,6 +1407,19 @@ class PlatformApiApplicationTests(unittest.TestCase):
             self.assertEqual(captured["status"], "200 OK")
             self.assertEqual(captured["headers"]["Content-Type"], "text/html; charset=utf-8")
             self.assertIn("自动投注总控台", body)
+
+    def test_autobet_sources_workspace_renders_source_copy(self):
+        captured = {"status": None, "headers": None}
+
+        def start_response(status, headers):
+            captured["status"] = status
+            captured["headers"] = dict(headers)
+
+        body = b"".join(self.app(build_testing_environ("/autobet/sources"), start_response)).decode("utf-8")
+        self.assertEqual(captured["status"], "200 OK")
+        self.assertIn("方案来源", body)
+        self.assertIn("来源链路工作区", body)
+        self.assertIn("/autobet/sources#sourcesSection", body)
 
     def test_autobet_accounts_workspace_renders_account_copy(self):
         captured = {"status": None, "headers": None}
@@ -1796,6 +1852,89 @@ class PlatformApiApplicationTests(unittest.TestCase):
             payload["item"]["config"]["fetch"]["url"],
             "https://example.com/api/export/predictors/12/signals?view=execution",
         )
+
+    def test_update_source_returns_item(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/sources/1",
+                method="POST",
+                body={
+                    "name": "demo-source-updated",
+                    "visibility": "private",
+                    "status": "inactive",
+                    "config": {
+                        "fetch": {
+                            "url": "https://example.com/api/export/predictors/9/signals?view=execution",
+                            "headers": {"Accept": "application/json"},
+                            "timeout": 10,
+                        }
+                    },
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["name"], "demo-source-updated")
+        self.assertEqual(payload["item"]["status"], "inactive")
+        self.assertEqual(payload["item"]["visibility"], "private")
+
+    def test_update_source_status_returns_item(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/sources/1/status",
+                method="POST",
+                body={"status": "archived"},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["status"], "archived")
+
+    def test_delete_source_returns_deleted_when_archived_and_unused(self):
+        source = self.repository.create_source_record(
+            owner_user_id=1,
+            source_type="ai_trading_simulator_export",
+            name="deletable-source",
+            visibility="private",
+            status="archived",
+            config={"fetch": {"url": "https://example.com/api/export/predictors/88/signals?view=execution"}},
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/sources/%s/delete" % source["id"],
+                method="POST",
+                body={},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertTrue(payload["deleted"])
+        self.assertIsNone(self.repository.get_source(source["id"]))
+
+    def test_delete_source_rejects_subscription_reference(self):
+        source = self.repository.create_source_record(
+            owner_user_id=1,
+            source_type="ai_trading_simulator_export",
+            name="subscribed-source",
+            visibility="private",
+            status="archived",
+            config={"fetch": {"url": "https://example.com/api/export/predictors/77/signals?view=execution"}},
+        )
+        self.repository.create_subscription_record(user_id=1, source_id=source["id"], strategy={"stake_amount": 10})
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/sources/%s/delete" % source["id"],
+                method="POST",
+                body={},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertIn("已有跟单策略引用", payload["error"])
 
     def test_create_telegram_account_and_list(self):
         create_status, _, create_payload = invoke(
@@ -2921,6 +3060,112 @@ class PlatformApiApplicationTests(unittest.TestCase):
         updated = self.repository.get_delivery_target(target["id"])
         self.assertEqual(updated["last_test_status"], "failed")
         self.assertEqual(updated["last_test_error_code"], "target_not_joined")
+
+    def test_delivery_target_test_send_reports_missing_telethon_runtime_hint(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号A",
+            phone="+12019360000",
+            session_path="/data/u7/account-a",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+        )
+        target = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100999",
+            target_name="测试群",
+            status="inactive",
+        )
+
+        class FakeSender:
+            def __init__(self, *, api_id, api_hash, phone, session):
+                self.api_id = api_id
+                self.api_hash = api_hash
+                self.phone = phone
+                self.session = session
+
+            def connect(self):
+                raise RuntimeError(
+                    "未安装 Telethon，请先安装 `Telethon>=1.42,<2`。 当前进程 Python: /usr/bin/python3。"
+                )
+
+            def disconnect(self):
+                return None
+
+            def send_text(self, target_key, message_text):
+                raise AssertionError("connect 失败时不应继续发送")
+
+        with patch("pc28touzhu.services.platform_service.TelethonMessageSender", FakeSender):
+            status, _, payload = invoke(
+                self.app,
+                build_testing_environ(
+                    "/api/platform/delivery-targets/%s/test-send" % target["id"],
+                    method="POST",
+                    body={"message_text": "hello"},
+                    headers=self.session_headers,
+                ),
+            )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertEqual(payload["reason_code"], "telethon_missing")
+        self.assertIn("当前平台运行进程缺少 Telethon 依赖", payload["error"])
+        self.assertIn("当前进程 Python: /usr/bin/python3", payload["why"])
+        updated = self.repository.get_delivery_target(target["id"])
+        self.assertEqual(updated["last_test_status"], "failed")
+        self.assertEqual(updated["last_test_error_code"], "telethon_missing")
+
+    def test_delivery_target_test_send_reports_session_readonly_hint(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号A",
+            phone="+12019360000",
+            session_path="/data/u7/account-a",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+        )
+        target = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100999",
+            target_name="测试群",
+            status="inactive",
+        )
+
+        class FakeSender:
+            def __init__(self, *, api_id, api_hash, phone, session):
+                self.api_id = api_id
+                self.api_hash = api_hash
+                self.phone = phone
+                self.session = session
+
+            def connect(self):
+                raise PermissionError(
+                    "Telethon session 文件不可写：/www/wwwroot/pc28touzhu/data/accounts/u1/main.session。当前运行用户对该文件没有写权限，请修正属主或权限。"
+                )
+
+            def disconnect(self):
+                return None
+
+            def send_text(self, target_key, message_text):
+                raise AssertionError("connect 失败时不应继续发送")
+
+        with patch("pc28touzhu.services.platform_service.TelethonMessageSender", FakeSender):
+            status, _, payload = invoke(
+                self.app,
+                build_testing_environ(
+                    "/api/platform/delivery-targets/%s/test-send" % target["id"],
+                    method="POST",
+                    body={"message_text": "hello"},
+                    headers=self.session_headers,
+                ),
+            )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertEqual(payload["reason_code"], "session_readonly")
+        self.assertIn("Session 文件不可写", payload["error"])
+        self.assertIn("main.session", payload["why"])
+        updated = self.repository.get_delivery_target(target["id"])
+        self.assertEqual(updated["last_test_status"], "failed")
+        self.assertEqual(updated["last_test_error_code"], "session_readonly")
 
     def test_update_delivery_target_status_endpoint(self):
         account = self.repository.create_telegram_account_record(

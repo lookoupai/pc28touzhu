@@ -2,6 +2,8 @@
     const state = {
         currentUser: null,
         sources: [],
+        rawItems: [],
+        signals: [],
         accounts: [],
         targets: [],
         templates: [],
@@ -9,6 +11,7 @@
         jobs: [],
         alerts: [],
         failures: [],
+        telegramBinding: null,
         lastRecommendedActionKey: null,
         showIssueJobsOnly: false,
         scopeFocused: false,
@@ -17,6 +20,8 @@
     const statusMessage = document.getElementById("statusMessage");
     const refreshAutobetBtn = document.getElementById("refreshAutobetBtn");
     const sourceCards = document.getElementById("sourceCards");
+    const sourceList = document.getElementById("sourceList");
+    const sourceForm = document.getElementById("sourceForm");
     const accountCards = document.getElementById("accountList");
     const targetCards = document.getElementById("targetList");
     const subscriptionCards = document.getElementById("subscriptionList");
@@ -40,6 +45,11 @@
     const onboardingProgressMeta = document.getElementById("onboardingProgressMeta");
     const onboardingPrerequisite = document.getElementById("onboardingPrerequisite");
     const continueOnboardingBtn = document.getElementById("continueOnboardingBtn");
+    const sourceNameInput = document.getElementById("sourceNameInput");
+    const sourceUrlInput = document.getElementById("sourceUrlInput");
+    const fillSourceExampleBtn = document.getElementById("fillSourceExampleBtn");
+    const createSourceBtn = document.getElementById("createSourceBtn");
+    const cancelSourceEditBtn = document.getElementById("cancelSourceEditBtn");
     const subscriptionBetFilterModeSelect = document.getElementById("subscriptionBetFilterModeSelect");
     const subscriptionBetFilterHint = document.getElementById("subscriptionBetFilterHint");
     const subscriptionBetFilterFields = document.getElementById("subscriptionBetFilterFields");
@@ -85,6 +95,8 @@
     const templatePreviewMeta = document.getElementById("templatePreviewMeta");
     const subscriptionWorkspaceSummary = document.getElementById("subscriptionWorkspaceSummary");
     const subscriptionWorkspaceSummaryText = document.getElementById("subscriptionWorkspaceSummaryText");
+    const sourceWorkspaceSummary = document.getElementById("sourceWorkspaceSummary");
+    const sourceWorkspaceSummaryText = document.getElementById("sourceWorkspaceSummaryText");
     const accountWorkspaceSummary = document.getElementById("accountWorkspaceSummary");
     const accountWorkspaceSummaryText = document.getElementById("accountWorkspaceSummaryText");
     const templateWorkspaceSummary = document.getElementById("templateWorkspaceSummary");
@@ -93,6 +105,12 @@
     const executionFlowSummaryText = document.getElementById("autobetExecutionFlowSummaryText");
     const executionFlowChains = document.getElementById("autobetExecutionFlowChains");
     const workspaceCards = document.getElementById("autobetWorkspaceCards");
+    const botBindingMetrics = document.getElementById("botBindingMetrics");
+    const botBindingSummary = document.getElementById("botBindingSummary");
+    const botBindingCommand = document.getElementById("botBindingCommand");
+    const botBindingCommandMeta = document.getElementById("botBindingCommandMeta");
+    const botBindingActions = document.getElementById("botBindingActions");
+    const botBindingInstructions = document.getElementById("botBindingInstructions");
     const templatePresetButtons = Array.from(document.querySelectorAll(".template-preset-btn"));
     const templateSampleButtons = Array.from(document.querySelectorAll(".template-sample-btn"));
     const accountModeGuideTitle = document.getElementById("accountModeGuideTitle");
@@ -203,6 +221,9 @@
 
     function currentAutobetScope() {
         const pathname = String(window.location.pathname || "").trim();
+        if (pathname === "/autobet/sources") {
+            return "sources";
+        }
         if (pathname === "/autobet/accounts") {
             return "accounts";
         }
@@ -220,6 +241,18 @@
 
     function autobetScopeConfig(scope) {
         const normalized = String(scope || "workbench").trim() || "workbench";
+        if (normalized === "sources") {
+            return {
+                eyebrow: "方案来源",
+                title: "这里专门处理来源管理、抓取推进和启停状态。",
+                detail: "新增、编辑、停用、归档删除，以及一键推进“抓取 -> 标准化 -> 派发”的动作，都收口在这个来源工作区。",
+                primaryHref: "#sourcesSection",
+                primaryText: "去管理来源",
+                secondaryHref: "/autobet/subscriptions#subscriptionsSection",
+                secondaryText: "去看跟单",
+                activeHref: "/autobet/sources#sourcesSection",
+            };
+        }
         if (normalized === "accounts") {
             return {
                 eyebrow: "托管账号",
@@ -307,6 +340,99 @@
         }
     }
 
+    async function copyTextToClipboard(text) {
+        const normalized = String(text || "").trim();
+        if (!normalized) {
+            throw new Error("没有可复制的内容");
+        }
+        if (window.navigator && window.navigator.clipboard && typeof window.navigator.clipboard.writeText === "function") {
+            await window.navigator.clipboard.writeText(normalized);
+            return;
+        }
+        const fallbackField = document.createElement("textarea");
+        fallbackField.value = normalized;
+        fallbackField.setAttribute("readonly", "readonly");
+        fallbackField.style.position = "fixed";
+        fallbackField.style.opacity = "0";
+        document.body.appendChild(fallbackField);
+        fallbackField.select();
+        const copied = document.execCommand("copy");
+        document.body.removeChild(fallbackField);
+        if (!copied) {
+            throw new Error("当前浏览器不支持自动复制，请手动复制绑定命令");
+        }
+    }
+
+    function deriveAiSourceName(urlObject) {
+        const match = urlObject.pathname.match(/\/(?:api\/export|public|api\/public)\/predictors\/(\d+)(?:\/signals)?$/);
+        if (match) {
+            return "AITradingSimulator 方案 #" + match[1];
+        }
+        return "AITradingSimulator 来源";
+    }
+
+    function normalizeAiSourceUrl(rawUrl) {
+        const text = String(rawUrl || "").trim();
+        if (!text) {
+            throw new Error("导出链接不能为空");
+        }
+
+        let parsed;
+        try {
+            parsed = new URL(text);
+        } catch (error) {
+            throw new Error("导出链接格式不正确");
+        }
+
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+            throw new Error("导出链接必须使用 http 或 https");
+        }
+
+        const publicMatch = parsed.pathname.match(/^\/public\/predictors\/(\d+)$/);
+        if (publicMatch) {
+            parsed.pathname = "/api/export/predictors/" + publicMatch[1] + "/signals";
+            parsed.search = "";
+            parsed.searchParams.set("view", "execution");
+        } else {
+            const publicApiMatch = parsed.pathname.match(/^\/api\/public\/predictors\/(\d+)$/);
+            if (publicApiMatch) {
+                parsed.pathname = "/api/export/predictors/" + publicApiMatch[1] + "/signals";
+                parsed.search = "";
+                parsed.searchParams.set("view", "execution");
+            }
+        }
+
+        const validPath = (
+            /^\/api\/export\/predictors\/\d+\/signals$/.test(parsed.pathname) ||
+            parsed.pathname === "/api/export/signals/pc28"
+        );
+        if (!validPath) {
+            throw new Error("当前只支持 AITradingSimulator 的公开方案页链接或 signals 导出地址");
+        }
+
+        if (parsed.pathname !== "/api/export/signals/pc28") {
+            const view = parsed.searchParams.get("view");
+            if (!view) {
+                parsed.searchParams.set("view", "execution");
+            } else if (view !== "execution") {
+                throw new Error("当前只支持 execution 视图导入");
+            }
+        }
+
+        return {
+            url: parsed.toString(),
+            suggestedName: deriveAiSourceName(parsed),
+        };
+    }
+
+    function findImportedAiSourceByUrl(normalizedUrl, excludeSourceId) {
+        return aiSources().find(function (item) {
+            const fetchConfig = item && item.config && item.config.fetch ? item.config.fetch : {};
+            return String(item.id) !== String(excludeSourceId || "") &&
+                String(fetchConfig.url || "") === normalizedUrl;
+        }) || null;
+    }
+
     function focusElement(element) {
         if (!(element instanceof HTMLElement) || typeof element.focus !== "function") {
             return;
@@ -355,6 +481,9 @@
         } else if (rawMessage.indexOf("已归档") >= 0) {
             reason = "归档项不会参与当前自动投注流程。";
             nextStep = "先取消归档后再执行当前操作。";
+        } else if (rawMessage.indexOf("Telethon") >= 0) {
+            reason = "当前平台进程没有加载到 Telethon 依赖，常见原因是服务没有使用装过依赖的 Python 解释器。";
+            nextStep = "检查当前服务实际使用的 Python 路径，必要时切到项目虚拟环境后重启服务。";
         } else if (rawMessage.indexOf("邀请链接") >= 0 || rawMessage.indexOf("格式") >= 0 || rawMessage.indexOf("群组标识") >= 0) {
             reason = "群组标识格式不符合平台可识别规则。";
             nextStep = "改用 @username 或 -100... Chat ID，并重新提交。";
@@ -374,6 +503,24 @@
         statusMessage.classList.toggle("is-error", Boolean(isError));
     }
 
+    function reportUiError(scope, error) {
+        const message = error && error.message ? error.message : String(error || "未知错误");
+        if (window.console && typeof window.console.error === "function") {
+            window.console.error("[autobet-ui][" + scope + "]", error);
+        }
+        setStatus("页面渲染异常：" + scope + " · " + message, true);
+    }
+
+    function safeRender(scope, handler) {
+        try {
+            handler();
+            return true;
+        } catch (error) {
+            reportUiError(scope, error);
+            return false;
+        }
+    }
+
     function escapeHtml(value) {
         return String(value == null ? "" : value)
             .replace(/&/g, "&amp;")
@@ -381,6 +528,15 @@
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;")
             .replace(/'/g, "&#39;");
+    }
+
+    function truncateText(value, length) {
+        const text = String(value == null ? "" : value);
+        const limit = Number(length) || 0;
+        if (limit <= 0 || text.length <= limit) {
+            return text;
+        }
+        return text.slice(0, Math.max(0, limit - 3)) + "...";
     }
 
     function renderStatusPill(status) {
@@ -736,6 +892,135 @@
             return "请上传商家附带的 Telethon Session 文件。";
         }
         return "请先发送验证码并完成登录验证。";
+    }
+
+    function currentTelegramBinding() {
+        if (!state.telegramBinding || typeof state.telegramBinding !== "object") {
+            return null;
+        }
+        return state.telegramBinding;
+    }
+
+    function telegramBindTokenState(binding) {
+        const item = binding || currentTelegramBinding();
+        const bindToken = item ? String(item.bind_token || "").trim() : "";
+        const expireAt = item ? String(item.bind_token_expire_at || "").trim() : "";
+        const expireTimestamp = expireAt ? Date.parse(expireAt) : NaN;
+        const isExpired = Boolean(bindToken) && Number.isFinite(expireTimestamp) && expireTimestamp <= Date.now();
+        return {
+            bindToken: bindToken,
+            expireAt: expireAt,
+            hasToken: Boolean(bindToken),
+            isExpired: isExpired,
+            isActive: Boolean(bindToken) && !isExpired,
+        };
+    }
+
+    function telegramBindingLabel(binding) {
+        const item = binding || currentTelegramBinding();
+        if (!item || !item.is_bound) {
+            return "未绑定";
+        }
+        const username = String(item.telegram_username || "").trim();
+        if (username) {
+            return "@" + username;
+        }
+        if (item.telegram_user_id != null) {
+            return "用户 #" + String(item.telegram_user_id);
+        }
+        const chatId = String(item.telegram_chat_id || "").trim();
+        return chatId ? ("chat_id " + chatId) : "已绑定";
+    }
+
+    function currentBindCommand() {
+        const tokenState = telegramBindTokenState();
+        return tokenState.isActive ? ("/bind " + tokenState.bindToken) : "/bind <绑定码>";
+    }
+
+    function renderBotBindingMetrics(binding, tokenState) {
+        if (!(botBindingMetrics instanceof HTMLElement)) {
+            return;
+        }
+        const item = binding || null;
+        const commandState = item && item.is_bound ? "已可查询" : "待绑定";
+        const commandDetail = item && item.is_bound
+            ? "当前 Telegram 私聊账号已绑定，可直接使用 /profit 和 /plan。"
+            : "完成绑定后，收益查询 Bot 才能识别你当前平台账号。";
+        const codeValue = tokenState.isActive
+            ? tokenState.bindToken
+            : (tokenState.hasToken ? "已过期" : "未生成");
+        const codeDetail = tokenState.isActive
+            ? ("有效期至 " + formatDateTime(tokenState.expireAt) + "。")
+            : (tokenState.hasToken
+                ? "当前绑定码已过期，请重新生成。"
+                : "网页端生成后，再去 Telegram 私聊 Bot 使用。");
+        botBindingMetrics.innerHTML = [
+            '<article class="health-card"><span class="setup-label">绑定状态</span><strong>' + escapeHtml(item && item.is_bound ? "已绑定" : "未绑定") + '</strong><p>' + escapeHtml(item && item.is_bound ? ("当前账号 " + telegramBindingLabel(item) + " 已绑定到平台用户。") : "当前 Telegram 私聊账号还没有绑定到平台用户。") + '</p></article>',
+            '<article class="health-card"><span class="setup-label">当前绑定码</span><strong class="mono-text">' + escapeHtml(codeValue) + '</strong><p>' + escapeHtml(codeDetail) + '</p></article>',
+            '<article class="health-card"><span class="setup-label">收益命令</span><strong>' + escapeHtml(commandState) + '</strong><p>' + escapeHtml(commandDetail) + '</p></article>',
+        ].join("");
+    }
+
+    function renderBotBindingSection() {
+        if (!(botBindingSummary instanceof HTMLElement) ||
+            !(botBindingCommand instanceof HTMLElement) ||
+            !(botBindingCommandMeta instanceof HTMLElement) ||
+            !(botBindingActions instanceof HTMLElement) ||
+            !(botBindingInstructions instanceof HTMLElement)) {
+            return;
+        }
+
+        if (!state.currentUser) {
+            renderBotBindingMetrics(null, {bindToken: "", expireAt: "", hasToken: false, isExpired: false, isActive: false});
+            botBindingSummary.textContent = "登录后可在网页端生成绑定码，再去 Telegram 私聊收益查询 Bot 完成账号绑定。";
+            botBindingCommand.textContent = "/bind <绑定码>";
+            botBindingCommandMeta.textContent = "当前未登录，暂时不能生成绑定码。";
+            botBindingActions.innerHTML = [
+                '<button id="generateBindCodeBtn" class="primary-btn" type="button" disabled>登录后生成绑定码</button>',
+                '<button id="copyBindCommandBtn" class="ghost-btn" type="button" disabled>复制 /bind 命令</button>',
+                '<button id="clearTelegramBindingBtn" class="ghost-btn" type="button" disabled>解除当前绑定</button>',
+            ].join("");
+            botBindingInstructions.innerHTML = [
+                '<p>1. 先在网页端登录当前平台账号。</p>',
+                '<p>2. 登录后点击“生成绑定码”，复制完整的 <span class="mono-text">/bind</span> 命令。</p>',
+                '<p>3. 去 Telegram 私聊收益查询 Bot，先发送 <span class="mono-text">/start</span>，再发送绑定命令。</p>',
+            ].join("");
+            return;
+        }
+
+        const binding = currentTelegramBinding();
+        const tokenState = telegramBindTokenState(binding);
+        const isBound = Boolean(binding && binding.is_bound);
+        const clearButtonText = isBound ? "解除当前绑定" : (tokenState.hasToken ? "清空当前绑定码" : "解除当前绑定");
+        const generateButtonText = isBound
+            ? "重新生成绑定码"
+            : (tokenState.isActive ? "刷新绑定码" : "生成绑定码");
+
+        renderBotBindingMetrics(binding, tokenState);
+        if (isBound) {
+            botBindingSummary.textContent = "当前 Telegram 账号 " + telegramBindingLabel(binding) + " 已绑定到平台用户，可直接在 Bot 私聊里查询收益。";
+        } else if (tokenState.isActive) {
+            botBindingSummary.textContent = "绑定码已生成，请在 " + formatDateTime(tokenState.expireAt) + " 前去 Telegram 私聊收益查询 Bot 完成绑定。";
+        } else if (tokenState.hasToken) {
+            botBindingSummary.textContent = "之前生成的绑定码已过期，请重新生成新的绑定码。";
+        } else {
+            botBindingSummary.textContent = "当前还没有绑定码。点击下方按钮后，在 Telegram 私聊收益查询 Bot 发送 /bind 命令即可。";
+        }
+        botBindingCommand.textContent = currentBindCommand();
+        botBindingCommandMeta.textContent = tokenState.isActive
+            ? "复制后直接发送给收益查询 Bot。绑定完成后，可继续使用 /profit 和 /plan。"
+            : "绑定码只在网页端生成。当前默认有效期来自后台 Telegram 配置。";
+        botBindingActions.innerHTML = [
+            '<button id="generateBindCodeBtn" class="primary-btn" type="button">' + escapeHtml(generateButtonText) + '</button>',
+            '<button id="copyBindCommandBtn" class="ghost-btn" type="button"' + (tokenState.isActive ? "" : " disabled") + '>复制 /bind 命令</button>',
+            '<button id="clearTelegramBindingBtn" class="ghost-btn" type="button"' + (isBound || tokenState.hasToken ? "" : " disabled") + '>' + escapeHtml(clearButtonText) + '</button>',
+        ].join("");
+        botBindingInstructions.innerHTML = [
+            '<p>1. 绑定码只能在网页端生成，默认有效期由后台 Telegram 配置决定。</p>',
+            '<p>2. 到 Telegram 私聊收益查询 Bot，先发送 <span class="mono-text">/start</span>，再发送上面的绑定命令。</p>',
+            '<p>3. 绑定完成后，可在同一个私聊窗口继续发送 <span class="mono-text">/profit</span>、<span class="mono-text">/plan</span> 查询收益。</p>',
+            '<p>4. 如果 Bot 没有响应，请联系管理员确认收益查询 Bot 已启用且 Token 正常。</p>',
+        ].join("");
     }
 
     function availableAccountsForTargets() {
@@ -1455,11 +1740,26 @@
         accountVerifyForm.reset();
         accountVerifyForm.hidden = true;
         accountVerifyForm.elements.telegram_account_id.value = "";
-        accountVerifyForm.querySelector(".account-code-field").hidden = false;
-        accountVerifyForm.querySelector(".account-password-field").hidden = true;
-        accountVerifyForm.querySelector("#verifyAccountCodeBtn").hidden = false;
-        accountVerifyForm.querySelector("#verifyAccountPasswordBtn").hidden = true;
-        document.getElementById("accountVerifySummary").textContent = "";
+        const codeField = accountVerifyForm.querySelector(".account-code-field");
+        const passwordField = accountVerifyForm.querySelector(".account-password-field");
+        const verifyCodeBtn = accountVerifyForm.querySelector("#verifyAccountCodeBtn");
+        const verifyPasswordBtn = accountVerifyForm.querySelector("#verifyAccountPasswordBtn");
+        const verifySummary = document.getElementById("accountVerifySummary");
+        if (codeField instanceof HTMLElement) {
+            codeField.hidden = false;
+        }
+        if (passwordField instanceof HTMLElement) {
+            passwordField.hidden = true;
+        }
+        if (verifyCodeBtn instanceof HTMLElement) {
+            verifyCodeBtn.hidden = false;
+        }
+        if (verifyPasswordBtn instanceof HTMLElement) {
+            verifyPasswordBtn.hidden = true;
+        }
+        if (verifySummary instanceof HTMLElement) {
+            verifySummary.textContent = "";
+        }
     }
 
     function renderAccountModeGuide(mode) {
@@ -1496,21 +1796,40 @@
     }
 
     function syncAccountModeUI(mode) {
+        if (!(accountForm instanceof HTMLFormElement)) {
+            return;
+        }
         const normalized = String(mode || "phone_login").trim() || "phone_login";
         const config = accountModeConfig[normalized] || accountModeConfig.phone_login;
         accountModeButtons.forEach(function (button) {
             button.classList.toggle("is-active", button.getAttribute("data-account-auth-mode") === normalized);
         });
         accountForm.elements.auth_mode.value = normalized;
-        accountForm.querySelector(".account-phone-field").hidden = normalized !== "phone_login";
-        accountForm.querySelector(".account-session-file-field").hidden = normalized !== "session_import";
-        accountForm.elements.phone.required = normalized === "phone_login";
-        accountForm.elements.session_file.required = normalized === "session_import" && !String(accountForm.elements.edit_id.value || "").trim();
-        document.getElementById("accountModeDescription").textContent = config.description;
+        const phoneField = accountForm.querySelector(".account-phone-field");
+        const sessionField = accountForm.querySelector(".account-session-file-field");
+        if (phoneField instanceof HTMLElement) {
+            phoneField.hidden = normalized !== "phone_login";
+        }
+        if (sessionField instanceof HTMLElement) {
+            sessionField.hidden = normalized !== "session_import";
+        }
+        if (accountForm.elements.phone instanceof HTMLInputElement) {
+            accountForm.elements.phone.required = normalized === "phone_login";
+        }
+        if (accountForm.elements.session_file instanceof HTMLInputElement) {
+            accountForm.elements.session_file.required = normalized === "session_import" && !String(accountForm.elements.edit_id.value || "").trim();
+        }
+        const accountModeDescription = document.getElementById("accountModeDescription");
+        if (accountModeDescription instanceof HTMLElement) {
+            accountModeDescription.textContent = config.description;
+        }
         renderAccountModeGuide(normalized);
-        document.getElementById("createAccountBtn").textContent = String(accountForm.elements.edit_id.value || "").trim()
-            ? config.editText
-            : config.createText;
+        const createAccountBtn = document.getElementById("createAccountBtn");
+        if (createAccountBtn instanceof HTMLElement) {
+            createAccountBtn.textContent = String(accountForm.elements.edit_id.value || "").trim()
+                ? config.editText
+                : config.createText;
+        }
         if (normalized !== "phone_login") {
             resetAccountVerifyForm();
         }
@@ -1914,13 +2233,28 @@
         accountVerifyForm.elements.telegram_account_id.value = String(account.id || "");
         accountVerifyForm.elements.code.value = "";
         accountVerifyForm.elements.password.value = "";
-        accountVerifyForm.querySelector(".account-code-field").hidden = passwordRequired;
-        accountVerifyForm.querySelector(".account-password-field").hidden = !passwordRequired;
-        accountVerifyForm.querySelector("#verifyAccountCodeBtn").hidden = passwordRequired;
-        accountVerifyForm.querySelector("#verifyAccountPasswordBtn").hidden = !passwordRequired;
-        document.getElementById("accountVerifySummary").textContent = passwordRequired
-            ? "账号「" + (account.label || "--") + "」需要输入二次密码。"
-            : "账号「" + (account.label || "--") + "」已发送验证码，请继续填写。";
+        const codeField = accountVerifyForm.querySelector(".account-code-field");
+        const passwordField = accountVerifyForm.querySelector(".account-password-field");
+        const verifyCodeBtn = accountVerifyForm.querySelector("#verifyAccountCodeBtn");
+        const verifyPasswordBtn = accountVerifyForm.querySelector("#verifyAccountPasswordBtn");
+        const verifySummary = document.getElementById("accountVerifySummary");
+        if (codeField instanceof HTMLElement) {
+            codeField.hidden = passwordRequired;
+        }
+        if (passwordField instanceof HTMLElement) {
+            passwordField.hidden = !passwordRequired;
+        }
+        if (verifyCodeBtn instanceof HTMLElement) {
+            verifyCodeBtn.hidden = passwordRequired;
+        }
+        if (verifyPasswordBtn instanceof HTMLElement) {
+            verifyPasswordBtn.hidden = !passwordRequired;
+        }
+        if (verifySummary instanceof HTMLElement) {
+            verifySummary.textContent = passwordRequired
+                ? "账号「" + (account.label || "--") + "」需要输入二次密码。"
+                : "账号「" + (account.label || "--") + "」已发送验证码，请继续填写。";
+        }
         accountVerifyForm.scrollIntoView({behavior: "smooth", block: "start"});
     }
 
@@ -1948,10 +2282,21 @@
         });
     }
 
-    function primarySource() {
-        const aiSource = state.sources.find(function (item) {
+    function aiSources() {
+        return state.sources.filter(function (item) {
             return item.source_type === "ai_trading_simulator_export";
         });
+    }
+
+    function primarySource() {
+        const subscription = primarySubscription();
+        if (subscription) {
+            const linkedSource = sourceById(subscription.source_id);
+            if (linkedSource) {
+                return linkedSource;
+            }
+        }
+        const aiSource = aiSources()[0];
         return aiSource || state.sources[0] || null;
     }
 
@@ -1974,6 +2319,110 @@
         return items.find(function (item) {
             return item.status === "active";
         }) || items[0] || null;
+    }
+
+    function sourceSubscription(sourceId) {
+        return visibleSubscriptions().find(function (item) {
+            return Number(item.source_id) === Number(sourceId);
+        }) || null;
+    }
+
+    function activeSourceSubscription(sourceId) {
+        return activeSubscriptions().find(function (item) {
+            return Number(item.source_id) === Number(sourceId);
+        }) || null;
+    }
+
+    function sourceRawItems(sourceId) {
+        return state.rawItems.filter(function (item) {
+            return Number(item.source_id) === Number(sourceId);
+        });
+    }
+
+    function sourceSignals(sourceId) {
+        return state.signals.filter(function (item) {
+            return Number(item.source_id) === Number(sourceId);
+        });
+    }
+
+    function sourceJobs(sourceId) {
+        const signalIds = {};
+        sourceSignals(sourceId).forEach(function (item) {
+            signalIds[String(item.id)] = true;
+        });
+        return state.jobs.filter(function (item) {
+            return Boolean(signalIds[String(item.signal_id)]);
+        });
+    }
+
+    function latestByTime(items, fieldNames) {
+        const fields = Array.isArray(fieldNames) ? fieldNames : [fieldNames];
+        return (items || []).slice().sort(function (left, right) {
+            const leftMs = fields.reduce(function (result, field) {
+                return result || parseTimeMs(left && left[field]);
+            }, 0);
+            const rightMs = fields.reduce(function (result, field) {
+                return result || parseTimeMs(right && right[field]);
+            }, 0);
+            return rightMs - leftMs;
+        })[0] || null;
+    }
+
+    function sourceSignalHasJobs(signalId) {
+        return state.jobs.some(function (item) {
+            return Number(item.signal_id) === Number(signalId);
+        });
+    }
+
+    function sourcePipelineState(source) {
+        const sourceId = source && source.id;
+        const subscription = sourceSubscription(sourceId);
+        const activeSubscription = activeSourceSubscription(sourceId);
+        const rawItems = sourceRawItems(sourceId);
+        const signals = sourceSignals(sourceId);
+        const jobs = sourceJobs(sourceId);
+        const latestRawItem = latestByTime(rawItems, ["created_at", "published_at"]);
+        const latestSignal = latestByTime(signals, ["published_at", "created_at"]);
+        const latestJob = latestByTime(jobs, ["updated_at", "created_at"]);
+        const pendingRawCount = rawItems.filter(function (item) {
+            return String(item.parse_status || "") === "pending";
+        }).length;
+        const failedRawCount = rawItems.filter(function (item) {
+            return String(item.parse_status || "") === "failed";
+        }).length;
+        const readySignalCount = signals.filter(function (item) {
+            return String(item.status || "") === "ready";
+        }).length;
+        const undispatchedSignalCount = signals.filter(function (item) {
+            return !sourceSignalHasJobs(item.id);
+        }).length;
+        let headline = "还没有开始跑来源链路。";
+        if (activeSubscription && !rawItems.length) {
+            headline = "当前来源已经被跟单使用，但还没有抓取到任何原始内容。";
+        } else if (pendingRawCount > 0) {
+            headline = "最近已经抓到原始内容，但还没完成标准化。";
+        } else if (signals.length && undispatchedSignalCount > 0) {
+            headline = "已经生成标准信号，但还没有继续展开成执行任务。";
+        } else if (jobs.length) {
+            headline = "这个来源最近已经跑到执行任务阶段。";
+        } else if (!activeSubscription) {
+            headline = "来源已经导入，但当前没有激活跟单策略会使用它。";
+        }
+        return {
+            subscription: subscription,
+            activeSubscription: activeSubscription,
+            rawItems: rawItems,
+            signals: signals,
+            jobs: jobs,
+            latestRawItem: latestRawItem,
+            latestSignal: latestSignal,
+            latestJob: latestJob,
+            pendingRawCount: pendingRawCount,
+            failedRawCount: failedRawCount,
+            readySignalCount: readySignalCount,
+            undispatchedSignalCount: undispatchedSignalCount,
+            headline: headline,
+        };
     }
 
     function pendingAccountForWizard() {
@@ -2415,10 +2864,11 @@
         const account = primaryAccount();
         const target = primaryTarget();
         const subscription = primarySubscription();
+        const sourceState = source ? sourcePipelineState(source) : null;
 
         document.getElementById("currentSourceName").textContent = source ? source.name : "未导入方案";
         document.getElementById("currentSourceMeta").textContent = source
-            ? ((source.source_type || "--") + " · " + (source.visibility || "private"))
+            ? (((sourceState && sourceState.activeSubscription) ? "已接入激活跟单" : ((source.source_type || "--") + " · " + (source.visibility || "private"))) + (sourceState ? (" · " + sourceState.headline) : ""))
             : "先在首页导入一个来源，再回来设置跟单。";
 
         document.getElementById("currentAccountName").textContent = account ? account.label : "未绑定";
@@ -3018,7 +3468,22 @@
         const subscriptionIssues = visibleSubscriptions().filter(function (item) {
             return subscriptionTargetsState(item).summaries.length > 0;
         }).length;
+        const activeLinkedSourceCount = aiSources().filter(function (item) {
+            return Boolean(activeSourceSubscription(item.id));
+        }).length;
+        const binding = currentTelegramBinding();
+        const tokenState = telegramBindTokenState(binding);
         const cards = [
+            {
+                kicker: "Sources",
+                title: "来源链路",
+                body: aiSources().length
+                    ? ("已导入 " + aiSources().length + " 个来源，其中 " + activeLinkedSourceCount + " 个正被激活跟单使用。")
+                    : "还没有导入来源，整条自动投注链路没有信号入口。",
+                meta: aiSources().length ? "这里补上抓取、标准化和派发闭环。" : "先去首页导入公开方案链接。",
+                href: "/autobet/sources#sourcesSection",
+                text: "去来源页",
+            },
             {
                 kicker: "Accounts",
                 title: "托管账号与授权",
@@ -3036,6 +3501,20 @@
                 meta: "可反查哪些跟单会发到这个群。",
                 href: "/autobet/targets#targetsSection",
                 text: "去群组页",
+            },
+            {
+                kicker: "Bot",
+                title: "收益查询 Bot 绑定",
+                body: !state.currentUser
+                    ? "登录后在网页端生成绑定码，再到 Telegram 私聊 Bot 完成绑定。"
+                    : (binding && binding.is_bound
+                        ? ("当前已绑定 " + telegramBindingLabel(binding) + "，可以直接查询收益。")
+                        : (tokenState.isActive
+                            ? ("绑定码有效至 " + formatDateTime(tokenState.expireAt) + "。")
+                            : "当前还没有有效绑定码。")),
+                meta: binding && binding.is_bound ? "用于 /profit 和 /plan 查询。" : "入口已经放回用户总控台，不再藏在后台。",
+                href: "/autobet#botBindingSection",
+                text: "去 Bot 绑定",
             },
             {
                 kicker: "Templates",
@@ -3275,10 +3754,10 @@
                 badgeClass: "step-pill is-pending",
                 title: "先导入 AI 方案来源",
                 description: "没有来源时，自动投注没有可跟随的信号入口，后续账号和群组都无法真正命中任务。",
-                primaryHref: "/#importSection",
-                primaryText: "去导入方案",
-                secondaryHref: "/autobet/subscriptions#subscriptionsSection",
-                secondaryText: "查看跟单策略",
+                primaryHref: "/autobet/sources#sourcesSection",
+                primaryText: "去来源工作区",
+                secondaryHref: "/#importSection",
+                secondaryText: "首页快捷导入",
             };
         }
         if (!activeAccounts().length) {
@@ -3660,6 +4139,7 @@
         toggleAutobetBtn.textContent = globalState.actionText;
         toggleAutobetBtn.dataset.nextStatus = globalState.nextStatus;
         toggleAutobetBtn.toggleAttribute("disabled", Boolean(globalState.disabled));
+        renderBotBindingSection();
         renderHealthCheck();
     }
 
@@ -3667,6 +4147,10 @@
         const scope = currentAutobetScope();
         const hash = window.location.hash || "";
         if (hash && scrollToHashTarget(hash)) {
+            return;
+        }
+        if (scope === "sources") {
+            scrollToHashTarget("#sourcesSection");
             return;
         }
         if (scope === "accounts") {
@@ -3706,8 +4190,8 @@
                 complete: aiSources.length > 0,
                 detail: aiSources.length
                     ? ("已识别 " + aiSources.length + " 个方案来源，当前主来源是「" + (primarySource() ? primarySource().name : "--") + "」。")
-                    : "先回首页导入公开方案链接，向导会在这里自动识别并进入下一步。",
-                actionText: "去导入方案",
+                    : "先去来源工作区导入公开方案链接，向导会在这里自动识别并进入下一步。",
+                actionText: "去来源工作区",
             },
             {
                 key: "account",
@@ -3842,28 +4326,136 @@
         }).join("");
     }
 
+    function renderSourceWorkspaceSummary() {
+        if (!(sourceWorkspaceSummary instanceof HTMLElement)) {
+            return;
+        }
+        const items = aiSources();
+        const activeLinkedCount = items.filter(function (item) {
+            return Boolean(activeSourceSubscription(item.id));
+        }).length;
+        const pendingRawCount = items.reduce(function (total, item) {
+            return total + sourcePipelineState(item).pendingRawCount;
+        }, 0);
+        const undispatchedSignalCount = items.reduce(function (total, item) {
+            return total + sourcePipelineState(item).undispatchedSignalCount;
+        }, 0);
+        const recentJobCount = items.reduce(function (total, item) {
+            return total + sourcePipelineState(item).jobs.length;
+        }, 0);
+
+        sourceWorkspaceSummary.innerHTML = [
+            '<article class="health-card"><span class="setup-label">来源总数</span><strong>' + escapeHtml(String(items.length)) + '</strong><p>当前已导入的 AI 方案来源数量。</p></article>',
+            '<article class="health-card"><span class="setup-label">已接入跟单</span><strong>' + escapeHtml(String(activeLinkedCount)) + '</strong><p>当前有激活跟单策略实际在使用的来源数量。</p></article>',
+            '<article class="health-card"><span class="setup-label">待标准化</span><strong>' + escapeHtml(String(pendingRawCount)) + '</strong><p>已经抓到 raw item 但还没进入标准信号的数量。</p></article>',
+            '<article class="health-card"><span class="setup-label">待派发信号</span><strong>' + escapeHtml(String(undispatchedSignalCount)) + '</strong><p>已生成信号但还没展开成执行任务的数量。</p></article>',
+            '<article class="health-card"><span class="setup-label">历史任务</span><strong>' + escapeHtml(String(recentJobCount)) + '</strong><p>当前来源们累计已经进入执行任务的记录数。</p></article>',
+        ].join("");
+
+        if (!(sourceWorkspaceSummaryText instanceof HTMLElement)) {
+            return;
+        }
+        if (!items.length) {
+            sourceWorkspaceSummaryText.textContent = "先导入一个来源，后续的抓取、标准化和派发入口才有意义。";
+            return;
+        }
+        if (!activeLinkedCount) {
+            sourceWorkspaceSummaryText.textContent = "来源已经导入，但还没有任何激活跟单策略在使用它们。先把某个来源接到跟单策略。";
+            return;
+        }
+        if (pendingRawCount > 0 || undispatchedSignalCount > 0) {
+            sourceWorkspaceSummaryText.textContent = "当前至少有一个来源卡在抓取后的中间阶段。可以直接在下方来源卡片点“一键推进来源链路”。";
+            return;
+        }
+        sourceWorkspaceSummaryText.textContent = "当前来源链路已经基本闭合。后续主要看最近抓取是否持续产生 signal 和 execution job。";
+    }
+
     function renderSourceCards() {
         if (!(sourceCards instanceof HTMLElement)) {
             return;
         }
-        const items = state.sources.filter(function (item) {
-            return item.source_type === "ai_trading_simulator_export";
-        });
+        const items = aiSources();
         if (!items.length) {
             sourceCards.innerHTML = '<article class="mini-card"><strong>还没有导入 AI 方案</strong><p>先回首页导入 AITradingSimulator 的公开方案页链接，再来这里配置账号、群组和跟单策略。</p></article>';
             return;
         }
         sourceCards.innerHTML = items.map(function (item) {
             const fetchConfig = item.config && item.config.fetch ? item.config.fetch : {};
+            const pipeline = sourcePipelineState(item);
             return [
                 '<article class="mini-card">',
                 '<strong>' + escapeHtml(item.name || "--") + "</strong>",
-                '<p>来源类型：' + escapeHtml(item.source_type || "--") + "</p>",
-                '<p>可见性：' + escapeHtml(item.visibility || "--") + "</p>",
+                '<p>来源类型：' + escapeHtml(item.source_type || "--") + " · " + escapeHtml(item.visibility || "--") + "</p>",
+                '<p>' + escapeHtml(pipeline.headline) + "</p>",
                 '<p class="mono-text">' + escapeHtml(fetchConfig.url || "--") + "</p>",
                 "</article>",
             ].join("");
         }).join("");
+    }
+
+    function renderSourceList() {
+        if (!(sourceList instanceof HTMLElement)) {
+            return;
+        }
+        const items = aiSources();
+        if (!items.length) {
+            sourceList.innerHTML = '<article class="mini-card"><strong>当前还没有来源链路</strong><p>先从首页导入 AITradingSimulator 公开方案，再回这里决定哪个来源要进入跟单和派发链路。</p></article>';
+            renderSourceWorkspaceSummary();
+            return;
+        }
+        sourceList.innerHTML = items.map(function (item) {
+            const fetchConfig = item.config && item.config.fetch ? item.config.fetch : {};
+            const pipeline = sourcePipelineState(item);
+            const activeSubscription = pipeline.activeSubscription;
+            const subscription = pipeline.subscription;
+            const statusAction = entityStatusAction(item.status, "停用来源", "启用来源");
+            const archiveAction = isArchivedItem(item)
+                ? '<button class="ghost-btn danger-btn delete-source-btn" type="button" data-source-id="' + item.id + '">删除来源</button>'
+                : '<button class="ghost-btn archive-source-btn" type="button" data-source-id="' + item.id + '">归档来源</button>';
+            const latestRawText = pipeline.latestRawItem
+                ? ("#" + pipeline.latestRawItem.id + " · " + formatDateTime(pipeline.latestRawItem.created_at || pipeline.latestRawItem.published_at))
+                : "还没有抓取记录";
+            const latestSignalText = pipeline.latestSignal
+                ? ("signal #" + pipeline.latestSignal.id + " · " + (pipeline.latestSignal.issue_no || "--") + " · " + formatDateTime(pipeline.latestSignal.published_at || pipeline.latestSignal.created_at))
+                : "还没有标准信号";
+            const latestJobText = pipeline.latestJob
+                ? ("job #" + pipeline.latestJob.id + " · " + statusText(pipeline.latestJob.status || "pending") + " · " + formatDateTime(pipeline.latestJob.updated_at || pipeline.latestJob.created_at))
+                : "还没有执行任务";
+            const subscriptionText = activeSubscription
+                ? ("当前激活策略 #" + activeSubscription.id + " 正在使用这个来源。")
+                : (subscription
+                    ? ("这个来源已有策略 #" + subscription.id + "，但当前状态是 " + statusText(subscription.status || "inactive") + "。")
+                    : "当前还没有任何跟单策略会使用这个来源。");
+            const pipelineButtonText = activeSubscription ? "一键推进来源链路" : "先接入跟单后再推进";
+            return [
+                '<article class="mini-card source-card-item">',
+                '<div class="config-list-head"><strong>' + escapeHtml(item.name || "--") + '</strong><div class="account-pill-row">' + renderStatusPill(item.status || "--") + (activeSubscription ? renderStatusPillWithLabel("active", "已接入跟单") : renderStatusPillWithLabel("inactive", subscription ? "策略未启用" : "未接入跟单")) + '</div></div>',
+                '<div class="source-card-meta">',
+                '<p class="source-card-status">' + escapeHtml(subscriptionText) + '</p>',
+                '<p>抓取地址：<span class="mono-text">' + escapeHtml(truncateText(fetchConfig.url || "--", 88)) + '</span></p>',
+                '<p>最近 raw：' + escapeHtml(latestRawText) + '</p>',
+                '<p>最近 signal：' + escapeHtml(latestSignalText) + '</p>',
+                '<p>最近任务：' + escapeHtml(latestJobText) + '</p>',
+                '<p>' + escapeHtml(pipeline.headline) + '</p>',
+                '</div>',
+                '<div class="source-card-kpis">' +
+                    '<div class="source-card-kpi"><strong>' + escapeHtml(String(pipeline.rawItems.length)) + '</strong><span>raw</span></div>' +
+                    '<div class="source-card-kpi"><strong>' + escapeHtml(String(pipeline.pendingRawCount)) + '</strong><span>待标准化</span></div>' +
+                    '<div class="source-card-kpi"><strong>' + escapeHtml(String(pipeline.signals.length)) + '</strong><span>signals</span></div>' +
+                    '<div class="source-card-kpi"><strong>' + escapeHtml(String(pipeline.jobs.length)) + '</strong><span>jobs</span></div>' +
+                '</div>',
+                '<div class="source-card-actions">' +
+                    '<button class="ghost-btn edit-source-btn" type="button" data-source-id="' + escapeHtml(String(item.id)) + '">编辑来源</button>' +
+                    '<button class="ghost-btn source-subscription-btn" type="button" data-source-id="' + escapeHtml(String(item.id)) + '">' + escapeHtml(activeSubscription ? "查看这个来源的跟单" : "用这个来源建跟单") + '</button>' +
+                    '<button class="' + (activeSubscription ? 'primary-btn' : 'ghost-btn') + ' source-pipeline-btn" type="button" data-source-id="' + escapeHtml(String(item.id)) + '"' + (activeSubscription ? '' : ' disabled') + '>' + escapeHtml(pipelineButtonText) + '</button>' +
+                    '<button class="ghost-btn toggle-source-btn" type="button" data-source-id="' + escapeHtml(String(item.id)) + '" data-next-status="' + escapeHtml(statusAction.nextStatus) + '">' + escapeHtml(statusAction.actionText) + '</button>' +
+                    archiveAction +
+                    '<a class="ghost-btn link-btn" href="/records' + (pipeline.latestSignal ? ('?signal_id=' + encodeURIComponent(String(pipeline.latestSignal.id))) : '') + '">' + escapeHtml(pipeline.latestSignal ? "看这个来源最近记录" : "去执行记录") + '</a>' +
+                '</div>',
+                '</article>',
+            ].join("");
+        }).join("");
+        renderSourceWorkspaceSummary();
     }
 
     function renderAccountCards() {
@@ -4070,6 +4662,8 @@
 
     function resetCollections() {
         state.sources = [];
+        state.rawItems = [];
+        state.signals = [];
         state.accounts = [];
         state.targets = [];
         state.templates = [];
@@ -4077,8 +4671,13 @@
         state.jobs = [];
         state.alerts = [];
         state.failures = [];
+        state.telegramBinding = null;
         state.showIssueJobsOnly = false;
         state.scopeFocused = false;
+        if (sourceForm instanceof HTMLFormElement) {
+            sourceForm.reset();
+            sourceForm.elements.visibility.value = "private";
+        }
         accountForm.reset();
         resetAccountVerifyForm();
         targetForm.reset();
@@ -4086,6 +4685,7 @@
             messageTemplateForm.reset();
         }
         subscriptionForm.reset();
+        setFormEditingState(sourceForm, createSourceBtn, cancelSourceEditBtn, false, "导入来源");
         setFormEditingState(accountForm, document.getElementById("createAccountBtn"), cancelAccountEditBtn, false, "新增托管账号");
         syncAccountModeUI("phone_login");
         setFormEditingState(targetForm, document.getElementById("createTargetBtn"), cancelTargetEditBtn, false, "新增投递群组");
@@ -4105,6 +4705,7 @@
         renderWorkspaceCards();
         renderOnboardingGuide();
         renderSourceCards();
+        renderSourceList();
         renderAccountCards();
         renderTargetWorkspaceSummary();
         renderTargetCards();
@@ -4113,28 +4714,35 @@
         renderRecentJobSummary();
         renderRecentJobs();
         renderRecentAlerts();
+        renderBotBindingSection();
         syncBatchResolveButtonState();
     }
 
     async function loadPageData() {
         const results = await Promise.all([
             request("/api/platform/sources"),
+            request("/api/platform/raw-items"),
+            request("/api/platform/signals"),
             request("/api/platform/telegram-accounts"),
             request("/api/platform/delivery-targets"),
             request("/api/platform/message-templates"),
             request("/api/platform/subscriptions"),
-            request("/api/platform/execution-jobs?limit=30"),
+            request("/api/platform/execution-jobs?limit=100"),
             request("/api/platform/alerts?limit=4"),
             request("/api/platform/execution-failures?limit=20"),
+            request("/api/platform/telegram-binding"),
         ]);
         state.sources = results[0].items || [];
-        state.accounts = results[1].items || [];
-        state.targets = results[2].items || [];
-        state.templates = results[3].items || [];
-        state.subscriptions = results[4].items || [];
-        state.jobs = results[5].items || [];
-        state.alerts = results[6].items || [];
-        state.failures = results[7].items || [];
+        state.rawItems = results[1].items || [];
+        state.signals = results[2].items || [];
+        state.accounts = results[3].items || [];
+        state.targets = results[4].items || [];
+        state.templates = results[5].items || [];
+        state.subscriptions = results[6].items || [];
+        state.jobs = results[7].items || [];
+        state.alerts = results[8].items || [];
+        state.failures = results[9].items || [];
+        state.telegramBinding = results[10].item || null;
     }
 
     async function refreshAll() {
@@ -4151,19 +4759,20 @@
             refreshSourceSelects();
             refreshAccountSelects();
             refreshTemplateSelects();
-            renderOverview();
-            renderExecutionFlowSection();
-            renderWorkspaceCards();
-            renderOnboardingGuide();
-            renderSourceCards();
-            renderAccountCards();
-            renderTargetWorkspaceSummary();
-            renderTargetCards();
-            renderTemplateCards();
-            renderSubscriptionCards();
-            renderRecentJobSummary();
-            renderRecentJobs();
-            renderRecentAlerts();
+            safeRender("overview", renderOverview);
+            safeRender("execution-flow", renderExecutionFlowSection);
+            safeRender("workspace-cards", renderWorkspaceCards);
+            safeRender("onboarding", renderOnboardingGuide);
+            safeRender("source-cards", renderSourceCards);
+            safeRender("source-list", renderSourceList);
+            safeRender("account-cards", renderAccountCards);
+            safeRender("target-summary", renderTargetWorkspaceSummary);
+            safeRender("target-cards", renderTargetCards);
+            safeRender("template-cards", renderTemplateCards);
+            safeRender("subscription-cards", renderSubscriptionCards);
+            safeRender("recent-job-summary", renderRecentJobSummary);
+            safeRender("recent-jobs", renderRecentJobs);
+            safeRender("recent-alerts", renderRecentAlerts);
             if (!state.scopeFocused) {
                 focusScopeSectionOnLoad();
                 state.scopeFocused = true;
@@ -4268,6 +4877,114 @@
         }
     }
 
+    function openSourceSubscriptionStep(sourceId) {
+        const source = sourceById(sourceId);
+        if (!source) {
+            throw new Error("source_id 对应的来源不存在");
+        }
+        scrollToHashTarget("#subscriptionsSection");
+        const existingSubscription = sourceSubscription(sourceId);
+        if (existingSubscription && subscriptionCards instanceof HTMLElement) {
+            const editButton = subscriptionCards.querySelector('.edit-subscription-btn[data-subscription-id="' + String(existingSubscription.id).replace(/"/g, '\\"') + '"]');
+            if (editButton instanceof HTMLButtonElement) {
+                editButton.click();
+                setStatus("已打开这个来源的现有跟单策略。", false);
+                return;
+            }
+        }
+        subscriptionForm.elements.edit_id.value = "";
+        subscriptionForm.elements.source_id.value = String(source.id);
+        setFormEditingState(subscriptionForm, document.getElementById("createSubscriptionBtn"), cancelSubscriptionEditBtn, false, "新建跟单策略");
+        resetSubscriptionStrategyFormState();
+        syncSubscriptionBetFilterUI();
+        syncSubscriptionPresetUI();
+        syncSubscriptionSettlementUI();
+        syncSubscriptionRiskControlUI();
+        subscriptionForm.scrollIntoView({behavior: "smooth", block: "start"});
+        focusElement(subscriptionForm.elements.source_id);
+        setStatus("已预选来源「" + (source.name || "--") + "」，现在可以直接创建跟单策略。", false);
+    }
+
+    function loadSourceIntoForm(source) {
+        if (!source || !(sourceForm instanceof HTMLFormElement)) {
+            return;
+        }
+        const fetchConfig = source.config && source.config.fetch ? source.config.fetch : {};
+        sourceForm.elements.edit_id.value = String(source.id || "");
+        sourceForm.elements.name.value = source.name || "";
+        sourceForm.elements.visibility.value = String(source.visibility || "private") || "private";
+        sourceForm.elements.source_url.value = String(fetchConfig.url || "");
+        setFormEditingState(sourceForm, createSourceBtn, cancelSourceEditBtn, true, "保存来源");
+        sourceForm.scrollIntoView({behavior: "smooth", block: "start"});
+        focusElement(sourceNameInput);
+    }
+
+    async function runSourcePipeline(source, button) {
+        if (!source || source.id == null) {
+            throw new Error("请选择要推进的来源");
+        }
+        const activeSubscription = activeSourceSubscription(source.id);
+        if (!activeSubscription) {
+            throw new Error("这个来源当前还没有激活跟单策略，请先把它接入并启用跟单。");
+        }
+        const confirmed = confirmDangerousAction(
+            "将为来源「" + (source.name || "--") + "」执行一次完整推进：抓取最新内容、标准化成信号，并把新信号展开为执行任务。确认继续吗？"
+        );
+        if (!confirmed) {
+            return {cancelled: true};
+        }
+        setButtonBusy(button, true, "推进中...");
+        try {
+            const fetchPayload = await request("/api/platform/sources/" + source.id + "/fetch", {
+                method: "POST",
+                body: {},
+            });
+            const rawItem = fetchPayload.raw_item || null;
+            if (!rawItem || rawItem.id == null) {
+                throw new Error("来源抓取成功，但没有返回可继续标准化的原始内容。");
+            }
+            const normalizePayload = await request("/api/platform/raw-items/" + rawItem.id + "/normalize", {
+                method: "POST",
+                body: {},
+            });
+            const createdSignals = Array.isArray(normalizePayload.items) ? normalizePayload.items : [];
+            let createdJobCount = 0;
+            let candidateCount = 0;
+            for (const signal of createdSignals) {
+                const dispatchPayload = await request("/api/platform/signals/" + signal.id + "/dispatch", {
+                    method: "POST",
+                    body: {},
+                });
+                createdJobCount += Number(dispatchPayload.created_count || 0);
+                candidateCount += Number(dispatchPayload.candidate_count || 0);
+            }
+            await refreshAll();
+            if (!createdSignals.length) {
+                setStatus("来源已抓取 raw item，但这次没有产出可用信号。请检查上游返回内容。", true);
+                return {rawItem: rawItem, createdSignals: [], createdJobCount: 0, candidateCount: 0};
+            }
+            if (createdJobCount <= 0) {
+                setStatus(
+                    "来源链路已推进：raw #" + rawItem.id + "，新增 " + createdSignals.length + " 条信号，但没有生成执行任务。请检查跟单玩法过滤、群组启用状态或信号内容。",
+                    true
+                );
+                return {rawItem: rawItem, createdSignals: createdSignals, createdJobCount: 0, candidateCount: candidateCount};
+            }
+            setStatus(
+                "来源链路已推进：raw #" + rawItem.id + "，新增 " + createdSignals.length + " 条信号，生成 " + createdJobCount + " 条执行任务。执行器会继续拉取并发送。",
+                false
+            );
+            return {
+                rawItem: rawItem,
+                createdSignals: createdSignals,
+                createdJobCount: createdJobCount,
+                candidateCount: candidateCount,
+            };
+        } finally {
+            setButtonBusy(button, false, "一键推进来源链路");
+        }
+    }
+
     function openAccountWizardStep() {
         if (currentAutobetScope() === "workbench") {
             window.location.href = "/autobet/accounts#accountsSection";
@@ -4353,7 +5070,12 @@
             return;
         }
         if (stepKey === "source") {
-            window.location.href = "/#importSection";
+            if (currentAutobetScope() !== "sources") {
+                window.location.href = "/autobet/sources#sourcesSection";
+                return;
+            }
+            scrollToHashTarget("#sourcesSection");
+            focusElement(sourceNameInput || sourceUrlInput);
             return;
         }
         if (stepKey === "account") {
@@ -4605,6 +5327,161 @@
         resetAccountVerifyForm();
         syncAccountModeUI("phone_login");
     });
+
+    if (fillSourceExampleBtn instanceof HTMLButtonElement && sourceUrlInput instanceof HTMLInputElement) {
+        fillSourceExampleBtn.addEventListener("click", function () {
+            sourceUrlInput.value = "https://your-ai-platform.example.com/public/predictors/12";
+            if (sourceNameInput instanceof HTMLInputElement && !String(sourceNameInput.value || "").trim()) {
+                sourceNameInput.value = "AITradingSimulator 方案 #12";
+            }
+            setStatus("已填入 AITradingSimulator 示例公开方案链接。", false);
+        });
+    }
+
+    if (sourceForm instanceof HTMLFormElement) {
+        sourceForm.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            try {
+                if (!state.currentUser) {
+                    throw new Error("请先登录，再导入来源");
+                }
+                const editId = String(sourceForm.elements.edit_id.value || "").trim();
+                const normalized = normalizeAiSourceUrl(sourceForm.elements.source_url.value);
+                const existingSource = findImportedAiSourceByUrl(normalized.url, editId);
+                if (existingSource) {
+                    throw new Error("该方案已存在于你的来源列表中，无需重复导入");
+                }
+                setButtonBusy(createSourceBtn, true, editId ? "保存中..." : "导入中...");
+                const payload = {
+                    name: String(sourceForm.elements.name.value || "").trim() || normalized.suggestedName,
+                    visibility: String(sourceForm.elements.visibility.value || "private").trim() || "private",
+                    status: editId ? undefined : "active",
+                    config: {
+                        fetch: {
+                            url: normalized.url,
+                            headers: {
+                                Accept: "application/json",
+                            },
+                            timeout: 10,
+                        },
+                    },
+                };
+                if (editId) {
+                    await request("/api/platform/sources/" + editId, {
+                        method: "POST",
+                        body: payload,
+                    });
+                } else {
+                    await request("/api/platform/sources", {
+                        method: "POST",
+                        body: payload,
+                    });
+                }
+                sourceForm.reset();
+                sourceForm.elements.visibility.value = "private";
+                setFormEditingState(sourceForm, createSourceBtn, cancelSourceEditBtn, false, "导入来源");
+                await refreshAll();
+                setStatus(editId ? "来源已更新。" : "来源已导入，现在可以直接把它接到跟单策略。", false);
+            } catch (error) {
+                setStatus(error.message, true);
+            } finally {
+                setButtonBusy(createSourceBtn, false, sourceForm && String(sourceForm.elements.edit_id.value || "").trim() ? "保存来源" : "导入来源");
+            }
+        });
+    }
+
+    if (cancelSourceEditBtn instanceof HTMLButtonElement && sourceForm instanceof HTMLFormElement) {
+        cancelSourceEditBtn.addEventListener("click", function () {
+            sourceForm.reset();
+            sourceForm.elements.visibility.value = "private";
+            setFormEditingState(sourceForm, createSourceBtn, cancelSourceEditBtn, false, "导入来源");
+        });
+    }
+
+    if (sourceList instanceof HTMLElement) {
+        sourceList.addEventListener("click", async function (event) {
+            const target = event.target;
+            if (!(target instanceof HTMLElement)) {
+                return;
+            }
+            if (target.classList.contains("edit-source-btn")) {
+                const sourceId = target.getAttribute("data-source-id");
+                const source = sourceById(sourceId);
+                if (!source) {
+                    return;
+                }
+                loadSourceIntoForm(source);
+                return;
+            }
+            if (target.classList.contains("source-subscription-btn")) {
+                const sourceId = target.getAttribute("data-source-id");
+                if (!sourceId) {
+                    return;
+                }
+                try {
+                    openSourceSubscriptionStep(sourceId);
+                } catch (error) {
+                    setStatus(error.message, true);
+                }
+                return;
+            }
+            if (target.classList.contains("archive-source-btn")) {
+                const sourceId = target.getAttribute("data-source-id");
+                if (!sourceId || !confirmDangerousAction("归档后该来源不会继续作为活跃来源参与新链路。确认继续吗？")) {
+                    return;
+                }
+                try {
+                    await updateEntityStatus("/api/platform/sources/", sourceId, "archived", "来源已归档。");
+                } catch (error) {
+                    setStatus(error.message, true);
+                }
+                return;
+            }
+            if (target.classList.contains("delete-source-btn")) {
+                const sourceId = target.getAttribute("data-source-id");
+                if (!sourceId || !confirmDangerousAction("删除后将无法恢复。只有无跟单、无抓取记录、无标准信号的已归档来源才能删除。确认继续吗？")) {
+                    return;
+                }
+                try {
+                    await deleteEntity("/api/platform/sources/", sourceId, "来源已删除。");
+                } catch (error) {
+                    setStatus(error.message, true);
+                }
+                return;
+            }
+            if (target.classList.contains("toggle-source-btn")) {
+                const sourceId = target.getAttribute("data-source-id");
+                const nextStatus = target.getAttribute("data-next-status");
+                if (!sourceId || !nextStatus) {
+                    return;
+                }
+                try {
+                    const wasArchived = isArchivedItem(sourceById(sourceId));
+                    await updateEntityStatus(
+                        "/api/platform/sources/",
+                        sourceId,
+                        nextStatus,
+                        wasArchived && nextStatus === "inactive" ? "来源已取消归档，当前状态为已停用。" : ("来源状态已更新为 " + statusText(nextStatus) + "。")
+                    );
+                } catch (error) {
+                    setStatus(error.message, true);
+                }
+                return;
+            }
+            if (!target.classList.contains("source-pipeline-btn")) {
+                return;
+            }
+            const sourceId = target.getAttribute("data-source-id");
+            if (!sourceId) {
+                return;
+            }
+            try {
+                await runSourcePipeline(sourceById(sourceId), target);
+            } catch (error) {
+                setStatus(error.message, true);
+            }
+        });
+    }
 
     targetForm.elements.telegram_account_id.addEventListener("change", function (event) {
         const select = event.currentTarget;
@@ -5629,6 +6506,67 @@
     refreshAutobetBtn.addEventListener("click", function () {
         refreshAll();
     });
+
+    if (botBindingActions instanceof HTMLElement) {
+        botBindingActions.addEventListener("click", async function (event) {
+            const target = event.target;
+            if (!(target instanceof HTMLButtonElement)) {
+                return;
+            }
+            if (target.id === "generateBindCodeBtn") {
+                try {
+                    setButtonBusy(target, true, "生成中...");
+                    const payload = await request("/api/platform/telegram-binding/token", {
+                        method: "POST",
+                        body: {},
+                    });
+                    state.telegramBinding = payload.item || null;
+                    renderBotBindingSection();
+                    const tokenState = telegramBindTokenState(state.telegramBinding);
+                    setStatus(
+                        tokenState.isActive
+                            ? ("新的绑定码已生成，有效期至 " + formatDateTime(tokenState.expireAt) + "。")
+                            : "绑定码已生成。",
+                        false
+                    );
+                } catch (error) {
+                    setStatus(error.message, true);
+                } finally {
+                    renderBotBindingSection();
+                }
+                return;
+            }
+            if (target.id === "copyBindCommandBtn") {
+                try {
+                    await copyTextToClipboard(currentBindCommand());
+                    setStatus("绑定命令已复制。去 Telegram 私聊收益查询 Bot 后直接粘贴发送即可。", false);
+                } catch (error) {
+                    setStatus(error.message, true);
+                }
+                return;
+            }
+            if (target.id !== "clearTelegramBindingBtn") {
+                return;
+            }
+            if (!confirmDangerousAction("解除后，当前 Telegram 私聊账号将不能继续查询这个平台账号的收益；如果只是换绑，也可以直接重新生成绑定码。确认继续吗？")) {
+                return;
+            }
+            try {
+                setButtonBusy(target, true, "处理中...");
+                const payload = await request("/api/platform/telegram-binding/unbind", {
+                    method: "POST",
+                    body: {},
+                });
+                state.telegramBinding = payload.item || null;
+                renderBotBindingSection();
+                setStatus("当前 Telegram Bot 绑定已解除。", false);
+            } catch (error) {
+                setStatus(error.message, true);
+            } finally {
+                renderBotBindingSection();
+            }
+        });
+    }
 
     toggleAutobetBtn.addEventListener("click", async function () {
         const nextStatus = String(toggleAutobetBtn.dataset.nextStatus || "").trim();

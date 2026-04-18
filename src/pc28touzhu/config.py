@@ -150,6 +150,13 @@ class PC28AutoSettlementConfig:
 
 
 @dataclass(frozen=True)
+class SourceSyncConfig:
+    enabled: bool
+    interval_seconds: int
+    once: bool
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     platform: PlatformConfig
     executor: ExecutorConfig
@@ -158,6 +165,7 @@ class RuntimeConfig:
     telegram_bot: TelegramBotConfig
     telegram_report: TelegramReportConfig
     pc28_auto_settlement: PC28AutoSettlementConfig
+    source_sync: SourceSyncConfig
 
 
 def get_platform_config() -> PlatformConfig:
@@ -252,6 +260,14 @@ def get_pc28_auto_settlement_config() -> PC28AutoSettlementConfig:
     )
 
 
+def get_source_sync_config() -> SourceSyncConfig:
+    return SourceSyncConfig(
+        enabled=_get_bool("SOURCE_SYNC_ENABLED", True),
+        interval_seconds=max(5, _get_int("SOURCE_SYNC_INTERVAL_SECONDS", 30)),
+        once=_get_bool("SOURCE_SYNC_ONCE", True),
+    )
+
+
 def get_runtime_config(env_path: str | os.PathLike[str] | None = None) -> RuntimeConfig:
     load_env_file(env_path)
     if env_path:
@@ -268,4 +284,5 @@ def get_runtime_config(env_path: str | os.PathLike[str] | None = None) -> Runtim
         telegram_bot=get_telegram_bot_config(),
         telegram_report=get_telegram_report_config(),
         pc28_auto_settlement=get_pc28_auto_settlement_config(),
+        source_sync=get_source_sync_config(),
     )

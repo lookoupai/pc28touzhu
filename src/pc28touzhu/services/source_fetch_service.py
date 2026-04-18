@@ -74,7 +74,31 @@ def _resolve_fetch_config(source: Dict[str, Any]) -> Dict[str, Any]:
     return config.get("fetch") if isinstance(config.get("fetch"), dict) else config
 
 
-def _create_http_json_raw_item(repository: Any, source_id: int, fetch_config: Dict[str, Any], payload: Any) -> Dict[str, Any]:
+def _find_existing_raw_item(
+    repository: Any,
+    *,
+    source_id: int,
+    external_item_id: Optional[str],
+    issue_no: str,
+    published_at: str,
+) -> Optional[Dict[str, Any]]:
+    normalized_external_item_id = str(external_item_id or "").strip()
+    normalized_issue_no = str(issue_no or "").strip()
+    normalized_published_at = str(published_at or "").strip()
+    for item in repository.list_raw_items(source_id=int(source_id)):
+        if normalized_external_item_id and str(item.get("external_item_id") or "").strip() == normalized_external_item_id:
+            return item
+        if (
+            normalized_issue_no
+            and str(item.get("issue_no") or "").strip() == normalized_issue_no
+            and normalized_published_at
+            and str(item.get("published_at") or "").strip() == normalized_published_at
+        ):
+            return item
+    return None
+
+
+def _create_http_json_raw_item(repository: Any, source_id: int, fetch_config: Dict[str, Any], payload: Any) -> tuple[Dict[str, Any], bool]:
     external_item_id = _extract_path(payload, str(fetch_config.get("external_item_id_path") or ""))
     issue_no = _extract_path(payload, str(fetch_config.get("issue_no_path") or ""))
     published_at = _extract_path(payload, str(fetch_config.get("published_at_path") or ""))
@@ -87,15 +111,28 @@ def _create_http_json_raw_item(repository: Any, source_id: int, fetch_config: Di
         if published_at in {None, ""}:
             published_at = payload.get("published_at")
 
+    normalized_external_item_id = str(external_item_id) if external_item_id not in {None, ""} else None
+    normalized_issue_no = str(issue_no) if issue_no not in {None, ""} else ""
+    normalized_published_at = str(published_at) if published_at not in {None, ""} else _utc_now_iso()
+    existing = _find_existing_raw_item(
+        repository,
+        source_id=source_id,
+        external_item_id=normalized_external_item_id,
+        issue_no=normalized_issue_no,
+        published_at=normalized_published_at,
+    )
+    if existing:
+        return existing, False
+
     return repository.create_raw_item_record(
         source_id=int(source_id),
-        external_item_id=str(external_item_id) if external_item_id not in {None, ""} else None,
-        issue_no=str(issue_no) if issue_no not in {None, ""} else "",
-        published_at=str(published_at) if published_at not in {None, ""} else _utc_now_iso(),
+        external_item_id=normalized_external_item_id,
+        issue_no=normalized_issue_no,
+        published_at=normalized_published_at,
         raw_payload=payload if isinstance(payload, dict) else {"data": payload},
         parse_status="pending",
         parse_error=None,
-    )
+    ), True
 
 
 def _create_ai_trading_simulator_raw_item(
@@ -103,7 +140,7 @@ def _create_ai_trading_simulator_raw_item(
     source_id: int,
     fetch_config: Dict[str, Any],
     payload: Any,
-) -> Dict[str, Any]:
+) -> tuple[Dict[str, Any], bool]:
     if not isinstance(payload, dict):
         raise ValueError("AITradingSimulator 导出接口必须返回 JSON 对象")
 
@@ -116,6 +153,16 @@ def _create_ai_trading_simulator_raw_item(
     issue_no = str(first_item.get("issue_no") or "").strip()
     published_at = str(first_item.get("published_at") or "").strip() or _utc_now_iso()
 
+    existing = _find_existing_raw_item(
+        repository,
+        source_id=source_id,
+        external_item_id=external_item_id,
+        issue_no=issue_no,
+        published_at=published_at,
+    )
+    if existing:
+        return existing, False
+
     return repository.create_raw_item_record(
         source_id=int(source_id),
         external_item_id=external_item_id,
@@ -124,7 +171,7 @@ def _create_ai_trading_simulator_raw_item(
         raw_payload=payload,
         parse_status="pending",
         parse_error=None,
-    )
+    ), True
 
 
 def fetch_source_to_raw_item(repository: Any, source_id: int, fetcher=None) -> Dict[str, Any]:
@@ -145,9 +192,9 @@ def fetch_source_to_raw_item(repository: Any, source_id: int, fetcher=None) -> D
     timeout = int(fetch_config.get("timeout") or 10)
     payload = (fetcher or _default_fetch_json)(url, headers=headers, timeout=timeout)
 
-    raw_item = (
+    raw_item, created = (
         _create_ai_trading_simulator_raw_item(repository, source_id, fetch_config, payload)
         if source_type == "ai_trading_simulator_export"
         else _create_http_json_raw_item(repository, source_id, fetch_config, payload)
     )
-    return {"source": source, "raw_item": raw_item}
+    return {"source": source, "raw_item": raw_item, "created": created}
