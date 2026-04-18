@@ -34,3 +34,7 @@ env/
 *.sqlite3
 *.db
 *.session
+*.session-journal
+data/
+.autobet_payload.json
+.autobet_runtime_check.js
