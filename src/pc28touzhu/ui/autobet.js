@@ -5353,6 +5353,7 @@
                 }
                 setButtonBusy(createSourceBtn, true, editId ? "保存中..." : "导入中...");
                 const payload = {
+                    source_type: "ai_trading_simulator_export",
                     name: String(sourceForm.elements.name.value || "").trim() || normalized.suggestedName,
                     visibility: String(sourceForm.elements.visibility.value || "private").trim() || "private",
                     status: editId ? undefined : "active",
