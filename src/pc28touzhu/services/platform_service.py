@@ -1292,6 +1292,32 @@ def reset_subscription_runtime(repository: Any, *, subscription_id: Any, user_id
     return result
 
 
+def restart_subscription_cycle(repository: Any, *, subscription_id: Any, user_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_subscription_id = _to_positive_int(subscription_id, "subscription_id")
+    normalized_user_id = _to_positive_int(user_id, "user_id")
+    current = repository.get_subscription(normalized_subscription_id)
+    if not current or int(current.get("user_id") or 0) != normalized_user_id:
+        raise ValueError("subscription_id 对应的订阅不存在")
+    if str(current.get("status") or "") == "archived":
+        raise ValueError("已归档的跟单策略不能直接开始新一轮，请先恢复后再试")
+
+    result = repository.reset_subscription_runtime(
+        subscription_id=normalized_subscription_id,
+        user_id=normalized_user_id,
+        note=str(payload.get("note") or "").strip(),
+    )
+    item = repository.update_subscription_status(
+        subscription_id=normalized_subscription_id,
+        user_id=normalized_user_id,
+        status="active",
+    )
+    if not item:
+        raise ValueError("subscription_id 对应的订阅不存在")
+    result["item"] = present_subscription_item(item)
+    result["restarted"] = True
+    return result
+
+
 def _group_targets_by_template(targets: list[Dict[str, Any]]) -> Dict[int, list[Dict[str, Any]]]:
     grouped: Dict[int, list[Dict[str, Any]]] = defaultdict(list)
     for target in targets:

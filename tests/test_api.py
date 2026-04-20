@@ -767,6 +767,9 @@ class FakeRepository:
         for subscription in self.subscriptions:
             if subscription["source_id"] != signal["source_id"] or subscription["status"] != "active":
                 continue
+            financial = self.subscription_financial_states.get(int(subscription["id"])) or {}
+            if str(financial.get("threshold_status") or ""):
+                continue
             for target in self.targets:
                 if target["user_id"] != subscription["user_id"] or target["status"] != "active":
                     continue
@@ -874,6 +877,16 @@ class FakeRepository:
                 return item
         return None
 
+    def list_open_progression_events(self, *, user_id, statuses=None, limit=5000):
+        normalized_statuses = {str(item or "").strip() for item in (statuses or ["pending", "placed"]) if str(item or "").strip()}
+        items = [
+            dict(item)
+            for item in self.progression_events
+            if item["user_id"] == int(user_id) and str(item.get("status") or "") in normalized_statuses
+        ]
+        items.sort(key=lambda item: int(item.get("id") or 0), reverse=True)
+        return items[: max(0, int(limit or 0))]
+
     def upsert_subscription_progression_state(self, *, subscription_id, user_id, current_step, last_signal_id=None, last_issue_no="", last_result_type=""):
         state = {
             "subscription_id": int(subscription_id),
@@ -935,15 +948,13 @@ class FakeRepository:
             loss_limit = float(risk_control.get("loss_limit") or 0)
             if profit_target > 0 and float(financial["net_profit"]) >= profit_target:
                 threshold_status = "profit_target_hit"
-                stopped_reason = "达到止盈阈值后已自动停用"
+                stopped_reason = "达到止盈阈值，当前轮次已停止"
             elif loss_limit > 0 and float(financial["net_profit"]) <= -loss_limit:
                 threshold_status = "loss_limit_hit"
-                stopped_reason = "达到止损阈值后已自动停用"
+                stopped_reason = "达到止损阈值，当前轮次已停止"
         financial["threshold_status"] = threshold_status
         financial["stopped_reason"] = stopped_reason
         self.subscription_financial_states[int(subscription_id)] = financial
-        if threshold_status:
-            self.update_subscription_status(subscription_id=subscription_id, user_id=user_id, status="inactive")
         return {"event": event, "state": state, "financial": financial, "subscription": self.get_subscription(subscription_id)}
 
     def reset_subscription_runtime(self, *, subscription_id, user_id, note=""):
@@ -2298,6 +2309,44 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(status, "200 OK")
         self.assertEqual(payload["item"]["status"], "inactive")
 
+    def test_restart_subscription_cycle_endpoint(self):
+        created = self.repository.create_subscription_record(
+            user_id=1,
+            source_id=1,
+            status="active",
+            strategy={"mode": "follow", "stake_amount": 10},
+        )
+        self.repository.subscription_financial_states[int(created["id"])] = {
+            "subscription_id": int(created["id"]),
+            "user_id": 1,
+            "realized_profit": 0.0,
+            "realized_loss": 10.0,
+            "net_profit": -10.0,
+            "threshold_status": "loss_limit_hit",
+            "stopped_reason": "达到止损阈值，当前轮次已停止",
+            "baseline_reset_at": None,
+            "baseline_reset_note": "",
+            "last_settled_event_id": 1,
+            "last_settled_at": "2026-04-07T12:00:00Z",
+            "updated_at": "2026-04-07T12:00:00Z",
+        }
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions/%s/restart" % created["id"],
+                method="POST",
+                body={"note": "api restart"},
+                headers=self.session_headers,
+            ),
+        )
+
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["status"], "active")
+        self.assertEqual(payload["financial"]["net_profit"], 0.0)
+        self.assertEqual(payload["financial"]["threshold_status"], "")
+        self.assertEqual(payload["reset_note"], "api restart")
+
     def test_update_subscription_endpoint(self):
         created = self.repository.create_subscription_record(
             user_id=1,
@@ -2525,7 +2574,7 @@ class PlatformApiApplicationTests(unittest.TestCase):
             settlement_snapshot={"rule_source": "subscription_fixed", "settlement_rule_id": "pc28_high_regular"},
             status="placed",
         )
-        with patch("pc28touzhu.services.platform_service.fetch_pc28_recent_draws") as mocked_fetch:
+        with patch("pc28touzhu.services.platform_service.fetch_pc28_recent_draws_deep") as mocked_fetch:
             mocked_fetch.return_value = {
                 "source": "official",
                 "items": [

@@ -5,6 +5,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 from uuid import uuid4
 
+from pc28touzhu.domain.subscription_strategy import upgrade_subscription_strategy
+from pc28touzhu.services.platform_service import (
+    restart_subscription_cycle,
+    update_subscription,
+    update_subscription_status,
+)
+
 
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 DEFAULT_BOT_STATE_KEY = "profit-query-bot"
@@ -12,10 +19,41 @@ TELEGRAM_BOT_COMMANDS = (
     {"command": "start", "description": "查看帮助"},
     {"command": "help", "description": "查看帮助"},
     {"command": "bind", "description": "绑定平台账号"},
+    {"command": "subs", "description": "查看跟单方案列表"},
+    {"command": "enable", "description": "启动跟单方案"},
+    {"command": "disable", "description": "暂停跟单方案"},
+    {"command": "play", "description": "切换跟单玩法"},
+    {"command": "restart", "description": "开始新一轮"},
     {"command": "profit", "description": "查询跟单汇总"},
     {"command": "plan", "description": "查询单方案盈亏"},
     {"command": "status", "description": "查询当前跟单状态"},
 )
+SUBSCRIPTION_PLAY_FILTER_PRESETS = {
+    "大小": {"mode": "selected", "selected_keys": ["big_small:大", "big_small:小"]},
+    "单双": {"mode": "selected", "selected_keys": ["odd_even:单", "odd_even:双"]},
+    "组合": {"mode": "selected", "selected_keys": ["combo:大单", "combo:大双", "combo:小单", "combo:小双"]},
+    "全部": {"mode": "all", "selected_keys": []},
+}
+SUBSCRIPTION_PLAY_FILTER_ALIASES = {
+    "big_small": "大小",
+    "odd_even": "单双",
+    "combo": "组合",
+    "all": "全部",
+    "大小": "大小",
+    "单双": "单双",
+    "组合": "组合",
+    "全部": "全部",
+}
+SUBSCRIPTION_PLAY_FILTER_LABELS = {
+    "big_small:大": "大",
+    "big_small:小": "小",
+    "odd_even:单": "单",
+    "odd_even:双": "双",
+    "combo:大单": "大单",
+    "combo:大双": "大双",
+    "combo:小单": "小单",
+    "combo:小双": "小双",
+}
 
 
 class TelegramBotClient(Protocol):
@@ -108,6 +146,11 @@ def _build_help_text() -> str:
             "/start 查看帮助",
             "/help 查看帮助",
             "/bind <绑定码> 绑定平台账号",
+            "/subs 查看跟单方案列表",
+            "/enable <订阅ID> 启动跟单方案",
+            "/disable <订阅ID> 暂停跟单方案",
+            "/play <订阅ID> <大小|单双|组合|全部> 切换玩法",
+            "/restart <订阅ID> 开始新一轮",
             "/status 查询当前跟单状态、待结算金额",
             "/status <方案名> 查询指定方案当前状态",
             "/profit 查询最近有已结算数据的汇总",
@@ -116,7 +159,7 @@ def _build_help_text() -> str:
             "/plan YYYY-MM-DD 查询指定日期单方案列表",
             "/plan <方案名> 查询最近有已结算数据的指定方案盈亏",
             "/plan <方案名> YYYY-MM-DD 查询指定方案盈亏",
-            "说明：/profit 与 /plan 仅展示已结算数据，/status 展示当前状态与待结算金额。",
+            "说明：/profit 与 /plan 仅展示已结算数据；/status 展示当前状态与待结算金额；/restart 会清空当前轮次运行态并立即开始新一轮。",
         ]
     )
 
@@ -216,6 +259,111 @@ def _resolve_bound_user(repository: Any, *, telegram_user_id: int) -> Dict[str, 
     if not user:
         raise ValueError("当前 Telegram 账号尚未绑定平台用户，请先在平台生成绑定码后发送 /bind <绑定码>")
     return user
+
+
+def _manual_subscription_status_text(status: Any) -> str:
+    normalized = str(status or "").strip()
+    if normalized == "active":
+        return "已启用"
+    if normalized == "archived":
+        return "已归档"
+    return "已停用"
+
+
+def _subscription_threshold_status(item: Dict[str, Any]) -> str:
+    financial = item.get("financial") if isinstance(item.get("financial"), dict) else {}
+    return str(financial.get("threshold_status") or "").strip()
+
+
+def _subscription_is_risk_blocked(item: Dict[str, Any]) -> bool:
+    return _subscription_threshold_status(item) in {"profit_target_hit", "loss_limit_hit"}
+
+
+def _subscription_is_dispatching(item: Dict[str, Any]) -> bool:
+    return str(item.get("status") or "").strip() == "active" and not _subscription_is_risk_blocked(item)
+
+
+def _subscription_runtime_status_text(item: Dict[str, Any]) -> str:
+    manual_status = str(item.get("status") or "").strip()
+    threshold_status = _subscription_threshold_status(item)
+    if manual_status == "archived":
+        return "已归档"
+    if manual_status != "active":
+        return "已停用"
+    if threshold_status == "profit_target_hit":
+        return "风控止盈阻塞"
+    if threshold_status == "loss_limit_hit":
+        return "风控止损阻塞"
+    return "运行中"
+
+
+def _subscription_strategy_v2(item: Dict[str, Any]) -> Dict[str, Any]:
+    strategy_v2 = item.get("strategy_v2") if isinstance(item.get("strategy_v2"), dict) else item.get("strategy")
+    return upgrade_subscription_strategy(strategy_v2)
+
+
+def _subscription_play_filter_label(item: Dict[str, Any]) -> str:
+    strategy_v2 = _subscription_strategy_v2(item)
+    play_filter = strategy_v2.get("play_filter") if isinstance(strategy_v2.get("play_filter"), dict) else {}
+    mode = str(play_filter.get("mode") or "all").strip() or "all"
+    selected_keys = list(play_filter.get("selected_keys") or [])
+    if mode != "selected" or not selected_keys:
+        return "全部"
+    for label, preset in SUBSCRIPTION_PLAY_FILTER_PRESETS.items():
+        if mode == str(preset.get("mode") or "") and selected_keys == list(preset.get("selected_keys") or []):
+            return label
+    labels = [SUBSCRIPTION_PLAY_FILTER_LABELS.get(key) for key in selected_keys if SUBSCRIPTION_PLAY_FILTER_LABELS.get(key)]
+    return " / ".join(labels) if labels else "全部"
+
+
+def _parse_subscription_id_arg(raw_value: Any) -> int:
+    try:
+        subscription_id = int(str(raw_value or "").strip())
+    except (TypeError, ValueError):
+        raise ValueError("订阅ID 格式不正确")
+    if subscription_id <= 0:
+        raise ValueError("订阅ID 格式不正确")
+    return subscription_id
+
+
+def _resolve_user_subscription_by_id(repository: Any, *, user_id: int, subscription_id: Any) -> Dict[str, Any]:
+    normalized_subscription_id = _parse_subscription_id_arg(subscription_id)
+    item = repository.get_subscription(normalized_subscription_id)
+    if not item or int(item.get("user_id") or 0) != int(user_id):
+        raise ValueError("未找到该跟单方案")
+    return item
+
+
+def _normalize_play_preset_arg(raw_value: Any) -> str:
+    normalized = SUBSCRIPTION_PLAY_FILTER_ALIASES.get(str(raw_value or "").strip())
+    if not normalized:
+        raise ValueError("玩法仅支持：大小、单双、组合、全部")
+    return normalized
+
+
+def _build_subscriptions_list_text(subscriptions: List[Dict[str, Any]], source_names: Dict[int, str]) -> str:
+    if not subscriptions:
+        return "当前没有跟单策略。"
+    lines = ["【跟单方案列表】"]
+    for item in subscriptions[:10]:
+        subscription_id = int(item.get("id") or 0)
+        source_name = source_names.get(int(item.get("source_id") or 0), "未命名方案")
+        runtime_status = _subscription_runtime_status_text(item)
+        play_filter = _subscription_play_filter_label(item)
+        lines.append("%s | %s | %s | 玩法：%s" % (subscription_id, source_name, runtime_status, play_filter))
+    if len(subscriptions) > 10:
+        lines.append("仅展示前 10 条，请到网页端查看完整列表。")
+    lines.extend(
+        [
+            "",
+            "使用示例：",
+            "/play 12 单双",
+            "/enable 12",
+            "/disable 12",
+            "/restart 12",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _build_profit_summary_text(user: Dict[str, Any], summary: Dict[str, Any]) -> str:
@@ -345,9 +493,11 @@ def _build_status_summary_text(
         return "当前没有跟单策略。"
 
     total_count = len(subscriptions)
-    active_count = len([item for item in subscriptions if str(item.get("status") or "") == "active"])
+    dispatching_count = len([item for item in subscriptions if _subscription_is_dispatching(item)])
+    paused_count = len([item for item in subscriptions if str(item.get("status") or "") == "inactive"])
+    archived_count = len([item for item in subscriptions if str(item.get("status") or "") == "archived"])
     pending_items = []
-    inactive_threshold_count = 0
+    risk_blocked_count = 0
     total_realized_net_profit = 0.0
     total_pending_stake = 0.0
     for item in subscriptions:
@@ -358,20 +508,23 @@ def _build_status_summary_text(
             pending_event = pending_events.get(int(progression.get("pending_event_id") or 0)) or {}
             total_pending_stake += round(float(pending_event.get("stake_amount") or 0), 2)
         if str(financial.get("threshold_status") or "") in {"profit_target_hit", "loss_limit_hit"}:
-            inactive_threshold_count += 1
+            risk_blocked_count += 1
         total_realized_net_profit += round(float(financial.get("net_profit") or 0), 2)
 
     lines = [
         "【当前跟单状态】",
         "账号: %s" % str(user.get("username") or ""),
         "策略总数: %s" % total_count,
-        "启用中: %s" % active_count,
+        "运行中: %s" % dispatching_count,
+        "手动停用: %s" % paused_count,
         "待结算: %s" % len(pending_items),
         "本轮已实现净盈亏合计: %s" % _signed_money(total_realized_net_profit),
         "待结算金额合计: %.2f" % round(total_pending_stake, 2),
     ]
-    if inactive_threshold_count > 0:
-        lines.append("已触发止盈/止损: %s" % inactive_threshold_count)
+    if risk_blocked_count > 0:
+        lines.append("风控阻塞: %s" % risk_blocked_count)
+    if archived_count > 0:
+        lines.append("已归档: %s" % archived_count)
     if pending_items:
         lines.append("待结算方案：")
         for index, item in enumerate(pending_items[:5], start=1):
@@ -402,11 +555,13 @@ def _build_status_detail_text(item: Dict[str, Any], source_name: str, pending_ev
     lines = [
         "【当前方案状态】",
         "方案: %s" % source_name,
-        "状态: %s" % str(item.get("status") or "--"),
+        "状态: %s" % _subscription_runtime_status_text(item),
+        "用户设置: %s" % _manual_subscription_status_text(item.get("status")),
         "当前手数: %s" % int(progression.get("current_step") or 1),
         "本轮已实现净盈亏: %s" % _signed_money(financial.get("net_profit")),
         "累计盈利: %.2f" % round(float(financial.get("realized_profit") or 0), 2),
         "累计亏损: %.2f" % round(float(financial.get("realized_loss") or 0), 2),
+        "当前玩法: %s" % _subscription_play_filter_label(item),
     ]
     if progression.get("last_result_type"):
         lines.append("最近结果: %s" % _progression_result_text(progression.get("last_result_type")))
@@ -502,6 +657,109 @@ def handle_telegram_command(
         return "绑定成功，当前平台账号：%s" % str((result.get("user") or {}).get("username") or "")
 
     user = _resolve_bound_user(repository, telegram_user_id=int(telegram_user_id))
+
+    if command == "/subs":
+        subscriptions = repository.list_subscriptions(user_id=int(user["id"]))
+        source_names = _resolve_subscription_source_names(repository, subscriptions)
+        return _build_subscriptions_list_text(subscriptions, source_names)
+
+    if command == "/enable":
+        if not args:
+            return "命令格式：/enable <订阅ID>"
+        item = _resolve_user_subscription_by_id(repository, user_id=int(user["id"]), subscription_id=args[0])
+        if str(item.get("status") or "") == "archived":
+            return "该方案当前已归档，请先到网页端恢复后再启动。"
+        if _subscription_is_risk_blocked(item):
+            return "该方案当前处于风控阻塞，请发送 /restart %s 开始新一轮。" % int(item["id"])
+        if str(item.get("status") or "") == "active":
+            return "该方案当前已经是已启用状态。"
+        result = update_subscription_status(
+            repository,
+            subscription_id=int(item["id"]),
+            user_id=int(user["id"]),
+            status="active",
+        )
+        next_item = result.get("item") if isinstance(result.get("item"), dict) else item
+        source_name = _resolve_subscription_source_names(repository, [next_item]).get(int(next_item.get("source_id") or 0), "未命名方案")
+        return "\n".join(
+            [
+                "已启动跟单方案：%s（#%s）" % (source_name, int(next_item["id"])),
+                "当前玩法：%s" % _subscription_play_filter_label(next_item),
+            ]
+        )
+
+    if command == "/disable":
+        if not args:
+            return "命令格式：/disable <订阅ID>"
+        item = _resolve_user_subscription_by_id(repository, user_id=int(user["id"]), subscription_id=args[0])
+        if str(item.get("status") or "") == "archived":
+            return "该方案当前已归档，请先到网页端恢复后再操作。"
+        if str(item.get("status") or "") == "inactive":
+            return "该方案当前已经是已停用状态。"
+        result = update_subscription_status(
+            repository,
+            subscription_id=int(item["id"]),
+            user_id=int(user["id"]),
+            status="inactive",
+        )
+        next_item = result.get("item") if isinstance(result.get("item"), dict) else item
+        source_name = _resolve_subscription_source_names(repository, [next_item]).get(int(next_item.get("source_id") or 0), "未命名方案")
+        lines = ["已关闭跟单方案：%s（#%s）" % (source_name, int(next_item["id"]))]
+        progression = next_item.get("progression") if isinstance(next_item.get("progression"), dict) else {}
+        if progression.get("pending_event_id"):
+            lines.append("仅停止后续新信号，当前待结算记录保持不变。")
+        return "\n".join(lines)
+
+    if command == "/play":
+        if len(args) < 2:
+            return "命令格式：/play <订阅ID> <大小|单双|组合|全部>"
+        item = _resolve_user_subscription_by_id(repository, user_id=int(user["id"]), subscription_id=args[0])
+        if str(item.get("status") or "") == "archived":
+            return "该方案当前已归档，请先到网页端恢复后再切换玩法。"
+        play_label = _normalize_play_preset_arg(args[1])
+        strategy_v2 = _subscription_strategy_v2(item)
+        strategy_v2["play_filter"] = dict(SUBSCRIPTION_PLAY_FILTER_PRESETS[play_label])
+        result = update_subscription(
+            repository,
+            subscription_id=int(item["id"]),
+            user_id=int(user["id"]),
+            payload={
+                "source_id": int(item["source_id"]),
+                "strategy_v2": strategy_v2,
+            },
+        )
+        next_item = result.get("item") if isinstance(result.get("item"), dict) else item
+        source_name = _resolve_subscription_source_names(repository, [next_item]).get(int(next_item.get("source_id") or 0), "未命名方案")
+        return "\n".join(
+            [
+                "玩法已切换：%s（#%s）" % (source_name, int(next_item["id"])),
+                "当前玩法：%s" % _subscription_play_filter_label(next_item),
+                "其他策略设置保持不变。",
+                "仅影响后续新信号，已生成或待结算记录不会变。",
+            ]
+        )
+
+    if command == "/restart":
+        if not args:
+            return "命令格式：/restart <订阅ID>"
+        item = _resolve_user_subscription_by_id(repository, user_id=int(user["id"]), subscription_id=args[0])
+        if str(item.get("status") or "") == "archived":
+            return "该方案当前已归档，请先到网页端恢复后再开始新一轮。"
+        result = restart_subscription_cycle(
+            repository,
+            subscription_id=int(item["id"]),
+            user_id=int(user["id"]),
+            payload={"note": "Telegram /restart"},
+        )
+        next_item = result.get("item") if isinstance(result.get("item"), dict) else item
+        source_name = _resolve_subscription_source_names(repository, [next_item]).get(int(next_item.get("source_id") or 0), "未命名方案")
+        return "\n".join(
+            [
+                "已开始新一轮：%s（#%s）" % (source_name, int(next_item["id"])),
+                "当前玩法：%s" % _subscription_play_filter_label(next_item),
+                "本轮净盈亏已重置为 0，旧轮次未执行任务已跳过。",
+            ]
+        )
 
     if command in {"/profit", "/profitall"}:
         if args:

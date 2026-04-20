@@ -165,7 +165,8 @@ class TelegramBotServiceTests(unittest.TestCase):
             text="/help",
         )
 
-        self.assertIn("/profit 查询最近有已结算数据的汇总", help_text)
+        self.assertIn("/subs 查看跟单方案列表", help_text)
+        self.assertIn("/restart <订阅ID> 开始新一轮", help_text)
         self.assertEqual(help_text, alias_text)
 
     def test_profit_and_plan_without_date_prefer_today_data(self):
@@ -280,6 +281,8 @@ class TelegramBotServiceTests(unittest.TestCase):
 
         self.assertIn("当前跟单状态", text)
         self.assertIn("策略总数: 1", text)
+        self.assertIn("运行中: 1", text)
+        self.assertIn("手动停用: 0", text)
         self.assertIn("待结算: 0", text)
         self.assertIn("本轮已实现净盈亏合计: +10.00", text)
         self.assertIn("待结算金额合计: 0.00", text)
@@ -365,6 +368,126 @@ class TelegramBotServiceTests(unittest.TestCase):
         )
 
         self.assertEqual("当前没有跟单策略。", text)
+
+    def test_subscription_commands_list_toggle_play_and_restart(self):
+        user = self.repo.create_user_record(username="ops-user", email="", role="user", status="active")
+        source = self.repo.create_source_record(
+            owner_user_id=user["id"],
+            source_type="internal_ai",
+            name="方案C",
+        )
+        subscription = self.repo.create_subscription_record(
+            user_id=user["id"],
+            source_id=source["id"],
+            status="inactive",
+            strategy={
+                "play_filter": {"mode": "selected", "selected_keys": ["big_small:大", "big_small:小"]},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 20},
+                "settlement_policy": {"rule_source": "follow_signal", "fallback_profit_ratio": 1.0},
+                "risk_control": {"enabled": True, "profit_target": 0, "loss_limit": 20},
+                "dispatch": {"expire_after_seconds": 120},
+            },
+        )
+        self.repo.update_user_telegram_binding(
+            user_id=user["id"],
+            telegram_user_id=9013,
+            telegram_chat_id="9013",
+            telegram_username="ops_user",
+            telegram_bound_at="2026-04-19T00:00:00Z",
+        )
+
+        subs_text = handle_telegram_command(
+            self.repo,
+            telegram_user_id=9013,
+            telegram_chat_id="9013",
+            telegram_username="ops_user",
+            text="/subs",
+        )
+        self.assertIn("方案C", subs_text)
+        self.assertIn("玩法：大小", subs_text)
+
+        enable_text = handle_telegram_command(
+            self.repo,
+            telegram_user_id=9013,
+            telegram_chat_id="9013",
+            telegram_username="ops_user",
+            text="/enable %s" % subscription["id"],
+        )
+        self.assertIn("已启动跟单方案", enable_text)
+        self.assertEqual(self.repo.get_subscription(subscription["id"])["status"], "active")
+
+        play_text = handle_telegram_command(
+            self.repo,
+            telegram_user_id=9013,
+            telegram_chat_id="9013",
+            telegram_username="ops_user",
+            text="/play %s 单双" % subscription["id"],
+        )
+        self.assertIn("玩法已切换", play_text)
+        self.assertEqual(
+            self.repo.get_subscription(subscription["id"])["strategy_v2"]["play_filter"]["selected_keys"],
+            ["odd_even:单", "odd_even:双"],
+        )
+
+        signal = self.repo.create_signal_record(
+            source_id=source["id"],
+            lottery_type="pc28",
+            issue_no="20260419001",
+            bet_type="big_small",
+            bet_value="大",
+        )
+        event = self.repo.create_progression_event_record(
+            subscription_id=subscription["id"],
+            user_id=user["id"],
+            signal_id=signal["id"],
+            issue_no="20260419001",
+            progression_step=1,
+            stake_amount=20,
+            base_stake=20,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            status="placed",
+        )
+        self.repo.settle_progression_event(
+            subscription_id=subscription["id"],
+            user_id=user["id"],
+            result_type="miss",
+            progression_event_id=event["id"],
+        )
+
+        blocked_enable_text = handle_telegram_command(
+            self.repo,
+            telegram_user_id=9013,
+            telegram_chat_id="9013",
+            telegram_username="ops_user",
+            text="/enable %s" % subscription["id"],
+        )
+        self.assertIn("/restart %s" % subscription["id"], blocked_enable_text)
+
+        restart_text = handle_telegram_command(
+            self.repo,
+            telegram_user_id=9013,
+            telegram_chat_id="9013",
+            telegram_username="ops_user",
+            text="/restart %s" % subscription["id"],
+        )
+        self.assertIn("已开始新一轮", restart_text)
+        restarted = self.repo.get_subscription(subscription["id"])
+        self.assertEqual(restarted["status"], "active")
+        self.assertEqual(restarted["financial"]["net_profit"], 0.0)
+        self.assertEqual(restarted["financial"]["threshold_status"], "")
+
+        disable_text = handle_telegram_command(
+            self.repo,
+            telegram_user_id=9013,
+            telegram_chat_id="9013",
+            telegram_username="ops_user",
+            text="/disable %s" % subscription["id"],
+        )
+        self.assertIn("已关闭跟单方案", disable_text)
+        self.assertEqual(self.repo.get_subscription(subscription["id"])["status"], "inactive")
 
     def test_process_cycle_replies_and_updates_runtime_state(self):
         user = self.repo.create_user_record(username="cycle-user", email="", role="user", status="active")

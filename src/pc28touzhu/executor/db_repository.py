@@ -2677,16 +2677,13 @@ class DatabaseRepository:
             next_net_profit = _round_money(current_financial["net_profit"] + net_delta)
             threshold_status = str(current_financial.get("threshold_status") or "")
             stopped_reason = str(current_financial.get("stopped_reason") or "")
-            threshold_triggered = False
             if not threshold_status and bool(risk_control["enabled"]):
                 if float(risk_control["profit_target"]) > 0 and next_net_profit >= float(risk_control["profit_target"]):
                     threshold_status = "profit_target_hit"
-                    stopped_reason = "达到止盈阈值后已自动停用"
-                    threshold_triggered = True
+                    stopped_reason = "达到止盈阈值，当前轮次已停止"
                 elif float(risk_control["loss_limit"]) > 0 and next_net_profit <= -float(risk_control["loss_limit"]):
                     threshold_status = "loss_limit_hit"
-                    stopped_reason = "达到止损阈值后已自动停用"
-                    threshold_triggered = True
+                    stopped_reason = "达到止损阈值，当前轮次已停止"
 
             conn.execute(
                 """
@@ -2738,15 +2735,6 @@ class DatabaseRepository:
                     updated_at=now,
                 )
 
-            if threshold_triggered:
-                conn.execute(
-                    """
-                    UPDATE user_subscriptions
-                    SET status = 'inactive', updated_at = ?
-                    WHERE id = ? AND user_id = ? AND status <> 'archived'
-                    """,
-                    (now, int(subscription_id), int(user_id)),
-                )
         state = self.get_subscription_progression_state(int(subscription_id))
         return {
             "event": self.get_progression_event(int(current_event["id"])) or {},
@@ -3390,9 +3378,11 @@ class DatabaseRepository:
             JOIN user_subscriptions us ON us.source_id = s.source_id
             JOIN delivery_targets dt ON dt.user_id = us.user_id
             LEFT JOIN telegram_accounts ta ON ta.id = dt.telegram_account_id
+            LEFT JOIN subscription_financial_state sfs ON sfs.subscription_id = us.id
             WHERE s.id = ?
               AND s.status = 'ready'
               AND us.status = 'active'
+              AND COALESCE(sfs.threshold_status, '') = ''
               AND dt.status = 'active'
               AND (dt.telegram_account_id IS NULL OR ta.status = 'active')
             ORDER BY us.user_id ASC, dt.id ASC

@@ -1115,7 +1115,81 @@ class DatabaseRepositoryTests(unittest.TestCase):
         )
 
         self.assertEqual(settled["financial"]["threshold_status"], "loss_limit_hit")
-        self.assertEqual(self.repo.get_subscription(subscription["id"])["status"], "inactive")
+        self.assertEqual(self.repo.get_subscription(subscription["id"])["status"], "active")
+
+    def test_dispatch_candidates_skip_risk_blocked_subscription(self):
+        user_id = self.repo.create_user("dispatch-risk-blocked-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="risk-blocked-source",
+        )["id"]
+        account_id = self.repo.create_telegram_account_record(
+            user_id=user_id,
+            label="执行号",
+            phone="+12017770111",
+            session_path="/data/risk-blocked-user/main",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={
+                "mode": "follow",
+                "stake_amount": 10,
+                "risk_control": {
+                    "enabled": True,
+                    "loss_limit": 10,
+                    "profit_target": 0,
+                    "win_profit_ratio": 1.0,
+                },
+            },
+        )
+        self.repo.create_delivery_target_record(
+            user_id=user_id,
+            telegram_account_id=account_id,
+            executor_type="telegram_group",
+            target_key="-100778899",
+            status="active",
+        )
+        settled_signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407013",
+            bet_type="big_small",
+            bet_value="大",
+        )
+        settled_event = self.repo.create_progression_event_record(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            signal_id=settled_signal["id"],
+            issue_no="20260407013",
+            progression_step=1,
+            stake_amount=10,
+            base_stake=10,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            status="placed",
+        )
+        self.repo.settle_progression_event(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            result_type="miss",
+            progression_event_id=settled_event["id"],
+        )
+
+        next_signal_id = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407014",
+            bet_type="big_small",
+            bet_value="小",
+            normalized_payload={},
+        )["id"]
+
+        self.assertEqual(self.repo.get_subscription(subscription["id"])["status"], "active")
+        self.assertEqual(self.repo.list_dispatch_candidates(next_signal_id), [])
 
     def test_reset_subscription_runtime_clears_current_round_state(self):
         user_id = self.repo.create_user("sub-reset-user")

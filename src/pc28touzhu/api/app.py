@@ -50,6 +50,7 @@ from pc28touzhu.services.platform_service import (
     list_sources,
     list_subscriptions,
     normalize_raw_item,
+    restart_subscription_cycle,
     reset_subscription_runtime,
     resolve_subscription_progression,
     resolve_pending_subscription_progressions,
@@ -803,6 +804,17 @@ class PlatformApiApplication:
                 return _json_response(start_response, 405, {"error": "method not allowed"})
             subscription_id = path[len(subscription_status_prefix) : -len("/reset")]
             payload = reset_subscription_runtime(
+                self.repository,
+                subscription_id=subscription_id,
+                user_id=current_user["id"],
+                payload=_read_json_body(environ),
+            )
+            return _json_response(start_response, 200, payload)
+        if path.startswith(subscription_status_prefix) and path.endswith("/restart"):
+            if method != "POST":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            subscription_id = path[len(subscription_status_prefix) : -len("/restart")]
+            payload = restart_subscription_cycle(
                 self.repository,
                 subscription_id=subscription_id,
                 user_id=current_user["id"],

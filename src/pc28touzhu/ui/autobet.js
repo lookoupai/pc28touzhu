@@ -745,10 +745,10 @@
     function settlementStatusMessage(item, successPrefix) {
         const thresholdStatus = item && item.financial ? String(item.financial.threshold_status || "") : "";
         if (thresholdStatus === "profit_target_hit") {
-            return (successPrefix || "当前待结算记录已处理，") + "策略达到止盈阈值并自动停用。";
+            return (successPrefix || "当前待结算记录已处理，") + "策略达到止盈阈值，当前轮次已停止。";
         }
         if (thresholdStatus === "loss_limit_hit") {
-            return (successPrefix || "当前待结算记录已处理，") + "策略达到止损阈值并自动停用。";
+            return (successPrefix || "当前待结算记录已处理，") + "策略达到止损阈值，当前轮次已停止。";
         }
         return (successPrefix || "当前待结算记录已处理。");
     }
@@ -944,7 +944,7 @@
         const item = binding || null;
         const commandState = item && item.is_bound ? "已可查询" : "待绑定";
         const commandDetail = item && item.is_bound
-            ? "当前 Telegram 私聊账号已绑定，可直接使用 /profit 和 /plan。"
+            ? "当前 Telegram 私聊账号已绑定，可直接使用 /subs、/play、/restart、/profit 和 /plan。"
             : "完成绑定后，收益查询 Bot 才能识别你当前平台账号。";
         const codeValue = tokenState.isActive
             ? tokenState.bindToken
@@ -1008,7 +1008,7 @@
         }
         botBindingCommand.textContent = currentBindCommand();
         botBindingCommandMeta.textContent = tokenState.isActive
-            ? "复制后直接发送给收益查询 Bot。绑定完成后，可继续使用 /profit 和 /plan。"
+            ? "复制后直接发送给收益查询 Bot。绑定完成后，可继续使用 /subs、/play、/restart、/profit 和 /plan。"
             : "绑定码只在网页端生成。当前默认有效期来自后台 Telegram 配置。";
         botBindingActions.innerHTML = [
             '<button id="generateBindCodeBtn" class="primary-btn" type="button">' + escapeHtml(generateButtonText) + '</button>',
@@ -1018,7 +1018,7 @@
         botBindingInstructions.innerHTML = [
             '<p>1. 绑定码只能在网页端生成，默认有效期由后台 Telegram 配置决定。</p>',
             '<p>2. 到 Telegram 私聊收益查询 Bot，先发送 <span class="mono-text">/start</span>，再发送上面的绑定命令。</p>',
-            '<p>3. 绑定完成后，可在同一个私聊窗口继续发送 <span class="mono-text">/profit</span>、<span class="mono-text">/plan</span> 查询收益。</p>',
+            '<p>3. 绑定完成后，可在同一个私聊窗口继续发送 <span class="mono-text">/subs</span>、<span class="mono-text">/play</span>、<span class="mono-text">/restart</span>、<span class="mono-text">/profit</span>、<span class="mono-text">/plan</span>。</p>',
             '<p>4. 如果 Bot 没有响应，请联系管理员确认收益查询 Bot 已启用且 Token 正常。</p>',
         ].join("");
     }
@@ -2478,9 +2478,32 @@
         });
     }
 
+    function isSubscriptionRiskBlocked(item) {
+        const financial = item && item.financial && typeof item.financial === "object" ? item.financial : null;
+        const thresholdStatus = String(financial && financial.threshold_status || "").trim();
+        return thresholdStatus === "profit_target_hit" || thresholdStatus === "loss_limit_hit";
+    }
+
+    function subscriptionRuntimeLabel(item) {
+        if (!item) {
+            return "策略未启用";
+        }
+        if (String(item.status || "inactive") !== "active") {
+            return "策略未启用";
+        }
+        const financial = item && item.financial && typeof item.financial === "object" ? item.financial : null;
+        if (String(financial && financial.threshold_status || "") === "profit_target_hit") {
+            return "风控止盈阻塞";
+        }
+        if (String(financial && financial.threshold_status || "") === "loss_limit_hit") {
+            return "风控止损阻塞";
+        }
+        return "已接入跟单";
+    }
+
     function activeSubscriptions() {
         return state.subscriptions.filter(function (item) {
-            return item.status === "active";
+            return item.status === "active" && !isSubscriptionRiskBlocked(item);
         });
     }
 
@@ -4421,15 +4444,18 @@
             const latestJobText = pipeline.latestJob
                 ? ("job #" + pipeline.latestJob.id + " · " + statusText(pipeline.latestJob.status || "pending") + " · " + formatDateTime(pipeline.latestJob.updated_at || pipeline.latestJob.created_at))
                 : "还没有执行任务";
+            const blockedSubscription = Boolean(subscription) && isSubscriptionRiskBlocked(subscription);
             const subscriptionText = activeSubscription
                 ? ("当前激活策略 #" + activeSubscription.id + " 正在使用这个来源。")
                 : (subscription
-                    ? ("这个来源已有策略 #" + subscription.id + "，但当前状态是 " + statusText(subscription.status || "inactive") + "。")
+                    ? (blockedSubscription
+                        ? ("这个来源已有策略 #" + subscription.id + "，但当前处于 " + subscriptionRuntimeLabel(subscription) + "。")
+                        : ("这个来源已有策略 #" + subscription.id + "，但当前状态是 " + statusText(subscription.status || "inactive") + "。"))
                     : "当前还没有任何跟单策略会使用这个来源。");
             const pipelineButtonText = activeSubscription ? "一键推进来源链路" : "先接入跟单后再推进";
             return [
                 '<article class="mini-card source-card-item">',
-                '<div class="config-list-head"><strong>' + escapeHtml(item.name || "--") + '</strong><div class="account-pill-row">' + renderStatusPill(item.status || "--") + (activeSubscription ? renderStatusPillWithLabel("active", "已接入跟单") : renderStatusPillWithLabel("inactive", subscription ? "策略未启用" : "未接入跟单")) + '</div></div>',
+                '<div class="config-list-head"><strong>' + escapeHtml(item.name || "--") + '</strong><div class="account-pill-row">' + renderStatusPill(item.status || "--") + (activeSubscription ? renderStatusPillWithLabel("active", "已接入跟单") : renderStatusPillWithLabel("inactive", subscription ? subscriptionRuntimeLabel(subscription) : "未接入跟单")) + '</div></div>',
                 '<div class="source-card-meta">',
                 '<p class="source-card-status">' + escapeHtml(subscriptionText) + '</p>',
                 '<p>抓取地址：<span class="mono-text">' + escapeHtml(truncateText(fetchConfig.url || "--", 88)) + '</span></p>',
@@ -4638,7 +4664,8 @@
                     '<button class="ghost-btn settle-progression-btn" type="button" data-subscription-id="' + item.id + '" data-progression-event-id="' + progression.pending_event_id + '" data-result-type="miss">未中</button>'
                 ].join("")
                 : "";
-            const resetAction = '<button class="ghost-btn reset-subscription-runtime-btn" type="button" data-subscription-id="' + item.id + '">重置盈亏</button>';
+            const resetActionText = isSubscriptionRiskBlocked(item) ? "开始新一轮" : "重置盈亏";
+            const resetAction = '<button class="ghost-btn reset-subscription-runtime-btn" type="button" data-subscription-id="' + item.id + '">' + resetActionText + '</button>';
             const stoppedReasonMarkup = financial && financial.stopped_reason
                 ? ('<p class="cell-muted subscription-runtime-note">' + escapeHtml(financial.stopped_reason) + '</p>')
                 : "";
@@ -6272,19 +6299,29 @@
             }
             if (target.classList.contains("reset-subscription-runtime-btn")) {
                 const subscriptionId = target.getAttribute("data-subscription-id");
-                if (!subscriptionId || !confirmDangerousAction("重置后会从新的盈亏基线重新计算，并跳过当前未执行的旧轮次任务。确认继续吗？")) {
+                const currentSubscription = subscriptionById(subscriptionId);
+                const isRestartingCycle = isSubscriptionRiskBlocked(currentSubscription);
+                const confirmMessage = isRestartingCycle
+                    ? "开始新一轮会清空当前轮次盈亏、回到第 1 手，并跳过未执行的旧轮次任务。确认继续吗？"
+                    : "重置后会从新的盈亏基线重新计算，并跳过当前未执行的旧轮次任务。确认继续吗？";
+                if (!subscriptionId || !confirmDangerousAction(confirmMessage)) {
                     return;
                 }
                 try {
-                    setButtonBusy(target, true, "重置中...");
+                    setButtonBusy(target, true, isRestartingCycle ? "处理中..." : "重置中...");
                     await request("/api/platform/subscriptions/" + subscriptionId + "/reset", {
                         method: "POST",
                         body: {
-                            note: "前端手动重置",
+                            note: isRestartingCycle ? "前端开始新一轮" : "前端手动重置",
                         },
                     });
                     await refreshAll();
-                    setStatus("跟单策略已重置，当前盈亏和手数已回到新基线。", false);
+                    setStatus(
+                        isRestartingCycle
+                            ? "新一轮已开始，当前盈亏和手数已回到新基线。"
+                            : "跟单策略已重置，当前盈亏和手数已回到新基线。",
+                        false
+                    );
                 } catch (error) {
                     setStatus(error.message, true);
                 } finally {
