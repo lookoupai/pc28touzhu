@@ -23,11 +23,21 @@ class FakeBotClient:
     def __init__(self, updates=None):
         self.updates = list(updates or [])
         self.sent = []
+        self.edited = []
+        self.callback_answers = []
         self.commands = []
 
-    def send_text(self, target_chat_id: str, message_text: str):
-        self.sent.append((target_chat_id, message_text))
+    def send_text(self, target_chat_id: str, message_text: str, *, reply_markup=None):
+        self.sent.append((target_chat_id, message_text, reply_markup))
         return {"target_chat_id": target_chat_id, "text": message_text}
+
+    def edit_text(self, target_chat_id: str, message_id: int, message_text: str, *, reply_markup=None):
+        self.edited.append((target_chat_id, message_id, message_text, reply_markup))
+        return {"target_chat_id": target_chat_id, "message_id": message_id, "text": message_text}
+
+    def answer_callback_query(self, callback_query_id: str, *, text: str = "", show_alert: bool = False):
+        self.callback_answers.append((callback_query_id, text, show_alert))
+        return {"ok": True}
 
     def get_updates(self, *, offset=None, timeout_seconds=10, limit=100):
         if offset is None:
@@ -531,6 +541,87 @@ class TelegramBotServiceTests(unittest.TestCase):
         self.assertEqual(result["ignored_count"], 1)
         self.assertEqual(self.repo.get_telegram_bot_runtime_state(bot_name="profit-query-bot")["last_update_id"], 11)
         self.assertIn("/bind <绑定码>", client.sent[0][1])
+
+    def test_process_cycle_supports_subscription_inline_buttons(self):
+        user = self.repo.create_user_record(username="button-user", email="", role="user", status="active")
+        source = self.repo.create_source_record(
+            owner_user_id=user["id"],
+            source_type="internal_ai",
+            name="按钮方案",
+        )
+        subscription = self.repo.create_subscription_record(
+            user_id=user["id"],
+            source_id=source["id"],
+            status="inactive",
+            strategy={
+                "play_filter": {"mode": "selected", "selected_keys": ["big_small:大", "big_small:小"]},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                "settlement_policy": {"rule_source": "follow_signal", "fallback_profit_ratio": 1.0},
+                "risk_control": {"enabled": False, "profit_target": 0, "loss_limit": 0},
+                "dispatch": {"expire_after_seconds": 120},
+            },
+        )
+        self.repo.update_user_telegram_binding(
+            user_id=user["id"],
+            telegram_user_id=7010,
+            telegram_chat_id="7010",
+            telegram_username="button_user",
+            telegram_bound_at="2026-04-20T00:00:00Z",
+        )
+        client = FakeBotClient(
+            updates=[
+                {
+                    "update_id": 20,
+                    "message": {
+                        "text": "/subs",
+                        "chat": {"id": 7010, "type": "private"},
+                        "from": {"id": 7010, "username": "button_user"},
+                    },
+                },
+                {
+                    "update_id": 21,
+                    "callback_query": {
+                        "id": "cbq-1",
+                        "data": "sub:%s:1" % subscription["id"],
+                        "from": {"id": 7010, "username": "button_user"},
+                        "message": {
+                            "message_id": 88,
+                            "chat": {"id": 7010, "type": "private"},
+                        },
+                    },
+                },
+                {
+                    "update_id": 22,
+                    "callback_query": {
+                        "id": "cbq-2",
+                        "data": "play:%s:oe:1" % subscription["id"],
+                        "from": {"id": 7010, "username": "button_user"},
+                        "message": {
+                            "message_id": 88,
+                            "chat": {"id": 7010, "type": "private"},
+                        },
+                    },
+                },
+            ]
+        )
+
+        result = process_telegram_bot_cycle(
+            self.repo,
+            bot_client=client,
+            poll_timeout_seconds=1,
+        )
+
+        self.assertEqual(result["update_count"], 3)
+        self.assertEqual(result["handled_count"], 3)
+        self.assertEqual(result["replied_count"], 3)
+        self.assertEqual(len(client.sent), 1)
+        self.assertIn("跟单方案列表", client.sent[0][1])
+        self.assertIn("inline_keyboard", client.sent[0][2])
+        self.assertEqual(len(client.edited), 2)
+        self.assertIn("跟单方案详情", client.edited[0][2])
+        self.assertIn("当前玩法：单双", client.edited[1][2])
+        self.assertEqual(self.repo.get_subscription(subscription["id"])["strategy_v2"]["play_filter"]["selected_keys"], ["odd_even:单", "odd_even:双"])
+        self.assertEqual(client.callback_answers[1][1], "已切换为单双")
 
 
 if __name__ == "__main__":

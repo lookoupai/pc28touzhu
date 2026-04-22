@@ -35,18 +35,27 @@ class TelegramBotSender:
             raise RuntimeError(str(description or "Telegram Bot API 请求失败"))
         return result
 
-    def send_text(self, target_chat_id: str, message_text: str) -> Dict[str, Any]:
+    def send_text(
+        self,
+        target_chat_id: str,
+        message_text: str,
+        *,
+        reply_markup: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         chat_id = str(target_chat_id or "").strip()
         if not chat_id:
             raise ValueError("target_chat_id 不能为空")
 
+        payload: Dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": str(message_text or ""),
+            "disable_web_page_preview": True,
+        }
+        if isinstance(reply_markup, dict) and reply_markup:
+            payload["reply_markup"] = reply_markup
         result = self._request(
             "sendMessage",
-            payload={
-                "chat_id": chat_id,
-                "text": str(message_text or ""),
-                "disable_web_page_preview": True,
-            },
+            payload=payload,
             timeout=10,
         )
         message = result.get("result") or {}
@@ -56,6 +65,55 @@ class TelegramBotSender:
             "text": message_text,
             "target_chat_id": chat_id,
         }
+
+    def edit_text(
+        self,
+        target_chat_id: str,
+        message_id: int,
+        message_text: str,
+        *,
+        reply_markup: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        chat_id = str(target_chat_id or "").strip()
+        if not chat_id:
+            raise ValueError("target_chat_id 不能为空")
+        normalized_message_id = int(message_id or 0)
+        if normalized_message_id <= 0:
+            raise ValueError("message_id 不能为空")
+        payload: Dict[str, Any] = {
+            "chat_id": chat_id,
+            "message_id": normalized_message_id,
+            "text": str(message_text or ""),
+            "disable_web_page_preview": True,
+        }
+        if isinstance(reply_markup, dict) and reply_markup:
+            payload["reply_markup"] = reply_markup
+        result = self._request("editMessageText", payload=payload, timeout=10)
+        message = result.get("result") or {}
+        return {
+            "message_id": message.get("message_id") or normalized_message_id,
+            "chat_id": str((message.get("chat") or {}).get("id") or chat_id),
+            "text": message_text,
+            "target_chat_id": chat_id,
+        }
+
+    def answer_callback_query(
+        self,
+        callback_query_id: str,
+        *,
+        text: str = "",
+        show_alert: bool = False,
+    ) -> Dict[str, Any]:
+        query_id = str(callback_query_id or "").strip()
+        if not query_id:
+            raise ValueError("callback_query_id 不能为空")
+        payload: Dict[str, Any] = {
+            "callback_query_id": query_id,
+            "text": str(text or ""),
+            "show_alert": bool(show_alert),
+        }
+        result = self._request("answerCallbackQuery", payload=payload, timeout=10)
+        return {"ok": bool(result.get("result"))}
 
     def get_updates(
         self,
@@ -67,7 +125,7 @@ class TelegramBotSender:
         payload: Dict[str, Any] = {
             "timeout": max(0, int(timeout_seconds or 0)),
             "limit": max(1, min(int(limit or 100), 100)),
-            "allowed_updates": ["message"],
+            "allowed_updates": ["message", "callback_query"],
         }
         if offset is not None:
             payload["offset"] = int(offset)

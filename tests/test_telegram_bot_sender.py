@@ -53,6 +53,24 @@ class TelegramBotSenderTests(unittest.TestCase):
         self.assertEqual(result["message_id"], 123)
         self.assertEqual(result["chat_id"], "-1009001")
 
+    def test_send_text_supports_reply_markup(self):
+        captured = {}
+
+        def fake_urlopen(request, timeout=0):
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            return FakeResponse({"ok": True, "result": {"message_id": 1, "chat": {"id": 9001}}})
+
+        with patch("urllib.request.urlopen", fake_urlopen):
+            sender = TelegramBotSender(bot_token="bot-token")
+            sender.send_text(
+                "9001",
+                "按钮测试",
+                reply_markup={"inline_keyboard": [[{"text": "打开", "callback_data": "sub:1:1"}]]},
+            )
+
+        self.assertIn("reply_markup", captured["body"])
+        self.assertEqual(captured["body"]["reply_markup"]["inline_keyboard"][0][0]["callback_data"], "sub:1:1")
+
     def test_send_text_raises_on_bot_api_error(self):
         def fake_urlopen(request, timeout=0):
             return FakeResponse({"ok": False, "description": "chat not found"})
@@ -91,7 +109,47 @@ class TelegramBotSenderTests(unittest.TestCase):
         self.assertEqual(captured["body"]["offset"], 50)
         self.assertEqual(captured["body"]["timeout"], 7)
         self.assertEqual(captured["body"]["limit"], 20)
+        self.assertEqual(captured["body"]["allowed_updates"], ["message", "callback_query"])
         self.assertEqual(result[0]["update_id"], 99)
+
+    def test_edit_text_calls_bot_api(self):
+        captured = {}
+
+        def fake_urlopen(request, timeout=0):
+            captured["url"] = request.full_url
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            return FakeResponse({"ok": True, "result": {"message_id": 321, "chat": {"id": 9001}}})
+
+        with patch("urllib.request.urlopen", fake_urlopen):
+            sender = TelegramBotSender(bot_token="bot-token")
+            result = sender.edit_text(
+                "9001",
+                321,
+                "更新后的内容",
+                reply_markup={"inline_keyboard": [[{"text": "返回", "callback_data": "subs:1"}]]},
+            )
+
+        self.assertIn("/botbot-token/editMessageText", captured["url"])
+        self.assertEqual(captured["body"]["message_id"], 321)
+        self.assertEqual(captured["body"]["reply_markup"]["inline_keyboard"][0][0]["callback_data"], "subs:1")
+        self.assertEqual(result["message_id"], 321)
+
+    def test_answer_callback_query_calls_bot_api(self):
+        captured = {}
+
+        def fake_urlopen(request, timeout=0):
+            captured["url"] = request.full_url
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            return FakeResponse({"ok": True, "result": True})
+
+        with patch("urllib.request.urlopen", fake_urlopen):
+            sender = TelegramBotSender(bot_token="bot-token")
+            result = sender.answer_callback_query("cbq-1", text="已刷新")
+
+        self.assertIn("/botbot-token/answerCallbackQuery", captured["url"])
+        self.assertEqual(captured["body"]["callback_query_id"], "cbq-1")
+        self.assertEqual(captured["body"]["text"], "已刷新")
+        self.assertTrue(result["ok"])
 
     def test_set_my_commands_calls_bot_api(self):
         captured = {}

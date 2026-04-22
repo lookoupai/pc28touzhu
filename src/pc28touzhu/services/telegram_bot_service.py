@@ -44,6 +44,12 @@ SUBSCRIPTION_PLAY_FILTER_ALIASES = {
     "组合": "组合",
     "全部": "全部",
 }
+SUBSCRIPTION_PLAY_FILTER_CALLBACKS = {
+    "bs": "大小",
+    "oe": "单双",
+    "cb": "组合",
+    "all": "全部",
+}
 SUBSCRIPTION_PLAY_FILTER_LABELS = {
     "big_small:大": "大",
     "big_small:小": "小",
@@ -54,10 +60,36 @@ SUBSCRIPTION_PLAY_FILTER_LABELS = {
     "combo:小单": "小单",
     "combo:小双": "小双",
 }
+SUBSCRIPTIONS_PAGE_SIZE = 5
 
 
 class TelegramBotClient(Protocol):
-    def send_text(self, target_chat_id: str, message_text: str) -> Dict[str, Any]:
+    def send_text(
+        self,
+        target_chat_id: str,
+        message_text: str,
+        *,
+        reply_markup: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        ...
+
+    def edit_text(
+        self,
+        target_chat_id: str,
+        message_id: int,
+        message_text: str,
+        *,
+        reply_markup: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        ...
+
+    def answer_callback_query(
+        self,
+        callback_query_id: str,
+        *,
+        text: str = "",
+        show_alert: bool = False,
+    ) -> Dict[str, Any]:
         ...
 
     def get_updates(
@@ -364,6 +396,221 @@ def _build_subscriptions_list_text(subscriptions: List[Dict[str, Any]], source_n
         ]
     )
     return "\n".join(lines)
+
+
+def _bot_action(
+    *,
+    text: str,
+    reply_markup: Optional[Dict[str, Any]] = None,
+    callback_text: str = "",
+    callback_alert: bool = False,
+) -> Dict[str, Any]:
+    return {
+        "text": str(text or ""),
+        "reply_markup": reply_markup if isinstance(reply_markup, dict) and reply_markup else None,
+        "callback_text": str(callback_text or ""),
+        "callback_alert": bool(callback_alert),
+    }
+
+
+def _inline_button(text: str, callback_data: str) -> Dict[str, str]:
+    return {
+        "text": str(text or "").strip(),
+        "callback_data": str(callback_data or "").strip(),
+    }
+
+
+def _inline_keyboard(rows: List[List[Dict[str, str]]]) -> Dict[str, Any]:
+    keyboard = []
+    for row in rows:
+        normalized_row = []
+        for item in row:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            callback_data = str(item.get("callback_data") or "").strip()
+            if not text or not callback_data:
+                continue
+            normalized_row.append({"text": text, "callback_data": callback_data})
+        if normalized_row:
+            keyboard.append(normalized_row)
+    return {"inline_keyboard": keyboard} if keyboard else {}
+
+
+def _to_positive_int_or_default(value: Any, default: int) -> int:
+    try:
+        normalized = int(str(value or "").strip())
+    except (TypeError, ValueError):
+        return int(default)
+    return normalized if normalized > 0 else int(default)
+
+
+def _subscriptions_page(subscriptions: List[Dict[str, Any]], page: int) -> Tuple[List[Dict[str, Any]], int, int]:
+    total_count = len(subscriptions)
+    if total_count <= 0:
+        return ([], 1, 1)
+    total_pages = max(1, (total_count + SUBSCRIPTIONS_PAGE_SIZE - 1) // SUBSCRIPTIONS_PAGE_SIZE)
+    current_page = min(max(1, int(page or 1)), total_pages)
+    start_index = (current_page - 1) * SUBSCRIPTIONS_PAGE_SIZE
+    end_index = start_index + SUBSCRIPTIONS_PAGE_SIZE
+    return (subscriptions[start_index:end_index], current_page, total_pages)
+
+
+def _subscription_summary_line(item: Dict[str, Any], source_name: str) -> str:
+    return "#%s %s | %s | %s | %s" % (
+        int(item.get("id") or 0),
+        source_name,
+        _subscription_runtime_status_text(item),
+        _subscription_play_filter_label(item),
+        _signed_money((item.get("financial") or {}).get("net_profit")),
+    )
+
+
+def _render_subscription_list_page(repository: Any, *, user_id: int, page: int = 1) -> Dict[str, Any]:
+    subscriptions = repository.list_subscriptions(user_id=int(user_id))
+    source_names = _resolve_subscription_source_names(repository, subscriptions)
+    page_items, current_page, total_pages = _subscriptions_page(subscriptions, page)
+    if not subscriptions:
+        return _bot_action(text="当前没有跟单策略。")
+
+    lines = ["【跟单方案列表】", "第 %s / %s 页" % (current_page, total_pages), ""]
+    for item in page_items:
+        source_name = source_names.get(int(item.get("source_id") or 0), "未命名方案")
+        lines.append(_subscription_summary_line(item, source_name))
+    text = "\n".join(lines)
+
+    button_rows = [[_inline_button(_subscription_summary_line(item, source_names.get(int(item.get("source_id") or 0), "未命名方案")), "sub:%s:%s" % (int(item.get("id") or 0), current_page))] for item in page_items]
+    button_rows.append(
+        [
+            _inline_button("上一页", "subs:%s" % max(1, current_page - 1)),
+            _inline_button("刷新", "rfsubs:%s" % current_page),
+            _inline_button("下一页", "subs:%s" % min(total_pages, current_page + 1)),
+        ]
+    )
+    return _bot_action(text=text, reply_markup=_inline_keyboard(button_rows))
+
+
+def _render_subscription_error_page(message: str, *, page: int = 1) -> Dict[str, Any]:
+    return _bot_action(
+        text=str(message or "操作失败"),
+        reply_markup=_inline_keyboard([[_inline_button("返回列表", "subs:%s" % max(1, int(page or 1)))]]),
+        callback_text=str(message or "操作失败"),
+        callback_alert=True,
+    )
+
+
+def _build_subscription_detail_text(item: Dict[str, Any], source_name: str, pending_event: Optional[Dict[str, Any]] = None) -> str:
+    progression = item.get("progression") if isinstance(item.get("progression"), dict) else {}
+    financial = item.get("financial") if isinstance(item.get("financial"), dict) else {}
+    lines = [
+        "【跟单方案详情】",
+        "方案：%s" % source_name,
+        "订阅ID：%s" % int(item.get("id") or 0),
+        "",
+        "用户状态：%s" % _manual_subscription_status_text(item.get("status")),
+        "运行状态：%s" % _subscription_runtime_status_text(item),
+        "当前玩法：%s" % _subscription_play_filter_label(item),
+        "本轮净盈亏：%s" % _signed_money(financial.get("net_profit")),
+        "当前手数：%s" % int(progression.get("current_step") or 1),
+    ]
+    if progression.get("pending_event_id"):
+        lines.append("待结算状态：%s" % str(progression.get("pending_status") or "pending"))
+        lines.append("待结算期号：%s" % str(progression.get("pending_issue_no") or "--"))
+        lines.append("当前待结算金额：%.2f" % round(float((pending_event or {}).get("stake_amount") or 0), 2))
+    else:
+        lines.append("待结算状态：无")
+    if _subscription_is_risk_blocked(item):
+        lines.extend(["", "说明：", "当前轮次已停止。", "如需继续，请开始新一轮。"])
+    else:
+        lines.extend(
+            [
+                "",
+                "说明：",
+                "启动/暂停会继续当前轮次。",
+                "开始新一轮会从 0 重新开始。",
+                "切换玩法只影响后续新信号。",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _build_subscription_detail_keyboard(item: Dict[str, Any], *, page: int) -> Dict[str, Any]:
+    subscription_id = int(item.get("id") or 0)
+    rows: List[List[Dict[str, str]]] = []
+    status = str(item.get("status") or "").strip()
+    risk_blocked = _subscription_is_risk_blocked(item)
+    if status != "archived":
+        if risk_blocked:
+            rows.append([_inline_button("开始新一轮", "rstc:%s:%s" % (subscription_id, page))])
+        else:
+            rows.append([
+                _inline_button(
+                    "暂停" if status == "active" else "启动",
+                    ("dis" if status == "active" else "en") + ":%s:%s" % (subscription_id, page),
+                )
+            ])
+            rows.append([_inline_button("开始新一轮", "rstc:%s:%s" % (subscription_id, page))])
+        rows.append(
+            [
+                _inline_button("大小", "play:%s:bs:%s" % (subscription_id, page)),
+                _inline_button("单双", "play:%s:oe:%s" % (subscription_id, page)),
+            ]
+        )
+        rows.append(
+            [
+                _inline_button("组合", "play:%s:cb:%s" % (subscription_id, page)),
+                _inline_button("全部", "play:%s:all:%s" % (subscription_id, page)),
+            ]
+        )
+    rows.append(
+        [
+            _inline_button("返回列表", "subs:%s" % page),
+            _inline_button("刷新", "rfsub:%s:%s" % (subscription_id, page)),
+        ]
+    )
+    return _inline_keyboard(rows)
+
+
+def _render_subscription_detail_page(repository: Any, *, user_id: int, subscription_id: int, page: int = 1) -> Dict[str, Any]:
+    item = _resolve_user_subscription_by_id(repository, user_id=int(user_id), subscription_id=subscription_id)
+    source_names = _resolve_subscription_source_names(repository, [item])
+    pending_events = _resolve_pending_event_snapshots(repository, [item])
+    progression = item.get("progression") if isinstance(item.get("progression"), dict) else {}
+    pending_event = pending_events.get(int(progression.get("pending_event_id") or 0))
+    source_name = source_names.get(int(item.get("source_id") or 0), "未命名方案")
+    return _bot_action(
+        text=_build_subscription_detail_text(item, source_name, pending_event),
+        reply_markup=_build_subscription_detail_keyboard(item, page=page),
+    )
+
+
+def _render_restart_confirm_page(repository: Any, *, user_id: int, subscription_id: int, page: int = 1) -> Dict[str, Any]:
+    item = _resolve_user_subscription_by_id(repository, user_id=int(user_id), subscription_id=subscription_id)
+    source_names = _resolve_subscription_source_names(repository, [item])
+    source_name = source_names.get(int(item.get("source_id") or 0), "未命名方案")
+    text = "\n".join(
+        [
+            "【确认开始新一轮】",
+            "方案：%s" % source_name,
+            "订阅ID：%s" % int(item.get("id") or 0),
+            "",
+            "执行后将：",
+            "1. 本轮净盈亏重置为 0",
+            "2. 当前手数回到第 1 手",
+            "3. 旧轮次未执行任务被跳过",
+            "",
+            "是否继续？",
+        ]
+    )
+    return _bot_action(
+        text=text,
+        reply_markup=_inline_keyboard(
+            [
+                [_inline_button("确认开始新一轮", "rsta:%s:%s" % (subscription_id, page))],
+                [_inline_button("取消", "rstx:%s:%s" % (subscription_id, page))],
+            ]
+        ),
+    )
 
 
 def _build_profit_summary_text(user: Dict[str, Any], summary: Dict[str, Any]) -> str:
@@ -852,6 +1099,175 @@ def handle_telegram_command(
     return _build_help_text()
 
 
+def _handle_telegram_command_action(
+    repository: Any,
+    *,
+    telegram_user_id: int,
+    telegram_chat_id: str,
+    telegram_username: str,
+    text: str,
+    reference_time: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    normalized_text = str(text or "").strip()
+    if not normalized_text:
+        return _bot_action(text="")
+    parts = normalized_text.split()
+    command = parts[0].split("@", 1)[0].lower()
+    if command == "/subs":
+        user = _resolve_bound_user(repository, telegram_user_id=int(telegram_user_id))
+        return _render_subscription_list_page(repository, user_id=int(user["id"]), page=1)
+    return _bot_action(
+        text=handle_telegram_command(
+            repository,
+            telegram_user_id=int(telegram_user_id),
+            telegram_chat_id=telegram_chat_id,
+            telegram_username=telegram_username,
+            text=text,
+            reference_time=reference_time,
+        )
+    )
+
+
+def _handle_telegram_callback_action(
+    repository: Any,
+    *,
+    telegram_user_id: int,
+    data: str,
+    reference_time: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    del reference_time
+    parts = [str(item or "").strip() for item in str(data or "").split(":")]
+    action = parts[0] if parts else ""
+    user = _resolve_bound_user(repository, telegram_user_id=int(telegram_user_id))
+    user_id = int(user["id"])
+
+    try:
+        if action in {"subs", "rfsubs", "back"}:
+            page = _to_positive_int_or_default(parts[1] if len(parts) > 1 else 1, 1)
+            result = _render_subscription_list_page(repository, user_id=user_id, page=page)
+            if action == "rfsubs":
+                result["callback_text"] = "列表已刷新"
+            return result
+
+        if action in {"sub", "rfsub", "en", "dis", "rstc", "rsta", "rstx"}:
+            subscription_id = _parse_subscription_id_arg(parts[1] if len(parts) > 1 else "")
+            page = _to_positive_int_or_default(parts[2] if len(parts) > 2 else 1, 1)
+        elif action == "play":
+            subscription_id = _parse_subscription_id_arg(parts[1] if len(parts) > 1 else "")
+            play_code = str(parts[2] if len(parts) > 2 else "").strip()
+            page = _to_positive_int_or_default(parts[3] if len(parts) > 3 else 1, 1)
+        else:
+            return _render_subscription_error_page("未识别的按钮操作，请重新发送 /subs", page=1)
+
+        if action == "sub":
+            return _render_subscription_detail_page(repository, user_id=user_id, subscription_id=subscription_id, page=page)
+
+        if action == "rfsub":
+            result = _render_subscription_detail_page(repository, user_id=user_id, subscription_id=subscription_id, page=page)
+            result["callback_text"] = "详情已刷新"
+            return result
+
+        if action == "rstc":
+            return _render_restart_confirm_page(repository, user_id=user_id, subscription_id=subscription_id, page=page)
+
+        if action == "rstx":
+            result = _render_subscription_detail_page(repository, user_id=user_id, subscription_id=subscription_id, page=page)
+            result["callback_text"] = "已取消"
+            return result
+
+        item = _resolve_user_subscription_by_id(repository, user_id=user_id, subscription_id=subscription_id)
+        if str(item.get("status") or "") == "archived":
+            return _render_subscription_error_page("该方案当前已归档，请先到网页端恢复。", page=page)
+
+        if action == "en":
+            if _subscription_is_risk_blocked(item):
+                result = _render_subscription_detail_page(repository, user_id=user_id, subscription_id=subscription_id, page=page)
+                result["callback_text"] = "该方案当前处于风控阻塞，请开始新一轮"
+                result["callback_alert"] = True
+                return result
+            if str(item.get("status") or "") != "active":
+                update_subscription_status(
+                    repository,
+                    subscription_id=subscription_id,
+                    user_id=user_id,
+                    status="active",
+                )
+            result = _render_subscription_detail_page(repository, user_id=user_id, subscription_id=subscription_id, page=page)
+            result["callback_text"] = "已启动"
+            return result
+
+        if action == "dis":
+            if str(item.get("status") or "") != "inactive":
+                update_subscription_status(
+                    repository,
+                    subscription_id=subscription_id,
+                    user_id=user_id,
+                    status="inactive",
+                )
+            result = _render_subscription_detail_page(repository, user_id=user_id, subscription_id=subscription_id, page=page)
+            result["callback_text"] = "已暂停"
+            return result
+
+        if action == "play":
+            play_label = SUBSCRIPTION_PLAY_FILTER_CALLBACKS.get(play_code)
+            if not play_label:
+                return _render_subscription_error_page("玩法按钮已失效，请重新发送 /subs。", page=page)
+            current_play = _subscription_play_filter_label(item)
+            if current_play == play_label:
+                result = _render_subscription_detail_page(repository, user_id=user_id, subscription_id=subscription_id, page=page)
+                result["callback_text"] = "当前已经是“%s”玩法" % play_label
+                return result
+            strategy_v2 = _subscription_strategy_v2(item)
+            strategy_v2["play_filter"] = dict(SUBSCRIPTION_PLAY_FILTER_PRESETS[play_label])
+            update_subscription(
+                repository,
+                subscription_id=subscription_id,
+                user_id=user_id,
+                payload={"source_id": int(item["source_id"]), "strategy_v2": strategy_v2},
+            )
+            result = _render_subscription_detail_page(repository, user_id=user_id, subscription_id=subscription_id, page=page)
+            result["callback_text"] = "已切换为%s" % play_label
+            return result
+
+        if action == "rsta":
+            restart_subscription_cycle(
+                repository,
+                subscription_id=subscription_id,
+                user_id=user_id,
+                payload={"note": "Telegram callback restart"},
+            )
+            result = _render_subscription_detail_page(repository, user_id=user_id, subscription_id=subscription_id, page=page)
+            result["callback_text"] = "已开始新一轮"
+            return result
+
+    except ValueError as exc:
+        return _render_subscription_error_page(str(exc) or "操作失败", page=_to_positive_int_or_default(parts[-1] if parts else 1, 1))
+
+    return _render_subscription_error_page("未识别的按钮操作，请重新发送 /subs", page=1)
+
+
+def _apply_bot_action_to_message(
+    bot_client: TelegramBotClient,
+    *,
+    chat_id: str,
+    message_id: Optional[int],
+    action: Dict[str, Any],
+) -> bool:
+    text = str(action.get("text") or "")
+    reply_markup = action.get("reply_markup") if isinstance(action.get("reply_markup"), dict) else None
+    if message_id is None or int(message_id or 0) <= 0:
+        if not text:
+            return False
+        bot_client.send_text(chat_id, text, reply_markup=reply_markup)
+        return True
+    try:
+        bot_client.edit_text(chat_id, int(message_id), text, reply_markup=reply_markup)
+    except Exception as exc:
+        if "message is not modified" not in str(exc).lower():
+            raise
+    return bool(text)
+
+
 def process_telegram_bot_cycle(
     repository: Any,
     *,
@@ -875,6 +1291,49 @@ def process_telegram_bot_cycle(
     for update in updates:
         update_id = int(update.get("update_id") or 0)
         message = update.get("message") if isinstance(update, dict) else None
+        callback_query = update.get("callback_query") if isinstance(update, dict) else None
+
+        if isinstance(callback_query, dict):
+            callback_id = str(callback_query.get("id") or "").strip()
+            callback_data = str(callback_query.get("data") or "").strip()
+            message_obj = callback_query.get("message") if isinstance(callback_query.get("message"), dict) else {}
+            chat = message_obj.get("chat") if isinstance(message_obj.get("chat"), dict) else {}
+            chat_type = str(chat.get("type") or "").strip()
+            chat_id = str(chat.get("id") or "").strip()
+            message_id = int(message_obj.get("message_id") or 0)
+            from_user = callback_query.get("from") if isinstance(callback_query.get("from"), dict) else {}
+            telegram_user_id = from_user.get("id")
+            if not callback_id or not callback_data or not chat_id or telegram_user_id is None or chat_type != "private":
+                ignored_count += 1
+                if update_id > 0:
+                    repository.update_telegram_bot_runtime_state(bot_name=bot_name, last_update_id=update_id)
+                continue
+            try:
+                action = _handle_telegram_callback_action(
+                    repository,
+                    telegram_user_id=int(telegram_user_id),
+                    data=callback_data,
+                    reference_time=reference_time,
+                )
+            except Exception as exc:
+                action = _bot_action(text=str(exc) or "按钮处理失败", callback_text=str(exc) or "按钮处理失败", callback_alert=True)
+            handled_count += 1
+            bot_client.answer_callback_query(
+                callback_id,
+                text=str(action.get("callback_text") or ""),
+                show_alert=bool(action.get("callback_alert")),
+            )
+            if _apply_bot_action_to_message(
+                bot_client,
+                chat_id=chat_id,
+                message_id=message_id,
+                action=action,
+            ):
+                replied_count += 1
+            if update_id > 0:
+                repository.update_telegram_bot_runtime_state(bot_name=bot_name, last_update_id=update_id)
+            continue
+
         chat = (message or {}).get("chat") or {}
         chat_type = str(chat.get("type") or "").strip()
         chat_id = str(chat.get("id") or "").strip()
@@ -890,7 +1349,7 @@ def process_telegram_bot_cycle(
             continue
 
         try:
-            response_text = handle_telegram_command(
+            action = _handle_telegram_command_action(
                 repository,
                 telegram_user_id=int(telegram_user_id),
                 telegram_chat_id=chat_id,
@@ -899,10 +1358,14 @@ def process_telegram_bot_cycle(
                 reference_time=reference_time,
             )
         except Exception as exc:
-            response_text = str(exc) or "命令处理失败"
+            action = _bot_action(text=str(exc) or "命令处理失败")
         handled_count += 1
-        if response_text:
-            bot_client.send_text(chat_id, response_text)
+        if str(action.get("text") or "").strip():
+            bot_client.send_text(
+                chat_id,
+                str(action.get("text") or ""),
+                reply_markup=action.get("reply_markup") if isinstance(action.get("reply_markup"), dict) else None,
+            )
             replied_count += 1
         if update_id > 0:
             repository.update_telegram_bot_runtime_state(bot_name=bot_name, last_update_id=update_id)
