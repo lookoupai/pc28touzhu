@@ -7,6 +7,7 @@
         const normalized = raw.toLowerCase();
         const statusMap = {
             active: "已启用",
+            standby: "待命触发",
             inactive: "已停用",
             archived: "已归档",
             success: "成功",

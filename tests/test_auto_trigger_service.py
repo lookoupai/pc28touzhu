@@ -97,6 +97,46 @@ class AutoTriggerServiceTests(unittest.TestCase):
         updated_rule = self.repo.get_auto_trigger_rule(rule["id"])
         self.assertEqual(updated_rule["last_triggered_issue_no"], "20260418000")
 
+    def test_rule_activates_standby_subscription_when_conditions_match(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "待命自动跟单",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 10,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+            },
+        )
+
+        result = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        self.assertEqual(self.repo.get_subscription(self.subscription["id"])["status"], "active")
+        jobs = self.repo.list_execution_jobs(user_id=self.user_id)
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["subscription_id"], self.subscription["id"])
+
+    def test_standby_subscription_does_not_join_normal_dispatch_candidates(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
+
+        candidates = self.repo.list_dispatch_candidates(self.signal["id"])
+
+        self.assertEqual(candidates, [])
+
     def test_cooldown_prevents_repeated_trigger_for_same_subscription(self):
         create_auto_trigger_rule(
             self.repo,

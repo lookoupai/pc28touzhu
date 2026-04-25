@@ -425,7 +425,8 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
         source = subscription.get("source") if isinstance(subscription.get("source"), dict) else {}
         summary["checked_count"] += 1
         try:
-            if str(subscription.get("status") or "") != "active":
+            subscription_status = str(subscription.get("status") or "")
+            if subscription_status not in {"active", "standby"}:
                 events.append(_record_event(repository, rule=rule, subscription=subscription, performance=None, status="skipped", reason="subscription_not_active"))
                 summary["skipped_count"] += 1
                 continue
@@ -454,6 +455,17 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
             matched = _matched_conditions(rule, performance)
             if not matched:
                 continue
+
+            if subscription_status == "standby":
+                activated = repository.update_subscription_status(
+                    subscription_id=int(subscription["id"]),
+                    user_id=int(rule["user_id"]),
+                    status="active",
+                )
+                if not activated:
+                    raise ValueError("subscription_id 对应的订阅不存在")
+                subscription = activated
+                subscription["source"] = source
 
             play_filter_result = _apply_subscription_play_filter(
                 repository,

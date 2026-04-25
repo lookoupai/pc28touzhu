@@ -955,6 +955,11 @@
     color: var(--primary-strong);
 }
 
+.config-status-pill.is-standby {
+    background: rgba(37, 99, 235, 0.12);
+    color: #1d4ed8;
+}
+
 .config-status-pill.is-inactive {
     background: rgba(201, 130, 43, 0.16);
     color: #8d5a16;

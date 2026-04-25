@@ -2488,6 +2488,9 @@
         if (!item) {
             return "策略未启用";
         }
+        if (String(item.status || "inactive") === "standby") {
+            return "待命触发";
+        }
         if (String(item.status || "inactive") !== "active") {
             return "策略未启用";
         }
@@ -3137,7 +3140,15 @@
         const effectiveTargets = String(item && item.status || "inactive") === "active" ? activeTargetItems : [];
         const previewTargets = effectiveTargets.length ? effectiveTargets : (activeTargetItems.length ? activeTargetItems : configuredTargets);
         const diagnostics = [];
-        if (item && String(item.status || "inactive") !== "active") {
+        const subscriptionStatus = String(item && item.status || "inactive");
+        if (subscriptionStatus === "standby") {
+            diagnostics.push({
+                key: "subscription_standby",
+                label: "待自动触发",
+                severity: "warning",
+                href: "/auto-triggers",
+            });
+        } else if (item && subscriptionStatus !== "active") {
             diagnostics.push({
                 key: "subscription_inactive",
                 label: "策略未启用",
@@ -4676,6 +4687,12 @@
         subscriptionCards.innerHTML = state.subscriptions.map(function (item) {
             const source = sourceById(item.source_id);
             const statusAction = entityStatusAction(item.status, "暂停跟单", "恢复跟单");
+            const normalizedStatus = String(item.status || "inactive");
+            const standbyAction = !isArchivedItem(item)
+                ? (normalizedStatus === "standby"
+                    ? '<button class="ghost-btn toggle-subscription-btn" type="button" data-subscription-id="' + item.id + '" data-next-status="inactive">停用待命</button>'
+                    : '<button class="ghost-btn standby-subscription-btn" type="button" data-subscription-id="' + item.id + '">待命触发</button>')
+                : "";
             const archiveAction = isArchivedItem(item)
                 ? '<button class="ghost-btn danger-btn delete-subscription-btn" type="button" data-subscription-id="' + item.id + '">删除策略</button>'
                 : '<button class="ghost-btn archive-subscription-btn" type="button" data-subscription-id="' + item.id + '">归档策略</button>';
@@ -4684,12 +4701,16 @@
             const hiddenPreviewCount = Math.max(0, chainState.previewTargets.length - previewTargets.length);
             const routeTitle = chainState.effectiveTargets.length
                 ? ("当前会收到信号的群组（" + chainState.effectiveTargets.length + "）")
-                : (chainState.previewTargets.length ? "启用后会收到信号的群组" : "还没有可用群组");
+                : (normalizedStatus === "standby"
+                    ? "待命触发后会收到信号的群组"
+                    : (chainState.previewTargets.length ? "启用后会收到信号的群组" : "还没有可用群组"));
             const routeCopy = chainState.effectiveTargets.length
                 ? "这些群组会在信号到来时生成实际发单任务。"
-                : (chainState.previewTargets.length
+                : (normalizedStatus === "standby"
+                    ? "当前只等待自动触发规则，普通信号不会直接生成发单任务。"
+                    : (chainState.previewTargets.length
                     ? "现在先展示未来会走到的链路，等策略和群组都启用后才会真的发出。"
-                    : "先去群组页新增并启用至少一个投递群组。");
+                    : "先去群组页新增并启用至少一个投递群组。"));
             const routeMarkup = previewTargets.length
                 ? previewTargets.map(function (targetItem) {
                     const preview = subscriptionPreviewForTarget(item, targetItem);
@@ -4772,7 +4793,7 @@
                     '<div class="subscription-chain-meta"><span class="subscription-chain-stat">当前命中 ' + escapeHtml(String(chainState.effectiveTargets.length)) + ' 个群组</span><span class="subscription-chain-stat">已配置 ' + escapeHtml(String(chainState.configuredTargets.length)) + ' 个群组</span><span class="subscription-chain-stat">阻塞 ' + escapeHtml(String(chainState.summaries.reduce(function (total, entry) { return total + entry.count; }, 0))) + ' 项</span></div>',
                     '<div class="subscription-detail-grid"><section class="subscription-routes"><strong class="subscription-section-title">' + escapeHtml(routeTitle) + '</strong><p class="subscription-section-copy">' + escapeHtml(routeCopy) + '</p><div class="subscription-route-grid">' + routeMarkup + '</div>' + (hiddenPreviewCount ? ('<p class="subscription-more-note">另有 ' + escapeHtml(String(hiddenPreviewCount)) + ' 个群组未展开，去群组页可查看全部详情。</p>') : "") + '</section><aside class="subscription-blockers"><strong class="subscription-section-title">当前阻塞项</strong><p class="subscription-section-copy">这里会直接说明信号现在发不出去的原因，以及应该去哪一页处理。</p><div class="subscription-blocker-list">' + blockerMarkup + '</div></aside></div>',
                 ].join(""),
-                footerMarkup: "<div class=\"config-list-actions\"><button class=\"ghost-btn edit-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\">编辑</button><button class=\"ghost-btn toggle-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\" data-next-status=\"" + statusAction.nextStatus + "\">" + statusAction.actionText + "</button>" + resetAction + archiveAction + progressionActions + "</div>",
+                footerMarkup: "<div class=\"config-list-actions\"><button class=\"ghost-btn edit-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\">编辑</button><button class=\"ghost-btn toggle-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\" data-next-status=\"" + statusAction.nextStatus + "\">" + statusAction.actionText + "</button>" + standbyAction + resetAction + archiveAction + progressionActions + "</div>",
             });
         }).join("");
         renderSubscriptionWorkspaceSummary();
@@ -6418,6 +6439,23 @@
                     setStatus(error.message, true);
                 } finally {
                     setButtonBusy(target, false, "重置盈亏");
+                }
+                return;
+            }
+            if (target.classList.contains("standby-subscription-btn")) {
+                const subscriptionId = target.getAttribute("data-subscription-id");
+                if (!subscriptionId) {
+                    return;
+                }
+                try {
+                    await updateEntityStatus(
+                        "/api/platform/subscriptions/",
+                        subscriptionId,
+                        "standby",
+                        "跟单策略已进入待命触发状态，普通信号不会立即跟单。"
+                    );
+                } catch (error) {
+                    setStatus(error.message, true);
                 }
                 return;
             }

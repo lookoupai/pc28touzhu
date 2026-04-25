@@ -32,6 +32,7 @@ ALLOWED_EXECUTION_JOB_STATUSES = {"pending", "delivered", "failed", "expired", "
 RETRYABLE_EXECUTION_JOB_STATUSES = {"failed", "expired", "skipped"}
 FAILED_DELIVERY_STATUSES = {"failed", "expired", "skipped"}
 ALLOWED_ENTITY_STATUSES = {"active", "inactive", "archived"}
+ALLOWED_SUBSCRIPTION_STATUSES = ALLOWED_ENTITY_STATUSES | {"standby"}
 ALLOWED_TELEGRAM_AUTH_MODES = {"phone_login", "session_import"}
 AUTHORIZED_TELEGRAM_AUTH_STATE = "authorized"
 
@@ -233,6 +234,13 @@ def _normalize_entity_status(value: Any, field_name: str = "status") -> str:
     text = str(value or "").strip()
     if text not in ALLOWED_ENTITY_STATUSES:
         raise ValueError("%s 仅支持 active、inactive 或 archived" % field_name)
+    return text
+
+
+def _normalize_subscription_status(value: Any, field_name: str = "status") -> str:
+    text = str(value or "").strip()
+    if text not in ALLOWED_SUBSCRIPTION_STATUSES:
+        raise ValueError("%s 仅支持 active、standby、inactive 或 archived" % field_name)
     return text
 
 
@@ -980,7 +988,7 @@ def create_subscription(repository: Any, payload: Dict[str, Any]) -> Dict[str, A
     item = repository.create_subscription_record(
         user_id=user_id,
         source_id=source_id,
-        status=str(payload.get("status") or "active").strip() or "active",
+        status=_normalize_subscription_status(payload.get("status") or "active"),
         strategy=_normalize_subscription_strategy(_subscription_strategy_input_from_payload(payload)),
     )
     return {"item": present_subscription_item(item)}
@@ -1009,7 +1017,7 @@ def update_subscription(repository: Any, *, subscription_id: Any, user_id: Any, 
 def update_subscription_status(repository: Any, *, subscription_id: Any, user_id: Any, status: Any) -> Dict[str, Any]:
     normalized_subscription_id = _to_positive_int(subscription_id, "subscription_id")
     normalized_user_id = _to_positive_int(user_id, "user_id")
-    normalized_status = _normalize_entity_status(status)
+    normalized_status = _normalize_subscription_status(status)
     item = repository.update_subscription_status(
         subscription_id=normalized_subscription_id,
         user_id=normalized_user_id,

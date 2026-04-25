@@ -658,6 +658,13 @@ class DatabaseRepositoryTests(unittest.TestCase):
         )
         self.assertIsNotNone(updated)
         self.assertEqual(updated["status"], "inactive")
+        standby = self.repo.update_subscription_status(
+            subscription_id=created["id"],
+            user_id=user_id,
+            status="standby",
+        )
+        self.assertIsNotNone(standby)
+        self.assertEqual(standby["status"], "standby")
 
     def test_update_subscription_record(self):
         user_id = self.repo.create_user("sub-edit-user")
