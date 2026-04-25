@@ -4076,12 +4076,53 @@
         return (item.lottery_type || "--") + " · 默认 " + (item.template_text || "--") + (ruleCount ? (" · " + ruleCount + " 条玩法规则") : "");
     }
 
+    function renderConfigSummaryItem(label, value, extraClassName) {
+        const normalizedValue = String(value == null ? "--" : value).trim() || "--";
+        const className = extraClassName ? (' class="' + extraClassName + '"') : "";
+        return '<div class="config-summary-item"><span class="config-summary-label">' + escapeHtml(label || "--") + '</span><strong' + className + '>' + escapeHtml(normalizedValue) + "</strong></div>";
+    }
+
+    function renderConfigSummaryGrid(items) {
+        return '<div class="config-summary-grid">' + (items || []).join("") + "</div>";
+    }
+
+    function renderConfigDetailRows(items) {
+        return '<div class="config-detail-list">' + (items || []).join("") + "</div>";
+    }
+
+    function renderConfigDetailRow(label, value, valueClassName) {
+        const normalizedValue = String(value == null ? "--" : value).trim() || "--";
+        const className = valueClassName ? (' class="' + valueClassName + '"') : "";
+        return '<div class="config-detail-row"><span class="config-detail-label">' + escapeHtml(label || "--") + '</span><span' + className + '>' + escapeHtml(normalizedValue) + "</span></div>";
+    }
+
+    function renderConfigCardShell(options) {
+        const headerBadges = Array.isArray(options.headerBadges) ? options.headerBadges.join("") : "";
+        const summaryMarkup = options.summaryMarkup ? ('<div class="config-card-summary">' + options.summaryMarkup + '</div>') : "";
+        const detailMarkup = options.detailMarkup ? ('<div class="config-card-details">' + options.detailMarkup + '</div>') : "";
+        const footerMarkup = options.footerMarkup ? ('<div class="config-card-footer">' + options.footerMarkup + '</div>') : "";
+        return [
+            '<article class="config-list-item' + (options.cardClassName ? (' ' + options.cardClassName) : '') + '">',
+            '<div class="config-list-head">',
+            '<div class="config-card-title-group">',
+            '<strong>' + escapeHtml(options.title || "--") + '</strong>',
+            (options.subtitle ? ('<p class="config-card-subtitle">' + escapeHtml(options.subtitle) + '</p>') : ""),
+            '</div>',
+            (headerBadges ? ('<div class="config-card-badges">' + headerBadges + '</div>') : ""),
+            '</div>',
+            summaryMarkup,
+            detailMarkup,
+            footerMarkup,
+            '</article>',
+        ].join("");
+    }
+
     function renderTemplateCards() {
         if (!(messageTemplateCards instanceof HTMLElement)) {
             return;
         }
         if (!state.templates.length) {
-            messageTemplateCards.innerHTML = '<article class="mini-card"><strong>当前没有下注模板</strong><p>先创建一个模板，再把模板绑定到对应群组，让不同玩法按群协议生成下注文本。</p></article>';
+            messageTemplateCards.innerHTML = '<article class="config-list-item config-list-empty-card"><strong>当前没有下注模板</strong><p>先创建一个模板，再把模板绑定到对应群组，让不同玩法按群协议生成下注文本。</p></article>';
             renderTemplateWorkspaceSummary();
             return;
         }
@@ -4097,17 +4138,28 @@
                     return (target.target_name || target.target_key || "--") + "（" + templateStatusLabel(target.status) + "）";
                 }).join("、")
                 : "当前还没有群组绑定这套模板。";
-            return [
-                '<article class="mini-card">',
-                '<div class="config-list-head"><strong>' + escapeHtml(item.name || "--") + "</strong>" + renderStatusPillWithLabel(item.status, templateStatusLabel(item.status)) + "</div>",
-                '<p>' + escapeHtml(summarizeTemplate(item)) + "</p>",
-                '<p>绑定群组：' + escapeHtml(usageText) + "</p>",
-                '<p>版本时间：' + escapeHtml(formatDateTime(item.updated_at || item.created_at)) + ' · 使用中 ' + escapeHtml(String(item.active_target_count != null ? item.active_target_count : boundTargets.filter(function (target) { return String(target.status || "") === "active"; }).length)) + " 个群组</p>",
-                '<p class="mono-text">' + escapeHtml(item.template_text || "--") + "</p>",
-                '<p>样例预览：' + escapeHtml(preview.text || "--") + "</p>",
-                '<div class="config-list-actions"><button class="ghost-btn edit-template-btn" type="button" data-template-id="' + item.id + '">编辑</button><button class="ghost-btn duplicate-template-btn" type="button" data-template-id="' + item.id + '">复制模板</button><button class="ghost-btn toggle-template-btn" type="button" data-template-id="' + item.id + '" data-next-status="' + statusAction.nextStatus + '">' + statusAction.actionText + "</button>" + archiveAction + "</div>",
-                "</article>",
-            ].join("");
+            const activeTargetCount = item.active_target_count != null
+                ? item.active_target_count
+                : boundTargets.filter(function (target) { return String(target.status || "") === "active"; }).length;
+            return renderConfigCardShell({
+                title: item.name || "--",
+                cardClassName: "template-card-item",
+                headerBadges: [
+                    renderStatusPillWithLabel(item.status, templateStatusLabel(item.status)),
+                ],
+                summaryMarkup: renderConfigSummaryGrid([
+                    renderConfigSummaryItem("模板状态", templateStatusLabel(item.status)),
+                    renderConfigSummaryItem("使用中群组", String(activeTargetCount)),
+                    renderConfigSummaryItem("更新时间", formatDateTime(item.updated_at || item.created_at)),
+                ]),
+                detailMarkup: renderConfigDetailRows([
+                    renderConfigDetailRow("模板摘要", summarizeTemplate(item)),
+                    renderConfigDetailRow("绑定群组", usageText),
+                    renderConfigDetailRow("默认口令", item.template_text || "--", "mono-text"),
+                    renderConfigDetailRow("样例预览", preview.text || "--", "mono-text"),
+                ]),
+                footerMarkup: '<div class="config-list-actions"><button class="ghost-btn edit-template-btn" type="button" data-template-id="' + item.id + '">编辑</button><button class="ghost-btn duplicate-template-btn" type="button" data-template-id="' + item.id + '">复制模板</button><button class="ghost-btn toggle-template-btn" type="button" data-template-id="' + item.id + '" data-next-status="' + statusAction.nextStatus + '">' + statusAction.actionText + "</button>" + archiveAction + "</div>",
+            });
         }).join("");
         renderTemplateWorkspaceSummary();
     }
@@ -4399,20 +4451,24 @@
         }
         const items = aiSources();
         if (!items.length) {
-            sourceCards.innerHTML = '<article class="mini-card"><strong>还没有导入 AI 方案</strong><p>先回首页导入 AITradingSimulator 的公开方案页链接，再来这里配置账号、群组和跟单策略。</p></article>';
+            sourceCards.innerHTML = '<article class="config-list-item config-list-empty-card"><strong>还没有导入 AI 方案</strong><p>先回首页导入 AITradingSimulator 的公开方案页链接，再来这里配置账号、群组和跟单策略。</p></article>';
             return;
         }
         sourceCards.innerHTML = items.map(function (item) {
             const fetchConfig = item.config && item.config.fetch ? item.config.fetch : {};
             const pipeline = sourcePipelineState(item);
-            return [
-                '<article class="mini-card">',
-                '<strong>' + escapeHtml(item.name || "--") + "</strong>",
-                '<p>来源类型：' + escapeHtml(item.source_type || "--") + " · " + escapeHtml(item.visibility || "--") + "</p>",
-                '<p>' + escapeHtml(pipeline.headline) + "</p>",
-                '<p class="mono-text">' + escapeHtml(fetchConfig.url || "--") + "</p>",
-                "</article>",
-            ].join("");
+            return renderConfigCardShell({
+                title: item.name || "--",
+                cardClassName: "source-card-item source-card-item-compact",
+                summaryMarkup: renderConfigSummaryGrid([
+                    renderConfigSummaryItem("来源类型", item.source_type || "--"),
+                    renderConfigSummaryItem("可见性", item.visibility || "--"),
+                ]),
+                detailMarkup: renderConfigDetailRows([
+                    renderConfigDetailRow("当前状态", pipeline.headline),
+                    renderConfigDetailRow("抓取地址", fetchConfig.url || "--", "mono-text"),
+                ]),
+            });
         }).join("");
     }
 
@@ -4422,7 +4478,7 @@
         }
         const items = aiSources();
         if (!items.length) {
-            sourceList.innerHTML = '<article class="mini-card"><strong>当前还没有来源链路</strong><p>先从首页导入 AITradingSimulator 公开方案，再回这里决定哪个来源要进入跟单和派发链路。</p></article>';
+            sourceList.innerHTML = '<article class="config-list-item config-list-empty-card"><strong>当前还没有来源链路</strong><p>先从首页导入 AITradingSimulator 公开方案，再回这里决定哪个来源要进入跟单和派发链路。</p></article>';
             renderSourceWorkspaceSummary();
             return;
         }
@@ -4453,33 +4509,41 @@
                         : ("这个来源已有策略 #" + subscription.id + "，但当前状态是 " + statusText(subscription.status || "inactive") + "。"))
                     : "当前还没有任何跟单策略会使用这个来源。");
             const pipelineButtonText = activeSubscription ? "一键推进来源链路" : "先接入跟单后再推进";
-            return [
-                '<article class="mini-card source-card-item">',
-                '<div class="config-list-head"><strong>' + escapeHtml(item.name || "--") + '</strong><div class="account-pill-row">' + renderStatusPill(item.status || "--") + (activeSubscription ? renderStatusPillWithLabel("active", "已接入跟单") : renderStatusPillWithLabel("inactive", subscription ? subscriptionRuntimeLabel(subscription) : "未接入跟单")) + '</div></div>',
-                '<div class="source-card-meta">',
-                '<p class="source-card-status">' + escapeHtml(subscriptionText) + '</p>',
-                '<p>抓取地址：<span class="mono-text">' + escapeHtml(truncateText(fetchConfig.url || "--", 88)) + '</span></p>',
-                '<p>最近 raw：' + escapeHtml(latestRawText) + '</p>',
-                '<p>最近 signal：' + escapeHtml(latestSignalText) + '</p>',
-                '<p>最近任务：' + escapeHtml(latestJobText) + '</p>',
-                '<p>' + escapeHtml(pipeline.headline) + '</p>',
-                '</div>',
-                '<div class="source-card-kpis">' +
-                    '<div class="source-card-kpi"><strong>' + escapeHtml(String(pipeline.rawItems.length)) + '</strong><span>raw</span></div>' +
-                    '<div class="source-card-kpi"><strong>' + escapeHtml(String(pipeline.pendingRawCount)) + '</strong><span>待标准化</span></div>' +
-                    '<div class="source-card-kpi"><strong>' + escapeHtml(String(pipeline.signals.length)) + '</strong><span>signals</span></div>' +
-                    '<div class="source-card-kpi"><strong>' + escapeHtml(String(pipeline.jobs.length)) + '</strong><span>jobs</span></div>' +
-                '</div>',
-                '<div class="source-card-actions">' +
+            return renderConfigCardShell({
+                title: item.name || "--",
+                cardClassName: "source-card-item",
+                headerBadges: [
+                    renderStatusPill(item.status || "--"),
+                    activeSubscription
+                        ? renderStatusPillWithLabel("active", "已接入跟单")
+                        : renderStatusPillWithLabel("inactive", subscription ? subscriptionRuntimeLabel(subscription) : "未接入跟单"),
+                ],
+                summaryMarkup: renderConfigSummaryGrid([
+                    renderConfigSummaryItem("跟单状态", activeSubscription ? "已接入跟单" : (subscription ? subscriptionRuntimeLabel(subscription) : "未接入跟单")),
+                    renderConfigSummaryItem("raw", String(pipeline.rawItems.length)),
+                    renderConfigSummaryItem("待标准化", String(pipeline.pendingRawCount)),
+                    renderConfigSummaryItem("signals", String(pipeline.signals.length)),
+                    renderConfigSummaryItem("jobs", String(pipeline.jobs.length)),
+                ]),
+                detailMarkup: [
+                    renderConfigDetailRows([
+                        renderConfigDetailRow("来源说明", subscriptionText),
+                        renderConfigDetailRow("抓取地址", truncateText(fetchConfig.url || "--", 88), "mono-text"),
+                        renderConfigDetailRow("最近 raw", latestRawText),
+                        renderConfigDetailRow("最近 signal", latestSignalText),
+                        renderConfigDetailRow("最近任务", latestJobText),
+                        renderConfigDetailRow("链路判断", pipeline.headline),
+                    ]),
+                ].join(""),
+                footerMarkup: '<div class="config-list-actions source-card-actions">' +
                     '<button class="ghost-btn edit-source-btn" type="button" data-source-id="' + escapeHtml(String(item.id)) + '">编辑来源</button>' +
                     '<button class="ghost-btn source-subscription-btn" type="button" data-source-id="' + escapeHtml(String(item.id)) + '">' + escapeHtml(activeSubscription ? "查看这个来源的跟单" : "用这个来源建跟单") + '</button>' +
                     '<button class="' + (activeSubscription ? 'primary-btn' : 'ghost-btn') + ' source-pipeline-btn" type="button" data-source-id="' + escapeHtml(String(item.id)) + '"' + (activeSubscription ? '' : ' disabled') + '>' + escapeHtml(pipelineButtonText) + '</button>' +
                     '<button class="ghost-btn toggle-source-btn" type="button" data-source-id="' + escapeHtml(String(item.id)) + '" data-next-status="' + escapeHtml(statusAction.nextStatus) + '">' + escapeHtml(statusAction.actionText) + '</button>' +
                     archiveAction +
                     '<a class="ghost-btn link-btn" href="/records' + (pipeline.latestSignal ? ('?signal_id=' + encodeURIComponent(String(pipeline.latestSignal.id))) : '') + '">' + escapeHtml(pipeline.latestSignal ? "看这个来源最近记录" : "去执行记录") + '</a>' +
-                '</div>',
-                '</article>',
-            ].join("");
+                    '</div>',
+            });
         }).join("");
         renderSourceWorkspaceSummary();
     }
@@ -4489,7 +4553,7 @@
             return;
         }
         if (!state.accounts.length) {
-            accountCards.innerHTML = '<article class="mini-card"><strong>当前没有托管账号</strong><p>先选择接入方式，再完成登录或导入 Session，后续才能继续配置投递群组。</p></article>';
+            accountCards.innerHTML = '<article class="config-list-item config-list-empty-card"><strong>当前没有托管账号</strong><p>先选择接入方式，再完成登录或导入 Session，后续才能继续配置投递群组。</p></article>';
             renderAccountWorkspaceSummary();
             return;
         }
@@ -4504,18 +4568,25 @@
             const authAction = authMode === "session_import"
                 ? '<button class="ghost-btn continue-account-auth-btn" type="button" data-account-id="' + item.id + '">' + (authState === "authorized" ? "重新导入" : "继续导入") + "</button>"
                 : '<button class="ghost-btn continue-account-auth-btn" type="button" data-account-id="' + item.id + '">' + (authState === "authorized" ? "重新登录" : "继续授权") + "</button>";
-            return [
-                '<article class="mini-card account-card-item">',
-                '<div class="config-list-head"><strong>' + escapeHtml(item.label || "--") + '</strong><div class="account-pill-row">' + renderStatusPill(item.status) + '<span class="config-status-pill is-auth-' + escapeHtml(authState) + '">' + escapeHtml(accountAuthLabel(item)) + "</span></div></div>",
-                '<div class="config-list-meta">',
-                '<p>接入方式：' + escapeHtml(authMode === "session_import" ? "导入 Session" : "手机号登录") + "</p>",
-                '<p>手机号：' + escapeHtml(item.phone || "--") + "</p>",
-                '<p>承接群组：' + escapeHtml(linkedTargets.length ? linkedTargets.map(function (targetItem) { return targetItem.target_name || targetItem.target_key || "--"; }).join("、") : "当前还没有群组绑定这个账号。") + "</p>",
-                '<p>' + escapeHtml(accountAuthDescription(item)) + "</p>",
-                "</div>",
-                "<div class=\"config-list-actions\"><button class=\"ghost-btn edit-account-btn\" type=\"button\" data-account-id=\"" + item.id + "\">编辑</button>" + authAction + "<button class=\"ghost-btn toggle-account-btn\" type=\"button\" data-account-id=\"" + item.id + "\" data-next-status=\"" + statusAction.nextStatus + "\">" + statusAction.actionText + "</button>" + archiveAction + "</div>",
-                "</article>",
-            ].join("");
+            return renderConfigCardShell({
+                title: item.label || "--",
+                cardClassName: "account-card-item",
+                headerBadges: [
+                    renderStatusPill(item.status),
+                    '<span class="config-status-pill is-auth-' + escapeHtml(authState) + '">' + escapeHtml(accountAuthLabel(item)) + "</span>",
+                ],
+                summaryMarkup: renderConfigSummaryGrid([
+                    renderConfigSummaryItem("授权状态", accountAuthLabel(item)),
+                    renderConfigSummaryItem("接入方式", authMode === "session_import" ? "导入 Session" : "手机号登录"),
+                    renderConfigSummaryItem("承接群组", String(linkedTargets.length)),
+                ]),
+                detailMarkup: renderConfigDetailRows([
+                    renderConfigDetailRow("手机号", item.phone || "--"),
+                    renderConfigDetailRow("承接群组", linkedTargets.length ? linkedTargets.map(function (targetItem) { return targetItem.target_name || targetItem.target_key || "--"; }).join("、") : "当前还没有群组绑定这个账号。"),
+                    renderConfigDetailRow("授权说明", accountAuthDescription(item)),
+                ]),
+                footerMarkup: "<div class=\"config-list-actions\"><button class=\"ghost-btn edit-account-btn\" type=\"button\" data-account-id=\"" + item.id + "\">编辑</button>" + authAction + "<button class=\"ghost-btn toggle-account-btn\" type=\"button\" data-account-id=\"" + item.id + "\" data-next-status=\"" + statusAction.nextStatus + "\">" + statusAction.actionText + "</button>" + archiveAction + "</div>",
+            });
         }).join("");
         renderAccountWorkspaceSummary();
     }
@@ -4525,7 +4596,7 @@
             return;
         }
         if (!state.targets.length) {
-            targetCards.innerHTML = '<article class="mini-card"><strong>当前没有投递群组</strong><p>新增至少一个投递群组后，后续信号才有实际执行落点。</p></article>';
+            targetCards.innerHTML = '<article class="config-list-item config-list-empty-card"><strong>当前没有投递群组</strong><p>新增至少一个投递群组后，后续信号才有实际执行落点。</p></article>';
             renderTargetWorkspaceSummary();
             return;
         }
@@ -4564,22 +4635,31 @@
             const failureText = Number(failureDigest.count || 0)
                 ? ((failureDigest.details || []).join("；") + (failureDigest.last_failure_at ? (" · 最近一次 " + formatDateTime(failureDigest.last_failure_at)) : ""))
                 : "最近没有失败原因聚合。";
-            return [
-                '<article class="mini-card">',
-                '<div class="config-list-head"><strong>' + escapeHtml(item.target_name || item.target_key || "--") + "</strong>" + renderStatusPill(item.status) + "</div>",
-                '<p>目标 Key：<span class="mono-text">' + escapeHtml(item.target_key || "--") + "</span></p>",
-                '<p>托管账号：' + escapeHtml(account ? account.label : "--") + "</p>",
-                '<p>模板：' + escapeHtml(template ? template.name : "默认格式") + (template ? (" · 模板版本 " + formatDateTime(template.updated_at || template.created_at)) : "") + "</p>",
-                '<p>命中策略：' + escapeHtml(subscriptionText) + "</p>",
-                '<p class="target-test-summary">' + escapeHtml(targetTestSummary(item)) + "</p>",
-                '<p>' + escapeHtml(recentExecutionText) + "</p>",
-                '<p>' + escapeHtml("失败摘要：" + failureText) + "</p>",
-                '<ul class="target-activity-list">' + recentActivityMarkup + "</ul>",
-                '<p class="target-repair-note"><strong>' + escapeHtml(repair.title || "当前状态") + '</strong> · ' + escapeHtml(repair.detail || "--") + "</p>",
-                '<div class="target-repair-actions"><a class="panel-link" href="' + escapeHtml(repair.href || "/autobet/targets#targetsSection") + '">' + escapeHtml(repair.text || "去处理") + "</a></div>",
-                "<div class=\"config-list-actions\"><button class=\"ghost-btn edit-target-btn\" type=\"button\" data-target-id=\"" + item.id + "\">编辑</button>" + testAction + toggleAction + archiveAction + "</div>",
-                "</article>",
-            ].join("");
+            return renderConfigCardShell({
+                title: item.target_name || item.target_key || "--",
+                cardClassName: "target-card-item",
+                headerBadges: [
+                    renderStatusPill(item.status),
+                ],
+                summaryMarkup: renderConfigSummaryGrid([
+                    renderConfigSummaryItem("测试状态", targetLastTestStatus(item) ? statusText(targetLastTestStatus(item)) : "待测试"),
+                    renderConfigSummaryItem("绑定账号", account ? account.label : "--"),
+                    renderConfigSummaryItem("绑定模板", template ? template.name : "默认格式"),
+                    renderConfigSummaryItem("命中策略", String(subscriptionRefs.length)),
+                ]),
+                detailMarkup: [
+                    renderConfigDetailRows([
+                        renderConfigDetailRow("群组标识", item.target_key || "--", "mono-text"),
+                        renderConfigDetailRow("命中策略", subscriptionText),
+                        renderConfigDetailRow("测试说明", targetTestSummary(item)),
+                        renderConfigDetailRow("最近执行", recentExecutionText),
+                        renderConfigDetailRow("失败摘要", failureText),
+                    ]),
+                    '<div class="config-card-section"><span class="config-card-section-title">最近轨迹</span><ul class="target-activity-list">' + recentActivityMarkup + '</ul></div>',
+                    '<div class="config-card-section config-card-section-muted"><span class="config-card-section-title">处理建议</span><p class="target-repair-note"><strong>' + escapeHtml(repair.title || "当前状态") + '</strong> · ' + escapeHtml(repair.detail || "--") + '</p><div class="target-repair-actions"><a class="panel-link" href="' + escapeHtml(repair.href || "/autobet/targets#targetsSection") + '">' + escapeHtml(repair.text || "去处理") + '</a></div></div>',
+                ].join(""),
+                footerMarkup: "<div class=\"config-list-actions\"><button class=\"ghost-btn edit-target-btn\" type=\"button\" data-target-id=\"" + item.id + "\">编辑</button>" + testAction + toggleAction + archiveAction + "</div>",
+            });
         }).join("");
         renderTargetWorkspaceSummary();
     }
@@ -4589,7 +4669,7 @@
             return;
         }
         if (!state.subscriptions.length) {
-            subscriptionCards.innerHTML = '<article class="mini-card"><strong>当前还没有跟单策略</strong><p>建好后，来源信号才会按你的规则生成实际发单任务。</p></article>';
+            subscriptionCards.innerHTML = '<article class="config-list-item config-list-empty-card"><strong>当前还没有跟单策略</strong><p>建好后，来源信号才会按你的规则生成实际发单任务。</p></article>';
             renderSubscriptionWorkspaceSummary();
             return;
         }
@@ -4667,21 +4747,33 @@
             const resetActionText = isSubscriptionRiskBlocked(item) ? "开始新一轮" : "重置盈亏";
             const resetAction = '<button class="ghost-btn reset-subscription-runtime-btn" type="button" data-subscription-id="' + item.id + '">' + resetActionText + '</button>';
             const stoppedReasonMarkup = financial && financial.stopped_reason
-                ? ('<p class="cell-muted subscription-runtime-note">' + escapeHtml(financial.stopped_reason) + '</p>')
+                ? ('<div class="config-card-note subscription-runtime-note">' + escapeHtml(financial.stopped_reason) + '</div>')
                 : "";
-            return [
-                '<article class="mini-card">',
-                '<div class="config-list-head"><strong>' + escapeHtml(source ? source.name : ("#" + item.source_id)) + "</strong>" + renderStatusPill(item.status) + "</div>",
-                '<p>' + escapeHtml(summarizeStrategy(item.strategy || {}, item.strategy_v2 || {})) + "</p>",
-                '<p class="cell-muted">' + escapeHtml(summarizeProgression(item)) + "</p>",
-                '<p class="cell-muted">' + escapeHtml(summarizeFinancial(item)) + "</p>",
-                stoppedReasonMarkup,
-                settlementPanelMarkup,
-                '<div class="subscription-chain-meta"><span class="subscription-chain-stat">当前命中 ' + escapeHtml(String(chainState.effectiveTargets.length)) + ' 个群组</span><span class="subscription-chain-stat">已配置 ' + escapeHtml(String(chainState.configuredTargets.length)) + ' 个群组</span><span class="subscription-chain-stat">阻塞 ' + escapeHtml(String(chainState.summaries.reduce(function (total, entry) { return total + entry.count; }, 0))) + ' 项</span></div>',
-                '<div class="subscription-detail-grid"><section class="subscription-routes"><strong class="subscription-section-title">' + escapeHtml(routeTitle) + '</strong><p class="subscription-section-copy">' + escapeHtml(routeCopy) + '</p><div class="subscription-route-grid">' + routeMarkup + '</div>' + (hiddenPreviewCount ? ('<p class="subscription-more-note">另有 ' + escapeHtml(String(hiddenPreviewCount)) + ' 个群组未展开，去群组页可查看全部详情。</p>') : "") + '</section><aside class="subscription-blockers"><strong class="subscription-section-title">当前阻塞项</strong><p class="subscription-section-copy">这里会直接说明信号现在发不出去的原因，以及应该去哪一页处理。</p><div class="subscription-blocker-list">' + blockerMarkup + '</div></aside></div>',
-                "<div class=\"config-list-actions\"><button class=\"ghost-btn edit-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\">编辑</button><button class=\"ghost-btn toggle-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\" data-next-status=\"" + statusAction.nextStatus + "\">" + statusAction.actionText + "</button>" + resetAction + archiveAction + progressionActions + "</div>",
-                "</article>",
-            ].join("");
+            return renderConfigCardShell({
+                title: source ? source.name : ("#" + item.source_id),
+                cardClassName: "subscription-card-item",
+                headerBadges: [
+                    renderStatusPill(item.status),
+                ],
+                summaryMarkup: renderConfigSummaryGrid([
+                    renderConfigSummaryItem("策略方式", summarizeStrategyMode(item.strategy || {})),
+                    renderConfigSummaryItem("当前命中群组", String(chainState.effectiveTargets.length)),
+                    renderConfigSummaryItem("已配置群组", String(chainState.configuredTargets.length)),
+                    renderConfigSummaryItem("阻塞项", String(chainState.summaries.reduce(function (total, entry) { return total + entry.count; }, 0))),
+                ]),
+                detailMarkup: [
+                    renderConfigDetailRows([
+                        renderConfigDetailRow("策略摘要", summarizeStrategy(item.strategy || {}, item.strategy_v2 || {})),
+                        renderConfigDetailRow("跟单进度", summarizeProgression(item)),
+                        renderConfigDetailRow("盈亏摘要", summarizeFinancial(item)),
+                    ]),
+                    stoppedReasonMarkup,
+                    settlementPanelMarkup,
+                    '<div class="subscription-chain-meta"><span class="subscription-chain-stat">当前命中 ' + escapeHtml(String(chainState.effectiveTargets.length)) + ' 个群组</span><span class="subscription-chain-stat">已配置 ' + escapeHtml(String(chainState.configuredTargets.length)) + ' 个群组</span><span class="subscription-chain-stat">阻塞 ' + escapeHtml(String(chainState.summaries.reduce(function (total, entry) { return total + entry.count; }, 0))) + ' 项</span></div>',
+                    '<div class="subscription-detail-grid"><section class="subscription-routes"><strong class="subscription-section-title">' + escapeHtml(routeTitle) + '</strong><p class="subscription-section-copy">' + escapeHtml(routeCopy) + '</p><div class="subscription-route-grid">' + routeMarkup + '</div>' + (hiddenPreviewCount ? ('<p class="subscription-more-note">另有 ' + escapeHtml(String(hiddenPreviewCount)) + ' 个群组未展开，去群组页可查看全部详情。</p>') : "") + '</section><aside class="subscription-blockers"><strong class="subscription-section-title">当前阻塞项</strong><p class="subscription-section-copy">这里会直接说明信号现在发不出去的原因，以及应该去哪一页处理。</p><div class="subscription-blocker-list">' + blockerMarkup + '</div></aside></div>',
+                ].join(""),
+                footerMarkup: "<div class=\"config-list-actions\"><button class=\"ghost-btn edit-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\">编辑</button><button class=\"ghost-btn toggle-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\" data-next-status=\"" + statusAction.nextStatus + "\">" + statusAction.actionText + "</button>" + resetAction + archiveAction + progressionActions + "</div>",
+            });
         }).join("");
         renderSubscriptionWorkspaceSummary();
         syncBatchResolveButtonState();
