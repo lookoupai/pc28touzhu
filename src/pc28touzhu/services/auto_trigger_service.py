@@ -206,7 +206,13 @@ def list_auto_trigger_events(repository: Any, *, user_id: Any, rule_id: Any = No
 
 
 def _http_json_fetch(url: str, *, timeout: int = 10) -> dict:
-    request = Request(url, headers={"Accept": "application/json"})
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (compatible; pc28touzhu-auto-trigger/1.0)",
+        },
+    )
     with urlopen(request, timeout=timeout) as response:
         raw = response.read()
     payload = json.loads(raw.decode("utf-8"))
