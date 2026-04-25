@@ -7,16 +7,23 @@ from typing import Any, Dict, Optional
 from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
 
+from pc28touzhu.domain.subscription_strategy import upgrade_subscription_strategy
 from pc28touzhu.services.dispatch_service import dispatch_signal
 
 
 ALLOWED_METRICS = {"big_small", "odd_even", "combo"}
 ALLOWED_OPERATORS = {"lt", "lte", "gt", "gte"}
 ALLOWED_SCOPE_MODES = {"all_subscriptions", "selected_subscriptions"}
+ALLOWED_PLAY_FILTER_ACTIONS = {"keep", "matched_metric", "fixed_metric"}
 METRIC_LABELS = {
     "big_small": "大小",
     "odd_even": "单双",
     "combo": "组合",
+}
+PLAY_FILTER_KEYS_BY_METRIC = {
+    "big_small": ["big_small:大", "big_small:小"],
+    "odd_even": ["odd_even:单", "odd_even:双"],
+    "combo": ["combo:大单", "combo:大双", "combo:小单", "combo:小双"],
 }
 
 
@@ -87,9 +94,17 @@ def _normalize_conditions(value: Any) -> list[dict]:
 
 def _normalize_action(value: Any) -> dict:
     action = value if isinstance(value, dict) else {}
+    play_filter_action = str(action.get("play_filter_action") or "keep").strip() or "keep"
+    if play_filter_action not in ALLOWED_PLAY_FILTER_ACTIONS:
+        raise ValueError("action.play_filter_action 仅支持 keep、matched_metric 或 fixed_metric")
+    fixed_metric = str(action.get("fixed_metric") or "").strip()
+    if play_filter_action == "fixed_metric" and fixed_metric not in ALLOWED_METRICS:
+        raise ValueError("固定切换玩法时，action.fixed_metric 不能为空")
     return {
         "type": "restart_cycle",
         "dispatch_latest_signal": bool(action.get("dispatch_latest_signal", True)),
+        "play_filter_action": play_filter_action,
+        "fixed_metric": fixed_metric if fixed_metric in ALLOWED_METRICS else "",
     }
 
 
@@ -262,6 +277,57 @@ def _matched_conditions(rule: Dict[str, Any], performance: Dict[str, Any]) -> li
     return matched
 
 
+def _resolve_target_metric(rule: Dict[str, Any], matched_conditions: list[dict]) -> Optional[str]:
+    action = rule.get("action") if isinstance(rule.get("action"), dict) else {}
+    play_filter_action = str(action.get("play_filter_action") or "keep").strip() or "keep"
+    if play_filter_action == "keep":
+        return None
+    if play_filter_action == "fixed_metric":
+        fixed_metric = str(action.get("fixed_metric") or "").strip()
+        return fixed_metric if fixed_metric in ALLOWED_METRICS else None
+    if not matched_conditions:
+        return None
+    metric = str(matched_conditions[0].get("metric") or "").strip()
+    return metric if metric in ALLOWED_METRICS else None
+
+
+def _apply_subscription_play_filter(
+    repository: Any,
+    *,
+    rule: Dict[str, Any],
+    subscription: Dict[str, Any],
+    matched_conditions: list[dict],
+) -> Optional[dict]:
+    target_metric = _resolve_target_metric(rule, matched_conditions)
+    if target_metric is None:
+        return None
+    current = repository.get_subscription(int(subscription["id"]))
+    if not current:
+        raise ValueError("subscription_id 对应的订阅不存在")
+    strategy = upgrade_subscription_strategy(current.get("strategy_v2") or current.get("strategy"))
+    previous_play_filter = dict(strategy.get("play_filter") or {})
+    next_play_filter = {
+        "mode": "selected",
+        "selected_keys": list(PLAY_FILTER_KEYS_BY_METRIC[target_metric]),
+    }
+    strategy["play_filter"] = next_play_filter
+    updated = repository.update_subscription_record(
+        subscription_id=int(subscription["id"]),
+        user_id=int(rule["user_id"]),
+        source_id=int(current["source_id"]),
+        strategy=strategy,
+        status=str(current.get("status") or "active"),
+    )
+    if not updated:
+        raise ValueError("subscription_id 对应的订阅不存在")
+    return {
+        "target_metric": target_metric,
+        "target_metric_label": METRIC_LABELS.get(target_metric, target_metric),
+        "previous_play_filter": previous_play_filter,
+        "next_play_filter": next_play_filter,
+    }
+
+
 def _issue_distance(current_issue: str, previous_issue: str) -> Optional[int]:
     try:
         return int(str(current_issue)) - int(str(previous_issue))
@@ -292,6 +358,7 @@ def _record_event(
     reason: str,
     matched_conditions: Optional[list[dict]] = None,
     dispatch_result: Optional[dict] = None,
+    play_filter_result: Optional[dict] = None,
 ) -> Dict[str, Any]:
     source = subscription.get("source") if isinstance(subscription.get("source"), dict) else {}
     latest_issue_no = str((performance or {}).get("latest_settled_issue") or "")
@@ -307,6 +374,8 @@ def _record_event(
     }
     if dispatch_result is not None:
         snapshot["dispatch_result"] = dispatch_result
+    if play_filter_result is not None:
+        snapshot["play_filter_result"] = play_filter_result
     return repository.record_auto_trigger_event(
         rule_id=int(rule["id"]),
         user_id=int(rule["user_id"]),
@@ -386,6 +455,12 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
             if not matched:
                 continue
 
+            play_filter_result = _apply_subscription_play_filter(
+                repository,
+                rule=rule,
+                subscription=subscription,
+                matched_conditions=matched,
+            )
             repository.reset_subscription_runtime(
                 subscription_id=int(subscription["id"]),
                 user_id=int(rule["user_id"]),
@@ -407,6 +482,7 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                 reason="conditions_matched",
                 matched_conditions=matched,
                 dispatch_result=dispatch_result,
+                play_filter_result=play_filter_result,
             )
             repository.mark_auto_trigger_rule_triggered(
                 rule_id=int(rule["id"]),

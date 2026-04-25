@@ -32,7 +32,10 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             source_id=self.source["id"],
             status="active",
-            strategy={"staking_policy": {"mode": "fixed", "fixed_amount": 10}},
+            strategy={
+                "play_filter": {"mode": "selected", "selected_keys": ["big_small:大", "big_small:小"]},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+            },
         )
         self.repo.create_delivery_target_record(
             user_id=self.user_id,
@@ -117,6 +120,64 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(second["summary"]["skipped_count"], 1)
         events = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=10)
         self.assertEqual(events[0]["reason"], "subscription_has_open_run")
+
+    def test_matched_metric_action_uses_condition_order_as_priority(self):
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "按优先级切换玩法",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "combo", "operator": "lt", "threshold": 20, "min_sample_count": 100},
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100},
+                ],
+                "action": {
+                    "dispatch_latest_signal": False,
+                    "play_filter_action": "matched_metric",
+                },
+            },
+        )
+
+        result = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        updated = self.repo.get_subscription(self.subscription["id"])
+        self.assertEqual(updated["strategy_v2"]["play_filter"]["mode"], "selected")
+        self.assertEqual(
+            updated["strategy_v2"]["play_filter"]["selected_keys"],
+            ["combo:大单", "combo:大双", "combo:小单", "combo:小双"],
+        )
+        event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(event["snapshot"]["play_filter_result"]["target_metric"], "combo")
+
+    def test_fixed_metric_action_switches_to_configured_metric(self):
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "固定切到单双",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "combo", "operator": "lt", "threshold": 20, "min_sample_count": 100},
+                ],
+                "action": {
+                    "dispatch_latest_signal": False,
+                    "play_filter_action": "fixed_metric",
+                    "fixed_metric": "odd_even",
+                },
+            },
+        )
+
+        result = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        updated = self.repo.get_subscription(self.subscription["id"])
+        self.assertEqual(updated["strategy_v2"]["play_filter"]["selected_keys"], ["odd_even:单", "odd_even:双"])
 
 
 if __name__ == "__main__":

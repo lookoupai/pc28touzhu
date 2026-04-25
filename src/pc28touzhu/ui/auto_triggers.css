@@ -409,7 +409,7 @@ select[multiple].text-input {
 
 .condition-row {
     display: grid;
-    grid-template-columns: minmax(120px, 1fr) minmax(120px, 0.8fr) minmax(100px, 0.7fr) minmax(120px, 0.8fr) auto;
+    grid-template-columns: minmax(120px, 1fr) minmax(120px, 0.8fr) minmax(100px, 0.7fr) minmax(120px, 0.8fr) minmax(170px, auto);
     gap: 10px;
     align-items: end;
     padding: 12px;
@@ -418,7 +418,17 @@ select[multiple].text-input {
     background: #ffffff;
 }
 
+.condition-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
 .action-row {
+    display: grid;
+    grid-template-columns: minmax(220px, 0.9fr) minmax(180px, 0.7fr) minmax(280px, 1.2fr);
+    gap: 12px;
+    align-items: end;
     margin-top: 18px;
 }
 
@@ -532,7 +542,8 @@ select[multiple].text-input {
 
     .summary-grid,
     .form-grid,
-    .condition-row {
+    .condition-row,
+    .action-row {
         grid-template-columns: 1fr;
     }
 

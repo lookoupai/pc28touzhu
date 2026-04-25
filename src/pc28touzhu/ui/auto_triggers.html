@@ -100,7 +100,7 @@
                             <div class="section-head">
                                 <div>
                                     <p class="panel-kicker">条件</p>
-                                    <h3>任一条件命中即触发</h3>
+                                    <h3>任一条件命中即触发，越靠上优先级越高</h3>
                                 </div>
                                 <button id="addConditionBtn" class="secondary-btn" type="button">添加条件</button>
                             </div>
@@ -108,6 +108,22 @@
                         </div>
 
                         <div class="action-row">
+                            <label class="field">
+                                <span>触发后玩法</span>
+                                <select id="playFilterActionSelect" class="text-input" name="play_filter_action">
+                                    <option value="keep">保持原玩法</option>
+                                    <option value="matched_metric">切换到首个命中条件玩法</option>
+                                    <option value="fixed_metric">固定切换到指定玩法</option>
+                                </select>
+                            </label>
+                            <label id="fixedMetricField" class="field">
+                                <span>固定玩法</span>
+                                <select class="text-input" name="fixed_metric">
+                                    <option value="big_small">大小</option>
+                                    <option value="odd_even">单双</option>
+                                    <option value="combo">组合</option>
+                                </select>
+                            </label>
                             <label class="check-row">
                                 <input name="dispatch_latest_signal" type="checkbox" checked>
                                 <span>触发后立即尝试派发该来源最新同期开奖信号</span>

@@ -98,6 +98,18 @@
         return (metric ? metric[1] : condition.metric) + "近100期命中率" + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "%";
     }
 
+    function actionText(action) {
+        const payload = action || {};
+        if (payload.play_filter_action === "matched_metric") {
+            return "命中后切换到首个命中条件玩法";
+        }
+        if (payload.play_filter_action === "fixed_metric") {
+            const metric = metricOptions.find(function (item) { return item[0] === payload.fixed_metric; });
+            return "命中后固定切换到" + (metric ? metric[1] : "指定玩法");
+        }
+        return "命中后保持原玩法";
+    }
+
     function renderRuleList() {
         const list = $("ruleList");
         if (!state.rules.length) {
@@ -112,6 +124,7 @@
                 '<article class="rule-card' + selected + '">' +
                     '<div class="rule-card-head"><div><strong>' + escapeHtml(rule.name) + '</strong><p class="meta-line">' + escapeHtml(scope) + '</p></div>' + statusPill(rule.status) + '</div>' +
                     '<p class="meta-line">' + escapeHtml(conditions) + '</p>' +
+                    '<p class="meta-line">' + escapeHtml(actionText(rule.action)) + '</p>' +
                     '<p class="meta-line">冷却 <span class="mono">' + escapeHtml(rule.cooldown_issues) + '</span> 期，上次触发 <span class="mono">' + escapeHtml(rule.last_triggered_issue_no || "--") + '</span></p>' +
                     '<div class="rule-actions">' +
                         '<button class="tiny-btn edit-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">编辑</button>' +
@@ -160,7 +173,11 @@
                 '<label class="field"><span>比较</span><select class="text-input condition-operator">' + options(operatorOptions, item.operator) + '</select></label>' +
                 '<label class="field"><span>阈值 %</span><input class="text-input condition-threshold" type="number" min="0" max="100" step="0.01" value="' + escapeHtml(item.threshold) + '"></label>' +
                 '<label class="field"><span>最少样本</span><input class="text-input condition-sample" type="number" min="1" step="1" value="' + escapeHtml(item.min_sample_count || 100) + '"></label>' +
-                '<button class="ghost-btn remove-condition-btn" type="button">删除</button>' +
+                '<div class="condition-actions">' +
+                    '<button class="ghost-btn move-condition-up-btn" type="button">上移</button>' +
+                    '<button class="ghost-btn move-condition-down-btn" type="button">下移</button>' +
+                    '<button class="ghost-btn remove-condition-btn" type="button">删除</button>' +
+                '</div>' +
             '</div>';
     }
 
@@ -178,11 +195,14 @@
         form.elements.scope_mode.value = item.scope_mode || "selected_subscriptions";
         form.elements.cooldown_issues.value = String(item.cooldown_issues == null ? 10 : item.cooldown_issues);
         form.elements.dispatch_latest_signal.checked = item.action ? item.action.dispatch_latest_signal !== false : true;
+        form.elements.play_filter_action.value = item.action && item.action.play_filter_action ? item.action.play_filter_action : "keep";
+        form.elements.fixed_metric.value = item.action && item.action.fixed_metric ? item.action.fixed_metric : "big_small";
         renderSubscriptionOptions(item.subscription_ids || []);
         renderConditions(item.conditions || []);
         $("editorTitle").textContent = item.id ? "编辑触发规则" : "新建触发规则";
         $("cancelEditBtn").hidden = !item.id;
         updateScopeVisibility();
+        updateActionVisibility();
         renderRuleList();
         setStatus("", false);
     }
@@ -190,6 +210,10 @@
     function updateScopeVisibility() {
         const isAll = $("scopeModeSelect").value === "all_subscriptions";
         $("subscriptionSelectField").hidden = isAll;
+    }
+
+    function updateActionVisibility() {
+        $("fixedMetricField").hidden = $("playFilterActionSelect").value !== "fixed_metric";
     }
 
     function collectConditions() {
@@ -215,6 +239,8 @@
             conditions: collectConditions(),
             action: {
                 dispatch_latest_signal: form.elements.dispatch_latest_signal.checked,
+                play_filter_action: form.elements.play_filter_action.value,
+                fixed_metric: form.elements.fixed_metric.value,
             },
         };
     }
@@ -283,6 +309,7 @@
     function attachEvents() {
         $("ruleForm").addEventListener("submit", saveRule);
         $("scopeModeSelect").addEventListener("change", updateScopeVisibility);
+        $("playFilterActionSelect").addEventListener("change", updateActionVisibility);
         $("refreshBtn").addEventListener("click", loadData);
         $("newRuleBtn").addEventListener("click", function () { resetForm(); });
         $("cancelEditBtn").addEventListener("click", function () { resetForm(); });
@@ -306,6 +333,20 @@
                 const rows = document.querySelectorAll(".condition-row");
                 if (rows.length > 1) {
                     target.closest(".condition-row").remove();
+                }
+                return;
+            }
+            if (target.classList.contains("move-condition-up-btn")) {
+                const row = target.closest(".condition-row");
+                if (row && row.previousElementSibling) {
+                    row.parentElement.insertBefore(row, row.previousElementSibling);
+                }
+                return;
+            }
+            if (target.classList.contains("move-condition-down-btn")) {
+                const row = target.closest(".condition-row");
+                if (row && row.nextElementSibling) {
+                    row.parentElement.insertBefore(row.nextElementSibling, row);
                 }
                 return;
             }
