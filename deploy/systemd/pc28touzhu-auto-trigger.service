@@ -1,0 +1,16 @@
+[Unit]
+Description=pc28touzhu Auto Trigger Worker
+After=network.target pc28touzhu-platform.service
+
+[Service]
+Type=simple
+WorkingDirectory=/www/wwwroot/pc28touzhu
+EnvironmentFile=/www/wwwroot/pc28touzhu/.env
+ExecStart=/usr/bin/env AUTO_TRIGGER_ONCE=false /www/wwwroot/pc28touzhu/deploy/systemd/pc28-python.sh platform_auto_trigger.py
+Restart=always
+RestartSec=5
+User=www
+Group=www
+
+[Install]
+WantedBy=multi-user.target

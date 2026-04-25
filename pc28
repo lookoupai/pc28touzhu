@@ -48,6 +48,7 @@ usage() {
   ./pc28 executor [executor_id]
   ./pc28 alert
   ./pc28 source-sync
+  ./pc28 auto-trigger
   ./pc28 settlement
   ./pc28 bot
   ./pc28 report
@@ -55,7 +56,7 @@ usage() {
   ./pc28 test
 
 说明:
-  - systemd 命令默认管理 platform + source-sync + auto-settlement + alert + telegram-bot + telegram-report
+  - systemd 命令默认管理 platform + source-sync + auto-trigger + auto-settlement + alert + telegram-bot + telegram-report
   - 传入 executor_id 后会额外管理执行器实例
   - 本地运行默认 executor_id: ${default_executor_id}
 
@@ -111,6 +112,9 @@ case "${COMMAND}" in
         ;;
     source-sync)
         exec env SOURCE_SYNC_ONCE=false "${PYTHON_LAUNCHER}" "platform_source_sync.py"
+        ;;
+    auto-trigger|trigger)
+        exec env AUTO_TRIGGER_ONCE=false "${PYTHON_LAUNCHER}" "platform_auto_trigger.py"
         ;;
     settlement)
         exec env PC28_AUTO_SETTLEMENT_ENABLED=true PC28_AUTO_SETTLEMENT_ONCE=false "${PYTHON_LAUNCHER}" -m "pc28touzhu.pc28_auto_settlement_worker"

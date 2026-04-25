@@ -9,6 +9,7 @@ ENV_FILE="${PROJECT_ROOT}/.env"
 
 PLATFORM_SERVICE="pc28touzhu-platform.service"
 SOURCE_SYNC_SERVICE="pc28touzhu-source-sync.service"
+AUTO_TRIGGER_SERVICE="pc28touzhu-auto-trigger.service"
 ALERT_SERVICE="pc28touzhu-alert-notifier.service"
 BOT_SERVICE="pc28touzhu-telegram-bot.service"
 REPORT_SERVICE="pc28touzhu-telegram-report.service"
@@ -26,7 +27,7 @@ usage() {
   "${PROJECT_ROOT}/deploy/systemd/pc28ctl.sh" logs [executor_id]
 
 说明:
-  - 默认管理 platform + source-sync + auto-settlement + alert + telegram-bot + telegram-report 六个服务
+  - 默认管理 platform + source-sync + auto-trigger + auto-settlement + alert + telegram-bot + telegram-report 七个服务
   - 传入 executor_id 后会额外管理对应执行器实例
   - 例如: sudo "${PROJECT_ROOT}/deploy/systemd/pc28ctl.sh" up "executor-001"
 EOF
@@ -58,6 +59,7 @@ collect_services() {
     local executor_id="${1:-}"
     printf "%s\n" "${PLATFORM_SERVICE}"
     printf "%s\n" "${SOURCE_SYNC_SERVICE}"
+    printf "%s\n" "${AUTO_TRIGGER_SERVICE}"
     printf "%s\n" "${AUTO_SETTLEMENT_SERVICE}"
     printf "%s\n" "${ALERT_SERVICE}"
     printf "%s\n" "${BOT_SERVICE}"
@@ -72,6 +74,7 @@ sync_units() {
     require_env_file
     cp -f "${SYSTEMD_SOURCE_DIR}/${PLATFORM_SERVICE}" "${SYSTEMD_TARGET_DIR}/${PLATFORM_SERVICE}"
     cp -f "${SYSTEMD_SOURCE_DIR}/${SOURCE_SYNC_SERVICE}" "${SYSTEMD_TARGET_DIR}/${SOURCE_SYNC_SERVICE}"
+    cp -f "${SYSTEMD_SOURCE_DIR}/${AUTO_TRIGGER_SERVICE}" "${SYSTEMD_TARGET_DIR}/${AUTO_TRIGGER_SERVICE}"
     cp -f "${SYSTEMD_SOURCE_DIR}/${AUTO_SETTLEMENT_SERVICE}" "${SYSTEMD_TARGET_DIR}/${AUTO_SETTLEMENT_SERVICE}"
     cp -f "${SYSTEMD_SOURCE_DIR}/${ALERT_SERVICE}" "${SYSTEMD_TARGET_DIR}/${ALERT_SERVICE}"
     cp -f "${SYSTEMD_SOURCE_DIR}/${BOT_SERVICE}" "${SYSTEMD_TARGET_DIR}/${BOT_SERVICE}"

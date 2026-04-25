@@ -18,6 +18,15 @@ from pc28touzhu.auth import (
     verify_password,
 )
 from pc28touzhu.services.job_service import heartbeat_executor, pull_jobs, report_job
+from pc28touzhu.services.auto_trigger_service import (
+    create_auto_trigger_rule,
+    delete_auto_trigger_rule,
+    list_auto_trigger_events,
+    list_auto_trigger_rules,
+    run_auto_trigger_cycle,
+    update_auto_trigger_rule,
+    update_auto_trigger_rule_status,
+)
 from pc28touzhu.services.platform_service import (
     begin_telegram_account_login,
     create_user,
@@ -300,6 +309,11 @@ class PlatformApiApplication:
                 return _json_response(start_response, 405, {"error": "method not allowed"})
             return _text_response(start_response, 200, _load_ui_html_file("autobet.html"), "text/html; charset=utf-8")
 
+        if path == "/auto-triggers":
+            if method != "GET":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            return _text_response(start_response, 200, _load_ui_html_file("auto_triggers.html"), "text/html; charset=utf-8")
+
         if path == "/alerts":
             if method != "GET":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
@@ -347,6 +361,21 @@ class PlatformApiApplication:
                 start_response,
                 200,
                 _load_ui_file("autobet.js"),
+                "application/javascript; charset=utf-8",
+            )
+
+        if path == "/assets/auto_triggers.css":
+            if method != "GET":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            return _text_response(start_response, 200, _load_ui_file("auto_triggers.css"), "text/css; charset=utf-8")
+
+        if path == "/assets/auto_triggers.js":
+            if method != "GET":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            return _text_response(
+                start_response,
+                200,
+                _load_ui_file("auto_triggers.js"),
                 "application/javascript; charset=utf-8",
             )
 
@@ -736,6 +765,75 @@ class PlatformApiApplication:
                 payload = create_subscription(self.repository, payload={**_read_json_body(environ), "user_id": current_user["id"]})
                 return _json_response(start_response, 200, payload)
             return _json_response(start_response, 405, {"error": "method not allowed"})
+
+        if path == "/api/platform/auto-trigger-rules":
+            if method == "GET":
+                payload = list_auto_trigger_rules(self.repository, user_id=current_user["id"])
+                return _json_response(start_response, 200, payload)
+            if method == "POST":
+                payload = create_auto_trigger_rule(
+                    self.repository,
+                    user_id=current_user["id"],
+                    payload=_read_json_body(environ),
+                )
+                return _json_response(start_response, 200, payload)
+            return _json_response(start_response, 405, {"error": "method not allowed"})
+
+        if path == "/api/platform/auto-trigger-events":
+            if method != "GET":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            payload = list_auto_trigger_events(
+                self.repository,
+                user_id=current_user["id"],
+                rule_id=_query_value(environ, "rule_id"),
+                limit=_query_value(environ, "limit", "50"),
+            )
+            return _json_response(start_response, 200, payload)
+
+        if path == "/api/platform/auto-trigger-rules/run-once":
+            if method != "POST":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            body = _read_json_body(environ)
+            payload = run_auto_trigger_cycle(
+                self.repository,
+                user_id=current_user["id"],
+                rule_id=body.get("rule_id"),
+            )
+            return _json_response(start_response, 200, payload)
+
+        auto_trigger_rule_prefix = "/api/platform/auto-trigger-rules/"
+        if path.startswith(auto_trigger_rule_prefix) and path.endswith("/status"):
+            if method != "POST":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            rule_id = path[len(auto_trigger_rule_prefix) : -len("/status")]
+            payload = update_auto_trigger_rule_status(
+                self.repository,
+                rule_id=rule_id,
+                user_id=current_user["id"],
+                status=_read_json_body(environ).get("status"),
+            )
+            return _json_response(start_response, 200, payload)
+        if path.startswith(auto_trigger_rule_prefix) and path.endswith("/delete"):
+            if method != "POST":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            rule_id = path[len(auto_trigger_rule_prefix) : -len("/delete")]
+            payload = delete_auto_trigger_rule(
+                self.repository,
+                rule_id=rule_id,
+                user_id=current_user["id"],
+            )
+            return _json_response(start_response, 200, payload)
+        if path.startswith(auto_trigger_rule_prefix):
+            if method != "POST":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            rule_id = path[len(auto_trigger_rule_prefix) :]
+            payload = update_auto_trigger_rule(
+                self.repository,
+                rule_id=rule_id,
+                user_id=current_user["id"],
+                payload=_read_json_body(environ),
+            )
+            return _json_response(start_response, 200, payload)
 
         if path == "/api/platform/telegram-binding":
             if method == "GET":

@@ -112,13 +112,18 @@ def _build_stake_plan(strategy: Dict[str, Any], signal: Dict[str, Any], current_
     return stake_plan
 
 
-def dispatch_signal(repository: Any, signal_id: int) -> Dict[str, Any]:
+def dispatch_signal(repository: Any, signal_id: int, *, subscription_id: int | None = None) -> Dict[str, Any]:
     signal = repository.get_signal(signal_id)
     if not signal:
         raise ValueError("signal 不存在")
 
+    raw_candidates = (
+        repository.list_dispatch_candidates_for_subscription(signal_id, subscription_id=subscription_id)
+        if subscription_id is not None and hasattr(repository, "list_dispatch_candidates_for_subscription")
+        else repository.list_dispatch_candidates(signal_id)
+    )
     candidates = [
-        item for item in repository.list_dispatch_candidates(signal_id)
+        item for item in raw_candidates
         if strategy_matches_signal(item.get("strategy_json"), signal)
     ]
     now = _utc_now()
@@ -213,6 +218,7 @@ def dispatch_signal(repository: Any, signal_id: int) -> Dict[str, Any]:
 
     return {
         "signal_id": int(signal_id),
+        "subscription_id": int(subscription_id) if subscription_id is not None else None,
         "candidate_count": len(candidates),
         "created_count": created_count,
         "existing_count": existing_count,

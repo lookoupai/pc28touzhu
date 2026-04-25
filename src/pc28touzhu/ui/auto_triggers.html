@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>自动触发跟单 - pc28touzhu</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Noto+Sans+SC:wght@400;500;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/assets/auto_triggers.css">
+</head>
+<body>
+    <div class="page-shell">
+        <header class="topbar">
+            <a class="brand" href="/">
+                <span class="brand-mark">P28</span>
+                <span class="brand-copy">
+                    <strong>pc28touzhu</strong>
+                    <span>自动触发跟单</span>
+                </span>
+            </a>
+            <nav class="topbar-actions">
+                <button id="refreshBtn" class="nav-link nav-button" type="button">刷新</button>
+                <a class="nav-link" href="/autobet">总控台</a>
+                <a class="nav-link" href="/records">执行记录</a>
+                <a class="nav-link" href="/alerts">异常提醒</a>
+                <button id="accountMenuBtn" class="nav-link nav-button" type="button" data-auth-account-label aria-haspopup="dialog" aria-controls="accountDialog">登录</button>
+            </nav>
+        </header>
+
+        <main class="layout">
+            <section class="page-head">
+                <div>
+                    <p class="eyebrow">Auto Trigger</p>
+                    <h1>按来源表现自动开始新一轮跟单</h1>
+                    <p class="head-copy">独立管理触发条件、冷却和动作。规则命中后会先确认跟单方案没有运行中事件，再重置止盈止损状态并开始新一轮。</p>
+                </div>
+                <div id="summaryGrid" class="summary-grid"></div>
+            </section>
+
+            <section class="workspace">
+                <aside class="rule-list-panel">
+                    <div class="panel-head">
+                        <div>
+                            <p class="panel-kicker">规则</p>
+                            <h2>自动触发规则</h2>
+                        </div>
+                        <button id="newRuleBtn" class="secondary-btn" type="button">新建</button>
+                    </div>
+                    <div id="ruleList" class="rule-list"></div>
+                </aside>
+
+                <section class="editor-panel">
+                    <form id="ruleForm" class="rule-form">
+                        <input type="hidden" name="rule_id">
+                        <div class="panel-head">
+                            <div>
+                                <p class="panel-kicker">配置</p>
+                                <h2 id="editorTitle">新建触发规则</h2>
+                            </div>
+                            <div class="form-actions">
+                                <button id="cancelEditBtn" class="ghost-btn" type="button" hidden>取消</button>
+                                <button id="saveRuleBtn" class="primary-btn" type="submit">保存规则</button>
+                            </div>
+                        </div>
+
+                        <div id="statusMessage" class="status-message" role="status"></div>
+
+                        <div class="form-grid">
+                            <label class="field wide">
+                                <span>规则名称</span>
+                                <input class="text-input" name="name" type="text" placeholder="例如：低命中自动跟单" required>
+                            </label>
+                            <label class="field">
+                                <span>状态</span>
+                                <select class="text-input" name="status">
+                                    <option value="active">启用</option>
+                                    <option value="inactive">停用</option>
+                                    <option value="archived">归档</option>
+                                </select>
+                            </label>
+                            <label class="field">
+                                <span>冷却期数</span>
+                                <input class="text-input" name="cooldown_issues" type="number" min="0" step="1" value="10">
+                            </label>
+                            <label class="field wide">
+                                <span>作用范围</span>
+                                <select id="scopeModeSelect" class="text-input" name="scope_mode">
+                                    <option value="selected_subscriptions">指定跟单方案</option>
+                                    <option value="all_subscriptions">全部已配置跟单方案</option>
+                                </select>
+                            </label>
+                            <label class="field wide" id="subscriptionSelectField">
+                                <span>跟单方案</span>
+                                <select id="subscriptionSelect" class="text-input" name="subscription_ids" multiple size="7"></select>
+                            </label>
+                        </div>
+
+                        <div class="condition-panel">
+                            <div class="section-head">
+                                <div>
+                                    <p class="panel-kicker">条件</p>
+                                    <h3>任一条件命中即触发</h3>
+                                </div>
+                                <button id="addConditionBtn" class="secondary-btn" type="button">添加条件</button>
+                            </div>
+                            <div id="conditionRows" class="condition-rows"></div>
+                        </div>
+
+                        <div class="action-row">
+                            <label class="check-row">
+                                <input name="dispatch_latest_signal" type="checkbox" checked>
+                                <span>触发后立即尝试派发该来源最新同期开奖信号</span>
+                            </label>
+                        </div>
+                    </form>
+                </section>
+            </section>
+
+            <section class="events-panel">
+                <div class="panel-head">
+                    <div>
+                        <p class="panel-kicker">记录</p>
+                        <h2>最近触发记录</h2>
+                    </div>
+                    <button id="runOnceBtn" class="secondary-btn" type="button">立即检查</button>
+                </div>
+                <div id="eventList" class="event-list"></div>
+            </section>
+        </main>
+    </div>
+
+    <dialog id="accountDialog" class="account-dialog" aria-label="账户">
+        <div class="account-dialog-shell">
+            <div class="account-dialog-header">
+                <div>
+                    <p class="panel-kicker">账户</p>
+                    <h2 data-auth-panel-title>登录与账户</h2>
+                </div>
+                <button id="accountDialogCloseBtn" class="ghost-btn account-dialog-close" type="button">关闭</button>
+            </div>
+            <div class="account-card">
+                <strong id="currentUsername">未登录</strong>
+                <span id="currentUserMeta">请先注册或登录</span>
+            </div>
+            <form id="authForm" class="auth-form">
+                <label>
+                    <span>用户名</span>
+                    <input id="authUsername" class="text-input" type="text" autocomplete="username" required>
+                </label>
+                <label>
+                    <span>邮箱</span>
+                    <input id="authEmail" class="text-input" type="email" autocomplete="email">
+                </label>
+                <label>
+                    <span>密码</span>
+                    <input id="authPassword" class="text-input" type="password" autocomplete="current-password" required>
+                </label>
+                <div class="form-actions">
+                    <button id="registerBtn" class="ghost-btn" type="button">注册</button>
+                    <button id="loginBtn" class="primary-btn" type="button">登录</button>
+                    <button id="logoutBtn" class="ghost-btn danger-btn" type="button" hidden>退出</button>
+                </div>
+            </form>
+        </div>
+    </dialog>
+
+    <script src="/assets/auth-panel.js"></script>
+    <script src="/assets/account-menu.js"></script>
+    <script src="/assets/auth-guard.js"></script>
+    <script src="/assets/auto_triggers.js"></script>
+</body>
+</html>

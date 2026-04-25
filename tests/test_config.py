@@ -42,6 +42,9 @@ class RuntimeConfigTests(unittest.TestCase):
             "SOURCE_SYNC_ENABLED",
             "SOURCE_SYNC_INTERVAL_SECONDS",
             "SOURCE_SYNC_ONCE",
+            "AUTO_TRIGGER_ENABLED",
+            "AUTO_TRIGGER_INTERVAL_SECONDS",
+            "AUTO_TRIGGER_ONCE",
             "PLATFORM_BASE_URL",
             "EXECUTOR_ID",
             "PULL_LIMIT",
@@ -92,6 +95,9 @@ class RuntimeConfigTests(unittest.TestCase):
                         "SOURCE_SYNC_ENABLED=true",
                         "SOURCE_SYNC_INTERVAL_SECONDS=25",
                         "SOURCE_SYNC_ONCE=false",
+                        "AUTO_TRIGGER_ENABLED=true",
+                        "AUTO_TRIGGER_INTERVAL_SECONDS=35",
+                        "AUTO_TRIGGER_ONCE=false",
                         "PLATFORM_BASE_URL=http://127.0.0.1:35200",
                         "EXECUTOR_ID=test-exec",
                         "PULL_LIMIT=25",
@@ -156,6 +162,9 @@ class RuntimeConfigTests(unittest.TestCase):
                 self.assertTrue(config.source_sync.enabled)
                 self.assertEqual(config.source_sync.interval_seconds, 25)
                 self.assertFalse(config.source_sync.once)
+                self.assertTrue(config.auto_trigger.enabled)
+                self.assertEqual(config.auto_trigger.interval_seconds, 35)
+                self.assertFalse(config.auto_trigger.once)
             finally:
                 for key, value in original_env.items():
                     if value is None:

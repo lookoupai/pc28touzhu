@@ -58,6 +58,16 @@ def _safe_json_loads(value: Optional[str]) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def _safe_json_loads_list(value: Optional[str]) -> list:
+    if not value:
+        return []
+    try:
+        payload = json.loads(value)
+    except Exception:
+        return []
+    return payload if isinstance(payload, list) else []
+
+
 def _safe_json_dumps(value: Any) -> str:
     try:
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
@@ -458,6 +468,45 @@ class DatabaseRepository:
             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS auto_trigger_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'active',
+            scope_mode TEXT NOT NULL DEFAULT 'selected_subscriptions',
+            subscription_ids_json TEXT NOT NULL DEFAULT '[]',
+            condition_mode TEXT NOT NULL DEFAULT 'any',
+            conditions_json TEXT NOT NULL DEFAULT '[]',
+            action_json TEXT NOT NULL DEFAULT '{}',
+            cooldown_issues INTEGER NOT NULL DEFAULT 10,
+            last_triggered_issue_no TEXT NOT NULL DEFAULT '',
+            last_triggered_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS auto_trigger_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            subscription_id INTEGER,
+            source_id INTEGER,
+            predictor_id INTEGER,
+            latest_issue_no TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'triggered',
+            reason TEXT NOT NULL DEFAULT '',
+            matched_conditions_json TEXT NOT NULL DEFAULT '[]',
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            FOREIGN KEY(rule_id) REFERENCES auto_trigger_rules(id),
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id),
+            FOREIGN KEY(source_id) REFERENCES signal_sources(id)
+        )
+        """,
         "CREATE INDEX IF NOT EXISTS idx_execution_jobs_status_time ON execution_jobs(status, execute_after, expire_at)",
         "CREATE INDEX IF NOT EXISTS idx_execution_attempts_job ON execution_attempts(job_id, attempt_no)",
         "CREATE INDEX IF NOT EXISTS idx_platform_alert_records_status_seen ON platform_alert_records(status, last_seen_at)",
@@ -468,6 +517,8 @@ class DatabaseRepository:
         "CREATE INDEX IF NOT EXISTS idx_subscription_financial_state_user ON subscription_financial_state(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_subscription_daily_stats_date_user ON subscription_daily_stats(stat_date, user_id)",
         "CREATE INDEX IF NOT EXISTS idx_subscription_daily_stats_date_net ON subscription_daily_stats(stat_date, net_profit)",
+        "CREATE INDEX IF NOT EXISTS idx_auto_trigger_rules_user_status ON auto_trigger_rules(user_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_auto_trigger_events_user_time ON auto_trigger_events(user_id, created_at)",
     ]
 
     def __init__(self, db_path: str = "pc28touzhu.db"):
@@ -771,6 +822,45 @@ class DatabaseRepository:
             "settled_at": row.get("settled_at"),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
+        }
+
+    def _serialize_auto_trigger_rule_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": int(row["id"]),
+            "user_id": int(row["user_id"]),
+            "name": str(row.get("name") or ""),
+            "status": str(row.get("status") or "active"),
+            "scope_mode": str(row.get("scope_mode") or "selected_subscriptions"),
+            "subscription_ids": [
+                int(item) for item in _safe_json_loads_list(row.get("subscription_ids_json"))
+                if str(item).strip().isdigit()
+            ],
+            "condition_mode": str(row.get("condition_mode") or "any"),
+            "conditions": _safe_json_loads_list(row.get("conditions_json")),
+            "action": _safe_json_loads(row.get("action_json")),
+            "cooldown_issues": int(row.get("cooldown_issues") or 0),
+            "last_triggered_issue_no": str(row.get("last_triggered_issue_no") or ""),
+            "last_triggered_at": row.get("last_triggered_at"),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+
+    def _serialize_auto_trigger_event_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": int(row["id"]),
+            "rule_id": int(row["rule_id"]),
+            "user_id": int(row["user_id"]),
+            "subscription_id": int(row["subscription_id"]) if row.get("subscription_id") is not None else None,
+            "source_id": int(row["source_id"]) if row.get("source_id") is not None else None,
+            "predictor_id": int(row["predictor_id"]) if row.get("predictor_id") is not None else None,
+            "latest_issue_no": str(row.get("latest_issue_no") or ""),
+            "status": str(row.get("status") or ""),
+            "reason": str(row.get("reason") or ""),
+            "matched_conditions": _safe_json_loads_list(row.get("matched_conditions_json")),
+            "snapshot": _safe_json_loads(row.get("snapshot_json")),
+            "created_at": row.get("created_at"),
+            "rule_name": str(row.get("rule_name") or "") if "rule_name" in row else "",
+            "source_name": str(row.get("source_name") or "") if "source_name" in row else "",
         }
 
     def _serialize_signal_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
@@ -1964,6 +2054,341 @@ class DatabaseRepository:
             (int(user_id),),
         )
         return [self._serialize_subscription_row(row) for row in rows]
+
+    def list_auto_trigger_candidate_subscriptions(
+        self,
+        *,
+        user_id: int,
+        subscription_ids: Optional[list[int]] = None,
+    ) -> list[Dict[str, Any]]:
+        params: list[Any] = [int(user_id)]
+        subscription_filter = ""
+        normalized_ids = [int(item) for item in (subscription_ids or []) if int(item) > 0]
+        if normalized_ids:
+            subscription_filter = " AND us.id IN (%s)" % ",".join(["?"] * len(normalized_ids))
+            params.extend(normalized_ids)
+        rows = self._fetch_all(
+            """
+            SELECT
+                us.*,
+                ss.name AS source_name,
+                ss.status AS source_status,
+                ss.source_type AS source_type,
+                ss.config_json AS source_config_json,
+                sps.current_step AS progression_current_step,
+                sps.last_signal_id AS progression_last_signal_id,
+                sps.last_issue_no AS progression_last_issue_no,
+                sps.last_result_type AS progression_last_result_type,
+                sfs.user_id AS financial_user_id,
+                sfs.realized_profit AS financial_realized_profit,
+                sfs.realized_loss AS financial_realized_loss,
+                sfs.net_profit AS financial_net_profit,
+                sfs.threshold_status AS financial_threshold_status,
+                sfs.stopped_reason AS financial_stopped_reason,
+                sfs.baseline_reset_at AS financial_baseline_reset_at,
+                sfs.baseline_reset_note AS financial_baseline_reset_note,
+                sfs.last_settled_event_id AS financial_last_settled_event_id,
+                sfs.last_settled_at AS financial_last_settled_at,
+                sfs.updated_at AS financial_updated_at,
+                pending.id AS pending_event_id,
+                pending.issue_no AS pending_issue_no,
+                pending.status AS pending_status
+            FROM user_subscriptions us
+            JOIN signal_sources ss ON ss.id = us.source_id
+            LEFT JOIN subscription_progression_state sps ON sps.subscription_id = us.id
+            LEFT JOIN subscription_financial_state sfs ON sfs.subscription_id = us.id
+            LEFT JOIN subscription_progression_events pending ON pending.id = (
+                SELECT spe.id
+                FROM subscription_progression_events spe
+                WHERE spe.subscription_id = us.id
+                  AND spe.status IN ('pending', 'placed')
+                ORDER BY spe.id DESC
+                LIMIT 1
+            )
+            WHERE us.user_id = ?
+            """ + subscription_filter + """
+            ORDER BY us.id ASC
+            """,
+            tuple(params),
+        )
+        items = []
+        for row in rows:
+            item = self._serialize_subscription_row(row)
+            item["source"] = {
+                "id": int(item["source_id"]),
+                "name": str(row.get("source_name") or ""),
+                "status": str(row.get("source_status") or ""),
+                "source_type": str(row.get("source_type") or ""),
+                "config": _safe_json_loads(row.get("source_config_json")),
+            }
+            items.append(item)
+        return items
+
+    def subscription_has_open_run(self, *, subscription_id: int, user_id: int) -> Dict[str, Any]:
+        self.expire_due_jobs()
+        row = self._fetch_one(
+            """
+            SELECT
+                (SELECT COUNT(1)
+                 FROM subscription_progression_events
+                 WHERE subscription_id = ? AND user_id = ? AND status IN ('pending', 'placed')) AS open_event_count,
+                (SELECT COUNT(1)
+                 FROM execution_jobs
+                 WHERE subscription_id = ? AND user_id = ? AND status = 'pending') AS pending_job_count
+            """,
+            (int(subscription_id), int(user_id), int(subscription_id), int(user_id)),
+        ) or {}
+        open_event_count = int(row.get("open_event_count") or 0)
+        pending_job_count = int(row.get("pending_job_count") or 0)
+        return {
+            "has_open_run": open_event_count > 0 or pending_job_count > 0,
+            "open_event_count": open_event_count,
+            "pending_job_count": pending_job_count,
+        }
+
+    def create_auto_trigger_rule_record(
+        self,
+        *,
+        user_id: int,
+        name: str,
+        status: str = "active",
+        scope_mode: str = "selected_subscriptions",
+        subscription_ids: Optional[list[int]] = None,
+        condition_mode: str = "any",
+        conditions: Optional[list[dict]] = None,
+        action: Optional[dict] = None,
+        cooldown_issues: int = 10,
+    ) -> Dict[str, Any]:
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO auto_trigger_rules(
+                    user_id, name, status, scope_mode, subscription_ids_json, condition_mode,
+                    conditions_json, action_json, cooldown_issues, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(user_id),
+                    name,
+                    status,
+                    scope_mode,
+                    _safe_json_dumps(subscription_ids or []),
+                    condition_mode,
+                    _safe_json_dumps(conditions or []),
+                    _safe_json_dumps(action or {}),
+                    int(cooldown_issues),
+                    now,
+                    now,
+                ),
+            )
+            rule_id = int(cur.lastrowid)
+        return self.get_auto_trigger_rule(rule_id) or {}
+
+    def get_auto_trigger_rule(self, rule_id: int) -> Optional[Dict[str, Any]]:
+        row = self._fetch_one("SELECT * FROM auto_trigger_rules WHERE id = ?", (int(rule_id),))
+        return self._serialize_auto_trigger_rule_row(row) if row else None
+
+    def list_auto_trigger_rules(self, *, user_id: Optional[int] = None, status: Optional[str] = None) -> list[Dict[str, Any]]:
+        clauses = []
+        params: list[Any] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(int(user_id))
+        if status:
+            clauses.append("status = ?")
+            params.append(str(status))
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = self._fetch_all(
+            "SELECT * FROM auto_trigger_rules" + where + " ORDER BY id DESC",
+            tuple(params),
+        )
+        return [self._serialize_auto_trigger_rule_row(row) for row in rows]
+
+    def update_auto_trigger_rule_record(
+        self,
+        *,
+        rule_id: int,
+        user_id: int,
+        name: str,
+        status: str,
+        scope_mode: str,
+        subscription_ids: Optional[list[int]],
+        condition_mode: str,
+        conditions: Optional[list[dict]],
+        action: Optional[dict],
+        cooldown_issues: int,
+    ) -> Optional[Dict[str, Any]]:
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE auto_trigger_rules
+                SET name = ?,
+                    status = ?,
+                    scope_mode = ?,
+                    subscription_ids_json = ?,
+                    condition_mode = ?,
+                    conditions_json = ?,
+                    action_json = ?,
+                    cooldown_issues = ?,
+                    updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    name,
+                    status,
+                    scope_mode,
+                    _safe_json_dumps(subscription_ids or []),
+                    condition_mode,
+                    _safe_json_dumps(conditions or []),
+                    _safe_json_dumps(action or {}),
+                    int(cooldown_issues),
+                    now,
+                    int(rule_id),
+                    int(user_id),
+                ),
+            )
+            if cursor.rowcount <= 0:
+                return None
+        return self.get_auto_trigger_rule(rule_id)
+
+    def update_auto_trigger_rule_status(self, *, rule_id: int, user_id: int, status: str) -> Optional[Dict[str, Any]]:
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE auto_trigger_rules
+                SET status = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (status, now, int(rule_id), int(user_id)),
+            )
+            if cursor.rowcount <= 0:
+                return None
+        return self.get_auto_trigger_rule(rule_id)
+
+    def delete_auto_trigger_rule_record(self, *, rule_id: int, user_id: int) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM auto_trigger_rules WHERE id = ? AND user_id = ?",
+                (int(rule_id), int(user_id)),
+            )
+            return cursor.rowcount > 0
+
+    def mark_auto_trigger_rule_triggered(self, *, rule_id: int, user_id: int, issue_no: str) -> Optional[Dict[str, Any]]:
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE auto_trigger_rules
+                SET last_triggered_issue_no = ?, last_triggered_at = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (str(issue_no or ""), now, now, int(rule_id), int(user_id)),
+            )
+            if cursor.rowcount <= 0:
+                return None
+        return self.get_auto_trigger_rule(rule_id)
+
+    def record_auto_trigger_event(
+        self,
+        *,
+        rule_id: int,
+        user_id: int,
+        subscription_id: Optional[int] = None,
+        source_id: Optional[int] = None,
+        predictor_id: Optional[int] = None,
+        latest_issue_no: str = "",
+        status: str = "triggered",
+        reason: str = "",
+        matched_conditions: Optional[list[dict]] = None,
+        snapshot: Optional[dict] = None,
+    ) -> Dict[str, Any]:
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO auto_trigger_events(
+                    rule_id, user_id, subscription_id, source_id, predictor_id, latest_issue_no,
+                    status, reason, matched_conditions_json, snapshot_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(rule_id),
+                    int(user_id),
+                    int(subscription_id) if subscription_id is not None else None,
+                    int(source_id) if source_id is not None else None,
+                    int(predictor_id) if predictor_id is not None else None,
+                    str(latest_issue_no or ""),
+                    status,
+                    reason,
+                    _safe_json_dumps(matched_conditions or []),
+                    _safe_json_dumps(snapshot or {}),
+                ),
+            )
+            event_id = int(cur.lastrowid)
+        row = self._fetch_one("SELECT * FROM auto_trigger_events WHERE id = ?", (event_id,))
+        return self._serialize_auto_trigger_event_row(row) if row else {}
+
+    def list_auto_trigger_events(
+        self,
+        *,
+        user_id: Optional[int] = None,
+        rule_id: Optional[int] = None,
+        limit: int = 50,
+    ) -> list[Dict[str, Any]]:
+        clauses = []
+        params: list[Any] = []
+        if user_id is not None:
+            clauses.append("e.user_id = ?")
+            params.append(int(user_id))
+        if rule_id is not None:
+            clauses.append("e.rule_id = ?")
+            params.append(int(rule_id))
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(max(1, min(int(limit or 50), 200)))
+        rows = self._fetch_all(
+            """
+            SELECT e.*, r.name AS rule_name, ss.name AS source_name
+            FROM auto_trigger_events e
+            LEFT JOIN auto_trigger_rules r ON r.id = e.rule_id
+            LEFT JOIN signal_sources ss ON ss.id = e.source_id
+            """ + where + """
+            ORDER BY e.id DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        )
+        return [self._serialize_auto_trigger_event_row(row) for row in rows]
+
+    def get_latest_auto_trigger_event(
+        self,
+        *,
+        rule_id: int,
+        subscription_id: Optional[int] = None,
+        status: str = "triggered",
+    ) -> Optional[Dict[str, Any]]:
+        if subscription_id is None:
+            row = self._fetch_one(
+                """
+                SELECT * FROM auto_trigger_events
+                WHERE rule_id = ? AND status = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (int(rule_id), status),
+            )
+        else:
+            row = self._fetch_one(
+                """
+                SELECT * FROM auto_trigger_events
+                WHERE rule_id = ? AND subscription_id = ? AND status = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (int(rule_id), int(subscription_id), status),
+            )
+        return self._serialize_auto_trigger_event_row(row) if row else None
 
     def update_subscription_status(self, *, subscription_id: int, user_id: int, status: str) -> Optional[Dict[str, Any]]:
         now = _utc_now_iso()
@@ -3394,6 +3819,71 @@ class DatabaseRepository:
             row["strategy_json"] = _safe_json_loads(row.get("strategy_json"))
             items.append(row)
         return items
+
+    def list_dispatch_candidates_for_subscription(self, signal_id: int, *, subscription_id: int) -> list[Dict[str, Any]]:
+        query = """
+            SELECT
+                s.id AS signal_id,
+                s.source_id,
+                s.issue_no,
+                s.bet_type,
+                s.bet_value,
+                s.lottery_type,
+                s.normalized_payload,
+                s.published_at,
+                us.id AS subscription_id,
+                us.user_id,
+                us.strategy_json,
+                dt.id AS delivery_target_id,
+                dt.telegram_account_id,
+                dt.template_id,
+                dt.executor_type,
+                dt.target_key,
+                dt.target_name
+            FROM normalized_signals s
+            JOIN user_subscriptions us ON us.source_id = s.source_id
+            JOIN delivery_targets dt ON dt.user_id = us.user_id
+            LEFT JOIN telegram_accounts ta ON ta.id = dt.telegram_account_id
+            LEFT JOIN subscription_financial_state sfs ON sfs.subscription_id = us.id
+            WHERE s.id = ?
+              AND us.id = ?
+              AND s.status = 'ready'
+              AND us.status = 'active'
+              AND COALESCE(sfs.threshold_status, '') = ''
+              AND dt.status = 'active'
+              AND (dt.telegram_account_id IS NULL OR ta.status = 'active')
+            ORDER BY dt.id ASC
+        """
+        rows = self._fetch_all(query, (int(signal_id), int(subscription_id)))
+        items = []
+        for row in rows:
+            row["normalized_payload"] = _safe_json_loads(row.get("normalized_payload"))
+            row["strategy_json"] = _safe_json_loads(row.get("strategy_json"))
+            items.append(row)
+        return items
+
+    def get_latest_ready_signal_for_source(self, *, source_id: int, issue_no: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        if issue_no:
+            row = self._fetch_one(
+                """
+                SELECT * FROM normalized_signals
+                WHERE source_id = ? AND issue_no = ? AND status = 'ready'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (int(source_id), str(issue_no)),
+            )
+        else:
+            row = self._fetch_one(
+                """
+                SELECT * FROM normalized_signals
+                WHERE source_id = ? AND status = 'ready'
+                ORDER BY CAST(COALESCE(NULLIF(issue_no, ''), '0') AS INTEGER) DESC, id DESC
+                LIMIT 1
+                """,
+                (int(source_id),),
+            )
+        return self._serialize_signal_row(row) if row else None
 
     def create_execution_job_record(
         self,
