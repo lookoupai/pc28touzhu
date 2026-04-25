@@ -786,6 +786,7 @@ class PlatformApiApplication:
                 self.repository,
                 user_id=current_user["id"],
                 rule_id=_query_value(environ, "rule_id"),
+                status=_query_value(environ, "status"),
                 limit=_query_value(environ, "limit", "50"),
             )
             return _json_response(start_response, 200, payload)

@@ -139,8 +139,22 @@
                         <p class="panel-kicker">记录</p>
                         <h2>最近触发记录</h2>
                     </div>
-                    <button id="runOnceBtn" class="secondary-btn" type="button">立即检查</button>
+                    <div class="event-toolbar">
+                        <select id="eventStatusFilter" class="compact-select" aria-label="记录状态筛选">
+                            <option value="all">全部状态</option>
+                            <option value="triggered">已触发</option>
+                            <option value="failed">失败</option>
+                            <option value="skipped">跳过</option>
+                        </select>
+                        <select id="eventLimitSelect" class="compact-select" aria-label="记录数量">
+                            <option value="30">最近 30 条</option>
+                            <option value="50">最近 50 条</option>
+                            <option value="100">最近 100 条</option>
+                        </select>
+                        <button id="runOnceBtn" class="secondary-btn" type="button">立即检查</button>
+                    </div>
                 </div>
+                <div id="eventSummary" class="event-summary"></div>
                 <div id="eventList" class="event-list"></div>
             </section>
         </main>

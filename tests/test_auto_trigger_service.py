@@ -160,6 +160,9 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(second["summary"]["skipped_count"], 1)
         events = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=10)
         self.assertEqual(events[0]["reason"], "subscription_has_open_run")
+        skipped_events = self.repo.list_auto_trigger_events(user_id=self.user_id, status="skipped", limit=10)
+        self.assertEqual(len(skipped_events), 1)
+        self.assertEqual(skipped_events[0]["reason"], "subscription_has_open_run")
 
     def test_matched_metric_action_uses_condition_order_as_priority(self):
         create_auto_trigger_rule(

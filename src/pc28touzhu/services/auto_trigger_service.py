@@ -193,13 +193,17 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any) -> Dict[str, Any]:
     return {"items": repository.list_auto_trigger_rules(user_id=normalized_user_id)}
 
 
-def list_auto_trigger_events(repository: Any, *, user_id: Any, rule_id: Any = None, limit: Any = 50) -> Dict[str, Any]:
+def list_auto_trigger_events(repository: Any, *, user_id: Any, rule_id: Any = None, status: Any = None, limit: Any = 50) -> Dict[str, Any]:
     normalized_user_id = _to_positive_int(user_id, "user_id")
     normalized_rule_id = _to_positive_int(rule_id, "rule_id", allow_none=True)
+    normalized_status = str(status or "").strip()
+    if normalized_status and normalized_status not in {"triggered", "skipped", "failed"}:
+        raise ValueError("status 仅支持 triggered、skipped 或 failed")
     return {
         "items": repository.list_auto_trigger_events(
             user_id=normalized_user_id,
             rule_id=normalized_rule_id,
+            status=normalized_status or None,
             limit=max(1, min(int(limit or 50), 200)),
         )
     }

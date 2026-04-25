@@ -6,6 +6,8 @@
         subscriptions: [],
         sources: [],
         editingRuleId: "",
+        eventLimit: 30,
+        eventStatusFilter: "all",
     };
 
     const metricOptions = [
@@ -70,11 +72,10 @@
     function renderSummary() {
         const activeRules = state.rules.filter(function (item) { return item.status === "active"; }).length;
         const activeSubscriptions = state.subscriptions.filter(function (item) { return item.status === "active"; }).length;
-        const triggered = state.events.filter(function (item) { return item.status === "triggered"; }).length;
         $("summaryGrid").innerHTML = [
             ["启用规则", activeRules],
             ["可用跟单", activeSubscriptions],
-            ["最近触发", triggered],
+            ["加载记录", state.events.length],
         ].map(function (item) {
             return '<article class="summary-card"><span>' + escapeHtml(item[0]) + '</span><strong>' + escapeHtml(item[1]) + '</strong></article>';
         }).join("");
@@ -90,6 +91,10 @@
             failed: "失败",
         };
         return '<span class="pill ' + escapeHtml(status) + '">' + escapeHtml(labels[status] || status || "--") + '</span>';
+    }
+
+    function eventReasonText(event) {
+        return (event.matched_conditions || []).map(conditionText).join("；") || event.reason || "--";
     }
 
     function conditionText(condition) {
@@ -138,12 +143,26 @@
 
     function renderEvents() {
         const list = $("eventList");
+        const summary = $("eventSummary");
+        const statusCounts = state.events.reduce(function (counts, event) {
+            const key = String(event.status || "unknown");
+            counts[key] = (counts[key] || 0) + 1;
+            return counts;
+        }, {});
+        summary.innerHTML = [
+            ["已触发", statusCounts.triggered || 0, "triggered"],
+            ["失败", statusCounts.failed || 0, "failed"],
+            ["跳过", statusCounts.skipped || 0, "skipped"],
+            ["已加载", state.events.length, "loaded"],
+        ].map(function (item) {
+            return '<span class="event-summary-pill ' + escapeHtml(item[2]) + '">' + escapeHtml(item[0]) + ' <strong>' + escapeHtml(item[1]) + '</strong></span>';
+        }).join("");
         if (!state.events.length) {
-            list.innerHTML = '<div class="empty-state">暂无触发记录。</div>';
+            list.innerHTML = '<div class="empty-state">' + (state.eventStatusFilter === "all" ? "暂无触发记录。" : "当前筛选条件下没有触发记录。") + '</div>';
             return;
         }
         list.innerHTML = state.events.map(function (event) {
-            const matched = (event.matched_conditions || []).map(conditionText).join("；") || event.reason || "--";
+            const matched = eventReasonText(event);
             return '' +
                 '<article class="event-card">' +
                     '<div class="event-card-head"><div><strong>' + escapeHtml(event.rule_name || ("规则 #" + event.rule_id)) + '</strong><p class="meta-line">' + escapeHtml(event.source_name || ("来源 #" + event.source_id)) + ' / 跟单 #' + escapeHtml(event.subscription_id || "--") + '</p></div>' + statusPill(event.status) + '</div>' +
@@ -261,7 +280,10 @@
             request("/api/platform/sources"),
             request("/api/platform/subscriptions"),
             request("/api/platform/auto-trigger-rules"),
-            request("/api/platform/auto-trigger-events?limit=50"),
+            request(
+                "/api/platform/auto-trigger-events?limit=" + encodeURIComponent(String(state.eventLimit)) +
+                (state.eventStatusFilter === "all" ? "" : ("&status=" + encodeURIComponent(state.eventStatusFilter)))
+            ),
         ]);
         state.sources = payloads[0].items || [];
         state.subscriptions = payloads[1].items || [];
@@ -313,6 +335,14 @@
         $("refreshBtn").addEventListener("click", loadData);
         $("newRuleBtn").addEventListener("click", function () { resetForm(); });
         $("cancelEditBtn").addEventListener("click", function () { resetForm(); });
+        $("eventStatusFilter").addEventListener("change", function (event) {
+            state.eventStatusFilter = event.target.value || "all";
+            loadData();
+        });
+        $("eventLimitSelect").addEventListener("change", async function (event) {
+            state.eventLimit = Number(event.target.value || 30);
+            await loadData();
+        });
         $("runOnceBtn").addEventListener("click", async function () {
             try {
                 await runOnce();

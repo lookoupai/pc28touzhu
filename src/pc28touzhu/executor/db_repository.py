@@ -2335,6 +2335,7 @@ class DatabaseRepository:
         *,
         user_id: Optional[int] = None,
         rule_id: Optional[int] = None,
+        status: Optional[str] = None,
         limit: int = 50,
     ) -> list[Dict[str, Any]]:
         clauses = []
@@ -2345,6 +2346,9 @@ class DatabaseRepository:
         if rule_id is not None:
             clauses.append("e.rule_id = ?")
             params.append(int(rule_id))
+        if status:
+            clauses.append("e.status = ?")
+            params.append(str(status))
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         params.append(max(1, min(int(limit or 50), 200)))
         rows = self._fetch_all(
