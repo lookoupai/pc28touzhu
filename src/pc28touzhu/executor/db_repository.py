@@ -2365,6 +2365,34 @@ class DatabaseRepository:
         )
         return [self._serialize_auto_trigger_event_row(row) for row in rows]
 
+    def prune_auto_trigger_events(
+        self,
+        *,
+        cutoffs_by_status: Dict[str, str],
+        user_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        deleted_by_status: Dict[str, int] = {}
+        with self._connect() as conn:
+            for status, cutoff in cutoffs_by_status.items():
+                if user_id is None:
+                    cursor = conn.execute(
+                        "DELETE FROM auto_trigger_events WHERE status = ? AND created_at < ?",
+                        (str(status), str(cutoff)),
+                    )
+                else:
+                    cursor = conn.execute(
+                        """
+                        DELETE FROM auto_trigger_events
+                        WHERE user_id = ? AND status = ? AND created_at < ?
+                        """,
+                        (int(user_id), str(status), str(cutoff)),
+                    )
+                deleted_by_status[str(status)] = int(cursor.rowcount or 0)
+        return {
+            "deleted_count": sum(deleted_by_status.values()),
+            "deleted_by_status": deleted_by_status,
+        }
+
     def get_latest_auto_trigger_event(
         self,
         *,

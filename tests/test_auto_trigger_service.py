@@ -164,6 +164,98 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(len(skipped_events), 1)
         self.assertEqual(skipped_events[0]["reason"], "subscription_has_open_run")
 
+    def test_repeated_skipped_event_is_deduplicated(self):
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "跳过去重",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 10,
+                "conditions": [
+                    {"metric": "combo", "operator": "lt", "threshold": 20, "min_sample_count": 100}
+                ],
+            },
+        )
+
+        run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+        second = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+        third = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+
+        self.assertEqual(second["summary"]["skipped_count"], 1)
+        self.assertEqual(third["summary"]["skipped_count"], 1)
+        skipped_events = self.repo.list_auto_trigger_events(user_id=self.user_id, status="skipped", limit=10)
+        self.assertEqual(len(skipped_events), 1)
+        self.assertEqual(skipped_events[0]["reason"], "subscription_has_open_run")
+
+    def test_auto_trigger_cycle_prunes_expired_events(self):
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "记录保留",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "combo", "operator": "lt", "threshold": 1, "min_sample_count": 100}
+                ],
+            },
+        )["item"]
+        old_skipped = self.repo.record_auto_trigger_event(
+            rule_id=rule["id"],
+            user_id=self.user_id,
+            subscription_id=self.subscription["id"],
+            source_id=self.source["id"],
+            status="skipped",
+            reason="cooldown",
+        )
+        old_triggered = self.repo.record_auto_trigger_event(
+            rule_id=rule["id"],
+            user_id=self.user_id,
+            subscription_id=self.subscription["id"],
+            source_id=self.source["id"],
+            status="triggered",
+            reason="conditions_matched",
+        )
+        old_failed = self.repo.record_auto_trigger_event(
+            rule_id=rule["id"],
+            user_id=self.user_id,
+            subscription_id=self.subscription["id"],
+            source_id=self.source["id"],
+            status="failed",
+            reason="fetch_failed",
+        )
+        recent_skipped = self.repo.record_auto_trigger_event(
+            rule_id=rule["id"],
+            user_id=self.user_id,
+            subscription_id=self.subscription["id"],
+            source_id=self.source["id"],
+            status="skipped",
+            reason="source_not_active",
+        )
+        with self.repo._connect() as conn:
+            for item in [old_skipped, old_triggered, old_failed]:
+                conn.execute(
+                    "UPDATE auto_trigger_events SET created_at = ? WHERE id = ?",
+                    ("2000-01-01T00:00:00Z", int(item["id"])),
+                )
+
+        result = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(combo_rate=99.0, big_small_rate=99.0),
+        )
+
+        self.assertEqual(result["cleanup"]["deleted_count"], 3)
+        events = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=20)
+        event_ids = {item["id"] for item in events}
+        self.assertNotIn(old_skipped["id"], event_ids)
+        self.assertNotIn(old_triggered["id"], event_ids)
+        self.assertNotIn(old_failed["id"], event_ids)
+        self.assertIn(recent_skipped["id"], event_ids)
+
     def test_matched_metric_action_uses_condition_order_as_priority(self):
         create_auto_trigger_rule(
             self.repo,

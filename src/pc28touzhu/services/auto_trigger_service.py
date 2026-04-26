@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
@@ -25,6 +26,23 @@ PLAY_FILTER_KEYS_BY_METRIC = {
     "odd_even": ["odd_even:单", "odd_even:双"],
     "combo": ["combo:大单", "combo:大双", "combo:小单", "combo:小双"],
 }
+EVENT_RETENTION_DAYS = {
+    "skipped": 7,
+    "triggered": 30,
+    "failed": 30,
+}
+
+
+def _format_utc_iso(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _event_retention_cutoffs(*, now: Optional[datetime] = None) -> Dict[str, str]:
+    reference = now or datetime.now(timezone.utc)
+    return {
+        status: _format_utc_iso(reference - timedelta(days=days))
+        for status, days in EVENT_RETENTION_DAYS.items()
+    }
 
 
 def _to_positive_int(value: Any, field_name: str, *, allow_none: bool = False) -> Optional[int]:
@@ -386,6 +404,19 @@ def _record_event(
         snapshot["dispatch_result"] = dispatch_result
     if play_filter_result is not None:
         snapshot["play_filter_result"] = play_filter_result
+    if status == "skipped":
+        latest_skipped = repository.get_latest_auto_trigger_event(
+            rule_id=int(rule["id"]),
+            subscription_id=int(subscription["id"]),
+            status="skipped",
+        )
+        if (
+            latest_skipped
+            and str(latest_skipped.get("reason") or "") == str(reason or "")
+            and str(latest_skipped.get("latest_issue_no") or "") == latest_issue_no
+            and str(latest_skipped.get("created_at") or "") >= _event_retention_cutoffs()["skipped"]
+        ):
+            return latest_skipped
     return repository.record_auto_trigger_event(
         rule_id=int(rule["id"]),
         user_id=int(rule["user_id"]),
@@ -552,4 +583,11 @@ def run_auto_trigger_cycle(repository: Any, *, user_id: Any = None, rule_id: Any
         for key in ["checked_count", "triggered_count", "skipped_count", "failed_count"]:
             result["summary"][key] += int(summary.get(key) or 0)
         result["rules"].append(item)
+    cleanup_user_id = normalized_user_id
+    if cleanup_user_id is None and normalized_rule_id is not None and rules:
+        cleanup_user_id = int(rules[0]["user_id"])
+    result["cleanup"] = repository.prune_auto_trigger_events(
+        user_id=cleanup_user_id,
+        cutoffs_by_status=_event_retention_cutoffs(),
+    )
     return result
