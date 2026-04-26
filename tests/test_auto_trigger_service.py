@@ -57,7 +57,15 @@ class AutoTriggerServiceTests(unittest.TestCase):
     def tearDown(self):
         self.tmpdir.cleanup()
 
-    def _performance_payload(self, issue_no="20260418000", big_small_rate=38.0, combo_rate=19.0):
+    def _performance_payload(
+        self,
+        issue_no="20260418000",
+        big_small_rate=38.0,
+        combo_rate=19.0,
+        big_small_miss_streak=0,
+        odd_even_miss_streak=0,
+        combo_miss_streak=0,
+    ):
         return {
             "schema_version": "1.0",
             "predictor_id": 5,
@@ -65,9 +73,21 @@ class AutoTriggerServiceTests(unittest.TestCase):
             "lottery_type": "pc28",
             "latest_settled_issue": issue_no,
             "metrics": {
-                "big_small": {"label": "大小", "recent_100": {"hit_rate": big_small_rate, "sample_count": 100, "hit_count": int(big_small_rate)}},
-                "odd_even": {"label": "单双", "recent_100": {"hit_rate": 50.0, "sample_count": 100, "hit_count": 50}},
-                "combo": {"label": "组合", "recent_100": {"hit_rate": combo_rate, "sample_count": 100, "hit_count": int(combo_rate)}},
+                "big_small": {
+                    "label": "大小",
+                    "recent_100": {"hit_rate": big_small_rate, "sample_count": 100, "hit_count": int(big_small_rate)},
+                    "streaks": {"current_miss_streak": big_small_miss_streak},
+                },
+                "odd_even": {
+                    "label": "单双",
+                    "recent_100": {"hit_rate": 50.0, "sample_count": 100, "hit_count": 50},
+                    "streaks": {"current_miss_streak": odd_even_miss_streak},
+                },
+                "combo": {
+                    "label": "组合",
+                    "recent_100": {"hit_rate": combo_rate, "sample_count": 100, "hit_count": int(combo_rate)},
+                    "streaks": {"current_miss_streak": combo_miss_streak},
+                },
             },
         }
 
@@ -136,6 +156,34 @@ class AutoTriggerServiceTests(unittest.TestCase):
         candidates = self.repo.list_dispatch_candidates(self.signal["id"])
 
         self.assertEqual(candidates, [])
+
+    def test_rule_triggers_when_metric_miss_streak_reaches_threshold(self):
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "大小连挂触发",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"type": "miss_streak", "metric": "big_small", "operator": "gte", "threshold": 5}
+                ],
+                "action": {"dispatch_latest_signal": False},
+            },
+        )
+
+        result = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(big_small_rate=80.0, combo_rate=80.0, big_small_miss_streak=5),
+        )
+
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(event["status"], "triggered")
+        self.assertEqual(event["matched_conditions"][0]["type"], "miss_streak")
+        self.assertEqual(event["matched_conditions"][0]["actual_miss_streak"], 5)
 
     def test_rule_skips_when_multiple_distinct_metrics_match_if_enabled(self):
         self.repo.update_subscription_status(

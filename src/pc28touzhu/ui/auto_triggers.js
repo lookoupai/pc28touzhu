@@ -15,6 +15,10 @@
         ["odd_even", "单双"],
         ["combo", "组合"],
     ];
+    const conditionTypeOptions = [
+        ["hit_rate", "命中率"],
+        ["miss_streak", "当前连挂"],
+    ];
     const operatorOptions = [
         ["lt", "低于"],
         ["lte", "低于或等于"],
@@ -117,8 +121,12 @@
     }
 
     function conditionText(condition) {
+        const type = condition.type || "hit_rate";
         const metric = metricOptions.find(function (item) { return item[0] === condition.metric; });
         const operator = operatorOptions.find(function (item) { return item[0] === condition.operator; });
+        if (type === "miss_streak") {
+            return (metric ? metric[1] : condition.metric) + "当前连挂" + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "期";
+        }
         return (metric ? metric[1] : condition.metric) + "近100期命中率" + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "%";
     }
 
@@ -202,7 +210,9 @@
     }
 
     function conditionRowHtml(condition) {
-        const item = condition || {metric: "big_small", operator: "lt", threshold: 40, min_sample_count: 100};
+        const item = condition || {type: "hit_rate", metric: "big_small", operator: "lt", threshold: 40, min_sample_count: 100};
+        const conditionType = item.type || "hit_rate";
+        const thresholdLabel = conditionType === "miss_streak" ? "连挂期数" : "阈值 %";
         function options(optionsList, current) {
             return optionsList.map(function (option) {
                 return '<option value="' + escapeHtml(option[0]) + '"' + (option[0] === current ? " selected" : "") + '>' + escapeHtml(option[1]) + '</option>';
@@ -210,10 +220,11 @@
         }
         return '' +
             '<div class="condition-row">' +
+                '<label class="field"><span>条件</span><select class="text-input condition-type">' + options(conditionTypeOptions, conditionType) + '</select></label>' +
                 '<label class="field"><span>玩法</span><select class="text-input condition-metric">' + options(metricOptions, item.metric) + '</select></label>' +
                 '<label class="field"><span>比较</span><select class="text-input condition-operator">' + options(operatorOptions, item.operator) + '</select></label>' +
-                '<label class="field"><span>阈值 %</span><input class="text-input condition-threshold" type="number" min="0" max="100" step="0.01" value="' + escapeHtml(item.threshold) + '"></label>' +
-                '<label class="field"><span>最少样本</span><input class="text-input condition-sample" type="number" min="1" step="1" value="' + escapeHtml(item.min_sample_count || 100) + '"></label>' +
+                '<label class="field condition-threshold-field"><span class="condition-threshold-label">' + escapeHtml(thresholdLabel) + '</span><input class="text-input condition-threshold" type="number" min="0" max="100" step="0.01" value="' + escapeHtml(item.threshold) + '"></label>' +
+                '<label class="field condition-sample-field"><span>最少样本</span><input class="text-input condition-sample" type="number" min="1" step="1" value="' + escapeHtml(item.min_sample_count || 100) + '"></label>' +
                 '<div class="condition-actions">' +
                     '<button class="ghost-btn move-condition-up-btn" type="button">上移</button>' +
                     '<button class="ghost-btn move-condition-down-btn" type="button">下移</button>' +
@@ -224,6 +235,27 @@
 
     function renderConditions(conditions) {
         $("conditionRows").innerHTML = (conditions && conditions.length ? conditions : [{metric: "big_small", operator: "lt", threshold: 40, min_sample_count: 100}]).map(conditionRowHtml).join("");
+        document.querySelectorAll(".condition-row").forEach(updateConditionRowVisibility);
+    }
+
+    function updateConditionRowVisibility(row, preferDefaultOperator) {
+        const type = row.querySelector(".condition-type").value || "hit_rate";
+        const isMissStreak = type === "miss_streak";
+        const threshold = row.querySelector(".condition-threshold");
+        const operator = row.querySelector(".condition-operator");
+        row.querySelector(".condition-threshold-label").textContent = isMissStreak ? "连挂期数" : "阈值 %";
+        threshold.max = isMissStreak ? "" : "100";
+        threshold.step = isMissStreak ? "1" : "0.01";
+        row.querySelector(".condition-sample-field").hidden = isMissStreak;
+        if (preferDefaultOperator && isMissStreak && operator.value === "lt") {
+            operator.value = "gte";
+        }
+        if (preferDefaultOperator && isMissStreak) {
+            threshold.value = "5";
+        }
+        if (isMissStreak && !Number(threshold.value || 0)) {
+            threshold.value = "5";
+        }
     }
 
     function resetForm(rule) {
@@ -261,6 +293,7 @@
     function collectConditions() {
         return Array.from(document.querySelectorAll(".condition-row")).map(function (row) {
             return {
+                type: row.querySelector(".condition-type").value || "hit_rate",
                 metric: row.querySelector(".condition-metric").value,
                 operator: row.querySelector(".condition-operator").value,
                 threshold: Number(row.querySelector(".condition-threshold").value),
@@ -377,6 +410,16 @@
         });
         $("addConditionBtn").addEventListener("click", function () {
             $("conditionRows").insertAdjacentHTML("beforeend", conditionRowHtml());
+            updateConditionRowVisibility($("conditionRows").lastElementChild);
+        });
+        $("conditionRows").addEventListener("change", function (event) {
+            const target = event.target;
+            if (target instanceof HTMLElement && target.classList.contains("condition-type")) {
+                const row = target.closest(".condition-row");
+                if (row) {
+                    updateConditionRowVisibility(row, true);
+                }
+            }
         });
         document.addEventListener("click", async function (event) {
             const target = event.target;

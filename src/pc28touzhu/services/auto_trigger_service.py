@@ -13,6 +13,7 @@ from pc28touzhu.services.dispatch_service import dispatch_signal
 
 
 ALLOWED_METRICS = {"big_small", "odd_even", "combo"}
+ALLOWED_CONDITION_TYPES = {"hit_rate", "miss_streak"}
 ALLOWED_OPERATORS = {"lt", "lte", "gt", "gte"}
 ALLOWED_SCOPE_MODES = {"all_subscriptions", "selected_subscriptions"}
 ALLOWED_PLAY_FILTER_ACTIONS = {"keep", "matched_metric", "fixed_metric"}
@@ -89,21 +90,27 @@ def _normalize_conditions(value: Any) -> list[dict]:
         metric = str(item.get("metric") or "").strip()
         if metric not in ALLOWED_METRICS:
             raise ValueError("conditions[%s].metric 仅支持 big_small、odd_even、combo" % index)
+        condition_type = str(item.get("type") or "hit_rate").strip() or "hit_rate"
+        if condition_type not in ALLOWED_CONDITION_TYPES:
+            raise ValueError("conditions[%s].type 仅支持 hit_rate 或 miss_streak" % index)
         operator = str(item.get("operator") or "").strip()
         if operator not in ALLOWED_OPERATORS:
             raise ValueError("conditions[%s].operator 仅支持 lt、lte、gt、gte" % index)
         threshold = _to_float(item.get("threshold"), "conditions[%s].threshold" % index)
-        if threshold < 0 or threshold > 100:
+        if condition_type == "hit_rate" and (threshold < 0 or threshold > 100):
             raise ValueError("conditions[%s].threshold 必须在 0 到 100 之间" % index)
+        if condition_type == "miss_streak" and threshold < 0:
+            raise ValueError("conditions[%s].threshold 不能小于 0" % index)
         min_sample_count = int(item.get("min_sample_count") or 100)
         if min_sample_count < 1:
             raise ValueError("conditions[%s].min_sample_count 必须大于 0" % index)
         normalized.append(
             {
+                "type": condition_type,
                 "metric": metric,
-                "window": "recent_100",
+                "window": "recent_100" if condition_type == "hit_rate" else "current",
                 "operator": operator,
-                "threshold": round(threshold, 2),
+                "threshold": int(threshold) if condition_type == "miss_streak" else round(threshold, 2),
                 "min_sample_count": min_sample_count,
             }
         )
@@ -287,7 +294,28 @@ def _matched_conditions(rule: Dict[str, Any], performance: Dict[str, Any]) -> li
     matched = []
     for condition in rule.get("conditions") or []:
         metric_key = str(condition.get("metric") or "")
-        recent_100 = (metrics.get(metric_key) or {}).get("recent_100") or {}
+        metric_payload = metrics.get(metric_key) if isinstance(metrics.get(metric_key), dict) else {}
+        condition_type = str(condition.get("type") or "hit_rate").strip() or "hit_rate"
+        if condition_type == "miss_streak":
+            streaks = metric_payload.get("streaks") if isinstance(metric_payload.get("streaks"), dict) else {}
+            miss_streak = streaks.get("current_miss_streak")
+            if miss_streak is None:
+                continue
+            try:
+                streak_count = int(miss_streak)
+            except (TypeError, ValueError):
+                continue
+            if _compare(float(streak_count), str(condition.get("operator") or ""), float(condition.get("threshold") or 0)):
+                matched.append(
+                    {
+                        **condition,
+                        "actual_miss_streak": streak_count,
+                        "metric_label": METRIC_LABELS.get(metric_key, metric_key),
+                    }
+                )
+            continue
+
+        recent_100 = metric_payload.get("recent_100") if isinstance(metric_payload.get("recent_100"), dict) else {}
         hit_rate = recent_100.get("hit_rate")
         sample_count = int(recent_100.get("sample_count") or 0)
         if hit_rate is None or sample_count < int(condition.get("min_sample_count") or 1):
