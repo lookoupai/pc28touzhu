@@ -62,19 +62,33 @@
         return state.sources.find(function (item) { return Number(item.id) === Number(sourceId); }) || null;
     }
 
+    function subscriptionStatusText(status) {
+        const labels = {
+            active: "启用",
+            standby: "待命触发",
+            inactive: "停用",
+            archived: "归档",
+        };
+        return labels[status] || status || "--";
+    }
+
+    function isTriggerableSubscription(item) {
+        const status = String(item && item.status || "");
+        return status === "active" || status === "standby";
+    }
+
     function subscriptionLabel(item) {
         const source = sourceById(item.source_id);
         const name = source ? source.name : ("来源 #" + String(item.source_id));
-        const status = item.status === "active" ? "启用" : item.status;
-        return "#" + String(item.id) + " " + name + " / " + status;
+        return "#" + String(item.id) + " " + name + " / " + subscriptionStatusText(item.status);
     }
 
     function renderSummary() {
         const activeRules = state.rules.filter(function (item) { return item.status === "active"; }).length;
-        const activeSubscriptions = state.subscriptions.filter(function (item) { return item.status === "active"; }).length;
+        const triggerableSubscriptions = state.subscriptions.filter(isTriggerableSubscription).length;
         $("summaryGrid").innerHTML = [
             ["启用规则", activeRules],
-            ["可用跟单", activeSubscriptions],
+            ["可触发跟单", triggerableSubscriptions],
             ["加载记录", state.events.length],
         ].map(function (item) {
             return '<article class="summary-card"><span>' + escapeHtml(item[0]) + '</span><strong>' + escapeHtml(item[1]) + '</strong></article>';
@@ -84,6 +98,7 @@
     function statusPill(status) {
         const labels = {
             active: "启用",
+            standby: "待命触发",
             inactive: "停用",
             archived: "归档",
             triggered: "已触发",
@@ -174,7 +189,9 @@
 
     function renderSubscriptionOptions(selectedIds) {
         const selected = new Set((selectedIds || []).map(function (item) { return String(item); }));
-        $("subscriptionSelect").innerHTML = state.subscriptions.map(function (item) {
+        $("subscriptionSelect").innerHTML = state.subscriptions.filter(function (item) {
+            return isTriggerableSubscription(item) || selected.has(String(item.id));
+        }).map(function (item) {
             return '<option value="' + escapeHtml(item.id) + '"' + (selected.has(String(item.id)) ? " selected" : "") + '>' + escapeHtml(subscriptionLabel(item)) + '</option>';
         }).join("");
     }
