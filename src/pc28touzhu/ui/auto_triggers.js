@@ -109,7 +109,11 @@
     }
 
     function eventReasonText(event) {
-        return (event.matched_conditions || []).map(conditionText).join("；") || event.reason || "--";
+        const matchedText = (event.matched_conditions || []).map(conditionText).join("；");
+        if (event.reason === "multiple_metrics_matched") {
+            return "多指标同时命中，已跳过" + (matchedText ? "：" + matchedText : "");
+        }
+        return matchedText || event.reason || "--";
     }
 
     function conditionText(condition) {
@@ -120,14 +124,15 @@
 
     function actionText(action) {
         const payload = action || {};
+        const guardText = payload.skip_multiple_metrics_matched ? "；多指标同时命中时跳过" : "";
         if (payload.play_filter_action === "matched_metric") {
-            return "命中后切换到首个命中条件玩法";
+            return "命中后切换到首个命中条件玩法" + guardText;
         }
         if (payload.play_filter_action === "fixed_metric") {
             const metric = metricOptions.find(function (item) { return item[0] === payload.fixed_metric; });
-            return "命中后固定切换到" + (metric ? metric[1] : "指定玩法");
+            return "命中后固定切换到" + (metric ? metric[1] : "指定玩法") + guardText;
         }
-        return "命中后保持原玩法";
+        return "命中后保持原玩法" + guardText;
     }
 
     function renderRuleList() {
@@ -231,6 +236,7 @@
         form.elements.scope_mode.value = item.scope_mode || "selected_subscriptions";
         form.elements.cooldown_issues.value = String(item.cooldown_issues == null ? 10 : item.cooldown_issues);
         form.elements.dispatch_latest_signal.checked = item.action ? item.action.dispatch_latest_signal !== false : true;
+        form.elements.skip_multiple_metrics_matched.checked = Boolean(item.action && item.action.skip_multiple_metrics_matched);
         form.elements.play_filter_action.value = item.action && item.action.play_filter_action ? item.action.play_filter_action : "keep";
         form.elements.fixed_metric.value = item.action && item.action.fixed_metric ? item.action.fixed_metric : "big_small";
         renderSubscriptionOptions(item.subscription_ids || []);
@@ -277,6 +283,7 @@
                 dispatch_latest_signal: form.elements.dispatch_latest_signal.checked,
                 play_filter_action: form.elements.play_filter_action.value,
                 fixed_metric: form.elements.fixed_metric.value,
+                skip_multiple_metrics_matched: form.elements.skip_multiple_metrics_matched.checked,
             },
         };
     }

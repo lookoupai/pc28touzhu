@@ -123,6 +123,7 @@ def _normalize_action(value: Any) -> dict:
         "dispatch_latest_signal": bool(action.get("dispatch_latest_signal", True)),
         "play_filter_action": play_filter_action,
         "fixed_metric": fixed_metric if fixed_metric in ALLOWED_METRICS else "",
+        "skip_multiple_metrics_matched": bool(action.get("skip_multiple_metrics_matched", False)),
     }
 
 
@@ -303,6 +304,15 @@ def _matched_conditions(rule: Dict[str, Any], performance: Dict[str, Any]) -> li
                 }
             )
     return matched
+
+
+def _has_multiple_matched_metrics(matched_conditions: list[dict]) -> bool:
+    metrics = {
+        str(condition.get("metric") or "").strip()
+        for condition in matched_conditions
+        if str(condition.get("metric") or "").strip() in ALLOWED_METRICS
+    }
+    return len(metrics) >= 2
 
 
 def _resolve_target_metric(rule: Dict[str, Any], matched_conditions: list[dict]) -> Optional[str]:
@@ -495,6 +505,21 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
 
             matched = _matched_conditions(rule, performance)
             if not matched:
+                continue
+            action = rule.get("action") if isinstance(rule.get("action"), dict) else {}
+            if bool(action.get("skip_multiple_metrics_matched", False)) and _has_multiple_matched_metrics(matched):
+                events.append(
+                    _record_event(
+                        repository,
+                        rule=rule,
+                        subscription=subscription,
+                        performance=performance,
+                        status="skipped",
+                        reason="multiple_metrics_matched",
+                        matched_conditions=matched,
+                    )
+                )
+                summary["skipped_count"] += 1
                 continue
 
             if subscription_status == "standby":

@@ -137,6 +137,76 @@ class AutoTriggerServiceTests(unittest.TestCase):
 
         self.assertEqual(candidates, [])
 
+    def test_rule_skips_when_multiple_distinct_metrics_match_if_enabled(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "多指标保护",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100},
+                    {"metric": "combo", "operator": "lt", "threshold": 20, "min_sample_count": 100},
+                ],
+                "action": {
+                    "dispatch_latest_signal": False,
+                    "skip_multiple_metrics_matched": True,
+                },
+            },
+        )["item"]
+
+        result = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+
+        self.assertEqual(result["summary"]["triggered_count"], 0)
+        self.assertEqual(result["summary"]["skipped_count"], 1)
+        self.assertEqual(self.repo.get_subscription(self.subscription["id"])["status"], "standby")
+        self.assertEqual(self.repo.list_execution_jobs(user_id=self.user_id), [])
+        self.assertEqual(self.repo.get_auto_trigger_rule(rule["id"])["last_triggered_issue_no"], "")
+        event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(event["status"], "skipped")
+        self.assertEqual(event["reason"], "multiple_metrics_matched")
+        self.assertEqual({condition["metric"] for condition in event["matched_conditions"]}, {"big_small", "combo"})
+
+    def test_rule_does_not_skip_when_duplicate_conditions_match_same_metric(self):
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "同指标重复条件",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100},
+                    {"metric": "big_small", "operator": "lt", "threshold": 45, "min_sample_count": 100},
+                ],
+                "action": {
+                    "dispatch_latest_signal": False,
+                    "skip_multiple_metrics_matched": True,
+                },
+            },
+        )
+
+        result = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(combo_rate=99.0),
+        )
+
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        self.assertEqual(result["summary"]["skipped_count"], 0)
+        event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(event["status"], "triggered")
+        self.assertEqual(event["reason"], "conditions_matched")
+        self.assertEqual([condition["metric"] for condition in event["matched_conditions"]], ["big_small", "big_small"])
+
     def test_cooldown_prevents_repeated_trigger_for_same_subscription(self):
         create_auto_trigger_rule(
             self.repo,
