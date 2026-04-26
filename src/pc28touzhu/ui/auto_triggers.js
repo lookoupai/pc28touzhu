@@ -115,7 +115,7 @@
     function eventReasonText(event) {
         const matchedText = (event.matched_conditions || []).map(conditionText).join("；");
         if (event.reason === "multiple_metrics_matched") {
-            return "多指标同时命中，已跳过" + (matchedText ? "：" + matchedText : "");
+            return "当前方案多指标同时命中，已仅跳过该方案" + (matchedText ? "：" + matchedText : "");
         }
         return matchedText || event.reason || "--";
     }
@@ -132,7 +132,7 @@
 
     function actionText(action) {
         const payload = action || {};
-        const guardText = payload.skip_multiple_metrics_matched ? "；多指标同时命中时跳过" : "";
+        const guardText = payload.skip_multiple_metrics_matched ? "；单个方案多指标同时命中时仅跳过该方案" : "";
         if (payload.play_filter_action === "matched_metric") {
             return "命中后切换到首个命中条件玩法" + guardText;
         }
