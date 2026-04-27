@@ -569,7 +569,6 @@ class DatabaseRepository:
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_events_user_time ON auto_trigger_events(user_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_rule_daily_stats_user_date ON auto_trigger_rule_daily_stats(user_id, stat_date, status)",
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_rule_runs_subscription ON auto_trigger_rule_runs(subscription_id, user_id, id)",
-        "CREATE INDEX IF NOT EXISTS idx_progression_events_auto_trigger_rule ON subscription_progression_events(auto_trigger_rule_id, user_id, auto_trigger_stat_date)",
     ]
 
     def __init__(self, db_path: str = "pc28touzhu.db"):
@@ -678,6 +677,12 @@ class DatabaseRepository:
         for column_name, ddl in column_definitions.items():
             if column_name not in existing_columns:
                 conn.execute(ddl)
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_progression_events_auto_trigger_rule
+            ON subscription_progression_events(auto_trigger_rule_id, user_id, auto_trigger_stat_date)
+            """
+        )
 
     def _ensure_auto_trigger_rule_columns(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute("PRAGMA table_info(auto_trigger_rules)").fetchall()
