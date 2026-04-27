@@ -103,12 +103,24 @@
                         <div class="condition-panel">
                             <div class="section-head">
                                 <div>
-                                    <p class="panel-kicker">条件</p>
-                                    <h3>任一条件命中即触发，越靠上优先级越高</h3>
+                                    <p class="panel-kicker">开始条件</p>
+                                    <h3>任一条件命中即进入判断，越靠上优先级越高</h3>
                                 </div>
                                 <button id="addConditionBtn" class="secondary-btn" type="button">添加条件</button>
                             </div>
                             <div id="conditionRows" class="condition-rows"></div>
+                        </div>
+
+                        <div class="condition-panel">
+                            <div class="section-head">
+                                <div>
+                                    <p class="panel-kicker">同时达成条件区</p>
+                                    <h3>区内任一条件命中即通过；多个条件区必须全部通过</h3>
+                                    <p class="meta-line">若本区存在与开始条件相同玩法的条件，优先按同玩法配对；否则按跨玩法条件区处理。</p>
+                                </div>
+                                <button id="addGuardGroupBtn" class="secondary-btn" type="button">新增条件区</button>
+                            </div>
+                            <div id="guardGroupRows" class="guard-group-rows"></div>
                         </div>
 
                         <div class="action-row">

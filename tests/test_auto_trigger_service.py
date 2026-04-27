@@ -185,6 +185,155 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(event["matched_conditions"][0]["type"], "miss_streak")
         self.assertEqual(event["matched_conditions"][0]["actual_miss_streak"], 5)
 
+    def test_guard_group_pairs_same_metric_before_cross_metric_conditions(self):
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "同玩法附加条件优先",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "guard_groups": [
+                    {
+                        "conditions": [
+                            {"type": "miss_streak", "metric": "big_small", "operator": "gte", "threshold": 5},
+                            {"type": "miss_streak", "metric": "combo", "operator": "gte", "threshold": 5},
+                        ]
+                    }
+                ],
+                "action": {"dispatch_latest_signal": False},
+            },
+        )
+
+        result = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(big_small_rate=38.0, combo_miss_streak=5),
+        )
+
+        self.assertEqual(result["summary"]["triggered_count"], 0)
+        self.assertEqual(self.repo.list_auto_trigger_events(user_id=self.user_id, limit=10), [])
+
+    def test_guard_group_uses_cross_metric_when_same_metric_is_absent(self):
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "跨玩法附加条件",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "guard_groups": [
+                    {
+                        "conditions": [
+                            {"type": "miss_streak", "metric": "combo", "operator": "gte", "threshold": 5}
+                        ]
+                    }
+                ],
+                "action": {
+                    "dispatch_latest_signal": False,
+                    "play_filter_action": "matched_metric",
+                },
+            },
+        )
+
+        result = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(big_small_rate=38.0, combo_miss_streak=5),
+        )
+
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        updated = self.repo.get_subscription(self.subscription["id"])
+        self.assertEqual(updated["strategy_v2"]["play_filter"]["selected_keys"], ["big_small:大", "big_small:小"])
+        event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual([condition["metric"] for condition in event["matched_conditions"]], ["big_small", "combo"])
+        self.assertEqual(event["snapshot"]["matched_primary_condition"]["metric"], "big_small")
+
+    def test_all_guard_groups_must_pass(self):
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "多个附加条件区",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "guard_groups": [
+                    {"conditions": [{"type": "miss_streak", "metric": "big_small", "operator": "gte", "threshold": 5}]},
+                    {"conditions": [{"type": "miss_streak", "metric": "combo", "operator": "gte", "threshold": 3}]},
+                ],
+                "action": {"dispatch_latest_signal": False},
+            },
+        )
+
+        failed = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(big_small_rate=38.0, big_small_miss_streak=5, combo_miss_streak=2),
+        )
+        passed = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(issue_no="20260418001", big_small_rate=38.0, big_small_miss_streak=5, combo_miss_streak=3),
+        )
+
+        self.assertEqual(failed["summary"]["triggered_count"], 0)
+        self.assertEqual(passed["summary"]["triggered_count"], 1)
+
+    def test_first_successful_primary_path_controls_matched_metric_action(self):
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "第一条成功路径",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100},
+                    {"metric": "combo", "operator": "lt", "threshold": 20, "min_sample_count": 100},
+                ],
+                "guard_groups": [
+                    {
+                        "conditions": [
+                            {"type": "miss_streak", "metric": "big_small", "operator": "gte", "threshold": 5},
+                            {"type": "miss_streak", "metric": "combo", "operator": "gte", "threshold": 5},
+                        ]
+                    }
+                ],
+                "action": {
+                    "dispatch_latest_signal": False,
+                    "play_filter_action": "matched_metric",
+                },
+            },
+        )
+
+        result = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(big_small_rate=38.0, combo_rate=19.0, big_small_miss_streak=0, combo_miss_streak=5),
+        )
+
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        updated = self.repo.get_subscription(self.subscription["id"])
+        self.assertEqual(
+            updated["strategy_v2"]["play_filter"]["selected_keys"],
+            ["combo:大单", "combo:大双", "combo:小单", "combo:小双"],
+        )
+        event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(event["snapshot"]["matched_primary_condition"]["metric"], "combo")
+
     def test_rule_skips_when_multiple_distinct_metrics_match_if_enabled(self):
         self.repo.update_subscription_status(
             subscription_id=self.subscription["id"],

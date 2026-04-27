@@ -117,6 +117,25 @@ def _normalize_conditions(value: Any) -> list[dict]:
     return normalized
 
 
+def _normalize_guard_groups(value: Any) -> list[dict]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("guard_groups 必须为数组")
+    normalized = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, dict):
+            raise ValueError("guard_groups[%s] 必须为对象" % index)
+        name = str(item.get("name") or "").strip()
+        normalized.append(
+            {
+                "name": name,
+                "conditions": _normalize_conditions(item.get("conditions")),
+            }
+        )
+    return normalized
+
+
 def _normalize_action(value: Any) -> dict:
     action = value if isinstance(value, dict) else {}
     play_filter_action = str(action.get("play_filter_action") or "keep").strip() or "keep"
@@ -161,6 +180,7 @@ def normalize_rule_payload(payload: Dict[str, Any], *, current: Optional[Dict[st
         "subscription_ids": subscription_ids,
         "condition_mode": condition_mode,
         "conditions": _normalize_conditions(payload.get("conditions", source.get("conditions") or [])),
+        "guard_groups": _normalize_guard_groups(payload.get("guard_groups", source.get("guard_groups") or [])),
         "action": _normalize_action(payload.get("action", source.get("action") or {})),
         "cooldown_issues": cooldown_issues,
     }
@@ -289,49 +309,122 @@ def _compare(value: float, operator: str, threshold: float) -> bool:
     return False
 
 
-def _matched_conditions(rule: Dict[str, Any], performance: Dict[str, Any]) -> list[dict]:
+def _match_condition(condition: Dict[str, Any], performance: Dict[str, Any]) -> Optional[dict]:
     metrics = performance.get("metrics") if isinstance(performance.get("metrics"), dict) else {}
-    matched = []
-    for condition in rule.get("conditions") or []:
-        metric_key = str(condition.get("metric") or "")
-        metric_payload = metrics.get(metric_key) if isinstance(metrics.get(metric_key), dict) else {}
-        condition_type = str(condition.get("type") or "hit_rate").strip() or "hit_rate"
-        if condition_type == "miss_streak":
-            streaks = metric_payload.get("streaks") if isinstance(metric_payload.get("streaks"), dict) else {}
-            miss_streak = streaks.get("current_miss_streak")
-            if miss_streak is None:
-                continue
-            try:
-                streak_count = int(miss_streak)
-            except (TypeError, ValueError):
-                continue
-            if _compare(float(streak_count), str(condition.get("operator") or ""), float(condition.get("threshold") or 0)):
-                matched.append(
-                    {
-                        **condition,
-                        "actual_miss_streak": streak_count,
-                        "metric_label": METRIC_LABELS.get(metric_key, metric_key),
-                    }
-                )
-            continue
+    metric_key = str(condition.get("metric") or "")
+    metric_payload = metrics.get(metric_key) if isinstance(metrics.get(metric_key), dict) else {}
+    condition_type = str(condition.get("type") or "hit_rate").strip() or "hit_rate"
+    if condition_type == "miss_streak":
+        streaks = metric_payload.get("streaks") if isinstance(metric_payload.get("streaks"), dict) else {}
+        miss_streak = streaks.get("current_miss_streak")
+        if miss_streak is None:
+            return None
+        try:
+            streak_count = int(miss_streak)
+        except (TypeError, ValueError):
+            return None
+        if _compare(float(streak_count), str(condition.get("operator") or ""), float(condition.get("threshold") or 0)):
+            return {
+                **condition,
+                "actual_miss_streak": streak_count,
+                "metric_label": METRIC_LABELS.get(metric_key, metric_key),
+            }
+        return None
 
-        recent_100 = metric_payload.get("recent_100") if isinstance(metric_payload.get("recent_100"), dict) else {}
-        hit_rate = recent_100.get("hit_rate")
-        sample_count = int(recent_100.get("sample_count") or 0)
-        if hit_rate is None or sample_count < int(condition.get("min_sample_count") or 1):
-            continue
-        rate = float(hit_rate)
-        if _compare(rate, str(condition.get("operator") or ""), float(condition.get("threshold") or 0)):
-            matched.append(
+    recent_100 = metric_payload.get("recent_100") if isinstance(metric_payload.get("recent_100"), dict) else {}
+    hit_rate = recent_100.get("hit_rate")
+    sample_count = int(recent_100.get("sample_count") or 0)
+    if hit_rate is None or sample_count < int(condition.get("min_sample_count") or 1):
+        return None
+    rate = float(hit_rate)
+    if _compare(rate, str(condition.get("operator") or ""), float(condition.get("threshold") or 0)):
+        return {
+            **condition,
+            "actual_hit_rate": rate,
+            "sample_count": sample_count,
+            "hit_count": int(recent_100.get("hit_count") or 0),
+            "metric_label": METRIC_LABELS.get(metric_key, metric_key),
+        }
+    return None
+
+
+def _matched_conditions(conditions: list[dict], performance: Dict[str, Any]) -> list[dict]:
+    matched = []
+    for condition in conditions or []:
+        item = _match_condition(condition, performance)
+        if item is not None:
+            matched.append(item)
+    return matched
+
+
+def _match_guard_group(group: Dict[str, Any], performance: Dict[str, Any], primary_metric: str) -> Optional[dict]:
+    conditions = group.get("conditions") if isinstance(group.get("conditions"), list) else []
+    same_metric_conditions = [
+        condition for condition in conditions
+        if str(condition.get("metric") or "").strip() == primary_metric
+    ]
+    active_conditions = same_metric_conditions or conditions
+    matched_conditions = _matched_conditions(active_conditions, performance)
+    if not matched_conditions:
+        return None
+    return {
+        "name": str(group.get("name") or ""),
+        "matched_conditions": matched_conditions,
+        "uses_same_metric": bool(same_metric_conditions),
+        "active_metric": primary_metric if same_metric_conditions else "",
+    }
+
+
+def _resolve_trigger_match(rule: Dict[str, Any], performance: Dict[str, Any]) -> Optional[dict]:
+    primary_matches = _matched_conditions(rule.get("conditions") or [], performance)
+    if not primary_matches:
+        return None
+    guard_groups = rule.get("guard_groups") if isinstance(rule.get("guard_groups"), list) else []
+    successful_paths = []
+    for primary_condition in primary_matches:
+        guard_matches = []
+        primary_metric = str(primary_condition.get("metric") or "").strip()
+        matched_conditions = [
+            condition for condition in primary_matches
+            if str(condition.get("metric") or "").strip() == primary_metric
+        ]
+        is_success = True
+        for group in guard_groups:
+            guard_match = _match_guard_group(group, performance, primary_metric)
+            if guard_match is None:
+                is_success = False
+                break
+            guard_matches.append(guard_match)
+            matched_conditions.extend(guard_match.get("matched_conditions") or [])
+        if is_success:
+            successful_paths.append(
                 {
-                    **condition,
-                    "actual_hit_rate": rate,
-                    "sample_count": sample_count,
-                    "hit_count": int(recent_100.get("hit_count") or 0),
-                    "metric_label": METRIC_LABELS.get(metric_key, metric_key),
+                    "primary_condition": primary_condition,
+                    "guard_matches": guard_matches,
+                    "matched_conditions": matched_conditions,
                 }
             )
-    return matched
+    if not successful_paths:
+        return None
+    selected_path = successful_paths[0]
+    distinct_metrics = {
+        str((path.get("primary_condition") or {}).get("metric") or "").strip()
+        for path in successful_paths
+        if str((path.get("primary_condition") or {}).get("metric") or "").strip() in ALLOWED_METRICS
+    }
+    return {
+        "primary_matches": primary_matches,
+        "successful_paths": successful_paths,
+        "successful_primary_conditions": [
+            dict(path.get("primary_condition") or {})
+            for path in successful_paths
+        ],
+        "selected_path": selected_path,
+        "matched_conditions": list(selected_path.get("matched_conditions") or []),
+        "primary_condition": dict(selected_path.get("primary_condition") or {}),
+        "guard_matches": list(selected_path.get("guard_matches") or []),
+        "distinct_metrics": distinct_metrics,
+    }
 
 
 def _has_multiple_matched_metrics(matched_conditions: list[dict]) -> bool:
@@ -341,6 +434,13 @@ def _has_multiple_matched_metrics(matched_conditions: list[dict]) -> bool:
         if str(condition.get("metric") or "").strip() in ALLOWED_METRICS
     }
     return len(metrics) >= 2
+
+
+def _has_multiple_trigger_metrics(trigger_match: Dict[str, Any]) -> bool:
+    metrics = trigger_match.get("distinct_metrics")
+    if isinstance(metrics, set):
+        return len(metrics) >= 2
+    return _has_multiple_matched_metrics(trigger_match.get("matched_conditions") or [])
 
 
 def _resolve_target_metric(rule: Dict[str, Any], matched_conditions: list[dict]) -> Optional[str]:
@@ -423,6 +523,7 @@ def _record_event(
     status: str,
     reason: str,
     matched_conditions: Optional[list[dict]] = None,
+    trigger_match: Optional[dict] = None,
     dispatch_result: Optional[dict] = None,
     play_filter_result: Optional[dict] = None,
 ) -> Dict[str, Any]:
@@ -438,6 +539,10 @@ def _record_event(
         "source_name": source.get("name"),
         "performance": performance or {},
     }
+    if trigger_match is not None:
+        snapshot["matched_primary_condition"] = trigger_match.get("primary_condition") or {}
+        snapshot["matched_guard_groups"] = trigger_match.get("guard_matches") or []
+        snapshot["successful_path_count"] = len(trigger_match.get("successful_paths") or [])
     if dispatch_result is not None:
         snapshot["dispatch_result"] = dispatch_result
     if play_filter_result is not None:
@@ -531,11 +636,13 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                 summary["skipped_count"] += 1
                 continue
 
-            matched = _matched_conditions(rule, performance)
-            if not matched:
+            trigger_match = _resolve_trigger_match(rule, performance)
+            if not trigger_match:
                 continue
+            matched = trigger_match.get("matched_conditions") or []
             action = rule.get("action") if isinstance(rule.get("action"), dict) else {}
-            if bool(action.get("skip_multiple_metrics_matched", False)) and _has_multiple_matched_metrics(matched):
+            if bool(action.get("skip_multiple_metrics_matched", False)) and _has_multiple_trigger_metrics(trigger_match):
+                skipped_matches = trigger_match.get("successful_primary_conditions") or matched
                 events.append(
                     _record_event(
                         repository,
@@ -544,7 +651,8 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                         performance=performance,
                         status="skipped",
                         reason="multiple_metrics_matched",
-                        matched_conditions=matched,
+                        matched_conditions=skipped_matches,
+                        trigger_match=trigger_match,
                     )
                 )
                 summary["skipped_count"] += 1
@@ -587,6 +695,7 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                 status="triggered",
                 reason="conditions_matched",
                 matched_conditions=matched,
+                trigger_match=trigger_match,
                 dispatch_result=dispatch_result,
                 play_filter_result=play_filter_result,
             )

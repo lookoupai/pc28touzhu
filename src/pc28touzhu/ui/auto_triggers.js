@@ -153,10 +153,15 @@
             const selected = String(rule.id) === String(state.editingRuleId) ? " is-active" : "";
             const scope = rule.scope_mode === "all_subscriptions" ? "全部跟单方案" : ("指定 " + String((rule.subscription_ids || []).length) + " 个方案");
             const conditions = (rule.conditions || []).map(conditionText).join("；") || "--";
+            const guardGroups = (rule.guard_groups || []).map(function (group, index) {
+                const groupConditions = (group.conditions || []).map(conditionText).join("；") || "--";
+                return "条件区" + String(index + 1) + "：" + groupConditions;
+            }).join(" / ");
             return '' +
                 '<article class="rule-card' + selected + '">' +
                     '<div class="rule-card-head"><div><strong>' + escapeHtml(rule.name) + '</strong><p class="meta-line">' + escapeHtml(scope) + '</p></div>' + statusPill(rule.status) + '</div>' +
-                    '<p class="meta-line">' + escapeHtml(conditions) + '</p>' +
+                    '<p class="meta-line">开始条件：' + escapeHtml(conditions) + '</p>' +
+                    (guardGroups ? '<p class="meta-line">同时达成：' + escapeHtml(guardGroups) + '</p>' : '') +
                     '<p class="meta-line">' + escapeHtml(actionText(rule.action)) + '</p>' +
                     '<p class="meta-line">冷却 <span class="mono">' + escapeHtml(rule.cooldown_issues) + '</span> 期，上次触发 <span class="mono">' + escapeHtml(rule.last_triggered_issue_no || "--") + '</span></p>' +
                     '<div class="rule-actions">' +
@@ -235,7 +240,32 @@
 
     function renderConditions(conditions) {
         $("conditionRows").innerHTML = (conditions && conditions.length ? conditions : [{metric: "big_small", operator: "lt", threshold: 40, min_sample_count: 100}]).map(conditionRowHtml).join("");
-        document.querySelectorAll(".condition-row").forEach(updateConditionRowVisibility);
+        $("conditionRows").querySelectorAll(".condition-row").forEach(updateConditionRowVisibility);
+    }
+
+    function guardGroupHtml(group, index) {
+        const item = group || {};
+        const title = item.name || ("条件区 " + String(index + 1));
+        const conditions = item.conditions && item.conditions.length ? item.conditions : [{type: "miss_streak", metric: "big_small", operator: "gte", threshold: 5, min_sample_count: 100}];
+        return '' +
+            '<article class="guard-group-card" data-guard-group-index="' + escapeHtml(index) + '">' +
+                '<div class="section-head guard-group-head">' +
+                    '<div>' +
+                        '<p class="panel-kicker">' + escapeHtml(title) + '</p>' +
+                        '<h3>本区任一条件命中即通过</h3>' +
+                    '</div>' +
+                    '<div class="condition-actions">' +
+                        '<button class="secondary-btn add-guard-condition-btn" type="button">添加条件</button>' +
+                        '<button class="ghost-btn remove-guard-group-btn" type="button">删除条件区</button>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="condition-rows guard-condition-rows">' + conditions.map(conditionRowHtml).join("") + '</div>' +
+            '</article>';
+    }
+
+    function renderGuardGroups(groups) {
+        $("guardGroupRows").innerHTML = (groups || []).map(guardGroupHtml).join("");
+        $("guardGroupRows").querySelectorAll(".condition-row").forEach(updateConditionRowVisibility);
     }
 
     function updateConditionRowVisibility(row, preferDefaultOperator) {
@@ -273,6 +303,7 @@
         form.elements.fixed_metric.value = item.action && item.action.fixed_metric ? item.action.fixed_metric : "big_small";
         renderSubscriptionOptions(item.subscription_ids || []);
         renderConditions(item.conditions || []);
+        renderGuardGroups(item.guard_groups || []);
         $("editorTitle").textContent = item.id ? "编辑触发规则" : "新建触发规则";
         $("cancelEditBtn").hidden = !item.id;
         updateScopeVisibility();
@@ -290,8 +321,8 @@
         $("fixedMetricField").hidden = $("playFilterActionSelect").value !== "fixed_metric";
     }
 
-    function collectConditions() {
-        return Array.from(document.querySelectorAll(".condition-row")).map(function (row) {
+    function collectConditions(container) {
+        return Array.from(container.querySelectorAll(":scope > .condition-row")).map(function (row) {
             return {
                 type: row.querySelector(".condition-type").value || "hit_rate",
                 metric: row.querySelector(".condition-metric").value,
@@ -299,6 +330,18 @@
                 threshold: Number(row.querySelector(".condition-threshold").value),
                 min_sample_count: Number(row.querySelector(".condition-sample").value || 100),
             };
+        });
+    }
+
+    function collectGuardGroups() {
+        return Array.from(document.querySelectorAll(".guard-group-card")).map(function (group, index) {
+            const rows = group.querySelector(".guard-condition-rows");
+            return {
+                name: "条件区 " + String(index + 1),
+                conditions: rows ? collectConditions(rows) : [],
+            };
+        }).filter(function (group) {
+            return group.conditions.length > 0;
         });
     }
 
@@ -311,7 +354,8 @@
             subscription_ids: Array.from($("subscriptionSelect").selectedOptions).map(function (option) { return Number(option.value); }),
             cooldown_issues: Number(form.elements.cooldown_issues.value || 0),
             condition_mode: "any",
-            conditions: collectConditions(),
+            conditions: collectConditions($("conditionRows")),
+            guard_groups: collectGuardGroups(),
             action: {
                 dispatch_latest_signal: form.elements.dispatch_latest_signal.checked,
                 play_filter_action: form.elements.play_filter_action.value,
@@ -412,7 +456,21 @@
             $("conditionRows").insertAdjacentHTML("beforeend", conditionRowHtml());
             updateConditionRowVisibility($("conditionRows").lastElementChild);
         });
+        $("addGuardGroupBtn").addEventListener("click", function () {
+            const index = document.querySelectorAll(".guard-group-card").length;
+            $("guardGroupRows").insertAdjacentHTML("beforeend", guardGroupHtml(null, index));
+            $("guardGroupRows").lastElementChild.querySelectorAll(".condition-row").forEach(updateConditionRowVisibility);
+        });
         $("conditionRows").addEventListener("change", function (event) {
+            const target = event.target;
+            if (target instanceof HTMLElement && target.classList.contains("condition-type")) {
+                const row = target.closest(".condition-row");
+                if (row) {
+                    updateConditionRowVisibility(row, true);
+                }
+            }
+        });
+        $("guardGroupRows").addEventListener("change", function (event) {
             const target = event.target;
             if (target instanceof HTMLElement && target.classList.contains("condition-type")) {
                 const row = target.closest(".condition-row");
@@ -426,9 +484,26 @@
             if (!(target instanceof HTMLElement)) {
                 return;
             }
+            if (target.classList.contains("add-guard-condition-btn")) {
+                const group = target.closest(".guard-group-card");
+                const rows = group ? group.querySelector(".guard-condition-rows") : null;
+                if (rows) {
+                    rows.insertAdjacentHTML("beforeend", conditionRowHtml({type: "miss_streak", metric: "big_small", operator: "gte", threshold: 5, min_sample_count: 100}));
+                    updateConditionRowVisibility(rows.lastElementChild);
+                }
+                return;
+            }
+            if (target.classList.contains("remove-guard-group-btn")) {
+                const group = target.closest(".guard-group-card");
+                if (group) {
+                    group.remove();
+                    renderGuardGroups(collectGuardGroups());
+                }
+                return;
+            }
             if (target.classList.contains("remove-condition-btn")) {
-                const rows = document.querySelectorAll(".condition-row");
-                if (rows.length > 1) {
+                const rows = target.closest(".condition-rows");
+                if (rows && rows.querySelectorAll(".condition-row").length > 1) {
                     target.closest(".condition-row").remove();
                 }
                 return;

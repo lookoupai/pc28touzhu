@@ -263,7 +263,8 @@ h3 {
 
 .rule-list,
 .event-list,
-.condition-rows {
+.condition-rows,
+.guard-group-rows {
     display: grid;
     gap: 12px;
 }
@@ -416,6 +417,19 @@ select[multiple].text-input {
     border: 1px solid var(--line);
     border-radius: 8px;
     background: var(--surface-subtle);
+}
+
+.guard-group-card {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #ffffff;
+}
+
+.guard-group-head {
+    margin-bottom: 0;
 }
 
 .condition-row {

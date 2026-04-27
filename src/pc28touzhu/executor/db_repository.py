@@ -478,6 +478,7 @@ class DatabaseRepository:
             subscription_ids_json TEXT NOT NULL DEFAULT '[]',
             condition_mode TEXT NOT NULL DEFAULT 'any',
             conditions_json TEXT NOT NULL DEFAULT '[]',
+            guard_groups_json TEXT NOT NULL DEFAULT '[]',
             action_json TEXT NOT NULL DEFAULT '{}',
             cooldown_issues INTEGER NOT NULL DEFAULT 10,
             last_triggered_issue_no TEXT NOT NULL DEFAULT '',
@@ -540,6 +541,7 @@ class DatabaseRepository:
             self._ensure_message_template_columns(conn)
             self._ensure_execution_job_columns(conn)
             self._ensure_progression_event_columns(conn)
+            self._ensure_auto_trigger_rule_columns(conn)
             self._ensure_user_telegram_indexes(conn)
             conn.commit()
 
@@ -619,6 +621,16 @@ class DatabaseRepository:
             "net_delta": "ALTER TABLE subscription_progression_events ADD COLUMN net_delta REAL NOT NULL DEFAULT 0",
             "settlement_snapshot_json": "ALTER TABLE subscription_progression_events ADD COLUMN settlement_snapshot_json TEXT NOT NULL DEFAULT '{}'",
             "result_context_json": "ALTER TABLE subscription_progression_events ADD COLUMN result_context_json TEXT NOT NULL DEFAULT '{}'",
+        }
+        for column_name, ddl in column_definitions.items():
+            if column_name not in existing_columns:
+                conn.execute(ddl)
+
+    def _ensure_auto_trigger_rule_columns(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(auto_trigger_rules)").fetchall()
+        existing_columns = {str(row["name"]) for row in rows}
+        column_definitions = {
+            "guard_groups_json": "ALTER TABLE auto_trigger_rules ADD COLUMN guard_groups_json TEXT NOT NULL DEFAULT '[]'",
         }
         for column_name, ddl in column_definitions.items():
             if column_name not in existing_columns:
@@ -837,6 +849,7 @@ class DatabaseRepository:
             ],
             "condition_mode": str(row.get("condition_mode") or "any"),
             "conditions": _safe_json_loads_list(row.get("conditions_json")),
+            "guard_groups": _safe_json_loads_list(row.get("guard_groups_json")),
             "action": _safe_json_loads(row.get("action_json")),
             "cooldown_issues": int(row.get("cooldown_issues") or 0),
             "last_triggered_issue_no": str(row.get("last_triggered_issue_no") or ""),
@@ -2156,6 +2169,7 @@ class DatabaseRepository:
         subscription_ids: Optional[list[int]] = None,
         condition_mode: str = "any",
         conditions: Optional[list[dict]] = None,
+        guard_groups: Optional[list[dict]] = None,
         action: Optional[dict] = None,
         cooldown_issues: int = 10,
     ) -> Dict[str, Any]:
@@ -2165,8 +2179,8 @@ class DatabaseRepository:
                 """
                 INSERT INTO auto_trigger_rules(
                     user_id, name, status, scope_mode, subscription_ids_json, condition_mode,
-                    conditions_json, action_json, cooldown_issues, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    conditions_json, guard_groups_json, action_json, cooldown_issues, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(user_id),
@@ -2176,6 +2190,7 @@ class DatabaseRepository:
                     _safe_json_dumps(subscription_ids or []),
                     condition_mode,
                     _safe_json_dumps(conditions or []),
+                    _safe_json_dumps(guard_groups or []),
                     _safe_json_dumps(action or {}),
                     int(cooldown_issues),
                     now,
@@ -2216,6 +2231,7 @@ class DatabaseRepository:
         subscription_ids: Optional[list[int]],
         condition_mode: str,
         conditions: Optional[list[dict]],
+        guard_groups: Optional[list[dict]],
         action: Optional[dict],
         cooldown_issues: int,
     ) -> Optional[Dict[str, Any]]:
@@ -2230,6 +2246,7 @@ class DatabaseRepository:
                     subscription_ids_json = ?,
                     condition_mode = ?,
                     conditions_json = ?,
+                    guard_groups_json = ?,
                     action_json = ?,
                     cooldown_issues = ?,
                     updated_at = ?
@@ -2242,6 +2259,7 @@ class DatabaseRepository:
                     _safe_json_dumps(subscription_ids or []),
                     condition_mode,
                     _safe_json_dumps(conditions or []),
+                    _safe_json_dumps(guard_groups or []),
                     _safe_json_dumps(action or {}),
                     int(cooldown_issues),
                     now,
