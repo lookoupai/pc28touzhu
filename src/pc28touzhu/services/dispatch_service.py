@@ -80,6 +80,59 @@ def _message_text_from_template(signal: Dict[str, Any], amount: float, template:
     return rendered or _default_message_text(signal, amount)
 
 
+def _resolve_auto_trigger_context(repository: Any, candidate: Dict[str, Any], explicit_context: Dict[str, Any] | None) -> Dict[str, Any] | None:
+    context = explicit_context if isinstance(explicit_context, dict) else None
+    if context and int(context.get("rule_id") or 0) > 0 and str(context.get("stat_date") or "").strip():
+        stat = repository.get_auto_trigger_rule_daily_stat(
+            rule_id=int(context["rule_id"]),
+            user_id=int(candidate["user_id"]),
+            stat_date=str(context["stat_date"]),
+        )
+        if str(stat.get("status") or "") == "stopped":
+            return {**context, "stopped": True, "stopped_reason": str(stat.get("stopped_reason") or "daily_risk_stopped")}
+        return {**context, "stopped": False}
+
+    if not hasattr(repository, "get_latest_auto_trigger_rule_run_for_subscription"):
+        return None
+    run = repository.get_latest_auto_trigger_rule_run_for_subscription(
+        subscription_id=int(candidate["subscription_id"]),
+        user_id=int(candidate["user_id"]),
+    )
+    if not run:
+        return None
+    if str(run.get("status") or "") == "stopped":
+        return {
+            "rule_id": int(run["rule_id"]),
+            "rule_run_id": int(run["id"]),
+            "stat_date": str(run.get("stat_date") or ""),
+            "stopped": True,
+            "stopped_reason": str(run.get("stop_reason") or "daily_risk_stopped"),
+        }
+    if str(run.get("status") or "") != "active":
+        return None
+    stat_date = str(run.get("stat_date") or "").strip()
+    rule_id = int(run["rule_id"])
+    stat = repository.get_auto_trigger_rule_daily_stat(
+        rule_id=rule_id,
+        user_id=int(candidate["user_id"]),
+        stat_date=stat_date,
+    )
+    if str(stat.get("status") or "") == "stopped":
+        return {
+            "rule_id": rule_id,
+            "rule_run_id": int(run["id"]),
+            "stat_date": stat_date,
+            "stopped": True,
+            "stopped_reason": str(stat.get("stopped_reason") or "daily_risk_stopped"),
+        }
+    return {
+        "rule_id": rule_id,
+        "rule_run_id": int(run["id"]),
+        "stat_date": stat_date,
+        "stopped": False,
+    }
+
+
 def _build_stake_plan(strategy: Dict[str, Any], signal: Dict[str, Any], current_step: int = 1) -> Dict[str, Any]:
     payload = signal.get("normalized_payload") or {}
     runtime_policy = resolve_staking_runtime_policy(strategy, payload)
@@ -112,7 +165,13 @@ def _build_stake_plan(strategy: Dict[str, Any], signal: Dict[str, Any], current_
     return stake_plan
 
 
-def dispatch_signal(repository: Any, signal_id: int, *, subscription_id: int | None = None) -> Dict[str, Any]:
+def dispatch_signal(
+    repository: Any,
+    signal_id: int,
+    *,
+    subscription_id: int | None = None,
+    auto_trigger_context: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     signal = repository.get_signal(signal_id)
     if not signal:
         raise ValueError("signal 不存在")
@@ -132,6 +191,7 @@ def dispatch_signal(repository: Any, signal_id: int, *, subscription_id: int | N
 
     created_count = 0
     existing_count = 0
+    skipped_count = 0
     jobs = []
     progression_events: dict[int, Dict[str, Any] | None] = {}
 
@@ -142,6 +202,10 @@ def dispatch_signal(repository: Any, signal_id: int, *, subscription_id: int | N
             strategy = {}
         strategy = strategy or {}
         subscription_id = int(candidate["subscription_id"])
+        resolved_auto_trigger_context = _resolve_auto_trigger_context(repository, candidate, auto_trigger_context)
+        if resolved_auto_trigger_context and resolved_auto_trigger_context.get("stopped"):
+            skipped_count += 1
+            continue
         progression_event = progression_events.get(subscription_id)
         if progression_event is None:
             existing_event = repository.get_progression_event_by_signal(
@@ -173,6 +237,21 @@ def dispatch_signal(repository: Any, signal_id: int, *, subscription_id: int | N
                         fallback_profit_ratio=float(settlement_policy.get("fallback_profit_ratio") or 1.0),
                         resolved_from=str(settlement_policy.get("resolved_from") or ""),
                         signal=signal,
+                    ),
+                    auto_trigger_rule_id=(
+                        int(resolved_auto_trigger_context["rule_id"])
+                        if resolved_auto_trigger_context and resolved_auto_trigger_context.get("rule_id")
+                        else None
+                    ),
+                    auto_trigger_rule_run_id=(
+                        int(resolved_auto_trigger_context["rule_run_id"])
+                        if resolved_auto_trigger_context and resolved_auto_trigger_context.get("rule_run_id")
+                        else None
+                    ),
+                    auto_trigger_stat_date=(
+                        str(resolved_auto_trigger_context.get("stat_date") or "")
+                        if resolved_auto_trigger_context
+                        else ""
                     ),
                     status="pending",
                 )
@@ -222,5 +301,6 @@ def dispatch_signal(repository: Any, signal_id: int, *, subscription_id: int | N
         "candidate_count": len(candidates),
         "created_count": created_count,
         "existing_count": existing_count,
+        "skipped_count": skipped_count,
         "jobs": jobs,
     }

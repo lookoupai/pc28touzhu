@@ -87,6 +87,24 @@
                                 <input name="skip_multiple_metrics_matched" type="checkbox">
                                 <span>单个方案同次命中 2 个或更多不同玩法指标时，仅跳过该方案</span>
                             </label>
+                            <label class="check-row wide">
+                                <input id="dailyRiskEnabledInput" name="daily_risk_enabled" type="checkbox">
+                                <span>启用规则每日止盈止损</span>
+                            </label>
+                            <div id="dailyRiskFields" class="daily-risk-grid wide">
+                                <label class="field">
+                                    <span>每日止盈</span>
+                                    <input class="text-input" name="daily_profit_target" type="number" min="0" step="0.01" value="0">
+                                </label>
+                                <label class="field">
+                                    <span>每日止损</span>
+                                    <input class="text-input" name="daily_loss_limit" type="number" min="0" step="0.01" value="0">
+                                </label>
+                                <label class="check-row">
+                                    <input name="daily_cancel_pending_jobs" type="checkbox" checked>
+                                    <span>达到阈值后取消未执行任务</span>
+                                </label>
+                            </div>
                             <label class="field wide">
                                 <span>作用范围</span>
                                 <select id="scopeModeSelect" class="text-input" name="scope_mode">

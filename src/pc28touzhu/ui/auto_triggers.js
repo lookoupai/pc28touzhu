@@ -143,6 +143,21 @@
         return "命中后保持原玩法" + guardText;
     }
 
+    function dailyRiskText(rule) {
+        const payload = rule.daily_risk_control || {};
+        if (!payload.enabled) {
+            return "";
+        }
+        const parts = [];
+        if (Number(payload.profit_target || 0) > 0) {
+            parts.push("止盈 " + String(payload.profit_target));
+        }
+        if (Number(payload.loss_limit || 0) > 0) {
+            parts.push("止损 " + String(payload.loss_limit));
+        }
+        return parts.length ? ("每日风控：" + parts.join(" / ")) : "";
+    }
+
     function renderRuleList() {
         const list = $("ruleList");
         if (!state.rules.length) {
@@ -163,6 +178,7 @@
                     '<p class="meta-line">开始条件：' + escapeHtml(conditions) + '</p>' +
                     (guardGroups ? '<p class="meta-line">同时达成：' + escapeHtml(guardGroups) + '</p>' : '') +
                     '<p class="meta-line">' + escapeHtml(actionText(rule.action)) + '</p>' +
+                    (dailyRiskText(rule) ? '<p class="meta-line">' + escapeHtml(dailyRiskText(rule)) + '</p>' : '') +
                     '<p class="meta-line">冷却 <span class="mono">' + escapeHtml(rule.cooldown_issues) + '</span> 期，上次触发 <span class="mono">' + escapeHtml(rule.last_triggered_issue_no || "--") + '</span></p>' +
                     '<div class="rule-actions">' +
                         '<button class="tiny-btn edit-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">编辑</button>' +
@@ -301,6 +317,11 @@
         form.elements.skip_multiple_metrics_matched.checked = Boolean(item.action && item.action.skip_multiple_metrics_matched);
         form.elements.play_filter_action.value = item.action && item.action.play_filter_action ? item.action.play_filter_action : "keep";
         form.elements.fixed_metric.value = item.action && item.action.fixed_metric ? item.action.fixed_metric : "big_small";
+        const dailyRisk = item.daily_risk_control || {};
+        form.elements.daily_risk_enabled.checked = Boolean(dailyRisk.enabled);
+        form.elements.daily_profit_target.value = String(dailyRisk.profit_target || 0);
+        form.elements.daily_loss_limit.value = String(dailyRisk.loss_limit || 0);
+        form.elements.daily_cancel_pending_jobs.checked = dailyRisk.cancel_pending_jobs !== false;
         renderSubscriptionOptions(item.subscription_ids || []);
         renderConditions(item.conditions || []);
         renderGuardGroups(item.guard_groups || []);
@@ -308,6 +329,7 @@
         $("cancelEditBtn").hidden = !item.id;
         updateScopeVisibility();
         updateActionVisibility();
+        updateDailyRiskVisibility();
         renderRuleList();
         setStatus("", false);
     }
@@ -319,6 +341,10 @@
 
     function updateActionVisibility() {
         $("fixedMetricField").hidden = $("playFilterActionSelect").value !== "fixed_metric";
+    }
+
+    function updateDailyRiskVisibility() {
+        $("dailyRiskFields").hidden = !Boolean($("dailyRiskEnabledInput").checked);
     }
 
     function collectConditions(container) {
@@ -361,6 +387,13 @@
                 play_filter_action: form.elements.play_filter_action.value,
                 fixed_metric: form.elements.fixed_metric.value,
                 skip_multiple_metrics_matched: form.elements.skip_multiple_metrics_matched.checked,
+            },
+            daily_risk_control: {
+                enabled: form.elements.daily_risk_enabled.checked,
+                profit_target: Number(form.elements.daily_profit_target.value || 0),
+                loss_limit: Number(form.elements.daily_loss_limit.value || 0),
+                timezone: "Asia/Shanghai",
+                cancel_pending_jobs: form.elements.daily_cancel_pending_jobs.checked,
             },
         };
     }
@@ -433,6 +466,7 @@
         $("ruleForm").addEventListener("submit", saveRule);
         $("scopeModeSelect").addEventListener("change", updateScopeVisibility);
         $("playFilterActionSelect").addEventListener("change", updateActionVisibility);
+        $("dailyRiskEnabledInput").addEventListener("change", updateDailyRiskVisibility);
         $("refreshBtn").addEventListener("click", loadData);
         $("newRuleBtn").addEventListener("click", function () { resetForm(); });
         $("cancelEditBtn").addEventListener("click", function () { resetForm(); });

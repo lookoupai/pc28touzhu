@@ -384,6 +384,21 @@ h3 {
     grid-column: 1 / -1;
 }
 
+.daily-risk-grid {
+    display: grid;
+    grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) minmax(220px, 1.2fr);
+    gap: 12px;
+    align-items: end;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface-subtle);
+}
+
+.daily-risk-grid[hidden] {
+    display: none;
+}
+
 .field span,
 .check-row span {
     color: #334155;
@@ -632,6 +647,7 @@ select[multiple].text-input {
 
     .summary-grid,
     .form-grid,
+    .daily-risk-grid,
     .condition-row,
     .action-row {
         grid-template-columns: 1fr;

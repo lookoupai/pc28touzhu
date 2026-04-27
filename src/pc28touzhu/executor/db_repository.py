@@ -319,6 +319,9 @@ class DatabaseRepository:
             net_delta REAL NOT NULL DEFAULT 0,
             settlement_snapshot_json TEXT NOT NULL DEFAULT '{}',
             result_context_json TEXT NOT NULL DEFAULT '{}',
+            auto_trigger_rule_id INTEGER,
+            auto_trigger_rule_run_id INTEGER,
+            auto_trigger_stat_date TEXT NOT NULL DEFAULT '',
             settled_at TEXT,
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
@@ -480,6 +483,7 @@ class DatabaseRepository:
             conditions_json TEXT NOT NULL DEFAULT '[]',
             guard_groups_json TEXT NOT NULL DEFAULT '[]',
             action_json TEXT NOT NULL DEFAULT '{}',
+            daily_risk_control_json TEXT NOT NULL DEFAULT '{}',
             cooldown_issues INTEGER NOT NULL DEFAULT 10,
             last_triggered_issue_no TEXT NOT NULL DEFAULT '',
             last_triggered_at TEXT,
@@ -508,6 +512,49 @@ class DatabaseRepository:
             FOREIGN KEY(source_id) REFERENCES signal_sources(id)
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS auto_trigger_rule_daily_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            stat_date TEXT NOT NULL,
+            profit_amount REAL NOT NULL DEFAULT 0,
+            loss_amount REAL NOT NULL DEFAULT 0,
+            net_profit REAL NOT NULL DEFAULT 0,
+            settled_event_count INTEGER NOT NULL DEFAULT 0,
+            hit_count INTEGER NOT NULL DEFAULT 0,
+            miss_count INTEGER NOT NULL DEFAULT 0,
+            refund_count INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active',
+            stopped_reason TEXT NOT NULL DEFAULT '',
+            stopped_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            FOREIGN KEY(rule_id) REFERENCES auto_trigger_rules(id),
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            UNIQUE(rule_id, stat_date)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS auto_trigger_rule_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            subscription_id INTEGER NOT NULL,
+            stat_date TEXT NOT NULL,
+            started_issue_no TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'active',
+            stop_reason TEXT NOT NULL DEFAULT '',
+            started_at TEXT NOT NULL,
+            stopped_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            FOREIGN KEY(rule_id) REFERENCES auto_trigger_rules(id),
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id),
+            UNIQUE(rule_id, subscription_id, stat_date)
+        )
+        """,
         "CREATE INDEX IF NOT EXISTS idx_execution_jobs_status_time ON execution_jobs(status, execute_after, expire_at)",
         "CREATE INDEX IF NOT EXISTS idx_execution_attempts_job ON execution_attempts(job_id, attempt_no)",
         "CREATE INDEX IF NOT EXISTS idx_platform_alert_records_status_seen ON platform_alert_records(status, last_seen_at)",
@@ -520,6 +567,9 @@ class DatabaseRepository:
         "CREATE INDEX IF NOT EXISTS idx_subscription_daily_stats_date_net ON subscription_daily_stats(stat_date, net_profit)",
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_rules_user_status ON auto_trigger_rules(user_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_events_user_time ON auto_trigger_events(user_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_auto_trigger_rule_daily_stats_user_date ON auto_trigger_rule_daily_stats(user_id, stat_date, status)",
+        "CREATE INDEX IF NOT EXISTS idx_auto_trigger_rule_runs_subscription ON auto_trigger_rule_runs(subscription_id, user_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_progression_events_auto_trigger_rule ON subscription_progression_events(auto_trigger_rule_id, user_id, auto_trigger_stat_date)",
     ]
 
     def __init__(self, db_path: str = "pc28touzhu.db"):
@@ -621,6 +671,9 @@ class DatabaseRepository:
             "net_delta": "ALTER TABLE subscription_progression_events ADD COLUMN net_delta REAL NOT NULL DEFAULT 0",
             "settlement_snapshot_json": "ALTER TABLE subscription_progression_events ADD COLUMN settlement_snapshot_json TEXT NOT NULL DEFAULT '{}'",
             "result_context_json": "ALTER TABLE subscription_progression_events ADD COLUMN result_context_json TEXT NOT NULL DEFAULT '{}'",
+            "auto_trigger_rule_id": "ALTER TABLE subscription_progression_events ADD COLUMN auto_trigger_rule_id INTEGER",
+            "auto_trigger_rule_run_id": "ALTER TABLE subscription_progression_events ADD COLUMN auto_trigger_rule_run_id INTEGER",
+            "auto_trigger_stat_date": "ALTER TABLE subscription_progression_events ADD COLUMN auto_trigger_stat_date TEXT NOT NULL DEFAULT ''",
         }
         for column_name, ddl in column_definitions.items():
             if column_name not in existing_columns:
@@ -631,6 +684,7 @@ class DatabaseRepository:
         existing_columns = {str(row["name"]) for row in rows}
         column_definitions = {
             "guard_groups_json": "ALTER TABLE auto_trigger_rules ADD COLUMN guard_groups_json TEXT NOT NULL DEFAULT '[]'",
+            "daily_risk_control_json": "ALTER TABLE auto_trigger_rules ADD COLUMN daily_risk_control_json TEXT NOT NULL DEFAULT '{}'",
         }
         for column_name, ddl in column_definitions.items():
             if column_name not in existing_columns:
@@ -831,7 +885,46 @@ class DatabaseRepository:
             "net_delta": _round_money(row.get("net_delta")),
             "settlement_snapshot": _safe_json_loads(row.get("settlement_snapshot_json")),
             "result_context": _safe_json_loads(row.get("result_context_json")),
+            "auto_trigger_rule_id": int(row["auto_trigger_rule_id"]) if row.get("auto_trigger_rule_id") is not None else None,
+            "auto_trigger_rule_run_id": int(row["auto_trigger_rule_run_id"]) if row.get("auto_trigger_rule_run_id") is not None else None,
+            "auto_trigger_stat_date": str(row.get("auto_trigger_stat_date") or ""),
             "settled_at": row.get("settled_at"),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+
+    def _serialize_auto_trigger_rule_daily_stat_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": int(row["id"]),
+            "rule_id": int(row["rule_id"]),
+            "user_id": int(row["user_id"]),
+            "stat_date": str(row.get("stat_date") or ""),
+            "profit_amount": _round_money(row.get("profit_amount")),
+            "loss_amount": _round_money(row.get("loss_amount")),
+            "net_profit": _round_money(row.get("net_profit")),
+            "settled_event_count": int(row.get("settled_event_count") or 0),
+            "hit_count": int(row.get("hit_count") or 0),
+            "miss_count": int(row.get("miss_count") or 0),
+            "refund_count": int(row.get("refund_count") or 0),
+            "status": str(row.get("status") or "active"),
+            "stopped_reason": str(row.get("stopped_reason") or ""),
+            "stopped_at": row.get("stopped_at"),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+
+    def _serialize_auto_trigger_rule_run_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": int(row["id"]),
+            "rule_id": int(row["rule_id"]),
+            "user_id": int(row["user_id"]),
+            "subscription_id": int(row["subscription_id"]),
+            "stat_date": str(row.get("stat_date") or ""),
+            "started_issue_no": str(row.get("started_issue_no") or ""),
+            "status": str(row.get("status") or "active"),
+            "stop_reason": str(row.get("stop_reason") or ""),
+            "started_at": row.get("started_at"),
+            "stopped_at": row.get("stopped_at"),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
         }
@@ -851,6 +944,7 @@ class DatabaseRepository:
             "conditions": _safe_json_loads_list(row.get("conditions_json")),
             "guard_groups": _safe_json_loads_list(row.get("guard_groups_json")),
             "action": _safe_json_loads(row.get("action_json")),
+            "daily_risk_control": _safe_json_loads(row.get("daily_risk_control_json")),
             "cooldown_issues": int(row.get("cooldown_issues") or 0),
             "last_triggered_issue_no": str(row.get("last_triggered_issue_no") or ""),
             "last_triggered_at": row.get("last_triggered_at"),
@@ -2171,6 +2265,7 @@ class DatabaseRepository:
         conditions: Optional[list[dict]] = None,
         guard_groups: Optional[list[dict]] = None,
         action: Optional[dict] = None,
+        daily_risk_control: Optional[dict] = None,
         cooldown_issues: int = 10,
     ) -> Dict[str, Any]:
         now = _utc_now_iso()
@@ -2179,8 +2274,9 @@ class DatabaseRepository:
                 """
                 INSERT INTO auto_trigger_rules(
                     user_id, name, status, scope_mode, subscription_ids_json, condition_mode,
-                    conditions_json, guard_groups_json, action_json, cooldown_issues, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    conditions_json, guard_groups_json, action_json, daily_risk_control_json,
+                    cooldown_issues, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(user_id),
@@ -2192,6 +2288,7 @@ class DatabaseRepository:
                     _safe_json_dumps(conditions or []),
                     _safe_json_dumps(guard_groups or []),
                     _safe_json_dumps(action or {}),
+                    _safe_json_dumps(daily_risk_control or {}),
                     int(cooldown_issues),
                     now,
                     now,
@@ -2233,6 +2330,7 @@ class DatabaseRepository:
         conditions: Optional[list[dict]],
         guard_groups: Optional[list[dict]],
         action: Optional[dict],
+        daily_risk_control: Optional[dict],
         cooldown_issues: int,
     ) -> Optional[Dict[str, Any]]:
         now = _utc_now_iso()
@@ -2248,6 +2346,7 @@ class DatabaseRepository:
                     conditions_json = ?,
                     guard_groups_json = ?,
                     action_json = ?,
+                    daily_risk_control_json = ?,
                     cooldown_issues = ?,
                     updated_at = ?
                 WHERE id = ? AND user_id = ?
@@ -2261,6 +2360,7 @@ class DatabaseRepository:
                     _safe_json_dumps(conditions or []),
                     _safe_json_dumps(guard_groups or []),
                     _safe_json_dumps(action or {}),
+                    _safe_json_dumps(daily_risk_control or {}),
                     int(cooldown_issues),
                     now,
                     int(rule_id),
@@ -2409,6 +2509,299 @@ class DatabaseRepository:
         return {
             "deleted_count": sum(deleted_by_status.values()),
             "deleted_by_status": deleted_by_status,
+        }
+
+    def get_auto_trigger_rule_daily_stat(self, *, rule_id: int, user_id: int, stat_date: str) -> Dict[str, Any]:
+        row = self._fetch_one(
+            """
+            SELECT *
+            FROM auto_trigger_rule_daily_stats
+            WHERE rule_id = ? AND user_id = ? AND stat_date = ?
+            LIMIT 1
+            """,
+            (int(rule_id), int(user_id), str(stat_date or "").strip()),
+        )
+        if row:
+            return self._serialize_auto_trigger_rule_daily_stat_row(row)
+        return {
+            "id": None,
+            "rule_id": int(rule_id),
+            "user_id": int(user_id),
+            "stat_date": str(stat_date or "").strip(),
+            "profit_amount": 0.0,
+            "loss_amount": 0.0,
+            "net_profit": 0.0,
+            "settled_event_count": 0,
+            "hit_count": 0,
+            "miss_count": 0,
+            "refund_count": 0,
+            "status": "active",
+            "stopped_reason": "",
+            "stopped_at": None,
+            "created_at": None,
+            "updated_at": None,
+        }
+
+    def get_auto_trigger_rule_run(self, rule_run_id: int) -> Optional[Dict[str, Any]]:
+        row = self._fetch_one(
+            "SELECT * FROM auto_trigger_rule_runs WHERE id = ? LIMIT 1",
+            (int(rule_run_id),),
+        )
+        return self._serialize_auto_trigger_rule_run_row(row) if row else None
+
+    def get_latest_auto_trigger_rule_run_for_subscription(self, *, subscription_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+        row = self._fetch_one(
+            """
+            SELECT *
+            FROM auto_trigger_rule_runs
+            WHERE subscription_id = ? AND user_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(subscription_id), int(user_id)),
+        )
+        return self._serialize_auto_trigger_rule_run_row(row) if row else None
+
+    def ensure_auto_trigger_rule_run(
+        self,
+        *,
+        rule_id: int,
+        user_id: int,
+        subscription_id: int,
+        stat_date: str,
+        started_issue_no: str = "",
+    ) -> Dict[str, Any]:
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO auto_trigger_rule_runs(
+                    rule_id, user_id, subscription_id, stat_date, started_issue_no,
+                    status, started_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                ON CONFLICT(rule_id, subscription_id, stat_date) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    started_issue_no = CASE
+                        WHEN auto_trigger_rule_runs.started_issue_no = '' THEN excluded.started_issue_no
+                        ELSE auto_trigger_rule_runs.started_issue_no
+                    END,
+                    status = CASE
+                        WHEN auto_trigger_rule_runs.status = 'closed' THEN 'active'
+                        ELSE auto_trigger_rule_runs.status
+                    END,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    int(rule_id),
+                    int(user_id),
+                    int(subscription_id),
+                    str(stat_date or "").strip(),
+                    str(started_issue_no or ""),
+                    now,
+                    now,
+                    now,
+                ),
+            )
+        row = self._fetch_one(
+            """
+            SELECT *
+            FROM auto_trigger_rule_runs
+            WHERE rule_id = ? AND subscription_id = ? AND stat_date = ?
+            LIMIT 1
+            """,
+            (int(rule_id), int(subscription_id), str(stat_date or "").strip()),
+        )
+        return self._serialize_auto_trigger_rule_run_row(row) if row else {}
+
+    def stop_auto_trigger_rule_day(
+        self,
+        *,
+        rule_id: int,
+        user_id: int,
+        stat_date: str,
+        reason: str,
+    ) -> Dict[str, Any]:
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO auto_trigger_rule_daily_stats(
+                    rule_id, user_id, stat_date, status, stopped_reason, stopped_at, created_at, updated_at
+                ) VALUES (?, ?, ?, 'stopped', ?, ?, ?, ?)
+                ON CONFLICT(rule_id, stat_date) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    status = 'stopped',
+                    stopped_reason = CASE
+                        WHEN auto_trigger_rule_daily_stats.stopped_reason = '' THEN excluded.stopped_reason
+                        ELSE auto_trigger_rule_daily_stats.stopped_reason
+                    END,
+                    stopped_at = COALESCE(auto_trigger_rule_daily_stats.stopped_at, excluded.stopped_at),
+                    updated_at = excluded.updated_at
+                """,
+                (int(rule_id), int(user_id), str(stat_date or "").strip(), str(reason or ""), now, now, now),
+            )
+            conn.execute(
+                """
+                UPDATE auto_trigger_rule_runs
+                SET status = 'stopped',
+                    stop_reason = CASE WHEN stop_reason = '' THEN ? ELSE stop_reason END,
+                    stopped_at = COALESCE(stopped_at, ?),
+                    updated_at = ?
+                WHERE rule_id = ? AND user_id = ? AND stat_date = ? AND status = 'active'
+                """,
+                (str(reason or ""), now, now, int(rule_id), int(user_id), str(stat_date or "").strip()),
+            )
+        return self.get_auto_trigger_rule_daily_stat(rule_id=rule_id, user_id=user_id, stat_date=stat_date)
+
+    def upsert_auto_trigger_rule_daily_stat(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        rule_id: int,
+        user_id: int,
+        stat_date: str,
+        profit_delta: float,
+        loss_delta: float,
+        net_delta: float,
+        result_type: str,
+        updated_at: str,
+    ) -> Dict[str, Any]:
+        hit_count = 1 if result_type == "hit" else 0
+        miss_count = 1 if result_type == "miss" else 0
+        refund_count = 1 if result_type == "refund" else 0
+        conn.execute(
+            """
+            INSERT INTO auto_trigger_rule_daily_stats(
+                rule_id, user_id, stat_date,
+                profit_amount, loss_amount, net_profit,
+                settled_event_count, hit_count, miss_count, refund_count,
+                status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+            ON CONFLICT(rule_id, stat_date) DO UPDATE SET
+                user_id = excluded.user_id,
+                profit_amount = ROUND(auto_trigger_rule_daily_stats.profit_amount + excluded.profit_amount, 2),
+                loss_amount = ROUND(auto_trigger_rule_daily_stats.loss_amount + excluded.loss_amount, 2),
+                net_profit = ROUND(auto_trigger_rule_daily_stats.net_profit + excluded.net_profit, 2),
+                settled_event_count = auto_trigger_rule_daily_stats.settled_event_count + excluded.settled_event_count,
+                hit_count = auto_trigger_rule_daily_stats.hit_count + excluded.hit_count,
+                miss_count = auto_trigger_rule_daily_stats.miss_count + excluded.miss_count,
+                refund_count = auto_trigger_rule_daily_stats.refund_count + excluded.refund_count,
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(rule_id),
+                int(user_id),
+                str(stat_date or "").strip(),
+                _round_money(profit_delta),
+                _round_money(loss_delta),
+                _round_money(net_delta),
+                1,
+                hit_count,
+                miss_count,
+                refund_count,
+                updated_at,
+                updated_at,
+            ),
+        )
+        row = conn.execute(
+            """
+            SELECT *
+            FROM auto_trigger_rule_daily_stats
+            WHERE rule_id = ? AND user_id = ? AND stat_date = ?
+            LIMIT 1
+            """,
+            (int(rule_id), int(user_id), str(stat_date or "").strip()),
+        ).fetchone()
+        return self._serialize_auto_trigger_rule_daily_stat_row(dict(row)) if row else {}
+
+    def cancel_pending_auto_trigger_rule_jobs(
+        self,
+        *,
+        rule_id: int,
+        user_id: int,
+        stat_date: str,
+        reason: str,
+    ) -> Dict[str, Any]:
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            job_cursor = conn.execute(
+                """
+                UPDATE execution_jobs
+                SET status = 'expired',
+                    error_message = ?,
+                    updated_at = ?
+                WHERE user_id = ?
+                  AND status = 'pending'
+                  AND progression_event_id IN (
+                      SELECT id
+                      FROM subscription_progression_events
+                      WHERE auto_trigger_rule_id = ?
+                        AND user_id = ?
+                        AND auto_trigger_stat_date = ?
+                  )
+                """,
+                (str(reason or "规则日风控已停止"), now, int(user_id), int(rule_id), int(user_id), str(stat_date or "").strip()),
+            )
+            event_cursor = conn.execute(
+                """
+                UPDATE subscription_progression_events
+                SET status = 'cancelled',
+                    result_context_json = ?,
+                    updated_at = ?
+                WHERE auto_trigger_rule_id = ?
+                  AND user_id = ?
+                  AND auto_trigger_stat_date = ?
+                  AND status = 'pending'
+                  AND id NOT IN (
+                      SELECT progression_event_id
+                      FROM execution_jobs
+                      WHERE progression_event_id IS NOT NULL
+                        AND status NOT IN ('pending', 'expired')
+                  )
+                """,
+                (
+                    _safe_json_dumps({"cancel_reason": str(reason or "规则日风控已停止")}),
+                    now,
+                    int(rule_id),
+                    int(user_id),
+                    str(stat_date or "").strip(),
+                ),
+            )
+        return {
+            "expired_job_count": int(job_cursor.rowcount or 0),
+            "cancelled_event_count": int(event_cursor.rowcount or 0),
+        }
+
+    def prune_auto_trigger_rule_runtime_data(
+        self,
+        *,
+        runs_cutoff: str,
+        stats_cutoff: str,
+        user_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        with self._connect() as conn:
+            if user_id is None:
+                runs_cursor = conn.execute(
+                    "DELETE FROM auto_trigger_rule_runs WHERE stat_date < ?",
+                    (str(runs_cutoff or ""),),
+                )
+                stats_cursor = conn.execute(
+                    "DELETE FROM auto_trigger_rule_daily_stats WHERE stat_date < ?",
+                    (str(stats_cutoff or ""),),
+                )
+            else:
+                runs_cursor = conn.execute(
+                    "DELETE FROM auto_trigger_rule_runs WHERE user_id = ? AND stat_date < ?",
+                    (int(user_id), str(runs_cutoff or "")),
+                )
+                stats_cursor = conn.execute(
+                    "DELETE FROM auto_trigger_rule_daily_stats WHERE user_id = ? AND stat_date < ?",
+                    (int(user_id), str(stats_cutoff or "")),
+                )
+        return {
+            "deleted_count": int(runs_cursor.rowcount or 0) + int(stats_cursor.rowcount or 0),
+            "deleted_runs_count": int(runs_cursor.rowcount or 0),
+            "deleted_stats_count": int(stats_cursor.rowcount or 0),
         }
 
     def get_latest_auto_trigger_event(
@@ -2947,6 +3340,9 @@ class DatabaseRepository:
         cap_action: str,
         settlement_rule_id: Optional[str] = None,
         settlement_snapshot: Optional[dict] = None,
+        auto_trigger_rule_id: Optional[int] = None,
+        auto_trigger_rule_run_id: Optional[int] = None,
+        auto_trigger_stat_date: str = "",
         status: str = "pending",
     ) -> Dict[str, Any]:
         existing = self.get_progression_event_by_signal(subscription_id=subscription_id, signal_id=signal_id)
@@ -2959,8 +3355,10 @@ class DatabaseRepository:
                 INSERT INTO subscription_progression_events(
                     subscription_id, user_id, signal_id, issue_no, progression_step, stake_amount,
                     base_stake, multiplier, max_steps, refund_action, cap_action,
-                    settlement_rule_id, settlement_snapshot_json, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    settlement_rule_id, settlement_snapshot_json,
+                    auto_trigger_rule_id, auto_trigger_rule_run_id, auto_trigger_stat_date,
+                    status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(subscription_id),
@@ -2976,6 +3374,9 @@ class DatabaseRepository:
                     str(cap_action or "reset"),
                     str(settlement_rule_id or ""),
                     _safe_json_dumps(settlement_snapshot or {}),
+                    int(auto_trigger_rule_id) if auto_trigger_rule_id is not None else None,
+                    int(auto_trigger_rule_run_id) if auto_trigger_rule_run_id is not None else None,
+                    str(auto_trigger_stat_date or ""),
                     str(status or "pending"),
                     now,
                     now,
@@ -3042,6 +3443,7 @@ class DatabaseRepository:
                 next_step = step + 1
 
         now = _utc_now_iso()
+        auto_trigger_daily_risk: Dict[str, Any] = {}
         with self._connect() as conn:
             signal = self.get_signal(int(current_event["signal_id"])) if current_event.get("signal_id") is not None else None
             conn.execute(
@@ -3210,12 +3612,87 @@ class DatabaseRepository:
                     updated_at=now,
                 )
 
+            auto_trigger_rule_id = current_event.get("auto_trigger_rule_id")
+            auto_trigger_stat_date = str(current_event.get("auto_trigger_stat_date") or "").strip()
+            if auto_trigger_rule_id is not None and auto_trigger_stat_date:
+                rule_stat = self.upsert_auto_trigger_rule_daily_stat(
+                    conn,
+                    rule_id=int(auto_trigger_rule_id),
+                    user_id=int(user_id),
+                    stat_date=auto_trigger_stat_date,
+                    profit_delta=profit_delta,
+                    loss_delta=loss_delta,
+                    net_delta=net_delta,
+                    result_type=normalized_result,
+                    updated_at=now,
+                )
+                rule_row = conn.execute(
+                    "SELECT daily_risk_control_json FROM auto_trigger_rules WHERE id = ? AND user_id = ? LIMIT 1",
+                    (int(auto_trigger_rule_id), int(user_id)),
+                ).fetchone()
+                daily_risk_control = _safe_json_loads(rule_row["daily_risk_control_json"]) if rule_row else {}
+                stop_reason = ""
+                if bool(daily_risk_control.get("enabled")) and str(rule_stat.get("status") or "") != "stopped":
+                    profit_target = _round_money(daily_risk_control.get("profit_target"))
+                    loss_limit = _round_money(daily_risk_control.get("loss_limit"))
+                    current_rule_net = _round_money(rule_stat.get("net_profit"))
+                    if profit_target > 0 and current_rule_net >= profit_target:
+                        stop_reason = "profit_target_hit"
+                    elif loss_limit > 0 and current_rule_net <= -loss_limit:
+                        stop_reason = "loss_limit_hit"
+                if stop_reason:
+                    conn.execute(
+                        """
+                        UPDATE auto_trigger_rule_daily_stats
+                        SET status = 'stopped',
+                            stopped_reason = ?,
+                            stopped_at = COALESCE(stopped_at, ?),
+                            updated_at = ?
+                        WHERE rule_id = ? AND user_id = ? AND stat_date = ?
+                        """,
+                        (stop_reason, now, now, int(auto_trigger_rule_id), int(user_id), auto_trigger_stat_date),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE auto_trigger_rule_runs
+                        SET status = 'stopped',
+                            stop_reason = CASE WHEN stop_reason = '' THEN ? ELSE stop_reason END,
+                            stopped_at = COALESCE(stopped_at, ?),
+                            updated_at = ?
+                        WHERE rule_id = ? AND user_id = ? AND stat_date = ? AND status = 'active'
+                        """,
+                        (stop_reason, now, now, int(auto_trigger_rule_id), int(user_id), auto_trigger_stat_date),
+                    )
+                    auto_trigger_daily_risk = {
+                        "stopped": True,
+                        "reason": stop_reason,
+                        "rule_id": int(auto_trigger_rule_id),
+                        "stat_date": auto_trigger_stat_date,
+                        "cancel_pending_jobs": bool(daily_risk_control.get("cancel_pending_jobs", True)),
+                    }
+                else:
+                    auto_trigger_daily_risk = {
+                        "stopped": False,
+                        "rule_id": int(auto_trigger_rule_id),
+                        "stat_date": auto_trigger_stat_date,
+                        "net_profit": _round_money(rule_stat.get("net_profit")),
+                    }
+
+        if auto_trigger_daily_risk.get("stopped") and auto_trigger_daily_risk.get("cancel_pending_jobs", True):
+            auto_trigger_daily_risk["cancel"] = self.cancel_pending_auto_trigger_rule_jobs(
+                rule_id=int(auto_trigger_daily_risk["rule_id"]),
+                user_id=int(user_id),
+                stat_date=str(auto_trigger_daily_risk["stat_date"]),
+                reason="规则日风控已停止：%s" % str(auto_trigger_daily_risk.get("reason") or ""),
+            )
+
         state = self.get_subscription_progression_state(int(subscription_id))
         return {
             "event": self.get_progression_event(int(current_event["id"])) or {},
             "state": state,
             "financial": self.get_subscription_financial_state(int(subscription_id)),
             "subscription": self.get_subscription(int(subscription_id)) or {},
+            "auto_trigger_daily_risk": auto_trigger_daily_risk,
         }
 
     def reset_subscription_runtime(

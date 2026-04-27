@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 from pc28touzhu.executor.db_repository import DatabaseRepository
+from pc28touzhu.services.dispatch_service import dispatch_signal
 from pc28touzhu.services.auto_trigger_service import create_auto_trigger_rule, run_auto_trigger_cycle
 
 
@@ -116,6 +117,125 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(jobs[0]["subscription_id"], self.subscription["id"])
         updated_rule = self.repo.get_auto_trigger_rule(rule["id"])
         self.assertEqual(updated_rule["last_triggered_issue_no"], "20260418000")
+
+    def test_daily_profit_target_stops_rule_and_blocks_following_dispatch(self):
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "日止盈自动跟单",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "daily_risk_control": {"enabled": True, "profit_target": 9, "loss_limit": 0},
+            },
+        )["item"]
+
+        first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+        self.assertEqual(first["summary"]["triggered_count"], 1)
+        job = self.repo.list_execution_jobs(user_id=self.user_id)[0]
+        event = self.repo.get_progression_event(job["progression_event_id"])
+        self.assertEqual(event["auto_trigger_rule_id"], rule["id"])
+        self.assertTrue(event["auto_trigger_rule_run_id"])
+        self.assertTrue(event["auto_trigger_stat_date"])
+
+        settled = self.repo.settle_progression_event(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            result_type="hit",
+            progression_event_id=event["id"],
+        )
+        self.assertTrue(settled["auto_trigger_daily_risk"]["stopped"])
+        stat = self.repo.get_auto_trigger_rule_daily_stat(
+            rule_id=rule["id"],
+            user_id=self.user_id,
+            stat_date=event["auto_trigger_stat_date"],
+        )
+        self.assertEqual(stat["status"], "stopped")
+        self.assertEqual(stat["stopped_reason"], "profit_target_hit")
+
+        second = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(issue_no="20260418002"),
+        )
+        self.assertEqual(second["summary"]["triggered_count"], 0)
+        self.assertEqual(second["summary"]["skipped_count"], 1)
+        self.assertEqual(second["rules"][0]["events"][0]["reason"], "daily_risk_stopped")
+
+        next_signal = self.repo.create_signal_record(
+            source_id=self.source["id"],
+            lottery_type="pc28",
+            issue_no="20260418003",
+            bet_type="big_small",
+            bet_value="小",
+            normalized_payload={"message_text": "小10"},
+            published_at="2026-04-18T09:35:00Z",
+        )
+        dispatch_result = dispatch_signal(self.repo, next_signal["id"])
+        self.assertEqual(dispatch_result["candidate_count"], 1)
+        self.assertEqual(dispatch_result["skipped_count"], 1)
+        self.assertEqual(dispatch_result["created_count"], 0)
+
+    def test_auto_trigger_profit_uses_event_stat_date_when_settled_after_midnight(self):
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "跨天统计",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": False},
+                "daily_risk_control": {"enabled": True, "profit_target": 100, "loss_limit": 0},
+            },
+        )["item"]
+        run = self.repo.ensure_auto_trigger_rule_run(
+            rule_id=rule["id"],
+            user_id=self.user_id,
+            subscription_id=self.subscription["id"],
+            stat_date="2026-04-18",
+            started_issue_no="20260418099",
+        )
+        event = self.repo.create_progression_event_record(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            signal_id=self.signal["id"],
+            issue_no="20260418099",
+            progression_step=1,
+            stake_amount=10,
+            base_stake=10,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            auto_trigger_rule_id=rule["id"],
+            auto_trigger_rule_run_id=run["id"],
+            auto_trigger_stat_date="2026-04-18",
+            status="pending",
+        )
+
+        self.repo.settle_progression_event(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            result_type="hit",
+            progression_event_id=event["id"],
+        )
+
+        previous_day = self.repo.get_auto_trigger_rule_daily_stat(
+            rule_id=rule["id"],
+            user_id=self.user_id,
+            stat_date="2026-04-18",
+        )
+        self.assertEqual(previous_day["settled_event_count"], 1)
+        self.assertEqual(previous_day["net_profit"], 10)
 
     def test_rule_activates_standby_subscription_when_conditions_match(self):
         self.repo.update_subscription_status(

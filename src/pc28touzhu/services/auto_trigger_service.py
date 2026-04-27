@@ -32,6 +32,11 @@ EVENT_RETENTION_DAYS = {
     "triggered": 30,
     "failed": 30,
 }
+RUNTIME_RETENTION_DAYS = {
+    "runs": 90,
+    "stats": 365,
+}
+SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 
 def _format_utc_iso(value: datetime) -> str:
@@ -63,6 +68,26 @@ def _to_float(value: Any, field_name: str) -> float:
         return float(value)
     except (TypeError, ValueError):
         raise ValueError("%s 必须为数字" % field_name)
+
+
+def _round_money(value: Any) -> float:
+    try:
+        return round(float(value or 0), 2)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _today_stat_date(*, now: Optional[datetime] = None, timezone_name: str = "Asia/Shanghai") -> str:
+    tz = SHANGHAI_TZ if str(timezone_name or "").strip() == "Asia/Shanghai" else timezone.utc
+    return (now or datetime.now(timezone.utc)).astimezone(tz).strftime("%Y-%m-%d")
+
+
+def _runtime_retention_cutoffs(*, now: Optional[datetime] = None) -> Dict[str, str]:
+    reference = now or datetime.now(timezone.utc)
+    return {
+        "runs": (reference.astimezone(SHANGHAI_TZ).date() - timedelta(days=RUNTIME_RETENTION_DAYS["runs"])).isoformat(),
+        "stats": (reference.astimezone(SHANGHAI_TZ).date() - timedelta(days=RUNTIME_RETENTION_DAYS["stats"])).isoformat(),
+    }
 
 
 def _normalize_subscription_ids(value: Any) -> list[int]:
@@ -153,6 +178,25 @@ def _normalize_action(value: Any) -> dict:
     }
 
 
+def _normalize_daily_risk_control(value: Any) -> dict:
+    payload = value if isinstance(value, dict) else {}
+    enabled = bool(payload.get("enabled", False))
+    profit_target = max(0.0, _round_money(payload.get("profit_target")))
+    loss_limit = max(0.0, _round_money(payload.get("loss_limit")))
+    if enabled and profit_target <= 0 and loss_limit <= 0:
+        raise ValueError("启用规则日止盈止损时，止盈或止损至少需要配置一个")
+    timezone_name = str(payload.get("timezone") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+    if timezone_name != "Asia/Shanghai":
+        raise ValueError("daily_risk_control.timezone 当前仅支持 Asia/Shanghai")
+    return {
+        "enabled": enabled,
+        "profit_target": profit_target,
+        "loss_limit": loss_limit,
+        "timezone": timezone_name,
+        "cancel_pending_jobs": bool(payload.get("cancel_pending_jobs", True)),
+    }
+
+
 def normalize_rule_payload(payload: Dict[str, Any], *, current: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     source = current or {}
     name = str(payload.get("name", source.get("name") or "") or "").strip()
@@ -182,6 +226,9 @@ def normalize_rule_payload(payload: Dict[str, Any], *, current: Optional[Dict[st
         "conditions": _normalize_conditions(payload.get("conditions", source.get("conditions") or [])),
         "guard_groups": _normalize_guard_groups(payload.get("guard_groups", source.get("guard_groups") or [])),
         "action": _normalize_action(payload.get("action", source.get("action") or {})),
+        "daily_risk_control": _normalize_daily_risk_control(
+            payload.get("daily_risk_control", source.get("daily_risk_control") or {})
+        ),
         "cooldown_issues": cooldown_issues,
     }
 
@@ -579,6 +626,7 @@ def _dispatch_latest_signal_if_available(
     *,
     subscription: Dict[str, Any],
     latest_settled_issue_no: str,
+    auto_trigger_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     signal = repository.get_latest_ready_signal_for_source(source_id=int(subscription["source_id"]))
     if not signal:
@@ -592,10 +640,30 @@ def _dispatch_latest_signal_if_available(
             "latest_settled_issue_no": str(latest_settled_issue_no or ""),
             "created_count": 0,
         }
-    return dispatch_signal(repository, int(signal["id"]), subscription_id=int(subscription["id"]))
+    return dispatch_signal(
+        repository,
+        int(signal["id"]),
+        subscription_id=int(subscription["id"]),
+        auto_trigger_context=auto_trigger_context,
+    )
+
+
+def _is_rule_day_stopped(repository: Any, rule: Dict[str, Any], *, stat_date: str) -> Dict[str, Any]:
+    daily_risk_control = rule.get("daily_risk_control") if isinstance(rule.get("daily_risk_control"), dict) else {}
+    if not bool(daily_risk_control.get("enabled")):
+        return {"stopped": False, "stat": None}
+    stat = repository.get_auto_trigger_rule_daily_stat(
+        rule_id=int(rule["id"]),
+        user_id=int(rule["user_id"]),
+        stat_date=stat_date,
+    )
+    return {"stopped": str(stat.get("status") or "") == "stopped", "stat": stat}
 
 
 def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher=None) -> Dict[str, Any]:
+    daily_risk_control = rule.get("daily_risk_control") if isinstance(rule.get("daily_risk_control"), dict) else {}
+    stat_date = _today_stat_date(timezone_name=str(daily_risk_control.get("timezone") or "Asia/Shanghai"))
+    day_state = _is_rule_day_stopped(repository, rule, stat_date=stat_date)
     subscription_ids = rule.get("subscription_ids") if rule.get("scope_mode") == "selected_subscriptions" else None
     subscriptions = repository.list_auto_trigger_candidate_subscriptions(
         user_id=int(rule["user_id"]),
@@ -609,6 +677,20 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
         source = subscription.get("source") if isinstance(subscription.get("source"), dict) else {}
         summary["checked_count"] += 1
         try:
+            if day_state.get("stopped"):
+                events.append(
+                    _record_event(
+                        repository,
+                        rule=rule,
+                        subscription=subscription,
+                        performance=None,
+                        status="skipped",
+                        reason="daily_risk_stopped",
+                        play_filter_result={"stat_date": stat_date, "stat": day_state.get("stat")},
+                    )
+                )
+                summary["skipped_count"] += 1
+                continue
             subscription_status = str(subscription.get("status") or "")
             if subscription_status not in {"active", "standby"}:
                 events.append(_record_event(repository, rule=rule, subscription=subscription, performance=None, status="skipped", reason="subscription_not_active"))
@@ -675,6 +757,13 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                 subscription=subscription,
                 matched_conditions=matched,
             )
+            rule_run = repository.ensure_auto_trigger_rule_run(
+                rule_id=int(rule["id"]),
+                user_id=int(rule["user_id"]),
+                subscription_id=int(subscription["id"]),
+                stat_date=stat_date,
+                started_issue_no=latest_issue_no,
+            )
             repository.reset_subscription_runtime(
                 subscription_id=int(subscription["id"]),
                 user_id=int(rule["user_id"]),
@@ -686,6 +775,11 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                     repository,
                     subscription=subscription,
                     latest_settled_issue_no=latest_issue_no,
+                    auto_trigger_context={
+                        "rule_id": int(rule["id"]),
+                        "rule_run_id": int(rule_run["id"]),
+                        "stat_date": stat_date,
+                    },
                 )
             event = _record_event(
                 repository,
@@ -751,5 +845,11 @@ def run_auto_trigger_cycle(repository: Any, *, user_id: Any = None, rule_id: Any
     result["cleanup"] = repository.prune_auto_trigger_events(
         user_id=cleanup_user_id,
         cutoffs_by_status=_event_retention_cutoffs(),
+    )
+    runtime_cutoffs = _runtime_retention_cutoffs()
+    result["runtime_cleanup"] = repository.prune_auto_trigger_rule_runtime_data(
+        user_id=cleanup_user_id,
+        runs_cutoff=runtime_cutoffs["runs"],
+        stats_cutoff=runtime_cutoffs["stats"],
     )
     return result
