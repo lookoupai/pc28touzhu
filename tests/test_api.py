@@ -468,6 +468,19 @@ class FakeRepository:
             })
         return items
 
+    def list_subscription_daily_stats(self, *, subscription_id, user_id, limit=7):
+        items = []
+        for item in self.subscription_daily_stats:
+            if item["subscription_id"] != int(subscription_id) or item["user_id"] != int(user_id):
+                continue
+            source = next((source for source in self.sources if source["id"] == int(item["source_id"])), None)
+            items.append({
+                **item,
+                "source_name": (source or {}).get("name", ""),
+            })
+        items.sort(key=lambda item: (str(item.get("stat_date") or ""), str(item.get("updated_at") or "")), reverse=True)
+        return items[: max(1, min(int(limit or 7), 30))]
+
     def get_user_daily_profit_summary(self, *, user_id, stat_date):
         stats = self.list_user_daily_subscription_stats(user_id=user_id, stat_date=stat_date)
         return {
@@ -2276,6 +2289,23 @@ class PlatformApiApplicationTests(unittest.TestCase):
                 "updated_at": "2026-04-28T12:00:00Z",
             }
         )
+        self.repository.subscription_daily_stats.append(
+            {
+                "id": 2,
+                "stat_date": "2026-04-27",
+                "user_id": 1,
+                "subscription_id": created["id"],
+                "source_id": 1,
+                "profit_amount": 12.0,
+                "loss_amount": 15.0,
+                "net_profit": -3.0,
+                "settled_event_count": 5,
+                "hit_count": 2,
+                "miss_count": 3,
+                "refund_count": 0,
+                "updated_at": "2026-04-27T12:00:00Z",
+            }
+        )
 
         status, _, payload = invoke(
             self.app,
@@ -2292,6 +2322,9 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["daily_stat"]["stat_date"], "2026-04-28")
         self.assertEqual(payload["items"][0]["daily_stat"]["settled_event_count"], 6)
         self.assertEqual(payload["items"][0]["daily_stat"]["net_profit"], 8.5)
+        self.assertEqual(len(payload["items"][0]["daily_history"]), 2)
+        self.assertEqual(payload["items"][0]["daily_history"][0]["stat_date"], "2026-04-28")
+        self.assertEqual(payload["items"][0]["daily_history"][1]["stat_date"], "2026-04-27")
 
     def test_create_subscription_with_selected_play_filter(self):
         status, _, payload = invoke(

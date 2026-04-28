@@ -2716,6 +2716,42 @@
         ].join(" · ");
     }
 
+    function subscriptionDailyHistory(subscription) {
+        return subscription && Array.isArray(subscription.daily_history)
+            ? subscription.daily_history
+            : [];
+    }
+
+    function renderSubscriptionDailyHistory(subscription) {
+        const items = subscriptionDailyHistory(subscription);
+        if (!items.length) {
+            return [
+                '<section class="subscription-history-panel">',
+                '<strong class="subscription-section-title">最近 7 天盈亏</strong>',
+                '<p class="subscription-section-copy">当前还没有历史日统计，等有已结算记录后，这里会自动累计。</p>',
+                '<div class="subscription-history-empty">暂无历史盈亏数据</div>',
+                '</section>',
+            ].join("");
+        }
+        return [
+            '<section class="subscription-history-panel">',
+            '<strong class="subscription-section-title">最近 7 天盈亏</strong>',
+            '<p class="subscription-section-copy">按自然日查看这条跟单方案最近 7 天的已实现盈亏。</p>',
+            '<div class="subscription-history-list">',
+            items.map(function (item) {
+                return [
+                    '<article class="subscription-history-item">',
+                    '<div class="subscription-history-head"><strong>' + escapeHtml(String(item.stat_date || "--")) + '</strong><span>' + escapeHtml("净盈亏 " + signedAmountText(item.net_profit || 0)) + '</span></div>',
+                    '<p>' + escapeHtml("盈利 " + amountText(item.profit_amount || 0) + " · 亏损 " + amountText(item.loss_amount || 0) + " · 已结算 " + String(item.settled_event_count || 0) + " 单") + '</p>',
+                    '<p>' + escapeHtml("命中 " + String(item.hit_count || 0) + " / 未中 " + String(item.miss_count || 0) + " / 回本 " + String(item.refund_count || 0)) + '</p>',
+                    '</article>',
+                ].join("");
+            }).join(""),
+            '</div>',
+            '</section>',
+        ].join("");
+    }
+
     function archivedCounts() {
         return {
             accounts: state.accounts.filter(isArchivedItem).length,
@@ -4827,6 +4863,7 @@
                         renderConfigDetailRow("盈亏摘要", summarizeFinancial(item)),
                         renderConfigDetailRow("当日盈亏", summarizeDailyFinancial(item)),
                     ]),
+                    renderSubscriptionDailyHistory(item),
                     stoppedReasonMarkup,
                     settlementPanelMarkup,
                     '<div class="subscription-chain-meta"><span class="subscription-chain-stat">当前命中 ' + escapeHtml(String(chainState.effectiveTargets.length)) + ' 个群组</span><span class="subscription-chain-stat">已配置 ' + escapeHtml(String(chainState.configuredTargets.length)) + ' 个群组</span><span class="subscription-chain-stat">阻塞 ' + escapeHtml(String(chainState.summaries.reduce(function (total, entry) { return total + entry.count; }, 0))) + ' 项</span></div>',

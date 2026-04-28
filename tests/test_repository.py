@@ -822,6 +822,14 @@ class DatabaseRepositoryTests(unittest.TestCase):
         summary = self.repo.get_user_daily_profit_summary(user_id=user_id, stat_date=stat_date)
         self.assertEqual(summary["plan_count"], 1)
         self.assertEqual(summary["net_profit"], 7)
+        history = self.repo.list_subscription_daily_stats(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            limit=7,
+        )
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["stat_date"], stat_date)
+        self.assertEqual(history[0]["net_profit"], 7)
 
     def test_progression_event_settlement_uses_pc28_rule_for_daxiao(self):
         user_id = self.repo.create_user("sub-pc28-basic-profit-user")

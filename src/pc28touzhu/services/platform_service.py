@@ -1025,6 +1025,11 @@ def list_subscriptions(repository: Any, user_id: Any, stat_date: Any = None) -> 
             **item,
             "stat_date": resolved_stat_date,
             "daily_stat": daily_stats_by_subscription.get(int(item["id"])) or _default_subscription_daily_stat(item, stat_date=resolved_stat_date),
+            "daily_history": repository.list_subscription_daily_stats(
+                subscription_id=int(item["id"]),
+                user_id=normalized_user_id,
+                limit=7,
+            ),
         }
         for item in items
     ]

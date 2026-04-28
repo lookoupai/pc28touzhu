@@ -3014,6 +3014,22 @@ class DatabaseRepository:
         )
         return [self._serialize_subscription_daily_stat_row(row) for row in rows]
 
+    def list_subscription_daily_stats(self, *, subscription_id: int, user_id: int, limit: int = 7) -> list[Dict[str, Any]]:
+        rows = self._fetch_all(
+            """
+            SELECT
+                sds.*,
+                ss.name AS source_name
+            FROM subscription_daily_stats sds
+            JOIN signal_sources ss ON ss.id = sds.source_id
+            WHERE sds.subscription_id = ? AND sds.user_id = ?
+            ORDER BY sds.stat_date DESC, sds.updated_at DESC, sds.id DESC
+            LIMIT ?
+            """,
+            (int(subscription_id), int(user_id), max(1, min(int(limit or 7), 30))),
+        )
+        return [self._serialize_subscription_daily_stat_row(row) for row in rows]
+
     def list_user_subscription_source_names(self, *, user_id: int) -> list[str]:
         rows = self._fetch_all(
             """

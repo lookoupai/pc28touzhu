@@ -1225,6 +1225,47 @@
     flex-wrap: wrap;
 }
 
+.subscription-history-panel {
+    display: grid;
+    gap: 10px;
+}
+
+.subscription-history-list {
+    display: grid;
+    gap: 10px;
+}
+
+.subscription-history-item,
+.subscription-history-empty {
+    padding: 12px 14px;
+    border: 1px solid rgba(20, 37, 45, 0.08);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.72);
+}
+
+.subscription-history-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.subscription-history-item strong {
+    font-size: 0.92rem;
+}
+
+.subscription-history-item span,
+.subscription-history-item p,
+.subscription-history-empty {
+    color: var(--text-secondary);
+}
+
+.subscription-history-item p {
+    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.6;
+}
+
 .subscription-chain-stat {
     display: inline-flex;
     align-items: center;
