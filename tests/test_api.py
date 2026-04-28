@@ -55,6 +55,7 @@ class FakeRepository:
         self.subscription_progression_states = {}
         self.subscription_financial_states = {}
         self.subscription_daily_stats = []
+        self.subscription_runtime_runs = []
 
     def requeue_auto_retry_jobs(self, *, max_attempts, base_delay_seconds, limit):
         return []
@@ -480,6 +481,18 @@ class FakeRepository:
             })
         items.sort(key=lambda item: (str(item.get("stat_date") or ""), str(item.get("updated_at") or "")), reverse=True)
         return items[: max(1, min(int(limit or 7), 30))]
+
+    def list_subscription_runtime_runs(self, *, subscription_id, user_id, limit=5):
+        items = [
+            dict(item)
+            for item in self.subscription_runtime_runs
+            if item["subscription_id"] == int(subscription_id) and item["user_id"] == int(user_id)
+        ]
+        items.sort(
+            key=lambda item: (0 if str(item.get("status") or "") == "active" else 1, str(item.get("started_at") or "")),
+            reverse=False,
+        )
+        return items[: max(1, min(int(limit or 5), 20))]
 
     def get_user_daily_profit_summary(self, *, user_id, stat_date):
         stats = self.list_user_daily_subscription_stats(user_id=user_id, stat_date=stat_date)
@@ -2306,6 +2319,33 @@ class PlatformApiApplicationTests(unittest.TestCase):
                 "updated_at": "2026-04-27T12:00:00Z",
             }
         )
+        self.repository.subscription_runtime_runs.append(
+            {
+                "id": 1,
+                "subscription_id": created["id"],
+                "user_id": 1,
+                "status": "active",
+                "started_signal_id": None,
+                "started_issue_no": "20260428001",
+                "started_at": "2026-04-28T10:00:00Z",
+                "start_reason": "auto_started",
+                "ended_at": None,
+                "end_reason": "",
+                "last_issue_no": "20260428006",
+                "last_result_type": "hit",
+                "realized_profit": 18.5,
+                "realized_loss": 10.0,
+                "net_profit": 8.5,
+                "settled_event_count": 6,
+                "hit_count": 3,
+                "miss_count": 2,
+                "refund_count": 1,
+                "baseline_reset_at": None,
+                "baseline_reset_note": "",
+                "created_at": "2026-04-28T10:00:00Z",
+                "updated_at": "2026-04-28T12:00:00Z",
+            }
+        )
 
         status, _, payload = invoke(
             self.app,
@@ -2325,6 +2365,9 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(len(payload["items"][0]["daily_history"]), 2)
         self.assertEqual(payload["items"][0]["daily_history"][0]["stat_date"], "2026-04-28")
         self.assertEqual(payload["items"][0]["daily_history"][1]["stat_date"], "2026-04-27")
+        self.assertEqual(len(payload["items"][0]["runtime_history"]), 1)
+        self.assertEqual(payload["items"][0]["runtime_history"][0]["status"], "active")
+        self.assertEqual(payload["items"][0]["runtime_history"][0]["net_profit"], 8.5)
 
     def test_create_subscription_with_selected_play_filter(self):
         status, _, payload = invoke(

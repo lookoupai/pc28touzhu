@@ -2752,6 +2752,64 @@
         ].join("");
     }
 
+    function subscriptionRuntimeHistory(subscription) {
+        return subscription && Array.isArray(subscription.runtime_history)
+            ? subscription.runtime_history
+            : [];
+    }
+
+    function subscriptionRuntimeStatusText(item) {
+        const status = String(item && item.status || "");
+        if (status === "active") {
+            return "当前轮次";
+        }
+        if (status === "closed") {
+            const endReason = String(item && item.end_reason || "");
+            if (endReason === "profit_target_hit") {
+                return "止盈结束";
+            }
+            if (endReason === "loss_limit_hit") {
+                return "止损结束";
+            }
+            if (endReason === "manual_reset") {
+                return "手动重置";
+            }
+            return "已结束";
+        }
+        return status || "--";
+    }
+
+    function renderSubscriptionRuntimeHistory(subscription) {
+        const items = subscriptionRuntimeHistory(subscription);
+        if (!items.length) {
+            return [
+                '<section class="subscription-history-panel">',
+                '<strong class="subscription-section-title">轮次历史</strong>',
+                '<p class="subscription-section-copy">当前还没有形成轮次记录。等开始结算或手动重置后，这里会显示每轮结果。</p>',
+                '<div class="subscription-history-empty">暂无轮次历史</div>',
+                '</section>',
+            ].join("");
+        }
+        return [
+            '<section class="subscription-history-panel">',
+            '<strong class="subscription-section-title">轮次历史</strong>',
+            '<p class="subscription-section-copy">这里按轮次记录每一轮的净盈亏、单数和结束原因，便于复盘策略表现。</p>',
+            '<div class="subscription-history-list">',
+            items.map(function (item) {
+                return [
+                    '<article class="subscription-history-item">',
+                    '<div class="subscription-history-head"><strong>' + escapeHtml(subscriptionRuntimeStatusText(item)) + '</strong><span>' + escapeHtml("净盈亏 " + signedAmountText(item.net_profit || 0)) + '</span></div>',
+                    '<p>' + escapeHtml("开始期号 " + String(item.started_issue_no || "--") + " · 最近期号 " + String(item.last_issue_no || "--") + " · 已结算 " + String(item.settled_event_count || 0) + " 单") + '</p>',
+                    '<p>' + escapeHtml("盈利 " + amountText(item.realized_profit || 0) + " · 亏损 " + amountText(item.realized_loss || 0) + " · 命中 " + String(item.hit_count || 0) + " / 未中 " + String(item.miss_count || 0) + " / 回本 " + String(item.refund_count || 0)) + '</p>',
+                    '<p>' + escapeHtml("开始 " + String(item.started_at || "--") + (item.ended_at ? (" · 结束 " + String(item.ended_at)) : "")) + '</p>',
+                    '</article>',
+                ].join("");
+            }).join(""),
+            '</div>',
+            '</section>',
+        ].join("");
+    }
+
     function archivedCounts() {
         return {
             accounts: state.accounts.filter(isArchivedItem).length,
@@ -4863,6 +4921,7 @@
                         renderConfigDetailRow("盈亏摘要", summarizeFinancial(item)),
                         renderConfigDetailRow("当日盈亏", summarizeDailyFinancial(item)),
                     ]),
+                    renderSubscriptionRuntimeHistory(item),
                     renderSubscriptionDailyHistory(item),
                     stoppedReasonMarkup,
                     settlementPanelMarkup,

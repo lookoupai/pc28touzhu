@@ -1307,6 +1307,16 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(result["voided_event_ids"], [pending_event["id"]])
         self.assertEqual(self.repo.get_progression_event(pending_event["id"])["status"], "reset")
         self.assertEqual(self.repo.get_execution_job(pending_job_id)["status"], "skipped")
+        runtime_history = self.repo.list_subscription_runtime_runs(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            limit=5,
+        )
+        self.assertEqual(len(runtime_history), 1)
+        self.assertEqual(runtime_history[0]["status"], "closed")
+        self.assertEqual(runtime_history[0]["end_reason"], "loss_limit_hit")
+        self.assertEqual(runtime_history[0]["settled_event_count"], 1)
+        self.assertEqual(runtime_history[0]["net_profit"], -10)
 
     def test_report_job_result_marks_progression_event_placed(self):
         user_id = self.repo.create_user("sub-progression-job-user")

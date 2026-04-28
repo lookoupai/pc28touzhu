@@ -443,6 +443,36 @@ class DatabaseRepository:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS subscription_runtime_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subscription_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            started_signal_id INTEGER,
+            started_issue_no TEXT NOT NULL DEFAULT '',
+            started_at TEXT NOT NULL,
+            start_reason TEXT NOT NULL DEFAULT '',
+            ended_at TEXT,
+            end_reason TEXT NOT NULL DEFAULT '',
+            last_issue_no TEXT NOT NULL DEFAULT '',
+            last_result_type TEXT NOT NULL DEFAULT '',
+            realized_profit REAL NOT NULL DEFAULT 0,
+            realized_loss REAL NOT NULL DEFAULT 0,
+            net_profit REAL NOT NULL DEFAULT 0,
+            settled_event_count INTEGER NOT NULL DEFAULT 0,
+            hit_count INTEGER NOT NULL DEFAULT 0,
+            miss_count INTEGER NOT NULL DEFAULT 0,
+            refund_count INTEGER NOT NULL DEFAULT 0,
+            baseline_reset_at TEXT,
+            baseline_reset_note TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id),
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            FOREIGN KEY(started_signal_id) REFERENCES normalized_signals(id)
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS telegram_daily_report_records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             report_key TEXT UNIQUE NOT NULL,
@@ -565,6 +595,7 @@ class DatabaseRepository:
         "CREATE INDEX IF NOT EXISTS idx_subscription_financial_state_user ON subscription_financial_state(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_subscription_daily_stats_date_user ON subscription_daily_stats(stat_date, user_id)",
         "CREATE INDEX IF NOT EXISTS idx_subscription_daily_stats_date_net ON subscription_daily_stats(stat_date, net_profit)",
+        "CREATE INDEX IF NOT EXISTS idx_subscription_runtime_runs_subscription ON subscription_runtime_runs(subscription_id, user_id, started_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_rules_user_status ON auto_trigger_rules(user_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_events_user_time ON auto_trigger_events(user_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_rule_daily_stats_user_date ON auto_trigger_rule_daily_stats(user_id, stat_date, status)",
@@ -894,6 +925,33 @@ class DatabaseRepository:
             "auto_trigger_rule_run_id": int(row["auto_trigger_rule_run_id"]) if row.get("auto_trigger_rule_run_id") is not None else None,
             "auto_trigger_stat_date": str(row.get("auto_trigger_stat_date") or ""),
             "settled_at": row.get("settled_at"),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+
+    def _serialize_subscription_runtime_run_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": int(row["id"]),
+            "subscription_id": int(row["subscription_id"]),
+            "user_id": int(row["user_id"]),
+            "status": str(row.get("status") or "active"),
+            "started_signal_id": int(row["started_signal_id"]) if row.get("started_signal_id") is not None else None,
+            "started_issue_no": str(row.get("started_issue_no") or ""),
+            "started_at": row.get("started_at"),
+            "start_reason": str(row.get("start_reason") or ""),
+            "ended_at": row.get("ended_at"),
+            "end_reason": str(row.get("end_reason") or ""),
+            "last_issue_no": str(row.get("last_issue_no") or ""),
+            "last_result_type": str(row.get("last_result_type") or ""),
+            "realized_profit": _round_money(row.get("realized_profit")),
+            "realized_loss": _round_money(row.get("realized_loss")),
+            "net_profit": _round_money(row.get("net_profit")),
+            "settled_event_count": int(row.get("settled_event_count") or 0),
+            "hit_count": int(row.get("hit_count") or 0),
+            "miss_count": int(row.get("miss_count") or 0),
+            "refund_count": int(row.get("refund_count") or 0),
+            "baseline_reset_at": row.get("baseline_reset_at"),
+            "baseline_reset_note": str(row.get("baseline_reset_note") or ""),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
         }
@@ -2945,6 +3003,194 @@ class DatabaseRepository:
             return self._default_subscription_financial_state(int(subscription_id))
         return self._serialize_subscription_financial_state_row(row)
 
+    def _bootstrap_subscription_runtime_run(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        subscription_id: int,
+        user_id: int,
+        issue_no: str,
+        signal_id: Optional[int],
+        started_at: str,
+    ) -> Dict[str, Any]:
+        financial_row = conn.execute(
+            "SELECT * FROM subscription_financial_state WHERE subscription_id = ? LIMIT 1",
+            (int(subscription_id),),
+        ).fetchone()
+        financial = (
+            self._serialize_subscription_financial_state_row(dict(financial_row))
+            if financial_row
+            else self._default_subscription_financial_state(int(subscription_id))
+        )
+        baseline_reset_at = financial.get("baseline_reset_at")
+        baseline_reset_note = str(financial.get("baseline_reset_note") or "")
+        if baseline_reset_at:
+            aggregate_row = conn.execute(
+                """
+                SELECT
+                    COALESCE(COUNT(1), 0) AS settled_event_count,
+                    COALESCE(SUM(CASE WHEN resolved_result_type = 'hit' THEN 1 ELSE 0 END), 0) AS hit_count,
+                    COALESCE(SUM(CASE WHEN resolved_result_type = 'miss' THEN 1 ELSE 0 END), 0) AS miss_count,
+                    COALESCE(SUM(CASE WHEN resolved_result_type = 'refund' THEN 1 ELSE 0 END), 0) AS refund_count
+                FROM subscription_progression_events
+                WHERE subscription_id = ? AND user_id = ? AND status = 'settled' AND settled_at >= ?
+                """,
+                (int(subscription_id), int(user_id), str(baseline_reset_at)),
+            ).fetchone()
+            first_event = conn.execute(
+                """
+                SELECT signal_id, issue_no, created_at
+                FROM subscription_progression_events
+                WHERE subscription_id = ? AND user_id = ? AND status = 'settled' AND settled_at >= ?
+                ORDER BY settled_at ASC, id ASC
+                LIMIT 1
+                """,
+                (int(subscription_id), int(user_id), str(baseline_reset_at)),
+            ).fetchone()
+            last_event = conn.execute(
+                """
+                SELECT issue_no, resolved_result_type
+                FROM subscription_progression_events
+                WHERE subscription_id = ? AND user_id = ? AND status = 'settled' AND settled_at >= ?
+                ORDER BY settled_at DESC, id DESC
+                LIMIT 1
+                """,
+                (int(subscription_id), int(user_id), str(baseline_reset_at)),
+            ).fetchone()
+        else:
+            aggregate_row = conn.execute(
+                """
+                SELECT
+                    COALESCE(COUNT(1), 0) AS settled_event_count,
+                    COALESCE(SUM(CASE WHEN resolved_result_type = 'hit' THEN 1 ELSE 0 END), 0) AS hit_count,
+                    COALESCE(SUM(CASE WHEN resolved_result_type = 'miss' THEN 1 ELSE 0 END), 0) AS miss_count,
+                    COALESCE(SUM(CASE WHEN resolved_result_type = 'refund' THEN 1 ELSE 0 END), 0) AS refund_count
+                FROM subscription_progression_events
+                WHERE subscription_id = ? AND user_id = ? AND status = 'settled'
+                """,
+                (int(subscription_id), int(user_id)),
+            ).fetchone()
+            first_event = conn.execute(
+                """
+                SELECT signal_id, issue_no, created_at
+                FROM subscription_progression_events
+                WHERE subscription_id = ? AND user_id = ? AND status = 'settled'
+                ORDER BY settled_at ASC, id ASC
+                LIMIT 1
+                """,
+                (int(subscription_id), int(user_id)),
+            ).fetchone()
+            last_event = conn.execute(
+                """
+                SELECT issue_no, resolved_result_type
+                FROM subscription_progression_events
+                WHERE subscription_id = ? AND user_id = ? AND status = 'settled'
+                ORDER BY settled_at DESC, id DESC
+                LIMIT 1
+                """,
+                (int(subscription_id), int(user_id)),
+            ).fetchone()
+
+        aggregate = dict(aggregate_row) if aggregate_row else {}
+        first = dict(first_event) if first_event else {}
+        last = dict(last_event) if last_event else {}
+        run_started_signal_id = int(first["signal_id"]) if first.get("signal_id") is not None else signal_id
+        run_started_issue_no = str(first.get("issue_no") or issue_no or "")
+        run_started_at = str(first.get("created_at") or baseline_reset_at or started_at)
+        settled_event_count = int(aggregate.get("settled_event_count") or 0)
+        hit_count = int(aggregate.get("hit_count") or 0)
+        miss_count = int(aggregate.get("miss_count") or 0)
+        refund_count = int(aggregate.get("refund_count") or 0)
+        last_issue_no = str(last.get("issue_no") or "")
+        last_result_type = str(last.get("resolved_result_type") or "")
+
+        cur = conn.execute(
+            """
+            INSERT INTO subscription_runtime_runs(
+                subscription_id, user_id, status,
+                started_signal_id, started_issue_no, started_at, start_reason,
+                ended_at, end_reason, last_issue_no, last_result_type,
+                realized_profit, realized_loss, net_profit,
+                settled_event_count, hit_count, miss_count, refund_count,
+                baseline_reset_at, baseline_reset_note,
+                created_at, updated_at
+            ) VALUES (?, ?, 'active', ?, ?, ?, ?, NULL, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(subscription_id),
+                int(user_id),
+                int(run_started_signal_id) if run_started_signal_id is not None else None,
+                run_started_issue_no,
+                run_started_at,
+                "baseline_reset" if baseline_reset_at else "auto_started",
+                last_issue_no,
+                last_result_type,
+                _round_money(financial.get("realized_profit")),
+                _round_money(financial.get("realized_loss")),
+                _round_money(financial.get("net_profit")),
+                settled_event_count,
+                hit_count,
+                miss_count,
+                refund_count,
+                baseline_reset_at,
+                baseline_reset_note,
+                started_at,
+                started_at,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM subscription_runtime_runs WHERE id = ? LIMIT 1",
+            (int(cur.lastrowid),),
+        ).fetchone()
+        return self._serialize_subscription_runtime_run_row(dict(row)) if row else {}
+
+    def _ensure_active_subscription_runtime_run(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        subscription_id: int,
+        user_id: int,
+        issue_no: str,
+        signal_id: Optional[int],
+        started_at: str,
+    ) -> Dict[str, Any]:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM subscription_runtime_runs
+            WHERE subscription_id = ? AND user_id = ? AND status = 'active'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(subscription_id), int(user_id)),
+        ).fetchone()
+        if row:
+            return self._serialize_subscription_runtime_run_row(dict(row))
+        return self._bootstrap_subscription_runtime_run(
+            conn,
+            subscription_id=int(subscription_id),
+            user_id=int(user_id),
+            issue_no=str(issue_no or ""),
+            signal_id=int(signal_id) if signal_id is not None else None,
+            started_at=str(started_at or _utc_now_iso()),
+        )
+
+    def list_subscription_runtime_runs(self, *, subscription_id: int, user_id: int, limit: int = 5) -> list[Dict[str, Any]]:
+        rows = self._fetch_all(
+            """
+            SELECT *
+            FROM subscription_runtime_runs
+            WHERE subscription_id = ? AND user_id = ?
+            ORDER BY
+                CASE WHEN status = 'active' THEN 0 ELSE 1 END ASC,
+                started_at DESC,
+                id DESC
+            LIMIT ?
+            """,
+            (int(subscription_id), int(user_id), max(1, min(int(limit or 5), 20))),
+        )
+        return [self._serialize_subscription_runtime_run_row(row) for row in rows]
+
     def _upsert_subscription_daily_stat(
         self,
         conn: sqlite3.Connection,
@@ -3371,6 +3617,14 @@ class DatabaseRepository:
             return existing
         now = _utc_now_iso()
         with self._connect() as conn:
+            self._ensure_active_subscription_runtime_run(
+                conn,
+                subscription_id=int(subscription_id),
+                user_id=int(user_id),
+                issue_no=str(issue_no or ""),
+                signal_id=int(signal_id),
+                started_at=now,
+            )
             cur = conn.execute(
                 """
                 INSERT INTO subscription_progression_events(
@@ -3619,6 +3873,48 @@ class DatabaseRepository:
                 ),
             )
 
+            active_run = self._ensure_active_subscription_runtime_run(
+                conn,
+                subscription_id=int(subscription_id),
+                user_id=int(user_id),
+                issue_no=str(current_event.get("issue_no") or ""),
+                signal_id=int(current_event["signal_id"]) if current_event.get("signal_id") is not None else None,
+                started_at=now,
+            )
+            conn.execute(
+                """
+                UPDATE subscription_runtime_runs
+                SET last_issue_no = ?,
+                    last_result_type = ?,
+                    realized_profit = ?,
+                    realized_loss = ?,
+                    net_profit = ?,
+                    settled_event_count = ?,
+                    hit_count = ?,
+                    miss_count = ?,
+                    refund_count = ?,
+                    baseline_reset_at = ?,
+                    baseline_reset_note = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    str(current_event.get("issue_no") or ""),
+                    normalized_result,
+                    next_realized_profit,
+                    next_realized_loss,
+                    next_net_profit,
+                    int(active_run.get("settled_event_count") or 0) + 1,
+                    int(active_run.get("hit_count") or 0) + (1 if normalized_result == "hit" else 0),
+                    int(active_run.get("miss_count") or 0) + (1 if normalized_result == "miss" else 0),
+                    int(active_run.get("refund_count") or 0) + (1 if normalized_result == "refund" else 0),
+                    current_financial.get("baseline_reset_at"),
+                    str(current_financial.get("baseline_reset_note") or ""),
+                    now,
+                    int(active_run["id"]),
+                ),
+            )
+
             if source_id is not None:
                 self._upsert_subscription_daily_stat(
                     conn,
@@ -3731,6 +4027,46 @@ class DatabaseRepository:
         reset_note = str(note or "").strip()
         voided_event_ids = []
         with self._connect() as conn:
+            active_run_row = conn.execute(
+                """
+                SELECT *
+                FROM subscription_runtime_runs
+                WHERE subscription_id = ? AND user_id = ? AND status = 'active'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (int(subscription_id), int(user_id)),
+            ).fetchone()
+            active_run = self._serialize_subscription_runtime_run_row(dict(active_run_row)) if active_run_row else None
+            current_financial = current.get("financial") if isinstance(current.get("financial"), dict) else {}
+            if active_run:
+                end_reason = str(current_financial.get("threshold_status") or "").strip() or "manual_reset"
+                conn.execute(
+                    """
+                    UPDATE subscription_runtime_runs
+                    SET status = 'closed',
+                        ended_at = ?,
+                        end_reason = ?,
+                        realized_profit = ?,
+                        realized_loss = ?,
+                        net_profit = ?,
+                        baseline_reset_at = ?,
+                        baseline_reset_note = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        now,
+                        end_reason,
+                        _round_money(current_financial.get("realized_profit")),
+                        _round_money(current_financial.get("realized_loss")),
+                        _round_money(current_financial.get("net_profit")),
+                        current_financial.get("baseline_reset_at"),
+                        str(reset_note or current_financial.get("baseline_reset_note") or ""),
+                        now,
+                        int(active_run["id"]),
+                    ),
+                )
             open_events = conn.execute(
                 """
                 SELECT id FROM subscription_progression_events

@@ -1030,6 +1030,11 @@ def list_subscriptions(repository: Any, user_id: Any, stat_date: Any = None) -> 
                 user_id=normalized_user_id,
                 limit=7,
             ),
+            "runtime_history": repository.list_subscription_runtime_runs(
+                subscription_id=int(item["id"]),
+                user_id=normalized_user_id,
+                limit=5,
+            ),
         }
         for item in items
     ]
