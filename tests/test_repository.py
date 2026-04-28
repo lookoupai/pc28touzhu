@@ -1327,6 +1327,80 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(loss_limit_run["settled_event_count"], 1)
         self.assertEqual(loss_limit_run["net_profit"], -10)
 
+    def test_list_subscription_runtime_runs_reconciles_threshold_closed_runs(self):
+        user_id = self.repo.create_user("sub-runtime-reconcile-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-runtime-reconcile",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={"mode": "follow", "stake_amount": 10},
+        )
+        with self.repo._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO subscription_runtime_runs(
+                    subscription_id, user_id, status, started_issue_no, started_at, start_reason,
+                    ended_at, end_reason, last_issue_no, last_result_type,
+                    realized_profit, realized_loss, net_profit,
+                    settled_event_count, hit_count, miss_count, refund_count,
+                    baseline_reset_at, baseline_reset_note, created_at, updated_at
+                ) VALUES (?, ?, 'active', ?, ?, ?, NULL, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '', ?, ?)
+                """,
+                (
+                    int(subscription["id"]),
+                    int(user_id),
+                    "20260428001",
+                    "2026-04-28T06:00:00Z",
+                    "auto_started",
+                    "20260428010",
+                    "hit",
+                    20.67,
+                    10.0,
+                    10.67,
+                    10,
+                    4,
+                    5,
+                    1,
+                    "2026-04-28T06:00:00Z",
+                    "2026-04-28T06:30:00Z",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO subscription_financial_state(
+                    subscription_id, user_id, realized_profit, realized_loss, net_profit,
+                    threshold_status, stopped_reason, baseline_reset_at, baseline_reset_note,
+                    last_settled_event_id, last_settled_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, '', 10, ?, ?)
+                """,
+                (
+                    int(subscription["id"]),
+                    int(user_id),
+                    20.67,
+                    10.0,
+                    10.67,
+                    "profit_target_hit",
+                    "达到止盈阈值，当前轮次已停止",
+                    "2026-04-28T06:44:35Z",
+                    "2026-04-28T06:44:35Z",
+                ),
+            )
+
+        runtime_history = self.repo.list_subscription_runtime_runs(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            limit=5,
+        )
+
+        self.assertEqual(len(runtime_history), 1)
+        self.assertEqual(runtime_history[0]["status"], "closed")
+        self.assertEqual(runtime_history[0]["end_reason"], "profit_target_hit")
+        self.assertEqual(runtime_history[0]["ended_at"], "2026-04-28T06:44:35Z")
+
     def test_report_job_result_marks_progression_event_placed(self):
         user_id = self.repo.create_user("sub-progression-job-user")
         source_id = self.repo.create_source_record(

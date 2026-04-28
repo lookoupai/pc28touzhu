@@ -3176,20 +3176,80 @@ class DatabaseRepository:
         )
 
     def list_subscription_runtime_runs(self, *, subscription_id: int, user_id: int, limit: int = 5) -> list[Dict[str, Any]]:
-        rows = self._fetch_all(
+        with self._connect() as conn:
+            self._reconcile_subscription_runtime_run_closure(
+                conn,
+                subscription_id=int(subscription_id),
+                user_id=int(user_id),
+            )
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM subscription_runtime_runs
+                WHERE subscription_id = ? AND user_id = ?
+                ORDER BY
+                    CASE WHEN status = 'active' THEN 0 ELSE 1 END ASC,
+                    started_at DESC,
+                    id DESC
+                LIMIT ?
+                """,
+                (int(subscription_id), int(user_id), max(1, min(int(limit or 5), 20))),
+            ).fetchall()
+        return [self._serialize_subscription_runtime_run_row(dict(row)) for row in rows]
+
+    def _reconcile_subscription_runtime_run_closure(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        subscription_id: int,
+        user_id: int,
+    ) -> None:
+        active_run_row = conn.execute(
             """
             SELECT *
             FROM subscription_runtime_runs
-            WHERE subscription_id = ? AND user_id = ?
-            ORDER BY
-                CASE WHEN status = 'active' THEN 0 ELSE 1 END ASC,
-                started_at DESC,
-                id DESC
-            LIMIT ?
+            WHERE subscription_id = ? AND user_id = ? AND status = 'active'
+            ORDER BY id DESC
+            LIMIT 1
             """,
-            (int(subscription_id), int(user_id), max(1, min(int(limit or 5), 20))),
+            (int(subscription_id), int(user_id)),
+        ).fetchone()
+        if not active_run_row:
+            return
+
+        financial_row = conn.execute(
+            """
+            SELECT *
+            FROM subscription_financial_state
+            WHERE subscription_id = ? AND user_id = ?
+            LIMIT 1
+            """,
+            (int(subscription_id), int(user_id)),
+        ).fetchone()
+        if not financial_row:
+            return
+
+        threshold_status = str(financial_row["threshold_status"] or "").strip()
+        if threshold_status not in {"profit_target_hit", "loss_limit_hit"}:
+            return
+
+        ended_at = financial_row["last_settled_at"] or financial_row["updated_at"] or _utc_now_iso()
+        conn.execute(
+            """
+            UPDATE subscription_runtime_runs
+            SET status = 'closed',
+                ended_at = COALESCE(ended_at, ?),
+                end_reason = CASE WHEN end_reason = '' THEN ? ELSE end_reason END,
+                updated_at = ?
+            WHERE id = ? AND status = 'active'
+            """,
+            (
+                ended_at,
+                threshold_status,
+                _utc_now_iso(),
+                int(active_run_row["id"]),
+            ),
         )
-        return [self._serialize_subscription_runtime_run_row(row) for row in rows]
 
     def _upsert_subscription_daily_stat(
         self,
