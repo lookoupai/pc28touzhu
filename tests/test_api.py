@@ -54,6 +54,7 @@ class FakeRepository:
         self.progression_events = []
         self.subscription_progression_states = {}
         self.subscription_financial_states = {}
+        self.subscription_daily_stats = []
 
     def requeue_auto_retry_jobs(self, *, max_attempts, base_delay_seconds, limit):
         return []
@@ -454,6 +455,33 @@ class FakeRepository:
 
     def list_subscriptions(self, user_id):
         return [self.get_subscription(item["id"]) for item in self.subscriptions if item["user_id"] == int(user_id)]
+
+    def list_user_daily_subscription_stats(self, *, user_id, stat_date):
+        items = []
+        for item in self.subscription_daily_stats:
+            if item["user_id"] != int(user_id) or str(item["stat_date"]) != str(stat_date):
+                continue
+            source = next((source for source in self.sources if source["id"] == int(item["source_id"])), None)
+            items.append({
+                **item,
+                "source_name": (source or {}).get("name", ""),
+            })
+        return items
+
+    def get_user_daily_profit_summary(self, *, user_id, stat_date):
+        stats = self.list_user_daily_subscription_stats(user_id=user_id, stat_date=stat_date)
+        return {
+            "stat_date": str(stat_date),
+            "user_id": int(user_id),
+            "profit_amount": round(sum(float(item.get("profit_amount") or 0) for item in stats), 2),
+            "loss_amount": round(sum(float(item.get("loss_amount") or 0) for item in stats), 2),
+            "net_profit": round(sum(float(item.get("net_profit") or 0) for item in stats), 2),
+            "settled_event_count": sum(int(item.get("settled_event_count") or 0) for item in stats),
+            "hit_count": sum(int(item.get("hit_count") or 0) for item in stats),
+            "miss_count": sum(int(item.get("miss_count") or 0) for item in stats),
+            "refund_count": sum(int(item.get("refund_count") or 0) for item in stats),
+            "plan_count": len(stats),
+        }
 
     def create_subscription_record(self, **kwargs):
         item = {
@@ -2224,6 +2252,46 @@ class PlatformApiApplicationTests(unittest.TestCase):
         )
         self.assertEqual(list_status, "200 OK")
         self.assertEqual(len(list_payload["items"]), 1)
+
+    def test_list_subscriptions_supports_stat_date(self):
+        created = self.repository.create_subscription_record(
+            user_id=1,
+            source_id=1,
+            strategy={"mode": "follow"},
+        )
+        self.repository.subscription_daily_stats.append(
+            {
+                "id": 1,
+                "stat_date": "2026-04-28",
+                "user_id": 1,
+                "subscription_id": created["id"],
+                "source_id": 1,
+                "profit_amount": 18.5,
+                "loss_amount": 10.0,
+                "net_profit": 8.5,
+                "settled_event_count": 6,
+                "hit_count": 3,
+                "miss_count": 2,
+                "refund_count": 1,
+                "updated_at": "2026-04-28T12:00:00Z",
+            }
+        )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions",
+                query="stat_date=2026-04-28",
+                headers=self.session_headers,
+            ),
+        )
+
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["stat_date"], "2026-04-28")
+        self.assertEqual(payload["daily_summary"]["net_profit"], 8.5)
+        self.assertEqual(payload["items"][0]["daily_stat"]["stat_date"], "2026-04-28")
+        self.assertEqual(payload["items"][0]["daily_stat"]["settled_event_count"], 6)
+        self.assertEqual(payload["items"][0]["daily_stat"]["net_profit"], 8.5)
 
     def test_create_subscription_with_selected_play_filter(self):
         status, _, payload = invoke(

@@ -12,6 +12,8 @@
         alerts: [],
         failures: [],
         telegramBinding: null,
+        subscriptionStatDate: "",
+        subscriptionDailySummary: null,
         lastRecommendedActionKey: null,
         showIssueJobsOnly: false,
         scopeFocused: false,
@@ -31,6 +33,8 @@
     const subscriptionForm = document.getElementById("subscriptionForm");
     const toggleAutobetBtn = document.getElementById("toggleAutobetBtn");
     const batchResolveSubscriptionsBtn = document.getElementById("batchResolveSubscriptionsBtn");
+    const subscriptionStatDateInput = document.getElementById("subscriptionStatDateInput");
+    const subscriptionStatTodayBtn = document.getElementById("subscriptionStatTodayBtn");
     const workspaceLinks = Array.from(document.querySelectorAll(".workspace-link"));
     const cancelAccountEditBtn = document.getElementById("cancelAccountEditBtn");
     const cancelTargetEditBtn = document.getElementById("cancelTargetEditBtn");
@@ -178,6 +182,14 @@
             values: [],
         },
     ];
+
+    function todayDateString() {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, "0");
+        const day = String(now.getDate()).padStart(2, "0");
+        return year + "-" + month + "-" + day;
+    }
 
     let templateBuilderExtraConfig = {};
     let templateBuilderCustomRules = [];
@@ -2684,6 +2696,26 @@
         return parts.join(" · ");
     }
 
+    function subscriptionDailyStat(subscription) {
+        return subscription && subscription.daily_stat && typeof subscription.daily_stat === "object"
+            ? subscription.daily_stat
+            : null;
+    }
+
+    function summarizeDailyFinancial(subscription) {
+        const stat = subscriptionDailyStat(subscription);
+        if (!stat) {
+            return "当日净盈亏 0";
+        }
+        return [
+            String(stat.stat_date || state.subscriptionStatDate || "--") + " 净盈亏 " + signedAmountText(stat.net_profit || 0),
+            "盈利 " + amountText(stat.profit_amount || 0),
+            "亏损 " + amountText(stat.loss_amount || 0),
+            "已结算 " + String(stat.settled_event_count || 0) + " 单",
+            "命中 " + String(stat.hit_count || 0) + " / 未中 " + String(stat.miss_count || 0) + " / 回本 " + String(stat.refund_count || 0),
+        ].join(" · ");
+    }
+
     function archivedCounts() {
         return {
             accounts: state.accounts.filter(isArchivedItem).length,
@@ -3251,12 +3283,18 @@
         const blockerCount = chainState.summaries.reduce(function (total, item) {
             return total + Number(item.count || 0);
         }, 0);
+        const dailySummary = state.subscriptionDailySummary && typeof state.subscriptionDailySummary === "object"
+            ? state.subscriptionDailySummary
+            : null;
+        const statDate = state.subscriptionStatDate || (dailySummary && dailySummary.stat_date) || "--";
 
         subscriptionWorkspaceSummary.innerHTML = [
             '<article class="health-card"><span class="setup-label">跟单策略数</span><strong>' + escapeHtml(String(subscriptions.length)) + '</strong><p>当前账号下未归档的跟单数量。</p></article>',
             '<article class="health-card"><span class="setup-label">会收到信号的群组</span><strong>' + escapeHtml(String(activeTargetItems.length)) + '</strong><p>只有启用且可用的群组才会真正发单。</p></article>',
             '<article class="health-card"><span class="setup-label">已绑定模板的群组</span><strong>' + escapeHtml(String(templateBoundCount)) + '</strong><p>这些群组已经选好自己的发单格式。</p></article>',
             '<article class="health-card"><span class="setup-label">当前问题数</span><strong>' + escapeHtml(String(blockerCount)) + '</strong><p>这里统计会挡住发单的授权、模板或群组问题。</p></article>',
+            '<article class="health-card"><span class="setup-label">当日净盈亏</span><strong>' + escapeHtml(signedAmountText(dailySummary && dailySummary.net_profit || 0)) + '</strong><p>当前查看 ' + escapeHtml(String(statDate)) + ' 的已结算净盈亏。</p></article>',
+            '<article class="health-card"><span class="setup-label">当日已结算</span><strong>' + escapeHtml(String(dailySummary && dailySummary.settled_event_count || 0)) + '</strong><p>命中 ' + escapeHtml(String(dailySummary && dailySummary.hit_count || 0)) + ' / 未中 ' + escapeHtml(String(dailySummary && dailySummary.miss_count || 0)) + ' / 回本 ' + escapeHtml(String(dailySummary && dailySummary.refund_count || 0)) + '。</p></article>',
         ].join("");
 
         if (!(subscriptionWorkspaceSummaryText instanceof HTMLElement)) {
@@ -3280,7 +3318,7 @@
             }).join("；") + "。";
             return;
         }
-        subscriptionWorkspaceSummaryText.textContent = "当前链路正常：来源信号会发到启用中的群组，并套用各群组自己的模板。";
+        subscriptionWorkspaceSummaryText.textContent = "当前链路正常：来源信号会发到启用中的群组，并套用各群组自己的模板。当前查看 " + String(statDate) + " 的日盈亏。";
     }
 
     function boundTargetsForTemplate(template) {
@@ -4787,6 +4825,7 @@
                         renderConfigDetailRow("策略摘要", summarizeStrategy(item.strategy || {}, item.strategy_v2 || {})),
                         renderConfigDetailRow("跟单进度", summarizeProgression(item)),
                         renderConfigDetailRow("盈亏摘要", summarizeFinancial(item)),
+                        renderConfigDetailRow("当日盈亏", summarizeDailyFinancial(item)),
                     ]),
                     stoppedReasonMarkup,
                     settlementPanelMarkup,
@@ -4812,6 +4851,7 @@
         state.alerts = [];
         state.failures = [];
         state.telegramBinding = null;
+        state.subscriptionDailySummary = null;
         state.showIssueJobsOnly = false;
         state.scopeFocused = false;
         if (sourceForm instanceof HTMLFormElement) {
@@ -4859,6 +4899,9 @@
     }
 
     async function loadPageData() {
+        const subscriptionStatDateQuery = state.subscriptionStatDate
+            ? ("?stat_date=" + encodeURIComponent(state.subscriptionStatDate))
+            : "";
         const results = await Promise.all([
             request("/api/platform/sources"),
             request("/api/platform/raw-items"),
@@ -4866,7 +4909,7 @@
             request("/api/platform/telegram-accounts"),
             request("/api/platform/delivery-targets"),
             request("/api/platform/message-templates"),
-            request("/api/platform/subscriptions"),
+            request("/api/platform/subscriptions" + subscriptionStatDateQuery),
             request("/api/platform/execution-jobs?limit=100"),
             request("/api/platform/alerts?limit=4"),
             request("/api/platform/execution-failures?limit=20"),
@@ -4879,10 +4922,18 @@
         state.targets = results[4].items || [];
         state.templates = results[5].items || [];
         state.subscriptions = results[6].items || [];
+        state.subscriptionStatDate = results[6].stat_date || state.subscriptionStatDate || todayDateString();
+        state.subscriptionDailySummary = results[6].daily_summary || null;
         state.jobs = results[7].items || [];
         state.alerts = results[8].items || [];
         state.failures = results[9].items || [];
         state.telegramBinding = results[10].item || null;
+    }
+
+    function syncSubscriptionStatDateControls() {
+        if (subscriptionStatDateInput instanceof HTMLInputElement) {
+            subscriptionStatDateInput.value = state.subscriptionStatDate || "";
+        }
     }
 
     async function refreshAll() {
@@ -4896,6 +4947,7 @@
             }
 
             await loadPageData();
+            syncSubscriptionStatDateControls();
             refreshSourceSelects();
             refreshAccountSelects();
             refreshTemplateSelects();
@@ -6675,6 +6727,22 @@
         refreshAll();
     });
 
+    if (subscriptionStatDateInput instanceof HTMLInputElement) {
+        subscriptionStatDateInput.addEventListener("change", async function (event) {
+            state.subscriptionStatDate = event.target.value || todayDateString();
+            syncSubscriptionStatDateControls();
+            await refreshAll();
+        });
+    }
+
+    if (subscriptionStatTodayBtn instanceof HTMLButtonElement) {
+        subscriptionStatTodayBtn.addEventListener("click", async function () {
+            state.subscriptionStatDate = todayDateString();
+            syncSubscriptionStatDateControls();
+            await refreshAll();
+        });
+    }
+
     if (botBindingActions instanceof HTMLElement) {
         botBindingActions.addEventListener("click", async function (event) {
             const target = event.target;
@@ -6809,5 +6877,7 @@
     syncTemplatePreview();
     resetAccountVerifyForm();
     resetSubscriptionStrategyFormState();
+    state.subscriptionStatDate = todayDateString();
+    syncSubscriptionStatDateControls();
     refreshAll();
 }());

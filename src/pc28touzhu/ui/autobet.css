@@ -1184,6 +1184,41 @@
     text-align: right;
 }
 
+.subscription-stat-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.compact-field {
+    display: grid;
+    gap: 6px;
+    min-width: 180px;
+}
+
+.compact-field span {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-weight: 700;
+}
+
+.compact-input {
+    min-height: 38px;
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    background: var(--panel);
+    color: var(--text-primary);
+    padding: 7px 10px;
+    outline: none;
+}
+
+.compact-input:focus {
+    border-color: var(--brand);
+    box-shadow: 0 0 0 3px rgba(19, 160, 145, 0.14);
+}
+
 .subscription-chain-meta {
     display: flex;
     gap: 10px;
@@ -1592,6 +1627,10 @@ body[data-autobet-scope="subscriptions"] .side-panel {
 
     .subscription-panel-head-actions .panel-copy {
         text-align: left;
+    }
+
+    .subscription-stat-toolbar {
+        justify-content: stretch;
     }
 
     .target-repair-actions {

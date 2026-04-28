@@ -759,6 +759,7 @@ class PlatformApiApplication:
                 payload = list_subscriptions(
                     self.repository,
                     user_id=_query_value(environ, "user_id") or current_user["id"],
+                    stat_date=_query_value(environ, "stat_date"),
                 )
                 return _json_response(start_response, 200, payload)
             if method == "POST":

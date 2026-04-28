@@ -35,6 +35,7 @@ ALLOWED_ENTITY_STATUSES = {"active", "inactive", "archived"}
 ALLOWED_SUBSCRIPTION_STATUSES = ALLOWED_ENTITY_STATUSES | {"standby"}
 ALLOWED_TELEGRAM_AUTH_MODES = {"phone_login", "session_import"}
 AUTHORIZED_TELEGRAM_AUTH_STATE = "authorized"
+SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 
 class ActionableValueError(ValueError):
@@ -50,6 +51,21 @@ class ActionableValueError(ValueError):
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _today_stat_date() -> str:
+    return datetime.now(timezone.utc).astimezone(SHANGHAI_TZ).strftime("%Y-%m-%d")
+
+
+def _normalize_stat_date(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return _today_stat_date()
+    try:
+        parsed = datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError("stat_date 必须为 YYYY-MM-DD")
+    return parsed.strftime("%Y-%m-%d")
 
 
 def _parse_iso8601(value: Any) -> Optional[datetime]:
@@ -228,6 +244,25 @@ def _subscription_strategy_input_from_payload(payload: Dict[str, Any]) -> Any:
 
 def _present_subscription_items(items: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
     return [present_subscription_item(item) for item in items]
+
+
+def _default_subscription_daily_stat(subscription: Dict[str, Any], *, stat_date: str) -> Dict[str, Any]:
+    return {
+        "id": None,
+        "stat_date": stat_date,
+        "user_id": int(subscription["user_id"]),
+        "subscription_id": int(subscription["id"]),
+        "source_id": int(subscription["source_id"]),
+        "source_name": str(subscription.get("source_name") or ""),
+        "profit_amount": 0.0,
+        "loss_amount": 0.0,
+        "net_profit": 0.0,
+        "settled_event_count": 0,
+        "hit_count": 0,
+        "miss_count": 0,
+        "refund_count": 0,
+        "updated_at": None,
+    }
 
 
 def _normalize_entity_status(value: Any, field_name: str = "status") -> str:
@@ -975,9 +1010,29 @@ def normalize_raw_item(repository: Any, raw_item_id: Any) -> Dict[str, Any]:
     return normalize_raw_item_to_signals(repository, raw_item_id=normalized_raw_item_id)
 
 
-def list_subscriptions(repository: Any, user_id: Any) -> Dict[str, Any]:
+def list_subscriptions(repository: Any, user_id: Any, stat_date: Any = None) -> Dict[str, Any]:
     normalized_user_id = _to_positive_int(user_id, "user_id")
-    return {"items": _present_subscription_items(repository.list_subscriptions(user_id=normalized_user_id))}
+    resolved_stat_date = _normalize_stat_date(stat_date)
+    items = _present_subscription_items(repository.list_subscriptions(user_id=normalized_user_id))
+    daily_stats = repository.list_user_daily_subscription_stats(user_id=normalized_user_id, stat_date=resolved_stat_date)
+    daily_stats_by_subscription = {
+        int(item["subscription_id"]): item
+        for item in daily_stats
+        if item.get("subscription_id") is not None
+    }
+    enriched_items = [
+        {
+            **item,
+            "stat_date": resolved_stat_date,
+            "daily_stat": daily_stats_by_subscription.get(int(item["id"])) or _default_subscription_daily_stat(item, stat_date=resolved_stat_date),
+        }
+        for item in items
+    ]
+    return {
+        "items": enriched_items,
+        "stat_date": resolved_stat_date,
+        "daily_summary": repository.get_user_daily_profit_summary(user_id=normalized_user_id, stat_date=resolved_stat_date),
+    }
 
 
 def create_subscription(repository: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
