@@ -269,6 +269,40 @@ h3 {
     gap: 12px;
 }
 
+.rule-stat-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.compact-field {
+    display: grid;
+    gap: 6px;
+    min-width: 180px;
+}
+
+.compact-field span {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.compact-input {
+    min-height: 38px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #ffffff;
+    color: var(--text);
+    padding: 7px 10px;
+    outline: none;
+}
+
+.compact-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.14);
+}
+
 .event-list {
     max-height: min(620px, calc(100vh - 260px));
     overflow: auto;

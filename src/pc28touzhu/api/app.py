@@ -768,7 +768,11 @@ class PlatformApiApplication:
 
         if path == "/api/platform/auto-trigger-rules":
             if method == "GET":
-                payload = list_auto_trigger_rules(self.repository, user_id=current_user["id"])
+                payload = list_auto_trigger_rules(
+                    self.repository,
+                    user_id=current_user["id"],
+                    stat_date=_query_value(environ, "stat_date"),
+                )
                 return _json_response(start_response, 200, payload)
             if method == "POST":
                 payload = create_auto_trigger_rule(

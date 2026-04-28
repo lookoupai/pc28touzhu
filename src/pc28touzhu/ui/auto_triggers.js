@@ -6,6 +6,7 @@
         subscriptions: [],
         sources: [],
         editingRuleId: "",
+        statDate: "",
         eventLimit: 30,
         eventStatusFilter: "all",
     };
@@ -28,6 +29,14 @@
 
     function $(id) {
         return document.getElementById(id);
+    }
+
+    function todayDateString() {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, "0");
+        const day = String(now.getDate()).padStart(2, "0");
+        return year + "-" + month + "-" + day;
     }
 
     function escapeHtml(value) {
@@ -93,6 +102,7 @@
         $("summaryGrid").innerHTML = [
             ["启用规则", activeRules],
             ["可触发跟单", triggerableSubscriptions],
+            ["统计日期", state.statDate || "--"],
             ["加载记录", state.events.length],
         ].map(function (item) {
             return '<article class="summary-card"><span>' + escapeHtml(item[0]) + '</span><strong>' + escapeHtml(item[1]) + '</strong></article>';
@@ -158,6 +168,45 @@
         return parts.length ? ("每日风控：" + parts.join(" / ")) : "";
     }
 
+    function formatMoney(value, withSign) {
+        const amount = Number(value || 0);
+        const text = amount.toFixed(2);
+        if (!withSign) {
+            return text;
+        }
+        return amount > 0 ? ("+" + text) : text;
+    }
+
+    function ruleDailyStat(rule) {
+        return rule && rule.daily_stat && typeof rule.daily_stat === "object" ? rule.daily_stat : null;
+    }
+
+    function dailyProfitText(rule) {
+        const stat = ruleDailyStat(rule);
+        if (!stat) {
+            return "当日盈亏：--";
+        }
+        return String(stat.stat_date || "--") + "：净盈亏 " + formatMoney(stat.net_profit, true) +
+            "（赢 " + formatMoney(stat.profit_amount, false) + " / 亏 " + formatMoney(stat.loss_amount, false) + "）";
+    }
+
+    function dailySettlementText(rule) {
+        const stat = ruleDailyStat(rule);
+        if (!stat) {
+            return "";
+        }
+        return "已结算 " + String(stat.settled_event_count || 0) + " 单，命中 " + String(stat.hit_count || 0) +
+            " / 未中 " + String(stat.miss_count || 0) + " / 回本 " + String(stat.refund_count || 0);
+    }
+
+    function dailyStatusText(rule) {
+        const stat = ruleDailyStat(rule);
+        if (!stat || stat.status !== "stopped") {
+            return "";
+        }
+        return String(stat.stat_date || "--") + " 状态：已停用" + (stat.stopped_reason ? "（" + String(stat.stopped_reason) + "）" : "");
+    }
+
     function renderRuleList() {
         const list = $("ruleList");
         if (!state.rules.length) {
@@ -179,6 +228,9 @@
                     (guardGroups ? '<p class="meta-line">同时达成：' + escapeHtml(guardGroups) + '</p>' : '') +
                     '<p class="meta-line">' + escapeHtml(actionText(rule.action)) + '</p>' +
                     (dailyRiskText(rule) ? '<p class="meta-line">' + escapeHtml(dailyRiskText(rule)) + '</p>' : '') +
+                    '<p class="meta-line">' + escapeHtml(dailyProfitText(rule)) + '</p>' +
+                    '<p class="meta-line">' + escapeHtml(dailySettlementText(rule)) + '</p>' +
+                    (dailyStatusText(rule) ? '<p class="meta-line">' + escapeHtml(dailyStatusText(rule)) + '</p>' : '') +
                     '<p class="meta-line">冷却 <span class="mono">' + escapeHtml(rule.cooldown_issues) + '</span> 期，上次触发 <span class="mono">' + escapeHtml(rule.last_triggered_issue_no || "--") + '</span></p>' +
                     '<div class="rule-actions">' +
                         '<button class="tiny-btn edit-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">编辑</button>' +
@@ -410,10 +462,11 @@
             renderSummary();
             return;
         }
+        const statDateQuery = state.statDate ? ("?stat_date=" + encodeURIComponent(state.statDate)) : "";
         const payloads = await Promise.all([
             request("/api/platform/sources"),
             request("/api/platform/subscriptions"),
-            request("/api/platform/auto-trigger-rules"),
+            request("/api/platform/auto-trigger-rules" + statDateQuery),
             request(
                 "/api/platform/auto-trigger-events?limit=" + encodeURIComponent(String(state.eventLimit)) +
                 (state.eventStatusFilter === "all" ? "" : ("&status=" + encodeURIComponent(state.eventStatusFilter)))
@@ -431,6 +484,12 @@
         } else {
             const current = state.rules.find(function (item) { return String(item.id) === state.editingRuleId; });
             resetForm(current);
+        }
+    }
+
+    function syncStatDateControls() {
+        if ($("statDateInput")) {
+            $("statDateInput").value = state.statDate || "";
         }
     }
 
@@ -467,6 +526,16 @@
         $("scopeModeSelect").addEventListener("change", updateScopeVisibility);
         $("playFilterActionSelect").addEventListener("change", updateActionVisibility);
         $("dailyRiskEnabledInput").addEventListener("change", updateDailyRiskVisibility);
+        $("statDateInput").addEventListener("change", async function (event) {
+            state.statDate = event.target.value || todayDateString();
+            syncStatDateControls();
+            await loadData();
+        });
+        $("statDateTodayBtn").addEventListener("click", async function () {
+            state.statDate = todayDateString();
+            syncStatDateControls();
+            await loadData();
+        });
         $("refreshBtn").addEventListener("click", loadData);
         $("newRuleBtn").addEventListener("click", function () { resetForm(); });
         $("cancelEditBtn").addEventListener("click", function () { resetForm(); });
@@ -588,12 +657,16 @@
         });
     }
 
+    state.statDate = todayDateString();
+
     if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", function () {
+            syncStatDateControls();
             attachEvents();
             loadData();
         });
     } else {
+        syncStatDateControls();
         attachEvents();
         loadData();
     }

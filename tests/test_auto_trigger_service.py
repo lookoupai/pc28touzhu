@@ -3,10 +3,11 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from pc28touzhu.executor.db_repository import DatabaseRepository
 from pc28touzhu.services.dispatch_service import dispatch_signal
-from pc28touzhu.services.auto_trigger_service import create_auto_trigger_rule, run_auto_trigger_cycle
+from pc28touzhu.services.auto_trigger_service import create_auto_trigger_rule, list_auto_trigger_rules, run_auto_trigger_cycle
 
 
 class AutoTriggerServiceTests(unittest.TestCase):
@@ -236,6 +237,62 @@ class AutoTriggerServiceTests(unittest.TestCase):
         )
         self.assertEqual(previous_day["settled_event_count"], 1)
         self.assertEqual(previous_day["net_profit"], 10)
+
+    def test_list_auto_trigger_rules_supports_selected_stat_date(self):
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "今日盈亏展示",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": False},
+            },
+        )["item"]
+        stat_date = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        run = self.repo.ensure_auto_trigger_rule_run(
+            rule_id=rule["id"],
+            user_id=self.user_id,
+            subscription_id=self.subscription["id"],
+            stat_date=stat_date,
+            started_issue_no="20260418001",
+        )
+        event = self.repo.create_progression_event_record(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            signal_id=self.signal["id"],
+            issue_no="20260418001",
+            progression_step=1,
+            stake_amount=10,
+            base_stake=10,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            auto_trigger_rule_id=rule["id"],
+            auto_trigger_rule_run_id=run["id"],
+            auto_trigger_stat_date=stat_date,
+            status="pending",
+        )
+
+        self.repo.settle_progression_event(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            result_type="hit",
+            progression_event_id=event["id"],
+        )
+
+        payload = list_auto_trigger_rules(self.repo, user_id=self.user_id, stat_date=stat_date)
+
+        current = next(item for item in payload["items"] if item["id"] == rule["id"])
+        self.assertEqual(current["stat_date"], stat_date)
+        self.assertEqual(current["daily_stat"]["stat_date"], stat_date)
+        self.assertEqual(current["daily_stat"]["settled_event_count"], 1)
+        self.assertEqual(current["daily_stat"]["net_profit"], 10)
 
     def test_rule_activates_standby_subscription_when_conditions_match(self):
         self.repo.update_subscription_status(

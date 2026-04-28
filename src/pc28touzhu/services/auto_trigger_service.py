@@ -82,6 +82,17 @@ def _today_stat_date(*, now: Optional[datetime] = None, timezone_name: str = "As
     return (now or datetime.now(timezone.utc)).astimezone(tz).strftime("%Y-%m-%d")
 
 
+def _normalize_stat_date(value: Any, *, timezone_name: str = "Asia/Shanghai") -> str:
+    text = str(value or "").strip()
+    if not text:
+        return _today_stat_date(timezone_name=timezone_name)
+    try:
+        parsed = datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError("stat_date 必须为 YYYY-MM-DD")
+    return parsed.strftime("%Y-%m-%d")
+
+
 def _runtime_retention_cutoffs(*, now: Optional[datetime] = None) -> Dict[str, str]:
     reference = now or datetime.now(timezone.utc)
     return {
@@ -281,9 +292,28 @@ def delete_auto_trigger_rule(repository: Any, *, rule_id: Any, user_id: Any) -> 
     return {"deleted": bool(deleted), "id": normalized_rule_id}
 
 
-def list_auto_trigger_rules(repository: Any, *, user_id: Any) -> Dict[str, Any]:
+def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = None) -> Dict[str, Any]:
     normalized_user_id = _to_positive_int(user_id, "user_id")
-    return {"items": repository.list_auto_trigger_rules(user_id=normalized_user_id)}
+    items = []
+    for rule in repository.list_auto_trigger_rules(user_id=normalized_user_id):
+        daily_risk_control = rule.get("daily_risk_control") if isinstance(rule.get("daily_risk_control"), dict) else {}
+        resolved_stat_date = _normalize_stat_date(
+            stat_date,
+            timezone_name=str(daily_risk_control.get("timezone") or "Asia/Shanghai"),
+        )
+        daily_stat = repository.get_auto_trigger_rule_daily_stat(
+            rule_id=int(rule["id"]),
+            user_id=int(rule["user_id"]),
+            stat_date=resolved_stat_date,
+        )
+        items.append(
+            {
+                **rule,
+                "stat_date": resolved_stat_date,
+                "daily_stat": daily_stat,
+            }
+        )
+    return {"items": items}
 
 
 def list_auto_trigger_events(repository: Any, *, user_id: Any, rule_id: Any = None, status: Any = None, limit: Any = 50) -> Dict[str, Any]:
