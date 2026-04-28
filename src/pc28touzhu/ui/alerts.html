@@ -185,40 +185,7 @@
         </main>
     </div>
 
-    <dialog id="accountDialog" class="account-dialog" aria-label="账户">
-        <div class="account-dialog-shell">
-            <div class="account-dialog-header">
-                <div>
-                    <p class="panel-kicker">账户</p>
-                    <h2 data-auth-panel-title>登录与账户</h2>
-                </div>
-                <button id="accountDialogCloseBtn" class="ghost-btn account-dialog-close" type="button">关闭</button>
-            </div>
-            <div class="account-card">
-                <strong id="currentUsername">未登录</strong>
-                <span id="currentUserMeta">请先注册或登录</span>
-            </div>
-            <form id="authForm" class="auth-form">
-                <label>
-                    <span>用户名</span>
-                    <input id="authUsername" class="text-input" type="text" autocomplete="username" required>
-                </label>
-                <label>
-                    <span>邮箱</span>
-                    <input id="authEmail" class="text-input" type="email" autocomplete="email">
-                </label>
-                <label>
-                    <span>密码</span>
-                    <input id="authPassword" class="text-input" type="password" autocomplete="current-password" required>
-                </label>
-                <div class="form-actions">
-                    <button id="registerBtn" class="ghost-btn" type="button">注册</button>
-                    <button id="loginBtn" class="primary-btn" type="button">登录</button>
-                    <button id="logoutBtn" class="ghost-btn danger-btn" type="button" hidden>退出</button>
-                </div>
-            </form>
-        </div>
-    </dialog>
+    __ACCOUNT_DIALOG__
 
     <script src="/assets/ui-text.js"></script>
     <script src="/assets/auth-panel.js"></script>

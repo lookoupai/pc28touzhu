@@ -43,35 +43,52 @@ def _sign(value: str, secret: str) -> str:
     return hmac.new(secret.encode("utf-8"), value.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def build_session_cookie_value(user_id: int, secret: str) -> str:
+def build_session_cookie_value(user_id: int, secret: str, *, session_version: int = 1) -> str:
     timestamp = str(int(time.time()))
-    payload = "%s:%s" % (int(user_id), timestamp)
+    payload = "%s:%s:%s" % (int(user_id), max(1, int(session_version or 1)), timestamp)
     signed = "%s:%s" % (payload, _sign(payload, secret))
     return base64.urlsafe_b64encode(signed.encode("utf-8")).decode("ascii")
 
 
-def parse_session_cookie_value(value: str, secret: str, *, max_age_seconds: int = 2592000) -> Optional[int]:
+def parse_session_cookie_value(
+    value: str,
+    secret: str,
+    *,
+    max_age_seconds: int = 2592000,
+) -> Optional[tuple[int, int]]:
     try:
         decoded = base64.urlsafe_b64decode(str(value or "").encode("ascii")).decode("utf-8")
-        user_id_text, timestamp_text, signature = decoded.split(":", 2)
+        parts = decoded.split(":")
     except Exception:
         return None
 
-    payload = "%s:%s" % (user_id_text, timestamp_text)
+    if len(parts) == 3:
+        user_id_text, timestamp_text, signature = parts
+        session_version_text = "1"
+        payload = "%s:%s" % (user_id_text, timestamp_text)
+    elif len(parts) == 4:
+        user_id_text, session_version_text, timestamp_text, signature = parts
+        payload = "%s:%s:%s" % (user_id_text, session_version_text, timestamp_text)
+    else:
+        return None
+
     if not hmac.compare_digest(signature, _sign(payload, secret)):
         return None
 
     try:
         timestamp = int(timestamp_text)
         user_id = int(user_id_text)
+        session_version = int(session_version_text)
     except ValueError:
         return None
 
     if user_id <= 0:
         return None
+    if session_version <= 0:
+        return None
     if max_age_seconds > 0 and (int(time.time()) - timestamp) > max_age_seconds:
         return None
-    return user_id
+    return user_id, session_version
 
 
 def get_cookie_value(environ: dict, name: str) -> Optional[str]:
@@ -91,6 +108,8 @@ def build_set_cookie_header(
     path: str = "/",
     http_only: bool = True,
     max_age: Optional[int] = None,
+    same_site: str = "Lax",
+    secure: bool = False,
 ) -> tuple[str, str]:
     cookie = SimpleCookie()
     cookie[name] = value
@@ -99,5 +118,8 @@ def build_set_cookie_header(
         cookie[name]["httponly"] = True
     if max_age is not None:
         cookie[name]["max-age"] = max_age
+    if same_site:
+        cookie[name]["samesite"] = same_site
+    if secure:
+        cookie[name]["secure"] = True
     return ("Set-Cookie", cookie.output(header="").strip())
-

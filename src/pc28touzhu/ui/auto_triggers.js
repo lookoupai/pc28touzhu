@@ -10,6 +10,7 @@
         eventLimit: 30,
         eventStatusFilter: "all",
     };
+    let currentUserLoadToken = 0;
 
     const metricOptions = [
         ["big_small", "大小"],
@@ -69,6 +70,49 @@
         }
         el.textContent = message || "";
         el.classList.toggle("is-error", Boolean(isError));
+    }
+
+    function setCurrentUser(user) {
+        state.user = user || null;
+        document.documentElement.setAttribute("data-authenticated", state.user ? "true" : "false");
+        if (window.PlatformAuthPanel && typeof window.PlatformAuthPanel.sync === "function") {
+            window.PlatformAuthPanel.sync({user: state.user});
+        }
+        const authForm = document.getElementById("authForm");
+        const authenticatedPanel = document.getElementById("authenticatedAccountPanel");
+        const usernameEl = document.getElementById("currentUsername");
+        const metaEl = document.getElementById("currentUserMeta");
+        const accountButton = document.getElementById("accountMenuBtn");
+        const isAuthenticated = Boolean(state.user);
+        if (usernameEl instanceof HTMLElement) {
+            usernameEl.textContent = isAuthenticated ? String(state.user.username || "未命名用户") : "未登录";
+        }
+        if (metaEl instanceof HTMLElement) {
+            metaEl.textContent = isAuthenticated
+                ? ((state.user.email || "--") + " · " + (state.user.role || "user") + " · " + (state.user.status || "active"))
+                : "请先注册或登录";
+        }
+        if (accountButton instanceof HTMLElement) {
+            accountButton.textContent = isAuthenticated ? String(state.user.username || "未命名用户") : "登录";
+        }
+        if (authForm instanceof HTMLElement) {
+            if (isAuthenticated) {
+                authForm.hidden = true;
+                authForm.style.setProperty("display", "none", "important");
+            } else {
+                authForm.hidden = false;
+                authForm.style.removeProperty("display");
+            }
+        }
+        if (authenticatedPanel instanceof HTMLElement) {
+            if (isAuthenticated) {
+                authenticatedPanel.hidden = false;
+                authenticatedPanel.style.removeProperty("display");
+            } else {
+                authenticatedPanel.hidden = true;
+                authenticatedPanel.style.setProperty("display", "none", "important");
+            }
+        }
     }
 
     function sourceById(sourceId) {
@@ -450,12 +494,15 @@
         };
     }
 
-    async function loadData() {
-        const auth = await request("/api/auth/me").catch(function () { return {user: null}; });
-        state.user = auth.user || null;
-        document.documentElement.setAttribute("data-authenticated", state.user ? "true" : "false");
-        if (window.PlatformAuthPanel && typeof window.PlatformAuthPanel.sync === "function") {
-            window.PlatformAuthPanel.sync({user: state.user});
+    async function loadData(options) {
+        const normalized = options || {};
+        if (!normalized.skipCurrentUserReload) {
+            const token = ++currentUserLoadToken;
+            const auth = await request("/api/auth/me").catch(function () { return {user: null}; });
+            if (token !== currentUserLoadToken) {
+                return;
+            }
+            setCurrentUser(auth.user || null);
         }
         if (!state.user) {
             setStatus("请先登录后再配置自动触发规则。", true);
@@ -492,6 +539,15 @@
             $("statDateInput").value = state.statDate || "";
         }
     }
+
+    document.addEventListener("platform-auth:changed", async function (event) {
+        const detail = event.detail || {};
+        setCurrentUser(detail.user || null);
+        await loadData({skipCurrentUserReload: true});
+        if (detail.message) {
+            setStatus(detail.message, false);
+        }
+    });
 
     async function saveRule(event) {
         event.preventDefault();

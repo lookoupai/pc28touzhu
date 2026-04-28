@@ -162,6 +162,9 @@ class DatabaseRepository:
             password_hash TEXT NOT NULL DEFAULT '',
             role TEXT NOT NULL DEFAULT 'user',
             status TEXT NOT NULL DEFAULT 'inactive',
+            session_version INTEGER NOT NULL DEFAULT 1,
+            last_login_at TEXT,
+            password_changed_at TEXT,
             telegram_user_id INTEGER,
             telegram_chat_id TEXT,
             telegram_username TEXT,
@@ -617,6 +620,7 @@ class DatabaseRepository:
             for ddl in self.SCHEMA_SQL:
                 cursor.execute(ddl)
             self._ensure_user_telegram_columns(conn)
+            self._ensure_user_auth_columns(conn)
             self._ensure_delivery_target_columns(conn)
             self._ensure_message_template_columns(conn)
             self._ensure_execution_job_columns(conn)
@@ -655,6 +659,18 @@ class DatabaseRepository:
             WHERE telegram_bind_token IS NOT NULL AND telegram_bind_token <> ''
             """
         )
+
+    def _ensure_user_auth_columns(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(users)").fetchall()
+        existing_columns = {str(row["name"]) for row in rows}
+        column_definitions = {
+            "session_version": "ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 1",
+            "last_login_at": "ALTER TABLE users ADD COLUMN last_login_at TEXT",
+            "password_changed_at": "ALTER TABLE users ADD COLUMN password_changed_at TEXT",
+        }
+        for column_name, ddl in column_definitions.items():
+            if column_name not in existing_columns:
+                conn.execute(ddl)
 
     def _ensure_delivery_target_columns(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute("PRAGMA table_info(delivery_targets)").fetchall()
@@ -756,6 +772,9 @@ class DatabaseRepository:
             "email": str(row["email"]) if row["email"] is not None else "",
             "role": str(row["role"]),
             "status": str(row["status"]),
+            "session_version": int(row["session_version"]) if row.get("session_version") is not None else 1,
+            "last_login_at": row.get("last_login_at"),
+            "password_changed_at": row.get("password_changed_at"),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
         }
@@ -1243,15 +1262,31 @@ class DatabaseRepository:
         password_hash: str = "",
         role: str = "user",
         status: str = "active",
+        session_version: int = 1,
+        last_login_at: str | None = None,
+        password_changed_at: str | None = None,
     ) -> Dict[str, Any]:
         now = _utc_now_iso()
         with self._connect() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO users(username, email, password_hash, role, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO users(
+                    username, email, password_hash, role, status, session_version, last_login_at, password_changed_at, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (username, email or None, password_hash, role, status, now, now),
+                (
+                    username,
+                    email or None,
+                    password_hash,
+                    role,
+                    status,
+                    max(1, int(session_version or 1)),
+                    last_login_at,
+                    password_changed_at,
+                    now,
+                    now,
+                ),
             )
             user_id = int(cur.lastrowid)
         return self.get_user(user_id) or {}
@@ -1264,19 +1299,51 @@ class DatabaseRepository:
         row = self._fetch_one("SELECT * FROM users WHERE username = ? LIMIT 1", (str(username),))
         return self._serialize_user_row_with_secret(row) if row else None
 
-    def update_user_password(self, user_id: int, password_hash: str, *, email: str | None = None) -> Optional[Dict[str, Any]]:
+    def update_user_password(
+        self,
+        user_id: int,
+        password_hash: str,
+        *,
+        email: str | None = None,
+        bump_session_version: bool = True,
+    ) -> Optional[Dict[str, Any]]:
         now = _utc_now_iso()
         with self._connect() as conn:
+            current = conn.execute("SELECT session_version FROM users WHERE id = ? LIMIT 1", (int(user_id),)).fetchone()
+            if current is None:
+                return None
+            next_session_version = int(current["session_version"] or 1)
+            if bump_session_version:
+                next_session_version += 1
             if email is None:
                 conn.execute(
-                    "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
-                    (password_hash, now, int(user_id)),
+                    """
+                    UPDATE users
+                    SET password_hash = ?, session_version = ?, password_changed_at = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (password_hash, next_session_version, now, now, int(user_id)),
                 )
             else:
                 conn.execute(
-                    "UPDATE users SET password_hash = ?, email = ?, updated_at = ? WHERE id = ?",
-                    (password_hash, email or None, now, int(user_id)),
+                    """
+                    UPDATE users
+                    SET password_hash = ?, email = ?, session_version = ?, password_changed_at = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (password_hash, email or None, next_session_version, now, now, int(user_id)),
                 )
+        return self.get_user(user_id)
+
+    def touch_user_login(self, user_id: int) -> Optional[Dict[str, Any]]:
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?",
+                (now, now, int(user_id)),
+            )
+            if cursor.rowcount <= 0:
+                return None
         return self.get_user(user_id)
 
     def list_users(self) -> list[Dict[str, Any]]:
@@ -1583,14 +1650,36 @@ class DatabaseRepository:
         )
         return row is not None
 
-    def list_raw_items(self, source_id: Optional[int] = None) -> list[Dict[str, Any]]:
-        if source_id is None:
-            rows = self._fetch_all("SELECT * FROM source_raw_items ORDER BY id DESC")
-        else:
+    def list_raw_items(self, source_id: Optional[int] = None, owner_user_id: Optional[int] = None) -> list[Dict[str, Any]]:
+        if source_id is not None and owner_user_id is not None:
+            rows = self._fetch_all(
+                """
+                SELECT r.*
+                FROM source_raw_items r
+                JOIN signal_sources s ON s.id = r.source_id
+                WHERE r.source_id = ? AND s.owner_user_id = ?
+                ORDER BY r.id DESC
+                """,
+                (int(source_id), int(owner_user_id)),
+            )
+        elif source_id is not None:
             rows = self._fetch_all(
                 "SELECT * FROM source_raw_items WHERE source_id = ? ORDER BY id DESC",
                 (int(source_id),),
             )
+        elif owner_user_id is not None:
+            rows = self._fetch_all(
+                """
+                SELECT r.*
+                FROM source_raw_items r
+                JOIN signal_sources s ON s.id = r.source_id
+                WHERE s.owner_user_id = ?
+                ORDER BY r.id DESC
+                """,
+                (int(owner_user_id),),
+            )
+        else:
+            rows = self._fetch_all("SELECT * FROM source_raw_items ORDER BY id DESC")
         return [self._serialize_raw_item_row(row) for row in rows]
 
     def update_raw_item_parse_result(
@@ -1837,14 +1926,36 @@ class DatabaseRepository:
         )
         return row is not None
 
-    def list_signals(self, source_id: Optional[int] = None) -> list[Dict[str, Any]]:
-        if source_id is None:
-            rows = self._fetch_all("SELECT * FROM normalized_signals ORDER BY id DESC")
-        else:
+    def list_signals(self, source_id: Optional[int] = None, owner_user_id: Optional[int] = None) -> list[Dict[str, Any]]:
+        if source_id is not None and owner_user_id is not None:
+            rows = self._fetch_all(
+                """
+                SELECT n.*
+                FROM normalized_signals n
+                JOIN signal_sources s ON s.id = n.source_id
+                WHERE n.source_id = ? AND s.owner_user_id = ?
+                ORDER BY n.id DESC
+                """,
+                (int(source_id), int(owner_user_id)),
+            )
+        elif source_id is not None:
             rows = self._fetch_all(
                 "SELECT * FROM normalized_signals WHERE source_id = ? ORDER BY id DESC",
                 (int(source_id),),
             )
+        elif owner_user_id is not None:
+            rows = self._fetch_all(
+                """
+                SELECT n.*
+                FROM normalized_signals n
+                JOIN signal_sources s ON s.id = n.source_id
+                WHERE s.owner_user_id = ?
+                ORDER BY n.id DESC
+                """,
+                (int(owner_user_id),),
+            )
+        else:
+            rows = self._fetch_all("SELECT * FROM normalized_signals ORDER BY id DESC")
         return [self._serialize_signal_row(row) for row in rows]
 
     def create_delivery_target(

@@ -951,23 +951,52 @@ def delete_telegram_account(repository: Any, *, telegram_account_id: Any, user_i
     return {"deleted": True, "id": normalized_account_id}
 
 
-def fetch_source(repository: Any, source_id: Any, fetcher=None) -> Dict[str, Any]:
+def fetch_source(
+    repository: Any,
+    source_id: Any,
+    *,
+    owner_user_id: Optional[Any] = None,
+    fetcher=None,
+) -> Dict[str, Any]:
     normalized_source_id = _to_positive_int(source_id, "source_id")
+    normalized_owner_user_id = (
+        _to_positive_int(owner_user_id, "owner_user_id", allow_none=True)
+        if owner_user_id is not None and str(owner_user_id).strip() != ""
+        else None
+    )
+    if normalized_owner_user_id is not None and not repository.source_belongs_to_user(normalized_source_id, normalized_owner_user_id):
+        raise ValueError("source_id 对应的来源不存在")
     return fetch_source_to_raw_item(repository, source_id=normalized_source_id, fetcher=fetcher)
 
 
-def list_raw_items(repository: Any, source_id: Optional[Any] = None) -> Dict[str, Any]:
+def list_raw_items(
+    repository: Any,
+    source_id: Optional[Any] = None,
+    *,
+    owner_user_id: Optional[Any] = None,
+) -> Dict[str, Any]:
     normalized_source_id = (
         _to_positive_int(source_id, "source_id", allow_none=True)
         if source_id is not None and str(source_id).strip() != ""
         else None
     )
-    return {"items": repository.list_raw_items(source_id=normalized_source_id)}
+    normalized_owner_user_id = (
+        _to_positive_int(owner_user_id, "owner_user_id", allow_none=True)
+        if owner_user_id is not None and str(owner_user_id).strip() != ""
+        else None
+    )
+    if normalized_source_id is not None and normalized_owner_user_id is not None:
+        if not repository.source_belongs_to_user(normalized_source_id, normalized_owner_user_id):
+            raise ValueError("source_id 对应的来源不存在")
+    return {"items": repository.list_raw_items(source_id=normalized_source_id, owner_user_id=normalized_owner_user_id)}
 
 
 def create_raw_item(repository: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     source_id = _to_positive_int(payload.get("source_id"), "source_id")
+    owner_user_id = _to_positive_int(payload.get("owner_user_id"), "owner_user_id", allow_none=True)
     _ensure_source_exists(repository, source_id)
+    if owner_user_id is not None and not repository.source_belongs_to_user(source_id, owner_user_id):
+        raise ValueError("source_id 对应的来源不存在")
     item = repository.create_raw_item_record(
         source_id=source_id,
         external_item_id=str(payload.get("external_item_id") or "").strip() or None,
@@ -980,18 +1009,34 @@ def create_raw_item(repository: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"item": item}
 
 
-def list_signals(repository: Any, source_id: Optional[Any] = None) -> Dict[str, Any]:
+def list_signals(
+    repository: Any,
+    source_id: Optional[Any] = None,
+    *,
+    owner_user_id: Optional[Any] = None,
+) -> Dict[str, Any]:
     normalized_source_id = (
         _to_positive_int(source_id, "source_id", allow_none=True)
         if source_id is not None and str(source_id).strip() != ""
         else None
     )
-    return {"items": repository.list_signals(source_id=normalized_source_id)}
+    normalized_owner_user_id = (
+        _to_positive_int(owner_user_id, "owner_user_id", allow_none=True)
+        if owner_user_id is not None and str(owner_user_id).strip() != ""
+        else None
+    )
+    if normalized_source_id is not None and normalized_owner_user_id is not None:
+        if not repository.source_belongs_to_user(normalized_source_id, normalized_owner_user_id):
+            raise ValueError("source_id 对应的来源不存在")
+    return {"items": repository.list_signals(source_id=normalized_source_id, owner_user_id=normalized_owner_user_id)}
 
 
 def create_signal(repository: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     source_id = _to_positive_int(payload.get("source_id"), "source_id")
+    owner_user_id = _to_positive_int(payload.get("owner_user_id"), "owner_user_id", allow_none=True)
     _ensure_source_exists(repository, source_id)
+    if owner_user_id is not None and not repository.source_belongs_to_user(source_id, owner_user_id):
+        raise ValueError("source_id 对应的来源不存在")
     item = repository.create_signal_record(
         source_id=source_id,
         lottery_type=_to_non_empty_str(payload.get("lottery_type"), "lottery_type"),
@@ -1005,8 +1050,15 @@ def create_signal(repository: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"item": item}
 
 
-def normalize_raw_item(repository: Any, raw_item_id: Any) -> Dict[str, Any]:
+def normalize_raw_item(repository: Any, raw_item_id: Any, *, owner_user_id: Optional[Any] = None) -> Dict[str, Any]:
     normalized_raw_item_id = _to_positive_int(raw_item_id, "raw_item_id")
+    normalized_owner_user_id = (
+        _to_positive_int(owner_user_id, "owner_user_id", allow_none=True)
+        if owner_user_id is not None and str(owner_user_id).strip() != ""
+        else None
+    )
+    if normalized_owner_user_id is not None and not repository.raw_item_belongs_to_user(normalized_raw_item_id, normalized_owner_user_id):
+        raise ValueError("raw_item_id 对应的原始记录不存在")
     return normalize_raw_item_to_signals(repository, raw_item_id=normalized_raw_item_id)
 
 
@@ -1889,58 +1941,60 @@ def list_platform_alerts(
     auto_retry_max_attempts: int = 3,
     auto_retry_base_delay_seconds: int = 30,
     failure_streak_threshold: int = 3,
+    include_platform_health: bool = False,
 ) -> Dict[str, Any]:
     alerts = []
     bounded_limit = max(1, min(int(limit or 50), 200))
 
-    executor_items = list_executor_instances(
-        repository,
-        limit=bounded_limit,
-        stale_after_seconds=stale_after_seconds,
-        offline_after_seconds=offline_after_seconds,
-        failure_streak_threshold=failure_streak_threshold,
-    )["items"]
-    for item in executor_items:
-        if item["heartbeat_status"] == "offline":
-            alerts.append(
-                _alert_item(
-                    severity="critical",
-                    alert_type="executor_offline",
-                    title="执行器离线",
-                    message="%s 已超过 %s 秒未上报心跳" % (item["executor_id"], item.get("heartbeat_age_seconds") or 0),
-                    metadata={"executor_id": item["executor_id"]},
-                    key_parts={"executor_id": item["executor_id"]},
+    if include_platform_health:
+        executor_items = list_executor_instances(
+            repository,
+            limit=bounded_limit,
+            stale_after_seconds=stale_after_seconds,
+            offline_after_seconds=offline_after_seconds,
+            failure_streak_threshold=failure_streak_threshold,
+        )["items"]
+        for item in executor_items:
+            if item["heartbeat_status"] == "offline":
+                alerts.append(
+                    _alert_item(
+                        severity="critical",
+                        alert_type="executor_offline",
+                        title="执行器离线",
+                        message="%s 已超过 %s 秒未上报心跳" % (item["executor_id"], item.get("heartbeat_age_seconds") or 0),
+                        metadata={"executor_id": item["executor_id"]},
+                        key_parts={"executor_id": item["executor_id"]},
+                    )
                 )
-            )
-        elif item["heartbeat_status"] == "stale":
-            alerts.append(
-                _alert_item(
-                    severity="warning",
-                    alert_type="executor_stale",
-                    title="执行器心跳延迟",
-                    message="%s 心跳延迟 %s 秒" % (item["executor_id"], item.get("heartbeat_age_seconds") or 0),
-                    metadata={"executor_id": item["executor_id"]},
-                    key_parts={"executor_id": item["executor_id"]},
+            elif item["heartbeat_status"] == "stale":
+                alerts.append(
+                    _alert_item(
+                        severity="warning",
+                        alert_type="executor_stale",
+                        title="执行器心跳延迟",
+                        message="%s 心跳延迟 %s 秒" % (item["executor_id"], item.get("heartbeat_age_seconds") or 0),
+                        metadata={"executor_id": item["executor_id"]},
+                        key_parts={"executor_id": item["executor_id"]},
+                    )
                 )
-            )
 
-        if int(item.get("recent_failure_streak") or 0) >= int(failure_streak_threshold):
-            alerts.append(
-                _alert_item(
-                    severity="critical",
-                    alert_type="executor_failure_streak",
-                    title="执行器连续失败过多",
-                    message="%s 最近连续失败 %s 次" % (
-                        item["executor_id"],
-                        item["recent_failure_streak"],
-                    ),
-                    metadata={
-                        "executor_id": item["executor_id"],
-                        "recent_failure_streak": int(item["recent_failure_streak"]),
-                    },
-                    key_parts={"executor_id": item["executor_id"]},
+            if int(item.get("recent_failure_streak") or 0) >= int(failure_streak_threshold):
+                alerts.append(
+                    _alert_item(
+                        severity="critical",
+                        alert_type="executor_failure_streak",
+                        title="执行器连续失败过多",
+                        message="%s 最近连续失败 %s 次" % (
+                            item["executor_id"],
+                            item["recent_failure_streak"],
+                        ),
+                        metadata={
+                            "executor_id": item["executor_id"],
+                            "recent_failure_streak": int(item["recent_failure_streak"]),
+                        },
+                        key_parts={"executor_id": item["executor_id"]},
+                    )
                 )
-            )
 
     failure_items = list_recent_execution_failures(
         repository,
@@ -1987,6 +2041,13 @@ def list_platform_alerts(
     return {"items": alerts}
 
 
-def dispatch_signal(repository: Any, signal_id: Any) -> Dict[str, Any]:
+def dispatch_signal(repository: Any, signal_id: Any, *, owner_user_id: Optional[Any] = None) -> Dict[str, Any]:
     normalized_signal_id = _to_positive_int(signal_id, "signal_id")
+    normalized_owner_user_id = (
+        _to_positive_int(owner_user_id, "owner_user_id", allow_none=True)
+        if owner_user_id is not None and str(owner_user_id).strip() != ""
+        else None
+    )
+    if normalized_owner_user_id is not None and not repository.signal_belongs_to_user(normalized_signal_id, normalized_owner_user_id):
+        raise ValueError("signal_id 对应的信号不存在")
     return dispatch_signal_jobs(repository, signal_id=normalized_signal_id)

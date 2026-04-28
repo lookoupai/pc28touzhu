@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -9,7 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from pc28touzhu.auth import SESSION_COOKIE_NAME, build_session_cookie_value, hash_password
-from pc28touzhu.api.app import PlatformApiApplication, build_testing_environ
+from pc28touzhu.api.app import PlatformApiApplication, _asset_version, _load_ui_html_file, build_testing_environ
 
 
 class FakeRepository:
@@ -35,13 +36,16 @@ class FakeRepository:
         self.users = [
             {
                 "id": 1,
-            "username": "owner",
-            "email": "owner@example.com",
-            "password_hash": hash_password("owner-pass"),
-            "role": "user",
-            "status": "active",
-            "created_at": "2026-04-07T12:00:00Z",
-            "updated_at": "2026-04-07T12:00:00Z",
+                "username": "owner",
+                "email": "owner@example.com",
+                "password_hash": hash_password("owner-pass"),
+                "role": "admin",
+                "status": "active",
+                "session_version": 1,
+                "last_login_at": None,
+                "password_changed_at": None,
+                "created_at": "2026-04-07T12:00:00Z",
+                "updated_at": "2026-04-07T12:00:00Z",
             }
         ]
         self.telegram_accounts = []
@@ -206,6 +210,9 @@ class FakeRepository:
             "password_hash": kwargs.get("password_hash", ""),
             "role": kwargs.get("role", "user"),
             "status": kwargs.get("status", "active"),
+            "session_version": kwargs.get("session_version", 1),
+            "last_login_at": kwargs.get("last_login_at"),
+            "password_changed_at": kwargs.get("password_changed_at"),
             "telegram_user_id": None,
             "telegram_chat_id": "",
             "telegram_username": "",
@@ -218,14 +225,25 @@ class FakeRepository:
         self.users.append(item)
         return item
 
-    def update_user_password(self, user_id, password_hash, *, email=None):
+    def update_user_password(self, user_id, password_hash, *, email=None, bump_session_version=True):
         user = self.get_user(user_id)
         if not user:
             return None
         user["password_hash"] = password_hash
         if email is not None:
             user["email"] = email
+        if bump_session_version:
+            user["session_version"] = int(user.get("session_version") or 1) + 1
+        user["password_changed_at"] = "2026-04-07T12:00:00Z"
         user["updated_at"] = "2026-04-07T12:00:00Z"
+        return user
+
+    def touch_user_login(self, user_id):
+        user = self.get_user(user_id)
+        if not user:
+            return None
+        user["last_login_at"] = "2026-04-08T12:00:00Z"
+        user["updated_at"] = "2026-04-08T12:00:00Z"
         return user
 
     def get_user_telegram_binding(self, user_id):
@@ -322,6 +340,10 @@ class FakeRepository:
             if item["id"] == int(source_id):
                 return item
         return None
+
+    def source_belongs_to_user(self, source_id, user_id):
+        source = self.get_source(source_id)
+        return bool(source and source.get("owner_user_id") == int(user_id))
 
     def list_telegram_accounts(self, user_id):
         return [item for item in self.telegram_accounts if item["user_id"] == int(user_id)]
@@ -750,10 +772,16 @@ class FakeRepository:
                 return item
         return None
 
-    def list_signals(self, source_id=None):
-        if source_id is None:
-            return list(self.signals)
-        return [item for item in self.signals if item["source_id"] == int(source_id)]
+    def list_signals(self, source_id=None, owner_user_id=None):
+        items = list(self.signals)
+        if source_id is not None:
+            items = [item for item in items if item["source_id"] == int(source_id)]
+        if owner_user_id is not None:
+            items = [
+                item for item in items
+                if (self.get_source(item["source_id"]) or {}).get("owner_user_id") == int(owner_user_id)
+            ]
+        return items
 
     def create_signal_record(self, **kwargs):
         item = {
@@ -794,10 +822,23 @@ class FakeRepository:
                 return item
         return None
 
-    def list_raw_items(self, source_id=None):
-        if source_id is None:
-            return list(self.raw_items)
-        return [item for item in self.raw_items if item["source_id"] == int(source_id)]
+    def raw_item_belongs_to_user(self, raw_item_id, user_id):
+        item = self.get_raw_item(raw_item_id)
+        if not item:
+            return False
+        source = self.get_source(item["source_id"]) or {}
+        return source.get("owner_user_id") == int(user_id)
+
+    def list_raw_items(self, source_id=None, owner_user_id=None):
+        items = list(self.raw_items)
+        if source_id is not None:
+            items = [item for item in items if item["source_id"] == int(source_id)]
+        if owner_user_id is not None:
+            items = [
+                item for item in items
+                if (self.get_source(item["source_id"]) or {}).get("owner_user_id") == int(owner_user_id)
+            ]
+        return items
 
     def update_raw_item_parse_result(self, raw_item_id, **kwargs):
         item = self.get_raw_item(raw_item_id)
@@ -812,6 +853,13 @@ class FakeRepository:
             if item["id"] == int(signal_id):
                 return item
         return None
+
+    def signal_belongs_to_user(self, signal_id, user_id):
+        item = self.get_signal(signal_id)
+        if not item:
+            return False
+        source = self.get_source(item["source_id"]) or {}
+        return source.get("owner_user_id") == int(user_id)
 
     def list_dispatch_candidates(self, signal_id):
         signal = self.get_signal(signal_id)
@@ -1195,6 +1243,12 @@ class FakeRepository:
         items.sort(key=lambda item: item["executed_at"], reverse=True)
         return items[:limit]
 
+    def get_execution_job(self, job_id):
+        for item in self.jobs:
+            if item["id"] == int(job_id):
+                return item
+        return None
+
     def retry_execution_job(self, *, job_id, user_id):
         for item in self.jobs:
             if item["id"] == int(job_id) and item["user_id"] == int(user_id):
@@ -1237,6 +1291,17 @@ class PlatformApiApplicationTests(unittest.TestCase):
             "HTTP_COOKIE": "%s=%s" % (SESSION_COOKIE_NAME, cookie_value),
         }
 
+    def session_headers_for(self, user_id):
+        user = self.repository.get_user(user_id) or {}
+        cookie_value = build_session_cookie_value(
+            int(user_id),
+            "session-secret",
+            session_version=int(user.get("session_version") or 1),
+        )
+        return {
+            "HTTP_COOKIE": "%s=%s" % (SESSION_COOKIE_NAME, cookie_value),
+        }
+
     def test_health_endpoint_does_not_require_auth(self):
         status, headers, payload = invoke(self.app, build_testing_environ("/api/health"))
         self.assertEqual(status, "200 OK")
@@ -1263,6 +1328,34 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertIn("/autobet/subscriptions#subscriptionsSection", body)
         self.assertIn("快捷导入方案", body)
         self.assertIn("下一步", body)
+
+    def test_home_page_injects_shared_account_dialog_and_versions_shared_assets(self):
+        captured = {"status": None, "headers": None}
+
+        def start_response(status, headers):
+            captured["status"] = status
+            captured["headers"] = dict(headers)
+
+        body = b"".join(self.app(build_testing_environ("/"), start_response)).decode("utf-8")
+        self.assertEqual(captured["status"], "200 OK")
+        self.assertIn('id="accountDialog"', body)
+        self.assertIn('id="authenticatedAccountPanel"', body)
+        self.assertNotIn("__ACCOUNT_DIALOG__", body)
+        for asset_name in ["ui-text.js", "auth-panel.js", "account-menu.js", "auth-guard.js", "home.js"]:
+            match = re.search(r"/assets/%s\?v=([0-9]+)" % re.escape(asset_name), body)
+            self.assertIsNotNone(match, asset_name)
+            self.assertNotEqual(match.group(1), "0", asset_name)
+
+    def test_shared_account_dialog_template_is_injected_for_all_pages(self):
+        for page_name in ["home.html", "records.html", "alerts.html", "autobet.html", "auto_triggers.html", "dashboard.html"]:
+            text = _load_ui_html_file(page_name)
+            self.assertNotIn("__ACCOUNT_DIALOG__", text, page_name)
+            self.assertIn('id="accountDialog"', text, page_name)
+            self.assertIn('id="authenticatedAccountPanel"', text, page_name)
+
+    def test_shared_asset_versions_resolve_real_files(self):
+        for asset_name in ["ui-text.js", "auth-panel.js", "account-menu.js", "auth-guard.js"]:
+            self.assertNotEqual(_asset_version(asset_name), "0", asset_name)
 
     def test_admin_page_requires_authenticated_session(self):
         captured = {"status": None, "headers": None}
@@ -1291,6 +1384,26 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertIn("来源接入中心", body)
         self.assertIn("执行中心", body)
         self.assertIn("支持查询页", body)
+
+    def test_admin_page_rejects_non_admin_session(self):
+        regular_user = self.repository.create_user_record(
+            username="normal-user",
+            email="normal@example.com",
+            password_hash=hash_password("normal-pass"),
+            role="user",
+            status="active",
+        )
+        captured = {"status": None, "headers": None}
+
+        def start_response(status, headers):
+            captured["status"] = status
+            captured["headers"] = dict(headers)
+
+        body = b"".join(
+            self.app(build_testing_environ("/admin", headers=self.session_headers_for(regular_user["id"])), start_response)
+        ).decode("utf-8")
+        self.assertEqual(captured["status"], "403 Forbidden")
+        self.assertIn("不是管理员", body)
 
     def test_admin_subpage_renders_same_shell(self):
         captured = {"status": None, "headers": None}
@@ -1708,6 +1821,57 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(status, "401 Unauthorized")
         self.assertIn("尚未设置密码", payload["error"])
 
+    def test_auth_change_password_invalidates_old_cookie(self):
+        old_headers = dict(self.session_headers)
+        status, headers, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/auth/change-password",
+                method="POST",
+                headers=old_headers,
+                body={
+                    "current_password": "owner-pass",
+                    "new_password": "owner-pass-2",
+                    "confirm_password": "owner-pass-2",
+                },
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertIn("Set-Cookie", headers)
+        self.assertIn("失效", payload["message"])
+
+        expired_status, _, expired_payload = invoke(
+            self.app,
+            build_testing_environ("/api/auth/me", headers=old_headers),
+        )
+        self.assertEqual(expired_status, "401 Unauthorized")
+        self.assertEqual(expired_payload["error"], "未登录")
+
+        next_cookie = {"HTTP_COOKIE": headers["Set-Cookie"].split(";", 1)[0]}
+        next_status, _, next_payload = invoke(
+            self.app,
+            build_testing_environ("/api/auth/me", headers=next_cookie),
+        )
+        self.assertEqual(next_status, "200 OK")
+        self.assertEqual(next_payload["user"]["username"], "owner")
+
+    def test_auth_change_password_requires_current_password(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/auth/change-password",
+                method="POST",
+                headers=self.session_headers,
+                body={
+                    "current_password": "wrong-pass",
+                    "new_password": "owner-pass-2",
+                    "confirm_password": "owner-pass-2",
+                },
+            ),
+        )
+        self.assertEqual(status, "401 Unauthorized")
+        self.assertIn("当前密码错误", payload["error"])
+
     def test_fetch_source_endpoint_returns_raw_item(self):
         with patch("pc28touzhu.api.app.fetch_source") as mocked_fetch_source:
             mocked_fetch_source.return_value = {
@@ -1834,6 +1998,25 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(len(payload["items"]), 1)
         self.assertEqual(payload["items"][0]["name"], "demo-source")
 
+    def test_list_sources_scope_all_requires_admin(self):
+        regular_user = self.repository.create_user_record(
+            username="scope-user",
+            email="scope@example.com",
+            password_hash=hash_password("scope-pass"),
+            role="user",
+            status="active",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/sources",
+                headers=self.session_headers_for(regular_user["id"]),
+                query="scope=all",
+            ),
+        )
+        self.assertEqual(status, "403 Forbidden")
+        self.assertIn("管理员", payload["error"])
+
     def test_list_users_scope_all_returns_all_users(self):
         self.repository.create_user_record(username="second", email="second@example.com", role="user", status="active")
 
@@ -1868,6 +2051,72 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(status, "200 OK")
         self.assertEqual(len(payload["items"]), 2)
         self.assertTrue(any(item["name"] == "foreign-source" for item in payload["items"]))
+
+    def test_list_signals_returns_only_current_user_items_for_regular_user(self):
+        regular_user = self.repository.create_user_record(
+            username="signal-user",
+            email="signal@example.com",
+            password_hash=hash_password("signal-pass"),
+            role="user",
+            status="active",
+        )
+        foreign_source = self.repository.create_source_record(
+            owner_user_id=regular_user["id"],
+            source_type="telegram_channel",
+            name="regular-source",
+            visibility="private",
+            config={"chat_id": "@regular"},
+        )
+        self.repository.create_signal_record(
+            source_id=1,
+            lottery_type="pc28",
+            issue_no="20260410001",
+            bet_type="big_small",
+            bet_value="大",
+        )
+        own_signal = self.repository.create_signal_record(
+            source_id=foreign_source["id"],
+            lottery_type="pc28",
+            issue_no="20260410002",
+            bet_type="big_small",
+            bet_value="小",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/signals",
+                headers=self.session_headers_for(regular_user["id"]),
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual([item["id"] for item in payload["items"]], [own_signal["id"]])
+
+    def test_list_raw_items_returns_only_current_user_items_for_regular_user(self):
+        regular_user = self.repository.create_user_record(
+            username="raw-user",
+            email="raw@example.com",
+            password_hash=hash_password("raw-pass"),
+            role="user",
+            status="active",
+        )
+        own_source = self.repository.create_source_record(
+            owner_user_id=regular_user["id"],
+            source_type="telegram_channel",
+            name="raw-source",
+            visibility="private",
+            config={"chat_id": "@raw"},
+        )
+        self.repository.create_raw_item_record(source_id=1, issue_no="20260411001", raw_payload={"from": "owner"})
+        own_raw_item = self.repository.create_raw_item_record(source_id=own_source["id"], issue_no="20260411002", raw_payload={"from": "regular"})
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/raw-items",
+                headers=self.session_headers_for(regular_user["id"]),
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual([item["id"] for item in payload["items"]], [own_raw_item["id"]])
 
     def test_create_source_returns_item(self):
         self.repository.create_user_record(username="u2", email="", role="user", status="active")
@@ -3667,6 +3916,34 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(len(self.repository.jobs), 1)
         self.assertEqual(self.repository.jobs[0]["telegram_account_id"], account["id"])
 
+    def test_dispatch_signal_rejects_other_user_access(self):
+        regular_user = self.repository.create_user_record(
+            username="dispatch-user",
+            email="dispatch@example.com",
+            password_hash=hash_password("dispatch-pass"),
+            role="user",
+            status="active",
+        )
+        signal = self.repository.create_signal_record(
+            source_id=1,
+            lottery_type="pc28",
+            issue_no="20260407009",
+            bet_type="big_small",
+            bet_value="大",
+            normalized_payload={},
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/signals/%s/dispatch" % signal["id"],
+                method="POST",
+                body={},
+                headers=self.session_headers_for(regular_user["id"]),
+            ),
+        )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertIn("signal_id", payload["error"])
+
     def test_list_execution_jobs_returns_filtered_items(self):
         account = self.repository.create_telegram_account_record(
             user_id=1,
@@ -3965,13 +4242,38 @@ class PlatformApiApplicationTests(unittest.TestCase):
         status, _, payload = invoke(
             self.app,
             build_testing_environ(
-                "/api/platform/alerts",
+                "/api/platform/admin/alerts",
                 headers=self.session_headers,
             ),
         )
         self.assertEqual(status, "200 OK")
         self.assertTrue(any(item["alert_type"] == "executor_offline" for item in payload["items"]))
         self.assertTrue(any(item["alert_type"] == "job_retry_exhausted" for item in payload["items"]))
+
+    def test_regular_user_alerts_exclude_platform_health(self):
+        regular_user = self.repository.create_user_record(
+            username="alert-user",
+            email="alert@example.com",
+            password_hash=hash_password("alert-pass"),
+            role="user",
+            status="active",
+        )
+        self.repository.upsert_executor_heartbeat(
+            executor_id="executor-offline",
+            version="0.2.0",
+            capabilities={"send": True},
+            status="online",
+            last_seen_at="2026-04-07T12:00:00Z",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/alerts",
+                headers=self.session_headers_for(regular_user["id"]),
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["items"], [])
 
     def test_create_raw_item_and_normalize(self):
         create_status, _, create_payload = invoke(
@@ -4015,6 +4317,31 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(normalize_payload["created_count"], 1)
         self.assertEqual(len(self.repository.signals), 1)
         self.assertEqual(self.repository.raw_items[0]["parse_status"], "parsed")
+
+    def test_normalize_raw_item_rejects_other_user_access(self):
+        regular_user = self.repository.create_user_record(
+            username="normalize-user",
+            email="normalize@example.com",
+            password_hash=hash_password("normalize-pass"),
+            role="user",
+            status="active",
+        )
+        raw_item = self.repository.create_raw_item_record(
+            source_id=1,
+            issue_no="20260407005",
+            raw_payload={"signals": []},
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/raw-items/%s/normalize" % raw_item["id"],
+                method="POST",
+                body={},
+                headers=self.session_headers_for(regular_user["id"]),
+            ),
+        )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertIn("raw_item_id", payload["error"])
 
     def test_normalize_ai_trading_simulator_export_payload(self):
         create_status, _, create_payload = invoke(

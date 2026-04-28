@@ -129,6 +129,7 @@
         pageData: null,
         filters: cloneFilters(DEFAULT_FILTERS),
     };
+    let currentUserLoadToken = 0;
 
     const statusMessage = document.getElementById("statusMessage");
     const adminContent = document.getElementById("adminContent");
@@ -208,8 +209,18 @@
     }
 
     function loadCurrentUser() {
+        const token = ++currentUserLoadToken;
         return request("/api/auth/me").then(function (payload) {
+            if (token !== currentUserLoadToken) {
+                return state.currentUser;
+            }
             setCurrentUser(payload.user || null);
+            return state.currentUser;
+        }).catch(function (error) {
+            if (token !== currentUserLoadToken) {
+                return state.currentUser;
+            }
+            throw error;
         });
     }
 
@@ -541,15 +552,19 @@
         return result;
     }
 
+    function withAdminScope(path) {
+        return path + (path.indexOf("?") >= 0 ? "&" : "?") + "scope=all";
+    }
+
     function loadOverviewData() {
         ensureAuthenticated();
         return Promise.all([
-            request("/api/platform/sources"),
-            request("/api/platform/signals"),
-            request("/api/platform/execution-jobs?limit=80"),
-            request("/api/platform/executors?limit=20"),
-            request("/api/platform/alerts?limit=50"),
-            request("/api/platform/execution-failures?limit=20"),
+            request(withAdminScope("/api/platform/sources")),
+            request(withAdminScope("/api/platform/signals")),
+            request(withAdminScope("/api/platform/execution-jobs?limit=80")),
+            request("/api/platform/admin/executors?limit=20"),
+            request("/api/platform/admin/alerts?limit=50"),
+            request(withAdminScope("/api/platform/execution-failures?limit=20")),
         ]).then(function (payloads) {
             return {
                 sources: payloads[0].items || [],
@@ -565,9 +580,9 @@
     function loadSourcesData() {
         ensureAuthenticated();
         return Promise.all([
-            request("/api/platform/sources"),
-            request("/api/platform/raw-items"),
-            request("/api/platform/signals"),
+            request(withAdminScope("/api/platform/sources")),
+            request(withAdminScope("/api/platform/raw-items")),
+            request(withAdminScope("/api/platform/signals")),
         ]).then(function (payloads) {
             return {
                 sources: payloads[0].items || [],
@@ -580,9 +595,9 @@
     function loadSignalsData() {
         ensureAuthenticated();
         return Promise.all([
-            request("/api/platform/sources"),
-            request("/api/platform/signals"),
-            request("/api/platform/execution-jobs?limit=100"),
+            request(withAdminScope("/api/platform/sources")),
+            request(withAdminScope("/api/platform/signals")),
+            request(withAdminScope("/api/platform/execution-jobs?limit=100")),
         ]).then(function (payloads) {
             return {
                 sources: payloads[0].items || [],
@@ -595,9 +610,9 @@
     function loadExecutionData() {
         ensureAuthenticated();
         return Promise.all([
-            request("/api/platform/execution-jobs?limit=100"),
-            request("/api/platform/executors?limit=20"),
-            request("/api/platform/execution-failures?limit=30"),
+            request(withAdminScope("/api/platform/execution-jobs?limit=100")),
+            request("/api/platform/admin/executors?limit=20"),
+            request(withAdminScope("/api/platform/execution-failures?limit=30")),
         ]).then(function (payloads) {
             return {
                 jobs: payloads[0].items || [],
@@ -610,8 +625,8 @@
     function loadAlertsData() {
         ensureAuthenticated();
         return Promise.all([
-            request("/api/platform/alerts?limit=100"),
-            request("/api/platform/execution-failures?limit=30"),
+            request("/api/platform/admin/alerts?limit=100"),
+            request(withAdminScope("/api/platform/execution-failures?limit=30")),
         ]).then(function (payloads) {
             return {
                 alerts: payloads[0].items || [],
@@ -1814,12 +1829,15 @@
         setStatus("已刷新支持查询页。", false);
     }
 
-    async function loadRoute() {
+    async function loadRoute(options) {
+        const normalized = options || {};
         state.currentRoute = resolveRoute(window.location.pathname);
         applyRouteMeta(state.currentRoute);
         renderLoadingState();
         try {
-            await loadCurrentUser();
+            if (!normalized.skipCurrentUserReload) {
+                await loadCurrentUser();
+            }
             state.pageData = await ROUTES[state.currentRoute].load();
             ROUTES[state.currentRoute].render(state.pageData);
             updateRefreshTimestamp();
@@ -2056,48 +2074,16 @@
         }
     }
 
-    document.getElementById("registerBtn").addEventListener("click", async function () {
-        try {
-            const payload = await request("/api/auth/register", {
-                method: "POST",
-                body: {
-                    username: document.getElementById("authUsername").value,
-                    email: document.getElementById("authEmail").value,
-                    password: document.getElementById("authPassword").value,
-                },
-            });
-            setCurrentUser(payload.user || null);
-            await loadRoute();
-            setStatus("注册并登录成功。", false);
-        } catch (error) {
-            setStatus(error.message, true);
-        }
-    });
-
-    document.getElementById("loginBtn").addEventListener("click", async function () {
-        try {
-            const payload = await request("/api/auth/login", {
-                method: "POST",
-                body: {
-                    username: document.getElementById("authUsername").value,
-                    password: document.getElementById("authPassword").value,
-                },
-            });
-            setCurrentUser(payload.user || null);
-            await loadRoute();
-            setStatus("登录成功。", false);
-        } catch (error) {
-            setStatus(error.message, true);
-        }
-    });
-
-    document.getElementById("logoutBtn").addEventListener("click", async function () {
-        try {
-            await request("/api/auth/logout", { method: "POST", body: {} });
-            setCurrentUser(null);
+    document.addEventListener("platform-auth:changed", async function (event) {
+        const detail = event.detail || {};
+        setCurrentUser(detail.user || null);
+        if (detail.action === "logout") {
             window.location.href = "/";
-        } catch (error) {
-            setStatus(error.message, true);
+            return;
+        }
+        await loadRoute({skipCurrentUserReload: true});
+        if (detail.message) {
+            setStatus(detail.message, false);
         }
     });
 

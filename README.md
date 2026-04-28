@@ -221,6 +221,8 @@ TG_REPORT_TIMEZONE=Asia/Shanghai
 
 这意味着当前系统已经切到“多用户 + 多账号 + 多目标”的执行模型，不再是单账号、单群的简单发消息脚本。
 
+用户端与后台共用的账户弹窗现在由服务端在页面渲染阶段注入统一模板；`auth-panel.js`、`account-menu.js`、`auth-guard.js`、`ui-text.js` 这类共享资源也统一按文件更新时间附带版本参数，避免浏览器继续命中旧缓存。
+
 ## API 概览
 
 ### 认证接口
@@ -229,6 +231,7 @@ TG_REPORT_TIMEZONE=Asia/Shanghai
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
+- `POST /api/auth/change-password`
 
 ### 平台接口
 
@@ -243,10 +246,17 @@ TG_REPORT_TIMEZONE=Asia/Shanghai
 - `/api/platform/delivery-targets`
 - `/api/platform/message-templates`
 - `/api/platform/execution-jobs`
-- `/api/platform/executors`
 - `/api/platform/execution-failures`
 - `/api/platform/alerts`
-- `/api/platform/support`
+
+普通平台接口默认只允许当前登录用户访问自己的资源；跨用户查询和平台运维能力已收口到管理员接口。
+
+### 管理员接口
+
+- `/api/platform/admin/support`
+- `/api/platform/admin/telegram-settings`
+- `/api/platform/admin/executors`
+- `/api/platform/admin/alerts`
 
 ### 执行器接口
 

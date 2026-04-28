@@ -91,6 +91,13 @@ from pc28touzhu.services.telegram_runtime_settings_service import (
 
 StartResponse = Callable[[str, list], None]
 UI_DIR = Path(__file__).resolve().parents[1] / "ui"
+ACCOUNT_DIALOG_PLACEHOLDER = "__ACCOUNT_DIALOG__"
+UI_ASSET_FILENAME_MAP = {
+    "ui-text.js": "ui_text.js",
+    "account-menu.js": "account_menu.js",
+    "auth-guard.js": "auth_guard.js",
+    "auth-panel.js": "auth_panel.js",
+}
 ADMIN_PAGE_ROUTES = {
     "/admin",
     "/admin/sources",
@@ -100,6 +107,13 @@ ADMIN_PAGE_ROUTES = {
     "/admin/support",
     "/admin/telegram",
 }
+SESSION_COOKIE_MAX_AGE = 2592000
+
+
+class ApiPermissionError(PermissionError):
+    def __init__(self, message: str, status_code: int = 401):
+        super().__init__(message)
+        self.status_code = int(status_code)
 
 
 def _json_response(
@@ -113,6 +127,7 @@ def _json_response(
         200: "200 OK",
         400: "400 Bad Request",
         401: "401 Unauthorized",
+        403: "403 Forbidden",
         404: "404 Not Found",
         405: "405 Method Not Allowed",
         500: "500 Internal Server Error",
@@ -162,8 +177,12 @@ def _load_ui_file(filename: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _resolve_ui_asset_filename(filename: str) -> str:
+    return UI_ASSET_FILENAME_MAP.get(str(filename or "").strip(), str(filename or "").strip())
+
+
 def _asset_version(filename: str) -> str:
-    path = UI_DIR / filename
+    path = UI_DIR / _resolve_ui_asset_filename(filename)
     if not path.exists():
         return "0"
     return str(int(path.stat().st_mtime))
@@ -171,6 +190,8 @@ def _asset_version(filename: str) -> str:
 
 def _load_ui_html_file(filename: str) -> str:
     text = _load_ui_file(filename)
+    if ACCOUNT_DIALOG_PLACEHOLDER in text:
+        text = text.replace(ACCOUNT_DIALOG_PLACEHOLDER, _load_ui_file("account_dialog.html"))
 
     def replace_asset(match: re.Match[str]) -> str:
         asset_name = str(match.group(1) or "").strip()
@@ -240,7 +261,8 @@ class PlatformApiApplication:
         try:
             return self._dispatch(environ, start_response)
         except PermissionError as exc:
-            return _json_response(start_response, 401, {"error": str(exc)})
+            status_code = int(getattr(exc, "status_code", 401) or 401)
+            return _json_response(start_response, status_code, {"error": str(exc)})
         except ValueError as exc:
             payload = getattr(exc, "payload", None)
             if isinstance(payload, dict) and payload.get("error"):
@@ -467,6 +489,7 @@ class PlatformApiApplication:
                 return _json_response(start_response, 400, {"error": "password 不能为空"})
             existing_user = self.repository.get_user_by_username(username)
             if existing_user:
+                self._ensure_active_user(existing_user, login_message="当前账号已停用，无法完成注册初始化")
                 if str(existing_user.get("password_hash") or "").strip():
                     return _json_response(start_response, 400, {"error": "用户名已存在"})
                 user = self.repository.update_user_password(
@@ -474,11 +497,10 @@ class PlatformApiApplication:
                     hash_password(password),
                     email=email or None,
                 )
-                cookie = build_set_cookie_header(
-                    SESSION_COOKIE_NAME,
-                    build_session_cookie_value(user["id"], self.session_secret),
-                    max_age=2592000,
-                )
+                if not user:
+                    return _json_response(start_response, 404, {"error": "用户不存在"})
+                user = self.repository.touch_user_login(user["id"]) or user
+                cookie = self._build_session_cookie_header(user, environ)
                 return _json_response(
                     start_response,
                     200,
@@ -494,11 +516,8 @@ class PlatformApiApplication:
                     "role": "user",
                 },
             )["item"]
-            cookie = build_set_cookie_header(
-                SESSION_COOKIE_NAME,
-                build_session_cookie_value(user["id"], self.session_secret),
-                max_age=2592000,
-            )
+            user = self.repository.touch_user_login(user["id"]) or user
+            cookie = self._build_session_cookie_header(user, environ)
             return _json_response(start_response, 200, {"user": user}, extra_headers=[cookie])
 
         if path == "/api/auth/login":
@@ -512,17 +531,15 @@ class PlatformApiApplication:
                 return _json_response(start_response, 401, {"error": "该账号尚未设置密码，请先注册完成初始化"})
             if not user or not verify_password(password, user.get("password_hash") or ""):
                 return _json_response(start_response, 401, {"error": "用户名或密码错误"})
-            cookie = build_set_cookie_header(
-                SESSION_COOKIE_NAME,
-                build_session_cookie_value(user["id"], self.session_secret),
-                max_age=2592000,
-            )
+            self._ensure_active_user(user, login_message="当前账号已停用，无法登录")
+            user = self.repository.touch_user_login(user["id"]) or self.repository.get_user(user["id"]) or user
+            cookie = self._build_session_cookie_header(user, environ)
             return _json_response(start_response, 200, {"user": user}, extra_headers=[cookie])
 
         if path == "/api/auth/logout":
             if method != "POST":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
-            cookie = build_set_cookie_header(SESSION_COOKIE_NAME, "", max_age=0)
+            cookie = self._build_cleared_session_cookie_header(environ)
             return _json_response(start_response, 200, {"message": "已退出登录"}, extra_headers=[cookie])
 
         if path == "/api/auth/me":
@@ -531,7 +548,36 @@ class PlatformApiApplication:
             user = self._get_current_user(environ)
             if not user:
                 return _json_response(start_response, 401, {"error": "未登录"})
+            self._ensure_active_user(user)
             return _json_response(start_response, 200, {"user": user})
+
+        if path == "/api/auth/change-password":
+            if method != "POST":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            current_user = self._require_platform_user(environ)
+            payload = _read_json_body(environ)
+            current_password = str(payload.get("current_password") or "")
+            next_password = str(payload.get("new_password") or "")
+            confirm_password = str(payload.get("confirm_password") or "")
+            if not current_password:
+                return _json_response(start_response, 400, {"error": "current_password 不能为空"})
+            if not next_password:
+                return _json_response(start_response, 400, {"error": "new_password 不能为空"})
+            if confirm_password and confirm_password != next_password:
+                return _json_response(start_response, 400, {"error": "两次输入的新密码不一致"})
+            current_user_with_secret = self.repository.get_user_by_username(str(current_user.get("username") or ""))
+            if not current_user_with_secret or not verify_password(current_password, current_user_with_secret.get("password_hash") or ""):
+                return _json_response(start_response, 401, {"error": "当前密码错误"})
+            user = self.repository.update_user_password(current_user["id"], hash_password(next_password))
+            if not user:
+                return _json_response(start_response, 404, {"error": "用户不存在"})
+            cookie = self._build_session_cookie_header(user, environ)
+            return _json_response(
+                start_response,
+                200,
+                {"user": user, "message": "密码已更新，其他旧会话已失效"},
+                extra_headers=[cookie],
+            )
 
         if path.startswith("/api/executor/"):
             if not self._is_executor_authorized(environ):
@@ -576,6 +622,34 @@ class PlatformApiApplication:
                 return _json_response(start_response, 200, payload)
             return _json_response(start_response, 405, {"error": "method not allowed"})
 
+        if path == "/api/platform/admin/executors":
+            if method != "GET":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            payload = list_executor_instances(
+                self.repository,
+                limit=_query_value(environ, "limit", "20"),
+                stale_after_seconds=self.executor_stale_after_seconds,
+                offline_after_seconds=self.executor_offline_after_seconds,
+                failure_streak_threshold=self.alert_failure_streak_threshold,
+            )
+            return _json_response(start_response, 200, payload)
+
+        if path == "/api/platform/admin/alerts":
+            if method != "GET":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            payload = list_platform_alerts(
+                self.repository,
+                user_id=_query_value(environ, "user_id"),
+                limit=_query_value(environ, "limit", "50"),
+                stale_after_seconds=self.executor_stale_after_seconds,
+                offline_after_seconds=self.executor_offline_after_seconds,
+                auto_retry_max_attempts=self.auto_retry_max_attempts,
+                auto_retry_base_delay_seconds=self.auto_retry_base_delay_seconds,
+                failure_streak_threshold=self.alert_failure_streak_threshold,
+                include_platform_health=True,
+            )
+            return _json_response(start_response, 200, payload)
+
         if path == "/api/executor/jobs/pull":
             if method != "GET":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
@@ -600,22 +674,20 @@ class PlatformApiApplication:
         if path == "/api/platform/users":
             if method == "GET":
                 if _query_value(environ, "scope") == "all":
+                    self._require_admin_api_user(current_user, "仅管理员可查看全部用户")
                     payload = list_users(self.repository)
                 else:
                     payload = {"items": [current_user]}
                 return _json_response(start_response, 200, payload)
             if method == "POST":
+                self._require_admin_api_user(current_user, "仅管理员可创建平台用户")
                 payload = create_user(self.repository, payload=_read_json_body(environ))
                 return _json_response(start_response, 200, payload)
             return _json_response(start_response, 405, {"error": "method not allowed"})
 
         if path == "/api/platform/sources":
             if method == "GET":
-                owner_user_id = current_user["id"]
-                if _query_value(environ, "scope") == "all":
-                    owner_user_id = None
-                elif _query_value(environ, "owner_user_id"):
-                    owner_user_id = _query_value(environ, "owner_user_id")
+                owner_user_id = self._resolve_owner_query_scope(environ, current_user)
                 payload = list_sources(self.repository, owner_user_id=owner_user_id)
                 return _json_response(start_response, 200, payload)
             if method == "POST":
@@ -631,7 +703,7 @@ class PlatformApiApplication:
             payload = delete_source(
                 self.repository,
                 source_id=source_id,
-                owner_user_id=current_user["id"],
+                owner_user_id=self._resolve_source_owner_for_write(source_id, current_user),
             )
             return _json_response(start_response, 200, payload)
         if path.startswith(source_prefix) and path.endswith("/status"):
@@ -641,7 +713,7 @@ class PlatformApiApplication:
             payload = update_source_status(
                 self.repository,
                 source_id=source_id,
-                owner_user_id=current_user["id"],
+                owner_user_id=self._resolve_source_owner_for_write(source_id, current_user),
                 status=_read_json_body(environ).get("status"),
             )
             return _json_response(start_response, 200, payload)
@@ -649,7 +721,11 @@ class PlatformApiApplication:
             if method != "POST":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
             source_id = path[len(source_prefix) : -len("/fetch")]
-            payload = fetch_source(self.repository, source_id=source_id)
+            payload = fetch_source(
+                self.repository,
+                source_id=source_id,
+                owner_user_id=None if self._is_admin_user(current_user) else current_user["id"],
+            )
             return _json_response(start_response, 200, payload)
         if path.startswith(source_prefix):
             if method != "POST":
@@ -658,7 +734,7 @@ class PlatformApiApplication:
             payload = update_source(
                 self.repository,
                 source_id=source_id,
-                owner_user_id=current_user["id"],
+                owner_user_id=self._resolve_source_owner_for_write(source_id, current_user),
                 payload=_read_json_body(environ),
             )
             return _json_response(start_response, 200, payload)
@@ -667,7 +743,7 @@ class PlatformApiApplication:
             if method == "GET":
                 payload = list_telegram_accounts(
                     self.repository,
-                    user_id=_query_value(environ, "user_id") or current_user["id"],
+                    user_id=self._resolve_user_query_scope(environ, current_user),
                 )
                 return _json_response(start_response, 200, payload)
             if method == "POST":
@@ -758,7 +834,7 @@ class PlatformApiApplication:
             if method == "GET":
                 payload = list_subscriptions(
                     self.repository,
-                    user_id=_query_value(environ, "user_id") or current_user["id"],
+                    user_id=self._resolve_user_query_scope(environ, current_user),
                     stat_date=_query_value(environ, "stat_date"),
                 )
                 return _json_response(start_response, 200, payload)
@@ -963,7 +1039,7 @@ class PlatformApiApplication:
             if method == "GET":
                 payload = list_message_templates(
                     self.repository,
-                    user_id=_query_value(environ, "user_id") or current_user["id"],
+                    user_id=self._resolve_user_query_scope(environ, current_user),
                 )
                 return _json_response(start_response, 200, payload)
             if method == "POST":
@@ -1002,7 +1078,7 @@ class PlatformApiApplication:
             if method == "GET":
                 payload = list_delivery_targets(
                     self.repository,
-                    user_id=_query_value(environ, "user_id") or current_user["id"],
+                    user_id=self._resolve_user_query_scope(environ, current_user),
                 )
                 return _json_response(start_response, 200, payload)
             if method == "POST":
@@ -1058,14 +1134,9 @@ class PlatformApiApplication:
 
         if path == "/api/platform/execution-jobs":
             if method == "GET":
-                query_user_id = current_user["id"]
-                if _query_value(environ, "scope") == "all":
-                    query_user_id = None
-                elif _query_value(environ, "user_id"):
-                    query_user_id = _query_value(environ, "user_id")
                 payload = list_execution_jobs(
                     self.repository,
-                    user_id=query_user_id,
+                    user_id=self._resolve_user_query_scope(environ, current_user, allow_all=True),
                     signal_id=_query_value(environ, "signal_id"),
                     status=_query_value(environ, "status"),
                     limit=_query_value(environ, "limit", "100"),
@@ -1075,6 +1146,7 @@ class PlatformApiApplication:
 
         if path == "/api/platform/executors":
             if method == "GET":
+                self._require_admin_api_user(current_user, "仅管理员可查看执行器状态")
                 payload = list_executor_instances(
                     self.repository,
                     limit=_query_value(environ, "limit", "20"),
@@ -1087,14 +1159,9 @@ class PlatformApiApplication:
 
         if path == "/api/platform/execution-failures":
             if method == "GET":
-                query_user_id = current_user["id"]
-                if _query_value(environ, "scope") == "all":
-                    query_user_id = None
-                elif _query_value(environ, "user_id"):
-                    query_user_id = _query_value(environ, "user_id")
                 payload = list_recent_execution_failures(
                     self.repository,
-                    user_id=query_user_id,
+                    user_id=self._resolve_user_query_scope(environ, current_user, allow_all=True),
                     limit=_query_value(environ, "limit", "20"),
                     auto_retry_max_attempts=self.auto_retry_max_attempts,
                     auto_retry_base_delay_seconds=self.auto_retry_base_delay_seconds,
@@ -1104,39 +1171,55 @@ class PlatformApiApplication:
 
         if path == "/api/platform/alerts":
             if method == "GET":
-                query_user_id = current_user["id"]
-                if _query_value(environ, "scope") == "all":
-                    query_user_id = None
-                elif _query_value(environ, "user_id"):
-                    query_user_id = _query_value(environ, "user_id")
                 payload = list_platform_alerts(
                     self.repository,
-                    user_id=query_user_id,
+                    user_id=self._resolve_user_query_scope(environ, current_user, allow_all=True),
                     limit=_query_value(environ, "limit", "50"),
                     stale_after_seconds=self.executor_stale_after_seconds,
                     offline_after_seconds=self.executor_offline_after_seconds,
                     auto_retry_max_attempts=self.auto_retry_max_attempts,
                     auto_retry_base_delay_seconds=self.auto_retry_base_delay_seconds,
                     failure_streak_threshold=self.alert_failure_streak_threshold,
+                    include_platform_health=False,
                 )
                 return _json_response(start_response, 200, payload)
             return _json_response(start_response, 405, {"error": "method not allowed"})
 
         if path == "/api/platform/signals":
             if method == "GET":
-                payload = list_signals(self.repository, source_id=_query_value(environ, "source_id"))
+                payload = list_signals(
+                    self.repository,
+                    source_id=_query_value(environ, "source_id"),
+                    owner_user_id=self._resolve_owner_query_scope(environ, current_user),
+                )
                 return _json_response(start_response, 200, payload)
             if method == "POST":
-                payload = create_signal(self.repository, payload=_read_json_body(environ))
+                payload = create_signal(
+                    self.repository,
+                    payload={
+                        **_read_json_body(environ),
+                        "owner_user_id": None if self._is_admin_user(current_user) else current_user["id"],
+                    },
+                )
                 return _json_response(start_response, 200, payload)
             return _json_response(start_response, 405, {"error": "method not allowed"})
 
         if path == "/api/platform/raw-items":
             if method == "GET":
-                payload = list_raw_items(self.repository, source_id=_query_value(environ, "source_id"))
+                payload = list_raw_items(
+                    self.repository,
+                    source_id=_query_value(environ, "source_id"),
+                    owner_user_id=self._resolve_owner_query_scope(environ, current_user),
+                )
                 return _json_response(start_response, 200, payload)
             if method == "POST":
-                payload = create_raw_item(self.repository, payload=_read_json_body(environ))
+                payload = create_raw_item(
+                    self.repository,
+                    payload={
+                        **_read_json_body(environ),
+                        "owner_user_id": None if self._is_admin_user(current_user) else current_user["id"],
+                    },
+                )
                 return _json_response(start_response, 200, payload)
             return _json_response(start_response, 405, {"error": "method not allowed"})
 
@@ -1145,7 +1228,11 @@ class PlatformApiApplication:
             if method != "POST":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
             signal_id = path[len(signal_dispatch_prefix) : -len("/dispatch")]
-            payload = dispatch_signal(self.repository, signal_id=signal_id)
+            payload = dispatch_signal(
+                self.repository,
+                signal_id=signal_id,
+                owner_user_id=None if self._is_admin_user(current_user) else current_user["id"],
+            )
             return _json_response(start_response, 200, payload)
 
         raw_normalize_prefix = "/api/platform/raw-items/"
@@ -1153,7 +1240,11 @@ class PlatformApiApplication:
             if method != "POST":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
             raw_item_id = path[len(raw_normalize_prefix) : -len("/normalize")]
-            payload = normalize_raw_item(self.repository, raw_item_id=raw_item_id)
+            payload = normalize_raw_item(
+                self.repository,
+                raw_item_id=raw_item_id,
+                owner_user_id=None if self._is_admin_user(current_user) else current_user["id"],
+            )
             return _json_response(start_response, 200, payload)
 
         retry_job_prefix = "/api/platform/execution-jobs/"
@@ -1165,7 +1256,7 @@ class PlatformApiApplication:
             payload = retry_execution_job(
                 self.repository,
                 job_id=job_id,
-                user_id=body.get("user_id") or current_user["id"],
+                user_id=self._resolve_retry_job_user(job_id, current_user, body.get("user_id")),
             )
             return _json_response(start_response, 200, payload)
 
@@ -1188,28 +1279,131 @@ class PlatformApiApplication:
         template = _load_ui_html_file("admin_access_denied.html")
         return template.replace("__ADMIN_ACCESS_MESSAGE__", str(message or "当前请求不具备后台访问权限。"))
 
+    def _is_user_active(self, user: Optional[Dict[str, Any]]) -> bool:
+        if not user:
+            return False
+        return str(user.get("status") or "").strip().lower() in {"", "active"}
+
+    def _is_admin_user(self, user: Optional[Dict[str, Any]]) -> bool:
+        if not user:
+            return False
+        return str(user.get("role") or "").strip().lower() == "admin"
+
+    def _session_cookie_secure(self, environ: Dict[str, Any]) -> bool:
+        return str(environ.get("wsgi.url_scheme") or "").strip().lower() == "https"
+
+    def _build_session_cookie_header(self, user: Dict[str, Any], environ: Dict[str, Any]) -> tuple[str, str]:
+        return build_set_cookie_header(
+            SESSION_COOKIE_NAME,
+            build_session_cookie_value(
+                int(user["id"]),
+                self.session_secret,
+                session_version=int(user.get("session_version") or 1),
+            ),
+            max_age=SESSION_COOKIE_MAX_AGE,
+            same_site="Lax",
+            secure=self._session_cookie_secure(environ),
+        )
+
+    def _build_cleared_session_cookie_header(self, environ: Dict[str, Any]) -> tuple[str, str]:
+        return build_set_cookie_header(
+            SESSION_COOKIE_NAME,
+            "",
+            max_age=0,
+            same_site="Lax",
+            secure=self._session_cookie_secure(environ),
+        )
+
+    def _ensure_active_user(self, user: Optional[Dict[str, Any]], *, login_message: str = "当前账号已停用") -> None:
+        if not self._is_user_active(user):
+            raise ApiPermissionError(login_message, 403)
+
+    def _require_admin_api_user(self, user: Optional[Dict[str, Any]], message: str = "当前账号无权执行该操作") -> None:
+        if not self._is_admin_user(user):
+            raise ApiPermissionError(message, 403)
+
     def _get_current_user(self, environ: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         cookie_value = get_cookie_value(environ, SESSION_COOKIE_NAME)
         if not cookie_value:
             return None
-        user_id = parse_session_cookie_value(cookie_value, self.session_secret)
-        if not user_id:
+        parsed = parse_session_cookie_value(cookie_value, self.session_secret)
+        if not parsed:
             return None
-        return self.repository.get_user(user_id)
+        user_id, session_version = parsed
+        user = self.repository.get_user(user_id)
+        if not user:
+            return None
+        if int(user.get("session_version") or 1) != int(session_version or 1):
+            return None
+        return user
 
     def _require_platform_user(self, environ: Dict[str, Any]) -> Dict[str, Any]:
         user = self._get_current_user(environ)
         if not user:
-            raise PermissionError("请先登录")
+            raise ApiPermissionError("请先登录", 401)
+        self._ensure_active_user(user)
         return user
 
     def _require_admin_console_user(self, environ: Dict[str, Any]) -> Dict[str, Any]:
         user = self._get_current_user(environ)
         if not user:
-            raise PermissionError("请先登录后再进入后台控制台")
-        if str(user.get("status") or "").strip().lower() not in {"", "active"}:
-            raise PermissionError("当前账号已停用，无法访问后台控制台")
+            raise ApiPermissionError("请先登录后再进入后台控制台", 401)
+        self._ensure_active_user(user, login_message="当前账号已停用，无法访问后台控制台")
+        if not self._is_admin_user(user):
+            raise ApiPermissionError("当前账号不是管理员，无法访问后台控制台", 403)
         return user
+
+    def _resolve_user_query_scope(
+        self,
+        environ: Dict[str, Any],
+        current_user: Dict[str, Any],
+        *,
+        allow_all: bool = False,
+    ) -> Optional[Any]:
+        if allow_all and _query_value(environ, "scope") == "all":
+            self._require_admin_api_user(current_user, "仅管理员可查看全部用户数据")
+            return None
+        requested_user_id = _query_value(environ, "user_id")
+        if requested_user_id:
+            self._require_admin_api_user(current_user, "仅管理员可查看其他用户数据")
+            return requested_user_id
+        return current_user["id"]
+
+    def _resolve_owner_query_scope(self, environ: Dict[str, Any], current_user: Dict[str, Any]) -> Optional[Any]:
+        if _query_value(environ, "scope") == "all":
+            self._require_admin_api_user(current_user, "仅管理员可查看全部来源数据")
+            return None
+        requested_owner_user_id = _query_value(environ, "owner_user_id")
+        if requested_owner_user_id:
+            self._require_admin_api_user(current_user, "仅管理员可查看其他用户来源数据")
+            return requested_owner_user_id
+        return current_user["id"]
+
+    def _resolve_source_owner_for_write(self, source_id: Any, current_user: Dict[str, Any]) -> Any:
+        if not self._is_admin_user(current_user):
+            return current_user["id"]
+        try:
+            item = self.repository.get_source(int(source_id))
+        except Exception:
+            item = None
+        if not item:
+            return current_user["id"]
+        owner_user_id = item.get("owner_user_id")
+        return owner_user_id if owner_user_id is not None else current_user["id"]
+
+    def _resolve_retry_job_user(self, job_id: Any, current_user: Dict[str, Any], requested_user_id: Any = None) -> Any:
+        if requested_user_id not in {None, ""}:
+            self._require_admin_api_user(current_user, "仅管理员可代其他用户重试任务")
+            return requested_user_id
+        if not self._is_admin_user(current_user):
+            return current_user["id"]
+        try:
+            item = self.repository.get_execution_job(int(job_id))
+        except Exception:
+            item = None
+        if not item or item.get("user_id") is None:
+            return current_user["id"]
+        return item.get("user_id")
 
 
 def build_testing_environ(

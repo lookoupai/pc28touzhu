@@ -64,6 +64,14 @@
                 closeDialog();
             }
         });
+
+        window.PlatformAccountDialog = {
+            open: openDialog,
+            close: closeDialog,
+            isOpen: function () {
+                return dialog.hasAttribute("open");
+            },
+        };
     }
 
     if (document.readyState === "loading") {

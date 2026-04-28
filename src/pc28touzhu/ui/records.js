@@ -4,6 +4,7 @@
         jobs: [],
         alerts: [],
     };
+    let currentUserLoadToken = 0;
 
     const statusMessage = document.getElementById("statusMessage");
     const refreshRecordsBtn = document.getElementById("refreshRecordsBtn");
@@ -121,6 +122,7 @@
     }
 
     async function loadCurrentUser() {
+        const token = ++currentUserLoadToken;
         const response = await fetch("/api/auth/me", {
             method: "GET",
             credentials: "same-origin",
@@ -129,6 +131,9 @@
             },
         });
         const payload = await response.json();
+        if (token !== currentUserLoadToken) {
+            return state.currentUser;
+        }
         if (response.status === 401) {
             setCurrentUser(null);
             return null;
@@ -151,6 +156,41 @@
             panelTitleLoggedIn: "当前账户",
             panelTitleLoggedOut: "登录与账户",
         });
+        const authForm = document.getElementById("authForm");
+        const authenticatedPanel = document.getElementById("authenticatedAccountPanel");
+        const usernameEl = document.getElementById("currentUsername");
+        const metaEl = document.getElementById("currentUserMeta");
+        const accountButton = document.getElementById("accountMenuBtn");
+        const isAuthenticated = Boolean(state.currentUser);
+        if (usernameEl instanceof HTMLElement) {
+            usernameEl.textContent = isAuthenticated ? String(state.currentUser.username || "未命名用户") : "未登录";
+        }
+        if (metaEl instanceof HTMLElement) {
+            metaEl.textContent = isAuthenticated
+                ? ((state.currentUser.email || "--") + " · " + (state.currentUser.role || "user") + " · " + (state.currentUser.status || "active"))
+                : "请先注册或登录";
+        }
+        if (accountButton instanceof HTMLElement) {
+            accountButton.textContent = isAuthenticated ? String(state.currentUser.username || "未命名用户") : "登录";
+        }
+        if (authForm instanceof HTMLElement) {
+            if (isAuthenticated) {
+                authForm.hidden = true;
+                authForm.style.setProperty("display", "none", "important");
+            } else {
+                authForm.hidden = false;
+                authForm.style.removeProperty("display");
+            }
+        }
+        if (authenticatedPanel instanceof HTMLElement) {
+            if (isAuthenticated) {
+                authenticatedPanel.hidden = false;
+                authenticatedPanel.style.removeProperty("display");
+            } else {
+                authenticatedPanel.hidden = true;
+                authenticatedPanel.style.setProperty("display", "none", "important");
+            }
+        }
     }
 
     function getFilterState() {
@@ -310,10 +350,11 @@
         state.alerts = results[1].items || [];
     }
 
-    async function refreshAll() {
+    async function refreshAll(options) {
+        const normalized = options || {};
         setButtonBusy(refreshRecordsBtn, true, "刷新中...");
         try {
-            const user = await loadCurrentUser();
+            const user = normalized.skipCurrentUserReload ? state.currentUser : await loadCurrentUser();
             renderFilterSummary();
             if (!user) {
                 resetCollections();
@@ -388,52 +429,17 @@
         }
     });
 
-    document.getElementById("registerBtn").addEventListener("click", async function () {
-        try {
-            const payload = await request("/api/auth/register", {
-                method: "POST",
-                body: {
-                    username: document.getElementById("authUsername").value,
-                    email: document.getElementById("authEmail").value,
-                    password: document.getElementById("authPassword").value,
-                },
-            });
-            setCurrentUser(payload.user || null);
-            await refreshAll();
-            setStatus("注册并登录成功。", false);
-        } catch (error) {
-            setStatus(error.message, true);
-        }
-    });
-
-    document.getElementById("loginBtn").addEventListener("click", async function () {
-        try {
-            const payload = await request("/api/auth/login", {
-                method: "POST",
-                body: {
-                    username: document.getElementById("authUsername").value,
-                    password: document.getElementById("authPassword").value,
-                },
-            });
-            setCurrentUser(payload.user || null);
-            await refreshAll();
-            setStatus("登录成功。", false);
-        } catch (error) {
-            setStatus(error.message, true);
-        }
-    });
-
-    document.getElementById("logoutBtn").addEventListener("click", async function () {
-        try {
-            await request("/api/auth/logout", {
-                method: "POST",
-                body: {},
-            });
-            setCurrentUser(null);
+    document.addEventListener("platform-auth:changed", async function (event) {
+        const detail = event.detail || {};
+        setCurrentUser(detail.user || null);
+        if (detail.action === "logout") {
             resetCollections();
-            setStatus("已退出登录。", false);
-        } catch (error) {
-            setStatus(error.message, true);
+            setStatus(detail.message || "已退出登录。", false);
+            return;
+        }
+        await refreshAll({skipCurrentUserReload: true});
+        if (detail.message) {
+            setStatus(detail.message, false);
         }
     });
 
