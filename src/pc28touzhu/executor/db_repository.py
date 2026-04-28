@@ -3884,7 +3884,10 @@ class DatabaseRepository:
             conn.execute(
                 """
                 UPDATE subscription_runtime_runs
-                SET last_issue_no = ?,
+                SET status = ?,
+                    ended_at = ?,
+                    end_reason = ?,
+                    last_issue_no = ?,
                     last_result_type = ?,
                     realized_profit = ?,
                     realized_loss = ?,
@@ -3899,6 +3902,9 @@ class DatabaseRepository:
                 WHERE id = ?
                 """,
                 (
+                    "closed" if threshold_status else "active",
+                    now if threshold_status else None,
+                    threshold_status,
                     str(current_event.get("issue_no") or ""),
                     normalized_result,
                     next_realized_profit,

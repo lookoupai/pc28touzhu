@@ -1131,6 +1131,14 @@ class DatabaseRepositoryTests(unittest.TestCase):
 
         self.assertEqual(settled["financial"]["threshold_status"], "loss_limit_hit")
         self.assertEqual(self.repo.get_subscription(subscription["id"])["status"], "active")
+        runtime_history = self.repo.list_subscription_runtime_runs(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            limit=5,
+        )
+        self.assertEqual(runtime_history[0]["status"], "closed")
+        self.assertEqual(runtime_history[0]["end_reason"], "loss_limit_hit")
+        self.assertEqual(runtime_history[0]["ended_at"], settled["financial"]["last_settled_at"])
 
     def test_dispatch_candidates_skip_risk_blocked_subscription(self):
         user_id = self.repo.create_user("dispatch-risk-blocked-user")
@@ -1312,11 +1320,12 @@ class DatabaseRepositoryTests(unittest.TestCase):
             user_id=user_id,
             limit=5,
         )
-        self.assertEqual(len(runtime_history), 1)
-        self.assertEqual(runtime_history[0]["status"], "closed")
-        self.assertEqual(runtime_history[0]["end_reason"], "loss_limit_hit")
-        self.assertEqual(runtime_history[0]["settled_event_count"], 1)
-        self.assertEqual(runtime_history[0]["net_profit"], -10)
+        self.assertEqual(len(runtime_history), 2)
+        self.assertTrue(all(item["status"] == "closed" for item in runtime_history))
+        loss_limit_run = next(item for item in runtime_history if item["end_reason"] == "loss_limit_hit")
+        self.assertEqual(loss_limit_run["status"], "closed")
+        self.assertEqual(loss_limit_run["settled_event_count"], 1)
+        self.assertEqual(loss_limit_run["net_profit"], -10)
 
     def test_report_job_result_marks_progression_event_placed(self):
         user_id = self.repo.create_user("sub-progression-job-user")
