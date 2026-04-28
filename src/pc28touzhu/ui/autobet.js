@@ -14,6 +14,9 @@
         telegramBinding: null,
         subscriptionStatDate: "",
         subscriptionDailySummary: null,
+        expandedSubscriptionId: null,
+        subscriptionDetailTabs: {},
+        subscriptionAllDailyHistories: {},
         lastRecommendedActionKey: null,
         showIssueJobsOnly: false,
         scopeFocused: false,
@@ -2756,27 +2759,43 @@
         ].join(" · ");
     }
 
+    function subscriptionDailyNet(subscription) {
+        const stat = subscriptionDailyStat(subscription);
+        return stat ? Number(stat.net_profit || 0) : 0;
+    }
+
+    function subscriptionRuntimeNet(subscription) {
+        const financial = subscription && subscription.financial && typeof subscription.financial === "object"
+            ? subscription.financial
+            : null;
+        return financial ? Number(financial.net_profit || 0) : 0;
+    }
+
     function subscriptionDailyHistory(subscription) {
         return subscription && Array.isArray(subscription.daily_history)
             ? subscription.daily_history
             : [];
     }
 
-    function renderSubscriptionDailyHistory(subscription) {
-        const items = subscriptionDailyHistory(subscription);
+    function renderSubscriptionDailyHistoryItems(items, options) {
+        const normalized = options || {};
+        const title = normalized.title || "最近 7 天盈亏";
+        const copy = normalized.copy || "按自然日查看这条跟单方案最近 7 天的已实现盈亏。";
+        const emptyCopy = normalized.emptyCopy || "当前还没有历史日统计，等有已结算记录后，这里会自动累计。";
+        const emptyText = normalized.emptyText || "暂无历史盈亏数据";
         if (!items.length) {
             return [
                 '<section class="subscription-history-panel">',
-                '<strong class="subscription-section-title">最近 7 天盈亏</strong>',
-                '<p class="subscription-section-copy">当前还没有历史日统计，等有已结算记录后，这里会自动累计。</p>',
-                '<div class="subscription-history-empty">暂无历史盈亏数据</div>',
+                '<strong class="subscription-section-title">' + escapeHtml(title) + '</strong>',
+                '<p class="subscription-section-copy">' + escapeHtml(emptyCopy) + '</p>',
+                '<div class="subscription-history-empty">' + escapeHtml(emptyText) + '</div>',
                 '</section>',
             ].join("");
         }
         return [
             '<section class="subscription-history-panel">',
-            '<strong class="subscription-section-title">最近 7 天盈亏</strong>',
-            '<p class="subscription-section-copy">按自然日查看这条跟单方案最近 7 天的已实现盈亏。</p>',
+            '<strong class="subscription-section-title">' + escapeHtml(title) + '</strong>',
+            '<p class="subscription-section-copy">' + escapeHtml(copy) + '</p>',
             '<div class="subscription-history-list">',
             items.map(function (item) {
                 return [
@@ -2788,6 +2807,46 @@
                 ].join("");
             }).join(""),
             '</div>',
+            '</section>',
+        ].join("");
+    }
+
+    function renderSubscriptionDailyHistory(subscription) {
+        return renderSubscriptionDailyHistoryItems(subscriptionDailyHistory(subscription), {});
+    }
+
+    function renderSubscriptionProfitDetail(subscription) {
+        const stat = subscriptionDailyStat(subscription) || {};
+        const statDate = String(stat.stat_date || state.subscriptionStatDate || "--");
+        const allHistory = state.subscriptionAllDailyHistories[String(subscription.id)] || null;
+        const historyItems = allHistory && Array.isArray(allHistory.items)
+            ? allHistory.items
+            : subscriptionDailyHistory(subscription);
+        const historyTitle = allHistory ? "全部天数盈亏" : "最近 7 天盈亏";
+        const historyCopy = allHistory
+            ? "按自然日倒序展示这条跟单方案已有的全部日统计。"
+            : "先展示最近 7 天，需要复盘完整周期时再展开全部天数。";
+        const loadAllText = allHistory ? "已显示全部天数" : "查看全部天数";
+        return [
+            '<section class="subscription-detail-section">',
+            '<div class="subscription-section-head">',
+            '<div><strong class="subscription-section-title">盈亏日历</strong><p class="subscription-section-copy">上方日期选择器控制当前查看日期，这里保留单方案盈亏详情和最近趋势。</p></div>',
+            '<span class="subscription-detail-date">' + escapeHtml(statDate) + '</span>',
+            '</div>',
+            renderConfigSummaryGrid([
+                renderConfigSummaryItem("查看日净盈亏", signedAmountText(stat.net_profit || 0)),
+                renderConfigSummaryItem("盈利", amountText(stat.profit_amount || 0)),
+                renderConfigSummaryItem("亏损", amountText(stat.loss_amount || 0)),
+                renderConfigSummaryItem("已结算", String(stat.settled_event_count || 0) + " 单"),
+            ]),
+            '<p class="subscription-detail-copy">' + escapeHtml("命中 " + String(stat.hit_count || 0) + " / 未中 " + String(stat.miss_count || 0) + " / 回本 " + String(stat.refund_count || 0)) + '</p>',
+            '<div class="subscription-detail-actions"><button class="ghost-btn load-subscription-all-days-btn" type="button" data-subscription-id="' + subscription.id + '"' + (allHistory ? " disabled" : "") + '>' + escapeHtml(loadAllText) + '</button></div>',
+            renderSubscriptionDailyHistoryItems(historyItems, {
+                title: historyTitle,
+                copy: historyCopy,
+                emptyCopy: "当前还没有历史日统计，等有已结算记录后，这里会自动累计。",
+                emptyText: "暂无历史盈亏数据",
+            }),
             '</section>',
         ].join("");
     }
@@ -2867,6 +2926,62 @@
                     '</article>',
                 ].join("");
             }).join(""),
+            '</div>',
+            '</section>',
+        ].join("");
+    }
+
+    function normalizedSubscriptionDetailTab(subscriptionId) {
+        const key = String(subscriptionId || "");
+        const value = String(state.subscriptionDetailTabs[key] || "overview");
+        return ["overview", "profit", "runtime", "delivery"].includes(value) ? value : "overview";
+    }
+
+    function renderSubscriptionDetailTabs(subscription, options) {
+        const normalized = options || {};
+        const activeTab = normalized.activeTab || normalizedSubscriptionDetailTab(subscription.id);
+        const tabs = [
+            {key: "overview", label: "概览"},
+            {key: "profit", label: "盈亏日历"},
+            {key: "runtime", label: "轮次历史"},
+            {key: "delivery", label: "投递链路"},
+        ];
+        const tabMarkup = tabs.map(function (tab) {
+            const selected = tab.key === activeTab;
+            return '<button class="subscription-detail-tab' + (selected ? " is-active" : "") + '" type="button" data-subscription-id="' + subscription.id + '" data-subscription-detail-tab="' + escapeHtml(tab.key) + '" aria-selected="' + (selected ? "true" : "false") + '">' + escapeHtml(tab.label) + '</button>';
+        }).join("");
+        let panelMarkup = "";
+        if (activeTab === "profit") {
+            panelMarkup = renderSubscriptionProfitDetail(subscription);
+        } else if (activeTab === "runtime") {
+            panelMarkup = renderSubscriptionRuntimeHistory(subscription);
+        } else if (activeTab === "delivery") {
+            panelMarkup = [
+                normalized.chainMetaMarkup || "",
+                normalized.deliveryMarkup || "",
+            ].join("");
+        } else {
+            panelMarkup = [
+                '<section class="subscription-detail-section">',
+                '<strong class="subscription-section-title">方案概览</strong>',
+                '<p class="subscription-section-copy">默认只展示关键状态；需要复盘时再切到盈亏、轮次或投递链路。</p>',
+                renderConfigDetailRows([
+                    renderConfigDetailRow("策略摘要", summarizeStrategy(subscription.strategy || {}, subscription.strategy_v2 || {})),
+                    renderConfigDetailRow("跟单进度", summarizeProgression(subscription)),
+                    renderConfigDetailRow("盈亏摘要", summarizeFinancial(subscription)),
+                    renderConfigDetailRow("当日盈亏", summarizeDailyFinancial(subscription)),
+                ]),
+                normalized.chainMetaMarkup || "",
+                '</section>',
+            ].join("");
+        }
+        return [
+            '<section class="subscription-detail-panel">',
+            '<div class="subscription-detail-tabs" role="tablist" aria-label="跟单详情切换">',
+            tabMarkup,
+            '</div>',
+            '<div class="subscription-detail-content">',
+            panelMarkup,
             '</div>',
             '</section>',
         ].join("");
@@ -4964,6 +5079,17 @@
             const stoppedReasonMarkup = financial && financial.stopped_reason
                 ? ('<div class="config-card-note subscription-runtime-note">' + escapeHtml(financial.stopped_reason) + '</div>')
                 : "";
+            const blockerCount = chainState.summaries.reduce(function (total, entry) { return total + entry.count; }, 0);
+            const chainMetaMarkup = '<div class="subscription-chain-meta"><span class="subscription-chain-stat">当前命中 ' + escapeHtml(String(chainState.effectiveTargets.length)) + ' 个群组</span><span class="subscription-chain-stat">已配置 ' + escapeHtml(String(chainState.configuredTargets.length)) + ' 个群组</span><span class="subscription-chain-stat">阻塞 ' + escapeHtml(String(blockerCount)) + ' 项</span></div>';
+            const deliveryMarkup = '<div class="subscription-detail-grid"><section class="subscription-routes"><strong class="subscription-section-title">' + escapeHtml(routeTitle) + '</strong><p class="subscription-section-copy">' + escapeHtml(routeCopy) + '</p><div class="subscription-route-grid">' + routeMarkup + '</div>' + (hiddenPreviewCount ? ('<p class="subscription-more-note">另有 ' + escapeHtml(String(hiddenPreviewCount)) + ' 个群组未展开，去群组页可查看全部详情。</p>') : "") + '</section><aside class="subscription-blockers"><strong class="subscription-section-title">当前阻塞项</strong><p class="subscription-section-copy">这里会直接说明信号现在发不出去的原因，以及应该去哪一页处理。</p><div class="subscription-blocker-list">' + blockerMarkup + '</div></aside></div>';
+            const isDetailOpen = String(state.expandedSubscriptionId || "") === String(item.id);
+            const detailToggleText = isDetailOpen ? "收起详情" : "查看详情";
+            const expandedDetailMarkup = isDetailOpen
+                ? renderSubscriptionDetailTabs(item, {
+                    chainMetaMarkup: chainMetaMarkup,
+                    deliveryMarkup: deliveryMarkup,
+                })
+                : "";
             return renderConfigCardShell({
                 title: source ? source.name : ("#" + item.source_id),
                 cardClassName: "subscription-card-item",
@@ -4972,25 +5098,21 @@
                 ],
                 summaryMarkup: renderConfigSummaryGrid([
                     renderConfigSummaryItem("策略方式", summarizeStrategyMode(item.strategy || {})),
-                    renderConfigSummaryItem("当前命中群组", String(chainState.effectiveTargets.length)),
-                    renderConfigSummaryItem("已配置群组", String(chainState.configuredTargets.length)),
-                    renderConfigSummaryItem("阻塞项", String(chainState.summaries.reduce(function (total, entry) { return total + entry.count; }, 0))),
+                    renderConfigSummaryItem("当日净盈亏", signedAmountText(subscriptionDailyNet(item)), subscriptionDailyNet(item) >= 0 ? "amount-positive" : "amount-negative"),
+                    renderConfigSummaryItem("当前轮次", signedAmountText(subscriptionRuntimeNet(item)), subscriptionRuntimeNet(item) >= 0 ? "amount-positive" : "amount-negative"),
+                    renderConfigSummaryItem("阻塞项", String(blockerCount)),
                 ]),
                 detailMarkup: [
                     renderConfigDetailRows([
-                        renderConfigDetailRow("策略摘要", summarizeStrategy(item.strategy || {}, item.strategy_v2 || {})),
                         renderConfigDetailRow("跟单进度", summarizeProgression(item)),
-                        renderConfigDetailRow("盈亏摘要", summarizeFinancial(item)),
                         renderConfigDetailRow("当日盈亏", summarizeDailyFinancial(item)),
+                        renderConfigDetailRow("投递概况", "命中 " + String(chainState.effectiveTargets.length) + " 个群组 · 已配置 " + String(chainState.configuredTargets.length) + " 个群组"),
                     ]),
-                    renderSubscriptionRuntimeHistory(item),
-                    renderSubscriptionDailyHistory(item),
                     stoppedReasonMarkup,
                     settlementPanelMarkup,
-                    '<div class="subscription-chain-meta"><span class="subscription-chain-stat">当前命中 ' + escapeHtml(String(chainState.effectiveTargets.length)) + ' 个群组</span><span class="subscription-chain-stat">已配置 ' + escapeHtml(String(chainState.configuredTargets.length)) + ' 个群组</span><span class="subscription-chain-stat">阻塞 ' + escapeHtml(String(chainState.summaries.reduce(function (total, entry) { return total + entry.count; }, 0))) + ' 项</span></div>',
-                    '<div class="subscription-detail-grid"><section class="subscription-routes"><strong class="subscription-section-title">' + escapeHtml(routeTitle) + '</strong><p class="subscription-section-copy">' + escapeHtml(routeCopy) + '</p><div class="subscription-route-grid">' + routeMarkup + '</div>' + (hiddenPreviewCount ? ('<p class="subscription-more-note">另有 ' + escapeHtml(String(hiddenPreviewCount)) + ' 个群组未展开，去群组页可查看全部详情。</p>') : "") + '</section><aside class="subscription-blockers"><strong class="subscription-section-title">当前阻塞项</strong><p class="subscription-section-copy">这里会直接说明信号现在发不出去的原因，以及应该去哪一页处理。</p><div class="subscription-blocker-list">' + blockerMarkup + '</div></aside></div>',
+                    expandedDetailMarkup,
                 ].join(""),
-                footerMarkup: "<div class=\"config-list-actions\"><button class=\"ghost-btn edit-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\">编辑</button><button class=\"ghost-btn toggle-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\" data-next-status=\"" + statusAction.nextStatus + "\">" + statusAction.actionText + "</button>" + standbyAction + resetAction + archiveAction + progressionActions + "</div>",
+                footerMarkup: "<div class=\"config-list-actions\"><button class=\"ghost-btn subscription-detail-toggle-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\">" + detailToggleText + "</button><button class=\"ghost-btn edit-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\">编辑</button><button class=\"ghost-btn toggle-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\" data-next-status=\"" + statusAction.nextStatus + "\">" + statusAction.actionText + "</button>" + standbyAction + resetAction + archiveAction + progressionActions + "</div>",
             });
         }).join("");
         renderSubscriptionWorkspaceSummary();
@@ -5010,6 +5132,9 @@
         state.failures = [];
         state.telegramBinding = null;
         state.subscriptionDailySummary = null;
+        state.expandedSubscriptionId = null;
+        state.subscriptionDetailTabs = {};
+        state.subscriptionAllDailyHistories = {};
         state.showIssueJobsOnly = false;
         state.scopeFocused = false;
         if (sourceForm instanceof HTMLFormElement) {
@@ -6439,6 +6564,49 @@
     if (subscriptionCards instanceof HTMLElement) {
         subscriptionCards.addEventListener("click", async function (event) {
             const target = event.target;
+            if (target instanceof HTMLElement && target.classList.contains("subscription-detail-toggle-btn")) {
+                const subscriptionId = target.getAttribute("data-subscription-id");
+                if (!subscriptionId) {
+                    return;
+                }
+                state.expandedSubscriptionId = String(state.expandedSubscriptionId || "") === String(subscriptionId)
+                    ? null
+                    : String(subscriptionId);
+                renderSubscriptionCards();
+                return;
+            }
+            if (target instanceof HTMLElement && target.classList.contains("subscription-detail-tab")) {
+                const subscriptionId = target.getAttribute("data-subscription-id");
+                const tabKey = target.getAttribute("data-subscription-detail-tab");
+                if (!subscriptionId || !tabKey) {
+                    return;
+                }
+                state.expandedSubscriptionId = String(subscriptionId);
+                state.subscriptionDetailTabs[String(subscriptionId)] = String(tabKey);
+                renderSubscriptionCards();
+                return;
+            }
+            if (target instanceof HTMLElement && target.classList.contains("load-subscription-all-days-btn")) {
+                const subscriptionId = target.getAttribute("data-subscription-id");
+                if (!subscriptionId) {
+                    return;
+                }
+                try {
+                    setButtonBusy(target, true, "加载中...");
+                    const payload = await request("/api/platform/subscriptions/" + subscriptionId + "/daily-stats?limit=365");
+                    state.subscriptionAllDailyHistories[String(subscriptionId)] = {
+                        items: payload.items || [],
+                    };
+                    state.expandedSubscriptionId = String(subscriptionId);
+                    state.subscriptionDetailTabs[String(subscriptionId)] = "profit";
+                    renderSubscriptionCards();
+                } catch (error) {
+                    setStatus(error.message, true);
+                } finally {
+                    setButtonBusy(target, false, "查看全部天数");
+                }
+                return;
+            }
             if (target instanceof HTMLElement && target.classList.contains("edit-subscription-btn")) {
                 const subscriptionId = target.getAttribute("data-subscription-id");
                 const item = subscriptionById(subscriptionId);

@@ -502,7 +502,7 @@ class FakeRepository:
                 "source_name": (source or {}).get("name", ""),
             })
         items.sort(key=lambda item: (str(item.get("stat_date") or ""), str(item.get("updated_at") or "")), reverse=True)
-        return items[: max(1, min(int(limit or 7), 30))]
+        return items[: max(1, min(int(limit or 7), 365))]
 
     def list_subscription_runtime_runs(self, *, subscription_id, user_id, limit=5):
         items = [
@@ -2617,6 +2617,47 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(len(payload["items"][0]["runtime_history"]), 1)
         self.assertEqual(payload["items"][0]["runtime_history"][0]["status"], "active")
         self.assertEqual(payload["items"][0]["runtime_history"][0]["net_profit"], 8.5)
+
+    def test_list_subscription_daily_stats_endpoint(self):
+        created = self.repository.create_subscription_record(
+            user_id=1,
+            source_id=1,
+            strategy={"mode": "follow"},
+        )
+        for index in range(35):
+            day = 28 - (index % 28)
+            month = 4 if index < 28 else 3
+            self.repository.subscription_daily_stats.append(
+                {
+                    "id": index + 1,
+                    "stat_date": "2026-%02d-%02d" % (month, day),
+                    "user_id": 1,
+                    "subscription_id": created["id"],
+                    "source_id": 1,
+                    "profit_amount": float(index + 1),
+                    "loss_amount": 0.0,
+                    "net_profit": float(index + 1),
+                    "settled_event_count": 1,
+                    "hit_count": 1,
+                    "miss_count": 0,
+                    "refund_count": 0,
+                    "updated_at": "2026-04-28T12:00:00Z",
+                }
+            )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions/%s/daily-stats" % created["id"],
+                query="limit=35",
+                headers=self.session_headers,
+            ),
+        )
+
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["limit"], 35)
+        self.assertEqual(len(payload["items"]), 35)
+        self.assertEqual(payload["items"][0]["source_name"], "demo-source")
 
     def test_create_subscription_with_selected_play_filter(self):
         status, _, payload = invoke(

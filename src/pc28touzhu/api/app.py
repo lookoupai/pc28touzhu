@@ -57,6 +57,7 @@ from pc28touzhu.services.platform_service import (
     list_raw_items,
     list_signals,
     list_sources,
+    list_subscription_daily_stats,
     list_subscriptions,
     normalize_raw_item,
     restart_subscription_cycle,
@@ -957,6 +958,17 @@ class PlatformApiApplication:
             return _json_response(start_response, 200, payload)
 
         subscription_status_prefix = "/api/platform/subscriptions/"
+        if path.startswith(subscription_status_prefix) and path.endswith("/daily-stats"):
+            if method != "GET":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            subscription_id = path[len(subscription_status_prefix) : -len("/daily-stats")]
+            payload = list_subscription_daily_stats(
+                self.repository,
+                subscription_id=subscription_id,
+                user_id=current_user["id"],
+                limit=_query_value(environ, "limit", "365"),
+            )
+            return _json_response(start_response, 200, payload)
         if path.startswith(subscription_status_prefix) and path.endswith("/progression/resolve"):
             if method != "POST":
                 return _json_response(start_response, 405, {"error": "method not allowed"})

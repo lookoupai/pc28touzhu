@@ -846,6 +846,14 @@
     color: rgba(var(--card-accent-rgb), 0.98);
 }
 
+.config-summary-item strong.amount-positive {
+    color: var(--success);
+}
+
+.config-summary-item strong.amount-negative {
+    color: var(--danger);
+}
+
 .config-card-details {
     display: grid;
     gap: 14px;
@@ -1228,6 +1236,82 @@
 .subscription-history-panel {
     display: grid;
     gap: 10px;
+}
+
+.subscription-detail-panel {
+    display: grid;
+    gap: 14px;
+    padding: 14px;
+    border: 1px solid rgba(var(--card-accent-rgb), 0.12);
+    border-radius: var(--radius-lg);
+    background: rgba(var(--card-accent-rgb), 0.045);
+}
+
+.subscription-detail-tabs {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 4px;
+    border: 1px solid rgba(var(--card-accent-rgb), 0.12);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.72);
+}
+
+.subscription-detail-tab {
+    min-height: 34px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-secondary);
+    padding: 0 14px;
+    font: inherit;
+    font-size: 0.82rem;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.subscription-detail-tab.is-active {
+    background: rgba(var(--card-accent-rgb), 0.14);
+    color: rgba(var(--card-accent-rgb), 0.98);
+}
+
+.subscription-detail-content,
+.subscription-detail-section {
+    display: grid;
+    gap: 12px;
+}
+
+.subscription-section-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.subscription-detail-date {
+    display: inline-flex;
+    align-items: center;
+    min-height: 30px;
+    padding: 0 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.78);
+    color: rgba(var(--card-accent-rgb), 0.92);
+    font-size: 0.78rem;
+    font-weight: 800;
+    white-space: nowrap;
+}
+
+.subscription-detail-copy {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+    line-height: 1.65;
+}
+
+.subscription-detail-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
 }
 
 .subscription-history-list {

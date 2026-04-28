@@ -3443,7 +3443,7 @@ class DatabaseRepository:
             ORDER BY sds.stat_date DESC, sds.updated_at DESC, sds.id DESC
             LIMIT ?
             """,
-            (int(subscription_id), int(user_id), max(1, min(int(limit or 7), 30))),
+            (int(subscription_id), int(user_id), max(1, min(int(limit or 7), 365))),
         )
         return [self._serialize_subscription_daily_stat_row(row) for row in rows]
 

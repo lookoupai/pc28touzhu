@@ -1097,6 +1097,23 @@ def list_subscriptions(repository: Any, user_id: Any, stat_date: Any = None) -> 
     }
 
 
+def list_subscription_daily_stats(repository: Any, *, subscription_id: Any, user_id: Any, limit: Any = 365) -> Dict[str, Any]:
+    normalized_subscription_id = _to_positive_int(subscription_id, "subscription_id")
+    normalized_user_id = _to_positive_int(user_id, "user_id")
+    current = repository.get_subscription(normalized_subscription_id)
+    if not current or int(current["user_id"]) != normalized_user_id:
+        raise ValueError("subscription_id 对应的订阅不存在")
+    normalized_limit = max(1, min(_to_positive_int(limit or 365, "limit"), 365))
+    return {
+        "items": repository.list_subscription_daily_stats(
+            subscription_id=normalized_subscription_id,
+            user_id=normalized_user_id,
+            limit=normalized_limit,
+        ),
+        "limit": normalized_limit,
+    }
+
+
 def create_subscription(repository: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     user_id = _to_positive_int(payload.get("user_id"), "user_id")
     source_id = _to_positive_int(payload.get("source_id"), "source_id")
