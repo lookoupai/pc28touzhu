@@ -2779,6 +2779,27 @@
         return status || "--";
     }
 
+    function subscriptionRuntimeEndReasonText(item) {
+        const status = String(item && item.status || "");
+        if (status === "active") {
+            return "进行中";
+        }
+        const endReason = String(item && item.end_reason || "");
+        if (!endReason) {
+            return "正常结束";
+        }
+        if (endReason === "profit_target_hit") {
+            return "达到止盈阈值";
+        }
+        if (endReason === "loss_limit_hit") {
+            return "达到止损阈值";
+        }
+        if (endReason === "manual_reset") {
+            return "手动重置或开始新一轮";
+        }
+        return endReason;
+    }
+
     function renderSubscriptionRuntimeHistory(subscription) {
         const items = subscriptionRuntimeHistory(subscription);
         if (!items.length) {
@@ -2801,6 +2822,7 @@
                     '<div class="subscription-history-head"><strong>' + escapeHtml(subscriptionRuntimeStatusText(item)) + '</strong><span>' + escapeHtml("净盈亏 " + signedAmountText(item.net_profit || 0)) + '</span></div>',
                     '<p>' + escapeHtml("开始期号 " + String(item.started_issue_no || "--") + " · 最近期号 " + String(item.last_issue_no || "--") + " · 已结算 " + String(item.settled_event_count || 0) + " 单") + '</p>',
                     '<p>' + escapeHtml("盈利 " + amountText(item.realized_profit || 0) + " · 亏损 " + amountText(item.realized_loss || 0) + " · 命中 " + String(item.hit_count || 0) + " / 未中 " + String(item.miss_count || 0) + " / 回本 " + String(item.refund_count || 0)) + '</p>',
+                    '<p>' + escapeHtml("结束原因 " + subscriptionRuntimeEndReasonText(item)) + '</p>',
                     '<p>' + escapeHtml("开始 " + String(item.started_at || "--") + (item.ended_at ? (" · 结束 " + String(item.ended_at)) : "")) + '</p>',
                     '</article>',
                 ].join("");
