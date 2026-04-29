@@ -44,6 +44,26 @@ def _to_optional_positive_float(value: Any, field_name: str) -> Optional[float]:
     return normalized
 
 
+def _normalize_positive_int_list(value: Any, field_name: str) -> list[int]:
+    if value is None or value == "":
+        return []
+    if not isinstance(value, list):
+        raise ValueError("%s 必须为数组" % field_name)
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for index, item in enumerate(value, start=1):
+        try:
+            item_id = int(item)
+        except (TypeError, ValueError):
+            raise ValueError("%s[%s] 必须为整数" % (field_name, index))
+        if item_id <= 0:
+            raise ValueError("%s[%s] 必须大于 0" % (field_name, index))
+        if item_id not in seen:
+            seen.add(item_id)
+            normalized.append(item_id)
+    return normalized
+
+
 def _normalize_ratio(value: Any, field_name: str, default: float = DEFAULT_FALLBACK_PROFIT_RATIO) -> float:
     normalized = _to_optional_positive_float(value, field_name)
     if normalized is None:
@@ -192,12 +212,20 @@ def _normalize_dispatch_v2(payload: Any) -> Dict[str, Any]:
     data = _to_object(payload)
     expire_after_seconds = data.get("expire_after_seconds")
     if expire_after_seconds in {None, ""}:
-        return {"expire_after_seconds": DEFAULT_EXPIRE_AFTER_SECONDS}
-    try:
-        normalized = int(expire_after_seconds)
-    except (TypeError, ValueError):
-        raise ValueError("strategy.dispatch.expire_after_seconds 必须为整数")
-    return {"expire_after_seconds": max(30, normalized)}
+        normalized_expire_after_seconds = DEFAULT_EXPIRE_AFTER_SECONDS
+    else:
+        try:
+            normalized_expire_after_seconds = int(expire_after_seconds)
+        except (TypeError, ValueError):
+            raise ValueError("strategy.dispatch.expire_after_seconds 必须为整数")
+        normalized_expire_after_seconds = max(30, normalized_expire_after_seconds)
+    return {
+        "expire_after_seconds": normalized_expire_after_seconds,
+        "delivery_target_ids": _normalize_positive_int_list(
+            data.get("delivery_target_ids"),
+            "strategy.dispatch.delivery_target_ids",
+        ),
+    }
 
 
 def normalize_subscription_strategy_input(value: Any) -> Dict[str, Any]:
@@ -252,6 +280,7 @@ def _normalize_legacy_subscription_strategy(payload: Dict[str, Any]) -> Dict[str
             },
             "dispatch": {
                 "expire_after_seconds": payload.get("expire_after_seconds"),
+                "delivery_target_ids": payload.get("delivery_target_ids"),
             },
         }
     )
@@ -295,6 +324,10 @@ def project_subscription_strategy_v1(value: Any) -> Dict[str, Any]:
             "selected_keys": normalize_play_filter_keys(play_filter.get("selected_keys")),
         },
         "expire_after_seconds": int(dispatch.get("expire_after_seconds") or DEFAULT_EXPIRE_AFTER_SECONDS),
+        "delivery_target_ids": _normalize_positive_int_list(
+            dispatch.get("delivery_target_ids"),
+            "strategy.dispatch.delivery_target_ids",
+        ),
         "risk_control": {
             "enabled": bool(risk_control.get("enabled")),
             "profit_target": round(float(risk_control.get("profit_target") or 0), 2),

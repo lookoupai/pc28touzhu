@@ -165,6 +165,27 @@ def _build_stake_plan(strategy: Dict[str, Any], signal: Dict[str, Any], current_
     return stake_plan
 
 
+def _candidate_matches_subscription_targets(candidate: Dict[str, Any]) -> bool:
+    strategy = candidate.get("strategy_json")
+    if isinstance(strategy, str):
+        strategy = {}
+    dispatch = strategy.get("dispatch") if isinstance(strategy, dict) and isinstance(strategy.get("dispatch"), dict) else {}
+    target_ids = dispatch.get("delivery_target_ids")
+    if not isinstance(target_ids, list) or not target_ids:
+        return True
+    try:
+        delivery_target_id = int(candidate.get("delivery_target_id"))
+    except (TypeError, ValueError):
+        return False
+    normalized_ids = set()
+    for target_id in target_ids:
+        try:
+            normalized_ids.add(int(target_id))
+        except (TypeError, ValueError):
+            continue
+    return delivery_target_id in normalized_ids
+
+
 def dispatch_signal(
     repository: Any,
     signal_id: int,
@@ -184,6 +205,7 @@ def dispatch_signal(
     candidates = [
         item for item in raw_candidates
         if strategy_matches_signal(item.get("strategy_json"), signal)
+        and _candidate_matches_subscription_targets(item)
     ]
     now = _utc_now()
     base_execute_after = max(_parse_iso_z(signal.get("published_at")), now)

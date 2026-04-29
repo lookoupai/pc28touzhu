@@ -62,6 +62,8 @@
     const subscriptionBetFilterHint = document.getElementById("subscriptionBetFilterHint");
     const subscriptionBetFilterFields = document.getElementById("subscriptionBetFilterFields");
     const subscriptionBetFilterSelectionSummary = document.getElementById("subscriptionBetFilterSelectionSummary");
+    const subscriptionTargetSelect = document.getElementById("subscriptionTargetSelect");
+    const subscriptionTargetHint = document.getElementById("subscriptionTargetHint");
     const subscriptionStrategyModeSelect = document.getElementById("subscriptionStrategyModeSelect");
     const subscriptionStrategyModeHint = document.getElementById("subscriptionStrategyModeHint");
     const subscriptionSettlementRuleSourceSelect = document.getElementById("subscriptionSettlementRuleSourceSelect");
@@ -875,6 +877,25 @@
         return state.targets.find(function (item) {
             return Number(item.id) === Number(targetId);
         }) || null;
+    }
+
+    function subscriptionDispatchTargetIds(item) {
+        const strategyV2 = item && item.strategy_v2 && typeof item.strategy_v2 === "object" ? item.strategy_v2 : {};
+        const dispatchV2 = strategyV2.dispatch && typeof strategyV2.dispatch === "object" ? strategyV2.dispatch : {};
+        const strategy = item && item.strategy && typeof item.strategy === "object" ? item.strategy : {};
+        const rawIds = Array.isArray(dispatchV2.delivery_target_ids)
+            ? dispatchV2.delivery_target_ids
+            : (Array.isArray(strategy.delivery_target_ids) ? strategy.delivery_target_ids : []);
+        const seen = {};
+        return rawIds.map(function (value) {
+            return Number(value);
+        }).filter(function (value) {
+            if (!Number.isInteger(value) || value <= 0 || seen[String(value)]) {
+                return false;
+            }
+            seen[String(value)] = true;
+            return true;
+        });
     }
 
     function templateById(templateId) {
@@ -2251,6 +2272,7 @@
         }
         subscriptionForm.elements.profit_target.value = "";
         subscriptionForm.elements.loss_limit.value = "";
+        refreshSubscriptionTargetSelects();
         setSubscriptionAdvancedVisible(false);
         syncSubscriptionBetFilterUI();
         syncSubscriptionPresetUI();
@@ -3438,12 +3460,25 @@
     }
 
     function subscriptionTargetsState(item) {
-        const configuredTargets = visibleTargets();
-        const activeTargetItems = activeTargets();
+        const selectedTargetIds = subscriptionDispatchTargetIds(item);
+        const selectedTargetSet = selectedTargetIds.reduce(function (result, targetId) {
+            result[String(targetId)] = true;
+            return result;
+        }, {});
+        const configuredTargets = visibleTargets().filter(function (targetItem) {
+            return !selectedTargetIds.length || selectedTargetSet[String(targetItem.id)];
+        });
+        const activeTargetItems = activeTargets().filter(function (targetItem) {
+            return !selectedTargetIds.length || selectedTargetSet[String(targetItem.id)];
+        });
         const effectiveTargets = String(item && item.status || "inactive") === "active" ? activeTargetItems : [];
         const previewTargets = effectiveTargets.length ? effectiveTargets : (activeTargetItems.length ? activeTargetItems : configuredTargets);
         const diagnostics = [];
         const subscriptionStatus = String(item && item.status || "inactive");
+        const invalidSelectedCount = selectedTargetIds.filter(function (targetId) {
+            const targetItem = targetById(targetId);
+            return !targetItem || isArchivedItem(targetItem);
+        }).length;
         if (subscriptionStatus === "standby") {
             diagnostics.push({
                 key: "subscription_standby",
@@ -3462,7 +3497,7 @@
         if (!configuredTargets.length) {
             diagnostics.push({
                 key: "target_missing",
-                label: "未配置群组",
+                label: selectedTargetIds.length ? "指定群组不可用" : "未指定群组",
                 severity: "blocked",
                 href: "/autobet/targets#targetsSection",
             });
@@ -3472,6 +3507,14 @@
                 label: "没有激活群组",
                 severity: "blocked",
                 href: "/autobet/targets#targetsSection",
+            });
+        }
+        if (invalidSelectedCount > 0) {
+            diagnostics.push({
+                key: "target_selection_invalid",
+                label: "指定群组已失效",
+                severity: "blocked",
+                href: "/autobet/subscriptions#subscriptionsSection",
             });
         }
         configuredTargets.forEach(function (targetItem) {
@@ -4351,6 +4394,79 @@
         });
     }
 
+    function setSubscriptionTargetSelection(targetIds) {
+        if (!(subscriptionTargetSelect instanceof HTMLSelectElement)) {
+            return;
+        }
+        const selected = (Array.isArray(targetIds) ? targetIds : []).reduce(function (result, targetId) {
+            result[String(targetId)] = true;
+            return result;
+        }, {});
+        Array.from(subscriptionTargetSelect.options).forEach(function (option) {
+            option.selected = Boolean(selected[String(option.value)]);
+        });
+    }
+
+    function selectedSubscriptionTargetIds() {
+        if (!(subscriptionTargetSelect instanceof HTMLSelectElement)) {
+            return [];
+        }
+        return Array.from(subscriptionTargetSelect.selectedOptions).map(function (option) {
+            return Number(option.value);
+        }).filter(function (value) {
+            return Number.isInteger(value) && value > 0;
+        });
+    }
+
+    function syncSubscriptionTargetHint() {
+        if (!(subscriptionTargetHint instanceof HTMLElement)) {
+            return;
+        }
+        const selectedIds = selectedSubscriptionTargetIds();
+        const activeSelectedCount = selectedIds.filter(function (targetId) {
+            const item = targetById(targetId);
+            return item && String(item.status || "") === "active";
+        }).length;
+        if (!visibleTargets().length) {
+            subscriptionTargetHint.textContent = "还没有可选群组，请先到群组页新增投递群组。";
+            return;
+        }
+        if (!selectedIds.length) {
+            subscriptionTargetHint.textContent = "必须至少选择一个群组；只会向这里选中的群组发单。";
+            return;
+        }
+        subscriptionTargetHint.textContent = "已选择 " + selectedIds.length + " 个群组，其中 " + activeSelectedCount + " 个已启用；停用群组不会收到新任务。";
+    }
+
+    function refreshSubscriptionTargetSelects() {
+        if (!(subscriptionTargetSelect instanceof HTMLSelectElement)) {
+            return;
+        }
+        const selectedValues = selectedSubscriptionTargetIds().map(function (value) {
+            return String(value);
+        });
+        const selectedSet = selectedValues.reduce(function (result, value) {
+            result[value] = true;
+            return result;
+        }, {});
+        const items = visibleTargets().slice();
+        selectedValues.forEach(function (value) {
+            const item = targetById(value);
+            if (item && items.some(function (entry) { return Number(entry.id) === Number(item.id); }) === false) {
+                items.push(item);
+            }
+        });
+        subscriptionTargetSelect.innerHTML = items.map(function (item) {
+            const account = accountById(item.telegram_account_id);
+            const label = "#" + item.id + " · " + (item.target_name || item.target_key || "未命名群组") + " · " + statusText(item.status) + (account ? (" · " + account.label) : "");
+            return '<option value="' + escapeHtml(item.id) + '"' + (selectedSet[String(item.id)] ? " selected" : "") + ">" + escapeHtml(label) + "</option>";
+        }).join("");
+        if (!selectedValues.length && items.length === 1) {
+            subscriptionTargetSelect.options[0].selected = true;
+        }
+        syncSubscriptionTargetHint();
+    }
+
     function refreshAccountSelects() {
         const items = availableAccountsForTargets().slice();
         const currentValue = String(targetForm.elements.telegram_account_id.value || "").trim();
@@ -5163,6 +5279,7 @@
         refreshSourceSelects();
         refreshAccountSelects();
         refreshTemplateSelects();
+        refreshSubscriptionTargetSelects();
         renderOverview();
         renderExecutionFlowSection();
         renderWorkspaceCards();
@@ -5235,6 +5352,7 @@
             refreshSourceSelects();
             refreshAccountSelects();
             refreshTemplateSelects();
+            refreshSubscriptionTargetSelects();
             safeRender("overview", renderOverview);
             safeRender("execution-flow", renderExecutionFlowSection);
             safeRender("workspace-cards", renderWorkspaceCards);
@@ -5372,6 +5490,7 @@
         subscriptionForm.elements.source_id.value = String(source.id);
         setFormEditingState(subscriptionForm, document.getElementById("createSubscriptionBtn"), cancelSubscriptionEditBtn, false, "新建跟单策略");
         resetSubscriptionStrategyFormState();
+        subscriptionForm.elements.source_id.value = String(source.id);
         syncSubscriptionBetFilterUI();
         syncSubscriptionPresetUI();
         syncSubscriptionSettlementUI();
@@ -6530,14 +6649,19 @@
                 },
                 dispatch: {
                     expire_after_seconds: expireAfterSeconds,
+                    delivery_target_ids: selectedSubscriptionTargetIds(),
                 },
             };
+            if (!strategyPayload.dispatch.delivery_target_ids.length) {
+                throw new Error("请至少选择一个发送群组");
+            }
             if (editId) {
                 await request("/api/platform/subscriptions/" + editId, {
                     method: "POST",
                     body: {
                         source_id: Number(sourceId),
                         strategy_v2: strategyPayload,
+                        require_delivery_targets: true,
                     },
                 });
             } else {
@@ -6546,6 +6670,7 @@
                     body: {
                         source_id: Number(sourceId),
                         strategy_v2: strategyPayload,
+                        require_delivery_targets: true,
                     },
                 });
             }
@@ -6671,6 +6796,9 @@
                 if (subscriptionForm.elements.settlement_rule_id instanceof HTMLSelectElement) {
                     subscriptionForm.elements.settlement_rule_id.value = String(settlementPolicy.settlement_rule_id || "pc28_netdisk_regular");
                 }
+                refreshSubscriptionTargetSelects();
+                setSubscriptionTargetSelection(subscriptionDispatchTargetIds(item));
+                syncSubscriptionTargetHint();
                 subscriptionForm.elements.fallback_profit_ratio.value = String(
                     settlementPolicy.fallback_profit_ratio != null
                         ? settlementPolicy.fallback_profit_ratio
@@ -6888,6 +7016,12 @@
     if (subscriptionForm instanceof HTMLFormElement && subscriptionForm.elements.source_id instanceof HTMLSelectElement) {
         subscriptionForm.elements.source_id.addEventListener("change", function () {
             syncSubscriptionBetFilterUI();
+        });
+    }
+
+    if (subscriptionTargetSelect instanceof HTMLSelectElement) {
+        subscriptionTargetSelect.addEventListener("change", function () {
+            syncSubscriptionTargetHint();
         });
     }
 

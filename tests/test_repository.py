@@ -1897,6 +1897,60 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(event["issue_no"], "20260407012")
         self.assertEqual(event["status"], "pending")
 
+    def test_dispatch_signal_respects_subscription_delivery_target_ids(self):
+        user_id = self.repo.create_user("dispatch-target-filter-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="dispatch-target-filter",
+        )["id"]
+        account_id = self.repo.create_telegram_account_record(
+            user_id=user_id,
+            label="执行号",
+            phone="+12017775555",
+            session_path="/data/dispatch-target-filter/main",
+            status="active",
+        )["id"]
+        selected_target_id = self.repo.create_delivery_target_record(
+            user_id=user_id,
+            telegram_account_id=account_id,
+            executor_type="telegram_group",
+            target_key="-1005551",
+            target_name="指定群",
+            status="active",
+        )["id"]
+        self.repo.create_delivery_target_record(
+            user_id=user_id,
+            telegram_account_id=account_id,
+            executor_type="telegram_group",
+            target_key="-1005552",
+            target_name="其他群",
+            status="active",
+        )
+        self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={
+                "play_filter": {"mode": "all", "selected_keys": []},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 12},
+                "dispatch": {"expire_after_seconds": 120, "delivery_target_ids": [selected_target_id]},
+            },
+        )
+        signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407013",
+            bet_type="big_small",
+            bet_value="大",
+            normalized_payload={},
+        )
+
+        result = dispatch_signal(self.repo, signal["id"])
+
+        self.assertEqual(result["created_count"], 1)
+        self.assertEqual(len(result["jobs"]), 1)
+        self.assertEqual(result["jobs"][0]["delivery_target_id"], selected_target_id)
+
     def test_dispatch_signal_skips_unselected_play_filter(self):
         user_id = self.repo.create_user("dispatch-play-filter-user")
         source_id = self.repo.create_source_record(

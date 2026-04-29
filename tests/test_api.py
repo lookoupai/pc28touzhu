@@ -2683,6 +2683,21 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(payload["item"]["strategy"]["bet_filter"]["selected_keys"], ["big_small:大", "combo:大双"])
 
     def test_create_subscription_with_strategy_v2_returns_legacy_projection(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="主号",
+            phone="+12015550000",
+            session_path="/data/u1/subscription-main",
+            meta={},
+        )
+        target = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-1001555",
+            target_name="指定群",
+            status="active",
+        )
         status, _, payload = invoke(
             self.app,
             build_testing_environ(
@@ -2711,8 +2726,10 @@ class PlatformApiApplicationTests(unittest.TestCase):
                         },
                         "dispatch": {
                             "expire_after_seconds": 90,
+                            "delivery_target_ids": [target["id"]],
                         },
                     },
+                    "require_delivery_targets": True,
                 },
                 headers=self.session_headers,
             ),
@@ -2722,8 +2739,75 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(payload["item"]["strategy"]["stake_amount"], 12)
         self.assertEqual(payload["item"]["strategy"]["bet_filter"]["selected_keys"], ["big_small:大"])
         self.assertEqual(payload["item"]["strategy"]["risk_control"]["win_profit_ratio"], 1.2)
+        self.assertEqual(payload["item"]["strategy"]["delivery_target_ids"], [target["id"]])
         self.assertEqual(payload["item"]["strategy_v2"]["staking_policy"]["mode"], "fixed")
         self.assertEqual(payload["item"]["strategy_v2"]["settlement_policy"]["settlement_rule_id"], "pc28_high_regular")
+        self.assertEqual(payload["item"]["strategy_v2"]["dispatch"]["delivery_target_ids"], [target["id"]])
+
+    def test_create_subscription_requires_selected_delivery_targets_when_requested(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions",
+                method="POST",
+                body={
+                    "source_id": 1,
+                    "strategy_v2": {
+                        "play_filter": {"mode": "all", "selected_keys": []},
+                        "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                        "dispatch": {"expire_after_seconds": 120, "delivery_target_ids": []},
+                    },
+                    "require_delivery_targets": True,
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertIn("至少选择一个发送群组", payload["error"])
+
+    def test_create_subscription_rejects_other_user_delivery_target(self):
+        other_user = self.repository.create_user_record(
+            username="target-owner",
+            email="target-owner@example.com",
+            password_hash=hash_password("target-owner-pass"),
+            role="user",
+            status="active",
+        )
+        account = self.repository.create_telegram_account_record(
+            user_id=other_user["id"],
+            label="其他账号",
+            phone="+12016660000",
+            session_path="/data/other/main",
+            meta={},
+        )
+        target = self.repository.create_delivery_target_record(
+            user_id=other_user["id"],
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-1001666",
+            target_name="其他用户群",
+            status="active",
+        )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions",
+                method="POST",
+                body={
+                    "source_id": 1,
+                    "strategy_v2": {
+                        "play_filter": {"mode": "all", "selected_keys": []},
+                        "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                        "dispatch": {"expire_after_seconds": 120, "delivery_target_ids": [target["id"]]},
+                    },
+                    "require_delivery_targets": True,
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertIn("发送群组不存在或不属于当前用户", payload["error"])
 
     def test_update_subscription_status_endpoint(self):
         created = self.repository.create_subscription_record(
@@ -3956,6 +4040,62 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(payload["created_count"], 1)
         self.assertEqual(len(self.repository.jobs), 1)
         self.assertEqual(self.repository.jobs[0]["telegram_account_id"], account["id"])
+
+    def test_dispatch_signal_only_uses_subscription_selected_delivery_targets(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="主号",
+            phone="+12010000010",
+            session_path="/data/u3/selected",
+            meta={},
+        )
+        selected_target = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100210",
+            target_name="指定跟单群",
+            status="active",
+        )
+        self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100211",
+            target_name="不发送群",
+            status="active",
+        )
+        self.repository.create_subscription_record(
+            user_id=1,
+            source_id=1,
+            strategy={
+                "play_filter": {"mode": "all", "selected_keys": []},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 12},
+                "dispatch": {"expire_after_seconds": 120, "delivery_target_ids": [selected_target["id"]]},
+            },
+        )
+        signal = self.repository.create_signal_record(
+            source_id=1,
+            lottery_type="pc28",
+            issue_no="20260407013",
+            bet_type="big_small",
+            bet_value="小",
+            normalized_payload={},
+        )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/signals/%s/dispatch" % signal["id"],
+                method="POST",
+                body={},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["created_count"], 1)
+        self.assertEqual(len(self.repository.jobs), 1)
+        self.assertEqual(self.repository.jobs[0]["delivery_target_id"], selected_target["id"])
 
     def test_dispatch_signal_rejects_other_user_access(self):
         regular_user = self.repository.create_user_record(

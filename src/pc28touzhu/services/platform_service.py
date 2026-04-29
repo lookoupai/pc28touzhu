@@ -242,8 +242,49 @@ def _subscription_strategy_input_from_payload(payload: Dict[str, Any]) -> Any:
     return payload.get("strategy")
 
 
+def _ensure_subscription_delivery_targets(
+    repository: Any,
+    *,
+    user_id: int,
+    strategy: Dict[str, Any],
+    require_explicit: bool,
+) -> None:
+    dispatch = strategy.get("dispatch") if isinstance(strategy.get("dispatch"), dict) else {}
+    target_ids = dispatch.get("delivery_target_ids") if isinstance(dispatch.get("delivery_target_ids"), list) else []
+    if require_explicit and not target_ids:
+        raise ValueError("请至少选择一个发送群组")
+
+    seen: set[int] = set()
+    for target_id in target_ids:
+        normalized_target_id = _to_positive_int(target_id, "delivery_target_id")
+        if normalized_target_id in seen:
+            continue
+        seen.add(normalized_target_id)
+        current = repository.get_delivery_target(normalized_target_id)
+        if not current or int(current.get("user_id") or 0) != int(user_id):
+            raise ValueError("发送群组不存在或不属于当前用户")
+        if str(current.get("status") or "") == "archived":
+            raise ValueError("已归档群组不能作为发送群组")
+
+
 def _present_subscription_items(items: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
     return [present_subscription_item(item) for item in items]
+
+
+def _subscription_includes_delivery_target(subscription: Dict[str, Any], target_id: int) -> bool:
+    strategy = present_subscription_item(subscription).get("strategy_v2")
+    dispatch = strategy.get("dispatch") if isinstance(strategy, dict) and isinstance(strategy.get("dispatch"), dict) else {}
+    target_ids = dispatch.get("delivery_target_ids")
+    if not isinstance(target_ids, list) or not target_ids:
+        return True
+    normalized_target_id = int(target_id)
+    for item in target_ids:
+        try:
+            if int(item) == normalized_target_id:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
 
 
 def _default_subscription_daily_stat(subscription: Dict[str, Any], *, stat_date: str) -> Dict[str, Any]:
@@ -1119,11 +1160,18 @@ def create_subscription(repository: Any, payload: Dict[str, Any]) -> Dict[str, A
     source_id = _to_positive_int(payload.get("source_id"), "source_id")
     _ensure_user_exists(repository, user_id)
     _ensure_source_exists(repository, source_id)
+    strategy = _normalize_subscription_strategy(_subscription_strategy_input_from_payload(payload))
+    _ensure_subscription_delivery_targets(
+        repository,
+        user_id=user_id,
+        strategy=strategy,
+        require_explicit=bool(payload.get("require_delivery_targets")),
+    )
     item = repository.create_subscription_record(
         user_id=user_id,
         source_id=source_id,
         status=_normalize_subscription_status(payload.get("status") or "active"),
-        strategy=_normalize_subscription_strategy(_subscription_strategy_input_from_payload(payload)),
+        strategy=strategy,
     )
     return {"item": present_subscription_item(item)}
 
@@ -1136,11 +1184,18 @@ def update_subscription(repository: Any, *, subscription_id: Any, user_id: Any, 
     current = repository.get_subscription(normalized_subscription_id)
     if not current or int(current["user_id"]) != normalized_user_id:
         raise ValueError("subscription_id 对应的订阅不存在")
+    strategy = _normalize_subscription_strategy(_subscription_strategy_input_from_payload(payload))
+    _ensure_subscription_delivery_targets(
+        repository,
+        user_id=normalized_user_id,
+        strategy=strategy,
+        require_explicit=bool(payload.get("require_delivery_targets")),
+    )
     item = repository.update_subscription_record(
         subscription_id=normalized_subscription_id,
         user_id=normalized_user_id,
         source_id=source_id,
-        strategy=_normalize_subscription_strategy(_subscription_strategy_input_from_payload(payload)),
+        strategy=strategy,
         status=current["status"],
     )
     if not item:
@@ -1581,18 +1636,6 @@ def list_delivery_targets(repository: Any, user_id: Any) -> Dict[str, Any]:
     sources = repository.list_sources(owner_user_id=normalized_user_id)
     source_map = {int(source["id"]): source for source in sources if source.get("id") is not None}
 
-    subscription_refs = []
-    for subscription in subscriptions:
-        source_info = source_map.get(int(subscription["source_id"])) if subscription.get("source_id") is not None else None
-        subscription_refs.append(
-            {
-                "id": subscription.get("id"),
-                "source_id": subscription.get("source_id"),
-                "source_name": (source_info or {}).get("name") or ("#" + str(subscription.get("source_id") or "--")),
-                "status": subscription.get("status"),
-            }
-        )
-
     recent_failures = repository.list_recent_execution_failures(user_id=normalized_user_id, limit=max(1, min(len(targets) * 3 or 1, 200)))
     failures_by_target: Dict[int, list[Dict[str, Any]]] = defaultdict(list)
     for failure in recent_failures:
@@ -1623,7 +1666,20 @@ def list_delivery_targets(repository: Any, user_id: Any) -> Dict[str, Any]:
             target["recent_execution_at"] = job_info.get("last_executed_at")
             target["recent_execution_status"] = job_info.get("last_delivery_status")
             target["recent_execution_attempt_count"] = job_info.get("attempt_count")
-        target["subscription_refs"] = list(subscription_refs)
+        subscription_refs = []
+        for subscription in subscriptions:
+            if not _subscription_includes_delivery_target(subscription, key):
+                continue
+            source_info = source_map.get(int(subscription["source_id"])) if subscription.get("source_id") is not None else None
+            subscription_refs.append(
+                {
+                    "id": subscription.get("id"),
+                    "source_id": subscription.get("source_id"),
+                    "source_name": (source_info or {}).get("name") or ("#" + str(subscription.get("source_id") or "--")),
+                    "status": subscription.get("status"),
+                }
+            )
+        target["subscription_refs"] = subscription_refs
         active_sub_count = sum(1 for entry in subscription_refs if entry.get("status") == "active")
         target["matched_subscription_count"] = len(subscription_refs)
         target["active_matched_subscription_count"] = active_sub_count

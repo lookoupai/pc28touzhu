@@ -1042,11 +1042,16 @@
 
 .subscription-strategy-mode-field,
 .subscription-play-filter-mode-field,
+.subscription-target-field,
 .subscription-settlement-mode-field,
 .subscription-follow-tip-field,
 .subscription-martingale-field,
 .subscription-martingale-advanced-field {
     align-content: flex-start;
+}
+
+.subscription-target-select {
+    min-height: 112px;
 }
 
 .subscription-play-filter-fields {
