@@ -2879,6 +2879,24 @@
             : [];
     }
 
+    function subscriptionRuntimeResetKind(item) {
+        const endReason = String(item && item.end_reason || "");
+        if (endReason !== "manual_reset") {
+            return "";
+        }
+        const resetNote = String(item && item.baseline_reset_note || "").trim();
+        if (!resetNote) {
+            return "manual_reset";
+        }
+        if (resetNote.indexOf("自动触发规则：") === 0) {
+            return "auto_restart";
+        }
+        if (resetNote === "前端开始新一轮") {
+            return "manual_restart";
+        }
+        return "manual_reset";
+    }
+
     function subscriptionRuntimeStatusText(item) {
         const status = String(item && item.status || "");
         if (status === "active") {
@@ -2893,6 +2911,10 @@
                 return "止损结束";
             }
             if (endReason === "manual_reset") {
+                const resetKind = subscriptionRuntimeResetKind(item);
+                if (resetKind === "auto_restart" || resetKind === "manual_restart") {
+                    return "开始新一轮";
+                }
                 return "手动重置";
             }
             return "已结束";
@@ -2916,7 +2938,14 @@
             return "达到止损阈值";
         }
         if (endReason === "manual_reset") {
-            return "手动重置或开始新一轮";
+            const resetKind = subscriptionRuntimeResetKind(item);
+            if (resetKind === "auto_restart") {
+                return "自动触发开始新一轮";
+            }
+            if (resetKind === "manual_restart") {
+                return "手动开始新一轮";
+            }
+            return "手动重置";
         }
         return endReason;
     }
@@ -2944,6 +2973,9 @@
                     '<p>' + escapeHtml("开始期号 " + String(item.started_issue_no || "--") + " · 最近期号 " + String(item.last_issue_no || "--") + " · 已结算 " + String(item.settled_event_count || 0) + " 单") + '</p>',
                     '<p>' + escapeHtml("盈利 " + amountText(item.realized_profit || 0) + " · 亏损 " + amountText(item.realized_loss || 0) + " · 命中 " + String(item.hit_count || 0) + " / 未中 " + String(item.miss_count || 0) + " / 回本 " + String(item.refund_count || 0)) + '</p>',
                     '<p>' + escapeHtml("结束原因 " + subscriptionRuntimeEndReasonText(item)) + '</p>',
+                    (item && item.baseline_reset_note
+                        ? ('<p>' + escapeHtml("备注 " + String(item.baseline_reset_note || "")) + '</p>')
+                        : ""),
                     '<p>' + escapeHtml("开始 " + String(item.started_at || "--") + (item.ended_at ? (" · 结束 " + String(item.ended_at)) : "")) + '</p>',
                     '</article>',
                 ].join("");
