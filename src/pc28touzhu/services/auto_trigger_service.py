@@ -690,6 +690,17 @@ def _is_rule_day_stopped(repository: Any, rule: Dict[str, Any], *, stat_date: st
     return {"stopped": str(stat.get("status") or "") == "stopped", "stat": stat}
 
 
+def _subscription_threshold_status(subscription: Dict[str, Any]) -> str:
+    financial = subscription.get("financial") if isinstance(subscription.get("financial"), dict) else {}
+    return str(financial.get("threshold_status") or "").strip()
+
+
+def _can_restart_subscription_cycle(subscription: Dict[str, Any]) -> bool:
+    if str(subscription.get("status") or "") == "standby":
+        return True
+    return _subscription_threshold_status(subscription) in {"profit_target_hit", "loss_limit_hit"}
+
+
 def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher=None) -> Dict[str, Any]:
     daily_risk_control = rule.get("daily_risk_control") if isinstance(rule.get("daily_risk_control"), dict) else {}
     stat_date = _today_stat_date(timezone_name=str(daily_risk_control.get("timezone") or "Asia/Shanghai"))
@@ -733,6 +744,10 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
             open_state = repository.subscription_has_open_run(subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]))
             if open_state.get("has_open_run"):
                 events.append(_record_event(repository, rule=rule, subscription=subscription, performance=None, status="skipped", reason="subscription_has_open_run"))
+                summary["skipped_count"] += 1
+                continue
+            if not _can_restart_subscription_cycle(subscription):
+                events.append(_record_event(repository, rule=rule, subscription=subscription, performance=None, status="skipped", reason="subscription_not_ready_for_restart"))
                 summary["skipped_count"] += 1
                 continue
 

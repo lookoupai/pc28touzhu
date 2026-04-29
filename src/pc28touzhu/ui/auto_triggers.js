@@ -171,6 +171,9 @@
         if (event.reason === "multiple_metrics_matched") {
             return "当前方案多指标同时命中，已仅跳过该方案" + (matchedText ? "：" + matchedText : "");
         }
+        if (event.reason === "subscription_not_ready_for_restart") {
+            return "当前方案未处于待命触发，且本轮也未触发止盈/止损，已跳过自动开始新一轮。";
+        }
         return matchedText || event.reason || "--";
     }
 

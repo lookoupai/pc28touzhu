@@ -94,6 +94,11 @@ class AutoTriggerServiceTests(unittest.TestCase):
         }
 
     def test_rule_restarts_subscription_and_dispatches_latest_signal(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
         rule = create_auto_trigger_rule(
             self.repo,
             user_id=self.user_id,
@@ -120,6 +125,11 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(updated_rule["last_triggered_issue_no"], "20260418000")
 
     def test_daily_profit_target_stops_rule_and_blocks_following_dispatch(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
         rule = create_auto_trigger_rule(
             self.repo,
             user_id=self.user_id,
@@ -335,6 +345,11 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(candidates, [])
 
     def test_rule_triggers_when_metric_miss_streak_reaches_threshold(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
         create_auto_trigger_rule(
             self.repo,
             user_id=self.user_id,
@@ -363,6 +378,11 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(event["matched_conditions"][0]["actual_miss_streak"], 5)
 
     def test_guard_group_pairs_same_metric_before_cross_metric_conditions(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
         create_auto_trigger_rule(
             self.repo,
             user_id=self.user_id,
@@ -396,6 +416,11 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(self.repo.list_auto_trigger_events(user_id=self.user_id, limit=10), [])
 
     def test_guard_group_uses_cross_metric_when_same_metric_is_absent(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
         create_auto_trigger_rule(
             self.repo,
             user_id=self.user_id,
@@ -435,6 +460,11 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(event["snapshot"]["matched_primary_condition"]["metric"], "big_small")
 
     def test_all_guard_groups_must_pass(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
         create_auto_trigger_rule(
             self.repo,
             user_id=self.user_id,
@@ -469,6 +499,11 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(passed["summary"]["triggered_count"], 1)
 
     def test_first_successful_primary_path_controls_matched_metric_action(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
         create_auto_trigger_rule(
             self.repo,
             user_id=self.user_id,
@@ -549,6 +584,11 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual({condition["metric"] for condition in event["matched_conditions"]}, {"big_small", "combo"})
 
     def test_rule_does_not_skip_when_duplicate_conditions_match_same_metric(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
         create_auto_trigger_rule(
             self.repo,
             user_id=self.user_id,
@@ -582,6 +622,11 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual([condition["metric"] for condition in event["matched_conditions"]], ["big_small", "big_small"])
 
     def test_cooldown_prevents_repeated_trigger_for_same_subscription(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
         create_auto_trigger_rule(
             self.repo,
             user_id=self.user_id,
@@ -609,6 +654,11 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(skipped_events[0]["reason"], "subscription_has_open_run")
 
     def test_repeated_skipped_event_is_deduplicated(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
         create_auto_trigger_rule(
             self.repo,
             user_id=self.user_id,
@@ -701,6 +751,11 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertIn(recent_skipped["id"], event_ids)
 
     def test_matched_metric_action_uses_condition_order_as_priority(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
         create_auto_trigger_rule(
             self.repo,
             user_id=self.user_id,
@@ -733,6 +788,11 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(event["snapshot"]["play_filter_result"]["target_metric"], "combo")
 
     def test_fixed_metric_action_switches_to_configured_metric(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
         create_auto_trigger_rule(
             self.repo,
             user_id=self.user_id,
@@ -757,6 +817,31 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(result["summary"]["triggered_count"], 1)
         updated = self.repo.get_subscription(self.subscription["id"])
         self.assertEqual(updated["strategy_v2"]["play_filter"]["selected_keys"], ["odd_even:单", "odd_even:双"])
+
+    def test_active_subscription_without_threshold_status_is_skipped(self):
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "运行中不强开新轮",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+            },
+        )
+
+        result = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+
+        self.assertEqual(result["summary"]["triggered_count"], 0)
+        self.assertEqual(result["summary"]["skipped_count"], 1)
+        self.assertEqual(self.repo.list_execution_jobs(user_id=self.user_id), [])
+        event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(event["status"], "skipped")
+        self.assertEqual(event["reason"], "subscription_not_ready_for_restart")
 
 
 if __name__ == "__main__":
