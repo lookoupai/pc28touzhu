@@ -225,7 +225,8 @@ def normalize_rule_payload(payload: Dict[str, Any], *, current: Optional[Dict[st
     condition_mode = str(payload.get("condition_mode", source.get("condition_mode") or "any") or "any").strip()
     if condition_mode != "any":
         raise ValueError("condition_mode 当前仅支持 any")
-    cooldown_issues = int(payload.get("cooldown_issues", source.get("cooldown_issues") or 10) or 10)
+    cooldown_value = payload["cooldown_issues"] if "cooldown_issues" in payload else source.get("cooldown_issues", 10)
+    cooldown_issues = int(cooldown_value if cooldown_value not in (None, "") else 10)
     if cooldown_issues < 0:
         raise ValueError("cooldown_issues 不能小于 0")
     return {
@@ -251,6 +252,44 @@ def create_auto_trigger_rule(repository: Any, *, user_id: Any, payload: Dict[str
     return {"item": item}
 
 
+def _daily_risk_stop_reason(daily_risk_control: Dict[str, Any], *, net_profit: Any) -> str:
+    if not bool(daily_risk_control.get("enabled")):
+        return ""
+    current_net_profit = _round_money(net_profit)
+    profit_target = _round_money(daily_risk_control.get("profit_target"))
+    loss_limit = _round_money(daily_risk_control.get("loss_limit"))
+    if profit_target > 0 and current_net_profit >= profit_target:
+        return "profit_target_hit"
+    if loss_limit > 0 and current_net_profit <= -loss_limit:
+        return "loss_limit_hit"
+    return ""
+
+
+def _resume_stopped_rule_day_if_allowed(
+    repository: Any,
+    *,
+    rule: Dict[str, Any],
+    daily_risk_control: Dict[str, Any],
+    stat_date: str,
+) -> Optional[Dict[str, Any]]:
+    stat = repository.get_auto_trigger_rule_daily_stat(
+        rule_id=int(rule["id"]),
+        user_id=int(rule["user_id"]),
+        stat_date=stat_date,
+    )
+    if str(stat.get("status") or "") != "stopped":
+        return None
+    if _daily_risk_stop_reason(daily_risk_control, net_profit=stat.get("net_profit")):
+        return None
+    if not hasattr(repository, "resume_auto_trigger_rule_day"):
+        return None
+    return repository.resume_auto_trigger_rule_day(
+        rule_id=int(rule["id"]),
+        user_id=int(rule["user_id"]),
+        stat_date=stat_date,
+    )
+
+
 def update_auto_trigger_rule(repository: Any, *, rule_id: Any, user_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     normalized_rule_id = _to_positive_int(rule_id, "rule_id")
     normalized_user_id = _to_positive_int(user_id, "user_id")
@@ -261,7 +300,44 @@ def update_auto_trigger_rule(repository: Any, *, rule_id: Any, user_id: Any, pay
     item = repository.update_auto_trigger_rule_record(rule_id=normalized_rule_id, user_id=normalized_user_id, **normalized)
     if not item:
         raise ValueError("rule_id 对应的自动触发规则不存在")
-    return {"item": item}
+    daily_risk_control = normalized["daily_risk_control"]
+    stat_date = _today_stat_date(timezone_name=str(daily_risk_control.get("timezone") or "Asia/Shanghai"))
+    resumed_stat = _resume_stopped_rule_day_if_allowed(
+        repository,
+        rule=item,
+        daily_risk_control=daily_risk_control,
+        stat_date=stat_date,
+    )
+    return {"item": item, "daily_risk_resume": {"resumed": bool(resumed_stat), "stat": resumed_stat}}
+
+
+def resume_auto_trigger_rule_day(repository: Any, *, rule_id: Any, user_id: Any, stat_date: Any = None) -> Dict[str, Any]:
+    normalized_rule_id = _to_positive_int(rule_id, "rule_id")
+    normalized_user_id = _to_positive_int(user_id, "user_id")
+    rule = repository.get_auto_trigger_rule(normalized_rule_id)
+    if not rule or int(rule.get("user_id") or 0) != normalized_user_id:
+        raise ValueError("rule_id 对应的自动触发规则不存在")
+    daily_risk_control = rule.get("daily_risk_control") if isinstance(rule.get("daily_risk_control"), dict) else {}
+    resolved_stat_date = _normalize_stat_date(
+        stat_date,
+        timezone_name=str(daily_risk_control.get("timezone") or "Asia/Shanghai"),
+    )
+    stat = repository.get_auto_trigger_rule_daily_stat(
+        rule_id=normalized_rule_id,
+        user_id=normalized_user_id,
+        stat_date=resolved_stat_date,
+    )
+    if str(stat.get("status") or "") != "stopped":
+        return {"resumed": False, "stat": stat}
+    stop_reason = _daily_risk_stop_reason(daily_risk_control, net_profit=stat.get("net_profit"))
+    if stop_reason:
+        raise ValueError("当前当日净盈亏仍达到规则风控阈值，请先调高阈值或关闭规则每日风控")
+    resumed_stat = repository.resume_auto_trigger_rule_day(
+        rule_id=normalized_rule_id,
+        user_id=normalized_user_id,
+        stat_date=resolved_stat_date,
+    )
+    return {"resumed": True, "stat": resumed_stat}
 
 
 def update_auto_trigger_rule_status(repository: Any, *, rule_id: Any, user_id: Any, status: Any) -> Dict[str, Any]:

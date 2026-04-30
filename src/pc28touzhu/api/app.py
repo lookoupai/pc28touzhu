@@ -23,6 +23,7 @@ from pc28touzhu.services.auto_trigger_service import (
     delete_auto_trigger_rule,
     list_auto_trigger_events,
     list_auto_trigger_rules,
+    resume_auto_trigger_rule_day,
     run_auto_trigger_cycle,
     update_auto_trigger_rule,
     update_auto_trigger_rule_status,
@@ -894,6 +895,18 @@ class PlatformApiApplication:
                 rule_id=rule_id,
                 user_id=current_user["id"],
                 status=_read_json_body(environ).get("status"),
+            )
+            return _json_response(start_response, 200, payload)
+        if path.startswith(auto_trigger_rule_prefix) and path.endswith("/resume-daily-risk"):
+            if method != "POST":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            rule_id = path[len(auto_trigger_rule_prefix) : -len("/resume-daily-risk")]
+            body = _read_json_body(environ)
+            payload = resume_auto_trigger_rule_day(
+                self.repository,
+                rule_id=rule_id,
+                user_id=current_user["id"],
+                stat_date=body.get("stat_date"),
             )
             return _json_response(start_response, 200, payload)
         if path.startswith(auto_trigger_rule_prefix) and path.endswith("/delete"):

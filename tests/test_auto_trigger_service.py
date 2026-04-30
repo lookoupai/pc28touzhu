@@ -7,7 +7,13 @@ from datetime import datetime, timedelta, timezone
 
 from pc28touzhu.executor.db_repository import DatabaseRepository
 from pc28touzhu.services.dispatch_service import dispatch_signal
-from pc28touzhu.services.auto_trigger_service import create_auto_trigger_rule, list_auto_trigger_rules, run_auto_trigger_cycle
+from pc28touzhu.services.auto_trigger_service import (
+    create_auto_trigger_rule,
+    list_auto_trigger_rules,
+    resume_auto_trigger_rule_day,
+    run_auto_trigger_cycle,
+    update_auto_trigger_rule,
+)
 
 
 class AutoTriggerServiceTests(unittest.TestCase):
@@ -191,6 +197,126 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(dispatch_result["candidate_count"], 1)
         self.assertEqual(dispatch_result["skipped_count"], 1)
         self.assertEqual(dispatch_result["created_count"], 0)
+
+    def test_update_profit_target_resumes_stopped_rule_day_when_threshold_allows(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "提高止盈继续触发",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "daily_risk_control": {"enabled": True, "profit_target": 9, "loss_limit": 0},
+            },
+        )["item"]
+
+        first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+        job = self.repo.list_execution_jobs(user_id=self.user_id)[0]
+        event = self.repo.get_progression_event(job["progression_event_id"])
+        self.repo.settle_progression_event(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            result_type="hit",
+            progression_event_id=event["id"],
+        )
+        self.repo.report_job_result(
+            job_id=str(job["id"]),
+            executor_id="test-executor",
+            attempt_no=1,
+            delivery_status="sent",
+            remote_message_id="remote-1",
+            executed_at="2026-04-18T09:40:00Z",
+            raw_result={},
+            error_message=None,
+        )
+        self.assertEqual(first["summary"]["triggered_count"], 1)
+
+        updated = update_auto_trigger_rule(
+            self.repo,
+            rule_id=rule["id"],
+            user_id=self.user_id,
+            payload={
+                **rule,
+                "daily_risk_control": {"enabled": True, "profit_target": 40, "loss_limit": 0},
+            },
+        )
+
+        self.assertTrue(updated["daily_risk_resume"]["resumed"])
+        stat = self.repo.get_auto_trigger_rule_daily_stat(
+            rule_id=rule["id"],
+            user_id=self.user_id,
+            stat_date=event["auto_trigger_stat_date"],
+        )
+        self.assertEqual(stat["status"], "active")
+        self.assertEqual(stat["stopped_reason"], "")
+
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
+        self.repo.create_signal_record(
+            source_id=self.source["id"],
+            lottery_type="pc28",
+            issue_no="20260418003",
+            bet_type="big_small",
+            bet_value="小",
+            normalized_payload={"message_text": "小10"},
+            published_at="2026-04-18T09:35:00Z",
+        )
+        second = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(issue_no="20260418002"),
+        )
+        self.assertEqual(second["summary"]["triggered_count"], 1)
+
+    def test_manual_resume_rejects_when_current_threshold_still_hit(self):
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "仍达阈值不可继续",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "daily_risk_control": {"enabled": True, "profit_target": 10, "loss_limit": 0},
+            },
+        )["item"]
+        today = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        with self.repo._connect() as conn:
+            self.repo.upsert_auto_trigger_rule_daily_stat(
+                conn,
+                rule_id=rule["id"],
+                user_id=self.user_id,
+                stat_date=today,
+                profit_delta=10,
+                loss_delta=0,
+                net_delta=10,
+                result_type="hit",
+                updated_at="2026-04-18T09:00:00Z",
+            )
+        self.repo.stop_auto_trigger_rule_day(
+            rule_id=rule["id"],
+            user_id=self.user_id,
+            stat_date=today,
+            reason="profit_target_hit",
+        )
+
+        with self.assertRaises(ValueError):
+            resume_auto_trigger_rule_day(self.repo, rule_id=rule["id"], user_id=self.user_id, stat_date=today)
 
     def test_auto_trigger_profit_uses_event_stat_date_when_settled_after_midnight(self):
         rule = create_auto_trigger_rule(

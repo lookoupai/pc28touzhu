@@ -251,7 +251,12 @@
         if (!stat || stat.status !== "stopped") {
             return "";
         }
-        return String(stat.stat_date || "--") + " 状态：已停用" + (stat.stopped_reason ? "（" + String(stat.stopped_reason) + "）" : "");
+        return String(stat.stat_date || "--") + " 状态：已停止触发" + (stat.stopped_reason ? "（" + String(stat.stopped_reason) + "）" : "");
+    }
+
+    function isDailyRiskStopped(rule) {
+        const stat = ruleDailyStat(rule);
+        return Boolean(stat && stat.status === "stopped");
     }
 
     function renderRuleList() {
@@ -282,6 +287,7 @@
                     '<div class="rule-actions">' +
                         '<button class="tiny-btn edit-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">编辑</button>' +
                         '<button class="tiny-btn run-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">检查</button>' +
+                        (isDailyRiskStopped(rule) ? '<button class="tiny-btn resume-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">继续今日触发</button>' : '') +
                         '<button class="tiny-btn status-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '" data-status="' + (rule.status === "active" ? "inactive" : "active") + '">' + (rule.status === "active" ? "停用" : "启用") + '</button>' +
                         '<button class="tiny-btn status-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '" data-status="archived">归档</button>' +
                     '</div>' +
@@ -695,6 +701,22 @@
                     target.setAttribute("disabled", "disabled");
                     await runOnce(target.dataset.id);
                     setStatus("检查完成。", false);
+                } catch (error) {
+                    setStatus(error.message, true);
+                } finally {
+                    target.removeAttribute("disabled");
+                }
+                return;
+            }
+            if (target.classList.contains("resume-rule-btn")) {
+                try {
+                    target.setAttribute("disabled", "disabled");
+                    await request("/api/platform/auto-trigger-rules/" + target.dataset.id + "/resume-daily-risk", {
+                        method: "POST",
+                        body: {stat_date: state.statDate || todayDateString()},
+                    });
+                    await loadData();
+                    setStatus("已恢复今日自动触发。", false);
                 } catch (error) {
                     setStatus(error.message, true);
                 } finally {

@@ -2827,6 +2827,40 @@ class DatabaseRepository:
             )
         return self.get_auto_trigger_rule_daily_stat(rule_id=rule_id, user_id=user_id, stat_date=stat_date)
 
+    def resume_auto_trigger_rule_day(
+        self,
+        *,
+        rule_id: int,
+        user_id: int,
+        stat_date: str,
+    ) -> Dict[str, Any]:
+        now = _utc_now_iso()
+        normalized_stat_date = str(stat_date or "").strip()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE auto_trigger_rule_daily_stats
+                SET status = 'active',
+                    stopped_reason = '',
+                    stopped_at = NULL,
+                    updated_at = ?
+                WHERE rule_id = ? AND user_id = ? AND stat_date = ? AND status = 'stopped'
+                """,
+                (now, int(rule_id), int(user_id), normalized_stat_date),
+            )
+            conn.execute(
+                """
+                UPDATE auto_trigger_rule_runs
+                SET status = 'active',
+                    stop_reason = '',
+                    stopped_at = NULL,
+                    updated_at = ?
+                WHERE rule_id = ? AND user_id = ? AND stat_date = ? AND status = 'stopped'
+                """,
+                (now, int(rule_id), int(user_id), normalized_stat_date),
+            )
+        return self.get_auto_trigger_rule_daily_stat(rule_id=rule_id, user_id=user_id, stat_date=normalized_stat_date)
+
     def upsert_auto_trigger_rule_daily_stat(
         self,
         conn: sqlite3.Connection,
