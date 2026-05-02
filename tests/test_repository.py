@@ -1092,6 +1092,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
             strategy={
                 "mode": "follow",
                 "stake_amount": 10,
+                "bet_filter": {"mode": "selected", "selected_keys": ["big_small:大", "big_small:小"]},
                 "risk_control": {
                     "enabled": True,
                     "loss_limit": 10,
@@ -1139,6 +1140,10 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(runtime_history[0]["status"], "closed")
         self.assertEqual(runtime_history[0]["end_reason"], "loss_limit_hit")
         self.assertEqual(runtime_history[0]["ended_at"], settled["financial"]["last_settled_at"])
+        self.assertEqual(
+            runtime_history[0]["play_filter"],
+            {"mode": "selected", "selected_keys": ["big_small:大", "big_small:小"]},
+        )
 
     def test_dispatch_candidates_skip_risk_blocked_subscription(self):
         user_id = self.repo.create_user("dispatch-risk-blocked-user")

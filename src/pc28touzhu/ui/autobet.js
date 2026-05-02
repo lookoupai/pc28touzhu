@@ -2950,6 +2950,20 @@
         return endReason;
     }
 
+    function summarizeSubscriptionRuntimePlayFilter(item) {
+        const playFilter = item && item.play_filter && typeof item.play_filter === "object" ? item.play_filter : {};
+        const mode = normalizeSubscriptionBetFilterMode(playFilter.mode);
+        const selectedKeys = Array.isArray(playFilter.selected_keys)
+            ? playFilter.selected_keys.filter(function (key) { return Boolean(SUBSCRIPTION_PLAY_FILTER_LABELS[key]); })
+            : [];
+        if (mode !== "selected" || !selectedKeys.length) {
+            return Object.keys(playFilter).length ? "全部玩法" : "未记录";
+        }
+        return selectedKeys.map(function (key) {
+            return SUBSCRIPTION_PLAY_FILTER_LABELS[key];
+        }).join(" / ");
+    }
+
     function renderSubscriptionRuntimeHistory(subscription) {
         const items = subscriptionRuntimeHistory(subscription);
         if (!items.length) {
@@ -2964,12 +2978,13 @@
         return [
             '<section class="subscription-history-panel">',
             '<strong class="subscription-section-title">轮次历史</strong>',
-            '<p class="subscription-section-copy">这里按轮次记录每一轮的净盈亏、单数和结束原因，便于复盘策略表现。</p>',
+            '<p class="subscription-section-copy">这里按轮次记录每一轮的玩法、净盈亏、单数和结束原因，便于复盘策略表现。</p>',
             '<div class="subscription-history-list">',
             items.map(function (item) {
                 return [
                     '<article class="subscription-history-item">',
                     '<div class="subscription-history-head"><strong>' + escapeHtml(subscriptionRuntimeStatusText(item)) + '</strong><span>' + escapeHtml("净盈亏 " + signedAmountText(item.net_profit || 0)) + '</span></div>',
+                    '<p>' + escapeHtml("玩法 " + summarizeSubscriptionRuntimePlayFilter(item)) + '</p>',
                     '<p>' + escapeHtml("开始期号 " + String(item.started_issue_no || "--") + " · 最近期号 " + String(item.last_issue_no || "--") + " · 已结算 " + String(item.settled_event_count || 0) + " 单") + '</p>',
                     '<p>' + escapeHtml("盈利 " + amountText(item.realized_profit || 0) + " · 亏损 " + amountText(item.realized_loss || 0) + " · 命中 " + String(item.hit_count || 0) + " / 未中 " + String(item.miss_count || 0) + " / 回本 " + String(item.refund_count || 0)) + '</p>',
                     '<p>' + escapeHtml("结束原因 " + subscriptionRuntimeEndReasonText(item)) + '</p>',

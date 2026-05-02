@@ -13,6 +13,7 @@ from pc28touzhu.domain.subscription_strategy import (
     present_subscription_item,
     resolve_risk_control_policy,
     resolve_settlement_runtime_policy,
+    upgrade_subscription_strategy,
 )
 
 
@@ -89,6 +90,16 @@ def _subscription_risk_control(strategy: Optional[dict]) -> Dict[str, Any]:
         "profit_target": max(0.0, _round_money(risk_control.get("profit_target"))),
         "loss_limit": max(0.0, _round_money(risk_control.get("loss_limit"))),
     }
+
+
+def _subscription_play_filter_snapshot(strategy: Optional[dict]) -> Dict[str, Any]:
+    strategy_v2 = upgrade_subscription_strategy(strategy or {})
+    play_filter = strategy_v2.get("play_filter") if isinstance(strategy_v2.get("play_filter"), dict) else {}
+    mode = str(play_filter.get("mode") or "all").strip()
+    selected_keys = list(play_filter.get("selected_keys") or [])
+    if mode != "selected" or not selected_keys:
+        return {"mode": "all", "selected_keys": []}
+    return {"mode": "selected", "selected_keys": selected_keys}
 
 
 def _event_settlement_context(
@@ -451,6 +462,7 @@ class DatabaseRepository:
             subscription_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
+            play_filter_json TEXT NOT NULL DEFAULT '{}',
             started_signal_id INTEGER,
             started_issue_no TEXT NOT NULL DEFAULT '',
             started_at TEXT NOT NULL,
@@ -625,6 +637,7 @@ class DatabaseRepository:
             self._ensure_message_template_columns(conn)
             self._ensure_execution_job_columns(conn)
             self._ensure_progression_event_columns(conn)
+            self._ensure_subscription_runtime_run_columns(conn)
             self._ensure_auto_trigger_rule_columns(conn)
             self._ensure_user_telegram_indexes(conn)
             conn.commit()
@@ -720,6 +733,16 @@ class DatabaseRepository:
             "auto_trigger_rule_id": "ALTER TABLE subscription_progression_events ADD COLUMN auto_trigger_rule_id INTEGER",
             "auto_trigger_rule_run_id": "ALTER TABLE subscription_progression_events ADD COLUMN auto_trigger_rule_run_id INTEGER",
             "auto_trigger_stat_date": "ALTER TABLE subscription_progression_events ADD COLUMN auto_trigger_stat_date TEXT NOT NULL DEFAULT ''",
+        }
+        for column_name, ddl in column_definitions.items():
+            if column_name not in existing_columns:
+                conn.execute(ddl)
+
+    def _ensure_subscription_runtime_run_columns(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(subscription_runtime_runs)").fetchall()
+        existing_columns = {str(row["name"]) for row in rows}
+        column_definitions = {
+            "play_filter_json": "ALTER TABLE subscription_runtime_runs ADD COLUMN play_filter_json TEXT NOT NULL DEFAULT '{}'",
         }
         for column_name, ddl in column_definitions.items():
             if column_name not in existing_columns:
@@ -954,6 +977,7 @@ class DatabaseRepository:
             "subscription_id": int(row["subscription_id"]),
             "user_id": int(row["user_id"]),
             "status": str(row.get("status") or "active"),
+            "play_filter": _safe_json_loads(row.get("play_filter_json")),
             "started_signal_id": int(row["started_signal_id"]) if row.get("started_signal_id") is not None else None,
             "started_issue_no": str(row.get("started_issue_no") or ""),
             "started_at": row.get("started_at"),
@@ -3248,22 +3272,29 @@ class DatabaseRepository:
         refund_count = int(aggregate.get("refund_count") or 0)
         last_issue_no = str(last.get("issue_no") or "")
         last_result_type = str(last.get("resolved_result_type") or "")
+        subscription_row = conn.execute(
+            "SELECT strategy_json FROM user_subscriptions WHERE id = ? AND user_id = ? LIMIT 1",
+            (int(subscription_id), int(user_id)),
+        ).fetchone()
+        strategy = _safe_json_loads(subscription_row["strategy_json"]) if subscription_row else {}
+        play_filter_snapshot = _subscription_play_filter_snapshot(strategy)
 
         cur = conn.execute(
             """
             INSERT INTO subscription_runtime_runs(
-                subscription_id, user_id, status,
+                subscription_id, user_id, status, play_filter_json,
                 started_signal_id, started_issue_no, started_at, start_reason,
                 ended_at, end_reason, last_issue_no, last_result_type,
                 realized_profit, realized_loss, net_profit,
                 settled_event_count, hit_count, miss_count, refund_count,
                 baseline_reset_at, baseline_reset_note,
                 created_at, updated_at
-            ) VALUES (?, ?, 'active', ?, ?, ?, ?, NULL, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, 'active', ?, ?, ?, ?, ?, NULL, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(subscription_id),
                 int(user_id),
+                _safe_json_dumps(play_filter_snapshot),
                 int(run_started_signal_id) if run_started_signal_id is not None else None,
                 run_started_issue_no,
                 run_started_at,
@@ -4086,10 +4117,12 @@ class DatabaseRepository:
                 signal_id=int(current_event["signal_id"]) if current_event.get("signal_id") is not None else None,
                 started_at=now,
             )
+            play_filter_snapshot = _subscription_play_filter_snapshot(strategy)
             conn.execute(
                 """
                 UPDATE subscription_runtime_runs
                 SET status = ?,
+                    play_filter_json = CASE WHEN play_filter_json = '' OR play_filter_json = '{}' THEN ? ELSE play_filter_json END,
                     ended_at = ?,
                     end_reason = ?,
                     last_issue_no = ?,
@@ -4108,6 +4141,7 @@ class DatabaseRepository:
                 """,
                 (
                     "closed" if threshold_status else "active",
+                    _safe_json_dumps(play_filter_snapshot),
                     now if threshold_status else None,
                     threshold_status,
                     str(current_event.get("issue_no") or ""),
@@ -4253,23 +4287,25 @@ class DatabaseRepository:
             if active_run:
                 end_reason = str(current_financial.get("threshold_status") or "").strip() or "manual_reset"
                 conn.execute(
-                    """
-                    UPDATE subscription_runtime_runs
-                    SET status = 'closed',
-                        ended_at = ?,
-                        end_reason = ?,
-                        realized_profit = ?,
+                """
+                UPDATE subscription_runtime_runs
+                SET status = 'closed',
+                    play_filter_json = CASE WHEN play_filter_json = '' OR play_filter_json = '{}' THEN ? ELSE play_filter_json END,
+                    ended_at = ?,
+                    end_reason = ?,
+                    realized_profit = ?,
                         realized_loss = ?,
                         net_profit = ?,
                         baseline_reset_at = ?,
                         baseline_reset_note = ?,
                         updated_at = ?
                     WHERE id = ?
-                    """,
-                    (
-                        now,
-                        end_reason,
-                        _round_money(current_financial.get("realized_profit")),
+                """,
+                (
+                    _safe_json_dumps(_subscription_play_filter_snapshot(current.get("strategy_v2") or current.get("strategy"))),
+                    now,
+                    end_reason,
+                    _round_money(current_financial.get("realized_profit")),
                         _round_money(current_financial.get("realized_loss")),
                         _round_money(current_financial.get("net_profit")),
                         current_financial.get("baseline_reset_at"),
