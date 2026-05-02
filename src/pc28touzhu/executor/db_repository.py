@@ -6,6 +6,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+from pc28touzhu.domain.pc28_play_filter import resolve_signal_play_filter_key
 from pc28touzhu.domain.pc28_profit_rules import resolve_pc28_hit_profit
 from pc28touzhu.domain.settlement_rules import build_settlement_snapshot
 from pc28touzhu.domain.subscription_strategy import (
@@ -83,13 +84,64 @@ def _round_money(value: Any, digits: int = 2) -> float:
         return 0.0
 
 
-def _subscription_risk_control(strategy: Optional[dict]) -> Dict[str, Any]:
+def _signal_risk_play_key(signal: Optional[dict]) -> str:
+    signal_key = resolve_signal_play_filter_key(
+        bet_type=str((signal or {}).get("bet_type") or ""),
+        bet_value=str((signal or {}).get("bet_value") or ""),
+    )
+    if not signal_key or ":" not in signal_key:
+        return ""
+    return signal_key.split(":", 1)[0]
+
+
+def _subscription_risk_control(strategy: Optional[dict], signal: Optional[dict] = None) -> Dict[str, Any]:
     risk_control = resolve_risk_control_policy(strategy)
+    default_profit_target = max(0.0, _round_money(risk_control.get("profit_target")))
+    default_loss_limit = max(0.0, _round_money(risk_control.get("loss_limit")))
+    play_key = _signal_risk_play_key(signal)
+    play_limits = risk_control.get("play_limits") if isinstance(risk_control.get("play_limits"), dict) else {}
+    play_limit = play_limits.get(play_key) if play_key and isinstance(play_limits.get(play_key), dict) else {}
+    play_profit_target = max(0.0, _round_money(play_limit.get("profit_target")))
+    play_loss_limit = max(0.0, _round_money(play_limit.get("loss_limit")))
+    uses_play_limit = play_profit_target > 0 or play_loss_limit > 0
     return {
         "enabled": bool(risk_control.get("enabled")),
-        "profit_target": max(0.0, _round_money(risk_control.get("profit_target"))),
-        "loss_limit": max(0.0, _round_money(risk_control.get("loss_limit"))),
+        "profit_target": play_profit_target if play_profit_target > 0 else default_profit_target,
+        "loss_limit": play_loss_limit if play_loss_limit > 0 else default_loss_limit,
+        "play_key": play_key,
+        "uses_play_limit": uses_play_limit,
     }
+
+
+def _subscription_play_net_profit(
+    conn: sqlite3.Connection,
+    *,
+    subscription_id: int,
+    user_id: int,
+    play_key: str,
+) -> float:
+    normalized_play_key = str(play_key or "").strip()
+    if not normalized_play_key:
+        return 0.0
+    rows = conn.execute(
+        """
+        SELECT e.net_delta AS net_delta,
+               s.bet_type AS bet_type,
+               s.bet_value AS bet_value
+        FROM subscription_progression_events e
+        JOIN normalized_signals s ON s.id = e.signal_id
+        WHERE e.subscription_id = ?
+          AND e.user_id = ?
+          AND COALESCE(e.resolved_result_type, '') != ''
+        """,
+        (int(subscription_id), int(user_id)),
+    ).fetchall()
+    total = 0.0
+    for row in rows:
+        row_play_key = _signal_risk_play_key({"bet_type": row["bet_type"], "bet_value": row["bet_value"]})
+        if row_play_key == normalized_play_key:
+            total += _round_money(row["net_delta"])
+    return _round_money(total)
 
 
 def _subscription_play_filter_snapshot(strategy: Optional[dict]) -> Dict[str, Any]:
@@ -4109,7 +4161,6 @@ class DatabaseRepository:
                 (int(subscription_id), int(user_id)),
             ).fetchone()
             strategy = _safe_json_loads(subscription_row["strategy_json"]) if subscription_row else {}
-            risk_control = _subscription_risk_control(strategy)
             source_id = int(subscription_row["source_id"]) if subscription_row and subscription_row["source_id"] is not None else None
 
             financial_row = conn.execute(
@@ -4128,6 +4179,7 @@ class DatabaseRepository:
                 signal=signal,
                 strategy=strategy,
             )
+            risk_control = _subscription_risk_control(strategy, signal)
             profit_delta = 0.0
             loss_delta = 0.0
             net_delta = 0.0
@@ -4178,10 +4230,20 @@ class DatabaseRepository:
             threshold_status = str(current_financial.get("threshold_status") or "")
             stopped_reason = str(current_financial.get("stopped_reason") or "")
             if not threshold_status and bool(risk_control["enabled"]):
-                if float(risk_control["profit_target"]) > 0 and next_net_profit >= float(risk_control["profit_target"]):
+                risk_net_profit = (
+                    _subscription_play_net_profit(
+                        conn,
+                        subscription_id=int(subscription_id),
+                        user_id=int(user_id),
+                        play_key=str(risk_control.get("play_key") or ""),
+                    )
+                    if bool(risk_control.get("uses_play_limit"))
+                    else next_net_profit
+                )
+                if float(risk_control["profit_target"]) > 0 and risk_net_profit >= float(risk_control["profit_target"]):
                     threshold_status = "profit_target_hit"
                     stopped_reason = "达到止盈阈值，当前轮次已停止"
-                elif float(risk_control["loss_limit"]) > 0 and next_net_profit <= -float(risk_control["loss_limit"]):
+                elif float(risk_control["loss_limit"]) > 0 and risk_net_profit <= -float(risk_control["loss_limit"]):
                     threshold_status = "loss_limit_hit"
                     stopped_reason = "达到止损阈值，当前轮次已停止"
 

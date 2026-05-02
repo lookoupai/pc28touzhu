@@ -1145,6 +1145,128 @@ class DatabaseRepositoryTests(unittest.TestCase):
             {"mode": "selected", "selected_keys": ["big_small:大", "big_small:小"]},
         )
 
+    def test_progression_event_settlement_uses_play_specific_risk_limits(self):
+        user_id = self.repo.create_user("sub-play-risk-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-play-risk",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={
+                "play_filter": {"mode": "selected", "selected_keys": ["big_small:大", "combo:大单"]},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 6},
+                "settlement_policy": {"rule_source": "follow_signal", "fallback_profit_ratio": 1.0},
+                "risk_control": {
+                    "enabled": True,
+                    "profit_target": 5,
+                    "loss_limit": 5,
+                    "play_limits": {
+                        "big_small": {"profit_target": 5, "loss_limit": 5},
+                        "combo": {"profit_target": 10, "loss_limit": 10},
+                    },
+                },
+                "dispatch": {"expire_after_seconds": 120},
+            },
+        )
+        combo_signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407011",
+            bet_type="combo",
+            bet_value="大单",
+        )
+        combo_event = self.repo.create_progression_event_record(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            signal_id=combo_signal["id"],
+            issue_no="20260407011",
+            progression_step=1,
+            stake_amount=6,
+            base_stake=6,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            status="placed",
+        )
+
+        combo_settled = self.repo.settle_progression_event(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            result_type="hit",
+            progression_event_id=combo_event["id"],
+        )
+
+        self.assertEqual(combo_settled["financial"]["net_profit"], 6)
+        self.assertEqual(combo_settled["financial"]["threshold_status"], "")
+
+        big_small_signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407012",
+            bet_type="big_small",
+            bet_value="大",
+        )
+        big_small_event = self.repo.create_progression_event_record(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            signal_id=big_small_signal["id"],
+            issue_no="20260407012",
+            progression_step=1,
+            stake_amount=1,
+            base_stake=1,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            status="placed",
+        )
+
+        big_small_settled = self.repo.settle_progression_event(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            result_type="hit",
+            progression_event_id=big_small_event["id"],
+        )
+
+        self.assertEqual(big_small_settled["financial"]["net_profit"], 7)
+        self.assertEqual(big_small_settled["financial"]["threshold_status"], "")
+
+        next_big_small_signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407013",
+            bet_type="big_small",
+            bet_value="小",
+        )
+        next_big_small_event = self.repo.create_progression_event_record(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            signal_id=next_big_small_signal["id"],
+            issue_no="20260407013",
+            progression_step=1,
+            stake_amount=4,
+            base_stake=4,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            status="placed",
+        )
+
+        next_big_small_settled = self.repo.settle_progression_event(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            result_type="hit",
+            progression_event_id=next_big_small_event["id"],
+        )
+
+        self.assertEqual(next_big_small_settled["financial"]["net_profit"], 11)
+        self.assertEqual(next_big_small_settled["financial"]["threshold_status"], "profit_target_hit")
+
     def test_dispatch_candidates_skip_risk_blocked_subscription(self):
         user_id = self.repo.create_user("dispatch-risk-blocked-user")
         source_id = self.repo.create_source_record(

@@ -15,6 +15,7 @@ from pc28touzhu.domain.settlement_rules import (
 
 ALLOWED_STAKING_POLICY_MODES = {"fixed", "follow_source", "martingale"}
 ALLOWED_SETTLEMENT_RULE_SOURCES = {"follow_signal", "subscription_fixed"}
+ALLOWED_RISK_PLAY_KEYS = ("big_small", "odd_even", "combo")
 DEFAULT_EXPIRE_AFTER_SECONDS = 120
 DEFAULT_FALLBACK_PROFIT_RATIO = 1.0
 
@@ -199,13 +200,39 @@ def _normalize_risk_control_v2(payload: Any) -> Dict[str, Any]:
     enabled = bool(data.get("enabled"))
     profit_target = round(float(_to_optional_non_negative_float(data.get("profit_target"), "strategy.risk_control.profit_target") or 0), 2)
     loss_limit = round(float(_to_optional_non_negative_float(data.get("loss_limit"), "strategy.risk_control.loss_limit") or 0), 2)
-    if enabled and profit_target <= 0 and loss_limit <= 0:
+    play_limits = _normalize_risk_control_play_limits(data.get("play_limits", data.get("play_thresholds")))
+    has_play_limit = any(
+        item["profit_target"] > 0 or item["loss_limit"] > 0
+        for item in play_limits.values()
+    )
+    if enabled and profit_target <= 0 and loss_limit <= 0 and not has_play_limit:
         raise ValueError("启用止盈止损时，止盈或止损至少要设置一个大于 0 的阈值")
     return {
         "enabled": enabled,
         "profit_target": profit_target,
         "loss_limit": loss_limit,
+        "play_limits": play_limits,
     }
+
+
+def _normalize_risk_control_play_limits(payload: Any) -> Dict[str, Dict[str, float]]:
+    data = _to_object(payload)
+    normalized: Dict[str, Dict[str, float]] = {}
+    for play_key in ALLOWED_RISK_PLAY_KEYS:
+        item = _to_object(data.get(play_key))
+        profit_target = round(float(_to_optional_non_negative_float(
+            item.get("profit_target"),
+            "strategy.risk_control.play_limits.%s.profit_target" % play_key,
+        ) or 0), 2)
+        loss_limit = round(float(_to_optional_non_negative_float(
+            item.get("loss_limit"),
+            "strategy.risk_control.play_limits.%s.loss_limit" % play_key,
+        ) or 0), 2)
+        normalized[play_key] = {
+            "profit_target": profit_target,
+            "loss_limit": loss_limit,
+        }
+    return normalized
 
 
 def _normalize_dispatch_v2(payload: Any) -> Dict[str, Any]:
@@ -277,6 +304,7 @@ def _normalize_legacy_subscription_strategy(payload: Dict[str, Any]) -> Dict[str
                 "enabled": _to_object(payload.get("risk_control")).get("enabled"),
                 "profit_target": _to_object(payload.get("risk_control")).get("profit_target"),
                 "loss_limit": _to_object(payload.get("risk_control")).get("loss_limit"),
+                "play_limits": _to_object(payload.get("risk_control")).get("play_limits"),
             },
             "dispatch": {
                 "expire_after_seconds": payload.get("expire_after_seconds"),
@@ -332,6 +360,7 @@ def project_subscription_strategy_v1(value: Any) -> Dict[str, Any]:
             "enabled": bool(risk_control.get("enabled")),
             "profit_target": round(float(risk_control.get("profit_target") or 0), 2),
             "loss_limit": round(float(risk_control.get("loss_limit") or 0), 2),
+            "play_limits": _normalize_risk_control_play_limits(risk_control.get("play_limits")),
             "win_profit_ratio": round(float(settlement_policy.get("fallback_profit_ratio") or DEFAULT_FALLBACK_PROFIT_RATIO), 4),
         },
     }

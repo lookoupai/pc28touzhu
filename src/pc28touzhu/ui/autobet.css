@@ -1079,6 +1079,32 @@
     padding: 0 14px;
 }
 
+.subscription-risk-play-limits {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    padding: 14px 16px;
+    border: 1px solid rgba(20, 37, 45, 0.08);
+    border-radius: var(--radius-lg);
+    background: rgba(255, 255, 255, 0.76);
+}
+
+.subscription-risk-play-limits[hidden] {
+    display: none;
+}
+
+.subscription-risk-play-limit-header {
+    grid-column: 1 / -1;
+    display: grid;
+    gap: 6px;
+}
+
+.subscription-risk-play-limit-inputs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
 .subscription-play-filter-shortcuts .row-button.is-active {
     border-color: rgba(15, 118, 110, 0.38);
     background: rgba(15, 118, 110, 0.12);
@@ -1663,6 +1689,7 @@ body[data-autobet-scope="subscriptions"] .side-panel {
     .health-grid,
     .onboarding-context-grid,
     .autobet-form-grid,
+    .subscription-risk-play-limits,
     .template-rule-mapping-grid,
     .template-custom-mapping-row {
         grid-template-columns: 1fr;

@@ -811,6 +811,33 @@
                                         <span>累计净亏到多少停</span>
                                         <input class="text-input" name="loss_limit" type="number" min="0" step="0.01" placeholder="例如：30">
                                     </label>
+                                    <div class="wide subscription-risk-field subscription-risk-play-limits" hidden>
+                                        <div class="subscription-risk-play-limit-header">
+                                            <span>按玩法覆盖额度</span>
+                                            <small class="field-hint">留空则使用上面的通用额度；填写后该玩法按自己的止盈/止损额度判断。</small>
+                                        </div>
+                                        <label>
+                                            <span>大小</span>
+                                            <span class="subscription-risk-play-limit-inputs">
+                                                <input class="text-input" name="risk_big_small_profit_target" type="number" min="0" step="0.01" placeholder="止盈">
+                                                <input class="text-input" name="risk_big_small_loss_limit" type="number" min="0" step="0.01" placeholder="止损">
+                                            </span>
+                                        </label>
+                                        <label>
+                                            <span>单双</span>
+                                            <span class="subscription-risk-play-limit-inputs">
+                                                <input class="text-input" name="risk_odd_even_profit_target" type="number" min="0" step="0.01" placeholder="止盈">
+                                                <input class="text-input" name="risk_odd_even_loss_limit" type="number" min="0" step="0.01" placeholder="止损">
+                                            </span>
+                                        </label>
+                                        <label>
+                                            <span>组合</span>
+                                            <span class="subscription-risk-play-limit-inputs">
+                                                <input class="text-input" name="risk_combo_profit_target" type="number" min="0" step="0.01" placeholder="止盈">
+                                                <input class="text-input" name="risk_combo_loss_limit" type="number" min="0" step="0.01" placeholder="止损">
+                                            </span>
+                                        </label>
+                                    </div>
                                 </div>
                             </div>
                             <div class="form-actions">

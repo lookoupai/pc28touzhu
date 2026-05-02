@@ -92,6 +92,23 @@
         odd_even: ["odd_even:单", "odd_even:双"],
         combo: ["combo:大单", "combo:大双", "combo:小单", "combo:小双"],
     };
+    const SUBSCRIPTION_RISK_PLAY_LIMIT_FIELDS = {
+        big_small: {
+            label: "大小",
+            profit: "risk_big_small_profit_target",
+            loss: "risk_big_small_loss_limit",
+        },
+        odd_even: {
+            label: "单双",
+            profit: "risk_odd_even_profit_target",
+            loss: "risk_odd_even_loss_limit",
+        },
+        combo: {
+            label: "组合",
+            profit: "risk_combo_profit_target",
+            loss: "risk_combo_loss_limit",
+        },
+    };
     const SUBSCRIPTION_SETTLEMENT_RULE_LABELS = {
         follow_signal: "跟随来源规则",
         subscription_fixed: "固定规则",
@@ -2226,6 +2243,56 @@
             }
             input.disabled = !enabled;
         });
+        Object.keys(SUBSCRIPTION_RISK_PLAY_LIMIT_FIELDS).forEach(function (playKey) {
+            const fields = SUBSCRIPTION_RISK_PLAY_LIMIT_FIELDS[playKey];
+            [fields.profit, fields.loss].forEach(function (name) {
+                const input = subscriptionForm.elements[name];
+                if (input instanceof HTMLInputElement) {
+                    input.disabled = !enabled;
+                }
+            });
+        });
+    }
+
+    function emptySubscriptionRiskPlayLimits() {
+        const result = {};
+        Object.keys(SUBSCRIPTION_RISK_PLAY_LIMIT_FIELDS).forEach(function (playKey) {
+            result[playKey] = {
+                profit_target: 0,
+                loss_limit: 0,
+            };
+        });
+        return result;
+    }
+
+    function subscriptionRiskPlayLimitsFromForm(form) {
+        const result = emptySubscriptionRiskPlayLimits();
+        Object.keys(SUBSCRIPTION_RISK_PLAY_LIMIT_FIELDS).forEach(function (playKey) {
+            const fields = SUBSCRIPTION_RISK_PLAY_LIMIT_FIELDS[playKey];
+            const profitValue = String(form.elements[fields.profit].value || "").trim();
+            const lossValue = String(form.elements[fields.loss].value || "").trim();
+            result[playKey] = {
+                profit_target: profitValue ? Number(profitValue) : 0,
+                loss_limit: lossValue ? Number(lossValue) : 0,
+            };
+        });
+        return result;
+    }
+
+    function applySubscriptionRiskPlayLimits(playLimits) {
+        const payload = playLimits && typeof playLimits === "object" ? playLimits : {};
+        Object.keys(SUBSCRIPTION_RISK_PLAY_LIMIT_FIELDS).forEach(function (playKey) {
+            const fields = SUBSCRIPTION_RISK_PLAY_LIMIT_FIELDS[playKey];
+            const item = payload[playKey] && typeof payload[playKey] === "object" ? payload[playKey] : {};
+            const profitInput = subscriptionForm.elements[fields.profit];
+            const lossInput = subscriptionForm.elements[fields.loss];
+            if (profitInput instanceof HTMLInputElement) {
+                profitInput.value = Number(item.profit_target || 0) > 0 ? String(item.profit_target) : "";
+            }
+            if (lossInput instanceof HTMLInputElement) {
+                lossInput.value = Number(item.loss_limit || 0) > 0 ? String(item.loss_limit) : "";
+            }
+        });
     }
 
     function subscriptionStrategyModeFromStrategy(strategy) {
@@ -2272,6 +2339,7 @@
         }
         subscriptionForm.elements.profit_target.value = "";
         subscriptionForm.elements.loss_limit.value = "";
+        applySubscriptionRiskPlayLimits({});
         refreshSubscriptionTargetSelects();
         setSubscriptionAdvancedVisible(false);
         syncSubscriptionBetFilterUI();
@@ -2664,6 +2732,26 @@
         return "结算 跟随来源规则 · 兜底净利 " + amountText(fallbackProfitRatio) + " 倍";
     }
 
+    function summarizeRiskPlayLimits(playLimits) {
+        const payload = playLimits && typeof playLimits === "object" ? playLimits : {};
+        const parts = [];
+        Object.keys(SUBSCRIPTION_RISK_PLAY_LIMIT_FIELDS).forEach(function (playKey) {
+            const fields = SUBSCRIPTION_RISK_PLAY_LIMIT_FIELDS[playKey];
+            const item = payload[playKey] && typeof payload[playKey] === "object" ? payload[playKey] : {};
+            const limits = [];
+            if (Number(item.profit_target || 0) > 0) {
+                limits.push("赚 " + amountText(item.profit_target));
+            }
+            if (Number(item.loss_limit || 0) > 0) {
+                limits.push("亏 " + amountText(item.loss_limit));
+            }
+            if (limits.length) {
+                parts.push(fields.label + " " + limits.join("/"));
+            }
+        });
+        return parts;
+    }
+
     function summarizeStrategy(strategy, strategyV2) {
         const payload = strategy && typeof strategy === "object" ? strategy : {};
         const parts = [];
@@ -2707,6 +2795,9 @@
             if (Number(riskControl.loss_limit || 0) > 0) {
                 riskParts.push("净亏到 " + amountText(riskControl.loss_limit) + " 停");
             }
+            summarizeRiskPlayLimits(riskControl.play_limits).forEach(function (item) {
+                riskParts.push(item);
+            });
             parts.push("自动停单 " + riskParts.join(" / "));
         }
         return parts.length ? parts.join(" · ") : "已保存跟单策略";
@@ -6693,6 +6784,7 @@
                     enabled: riskControlEnabled,
                     profit_target: profitTarget ? Number(profitTarget) : 0,
                     loss_limit: lossLimit ? Number(lossLimit) : 0,
+                    play_limits: subscriptionRiskPlayLimitsFromForm(form),
                 },
                 dispatch: {
                     expire_after_seconds: expireAfterSeconds,
@@ -6837,6 +6929,7 @@
                 subscriptionForm.elements.loss_limit.value = riskControl.loss_limit != null && Number(riskControl.loss_limit) > 0
                     ? String(riskControl.loss_limit)
                     : "";
+                applySubscriptionRiskPlayLimits(riskControl.play_limits);
                 if (subscriptionSettlementRuleSourceSelect instanceof HTMLSelectElement) {
                     subscriptionSettlementRuleSourceSelect.value = normalizeSubscriptionSettlementRuleSource(settlementPolicy.rule_source);
                 }

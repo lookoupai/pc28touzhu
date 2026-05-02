@@ -2723,6 +2723,10 @@ class PlatformApiApplicationTests(unittest.TestCase):
                             "enabled": True,
                             "profit_target": 50,
                             "loss_limit": 20,
+                            "play_limits": {
+                                "big_small": {"profit_target": 5, "loss_limit": 5},
+                                "combo": {"profit_target": 10, "loss_limit": 10},
+                            },
                         },
                         "dispatch": {
                             "expire_after_seconds": 90,
@@ -2739,6 +2743,8 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(payload["item"]["strategy"]["stake_amount"], 12)
         self.assertEqual(payload["item"]["strategy"]["bet_filter"]["selected_keys"], ["big_small:大"])
         self.assertEqual(payload["item"]["strategy"]["risk_control"]["win_profit_ratio"], 1.2)
+        self.assertEqual(payload["item"]["strategy"]["risk_control"]["play_limits"]["big_small"]["profit_target"], 5)
+        self.assertEqual(payload["item"]["strategy"]["risk_control"]["play_limits"]["combo"]["loss_limit"], 10)
         self.assertEqual(payload["item"]["strategy"]["delivery_target_ids"], [target["id"]])
         self.assertEqual(payload["item"]["strategy_v2"]["staking_policy"]["mode"], "fixed")
         self.assertEqual(payload["item"]["strategy_v2"]["settlement_policy"]["settlement_rule_id"], "pc28_high_regular")
