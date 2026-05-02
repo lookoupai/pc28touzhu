@@ -194,9 +194,19 @@ class AutoTriggerServiceTests(unittest.TestCase):
             published_at="2026-04-18T09:35:00Z",
         )
         dispatch_result = dispatch_signal(self.repo, next_signal["id"])
-        self.assertEqual(dispatch_result["candidate_count"], 1)
-        self.assertEqual(dispatch_result["skipped_count"], 1)
+        self.assertEqual(dispatch_result["candidate_count"], 0)
+        self.assertEqual(dispatch_result["skipped_count"], 0)
         self.assertEqual(dispatch_result["created_count"], 0)
+        subscription = self.repo.get_subscription(self.subscription["id"])
+        self.assertEqual(subscription["financial"]["threshold_status"], "profit_target_hit")
+        self.assertEqual(subscription["financial"]["stopped_reason"], "自动触发达到日止盈阈值，当前轮次已停止")
+        runtime_history = self.repo.list_subscription_runtime_runs(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            limit=5,
+        )
+        self.assertEqual(runtime_history[0]["status"], "closed")
+        self.assertEqual(runtime_history[0]["end_reason"], "profit_target_hit")
 
     def test_update_profit_target_resumes_stopped_rule_day_when_threshold_allows(self):
         self.repo.update_subscription_status(

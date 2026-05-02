@@ -2955,6 +2955,20 @@ class DatabaseRepository:
         reason: str,
     ) -> Dict[str, Any]:
         now = _utc_now_iso()
+        normalized_stop_reason = str(reason or "").strip()
+        if "profit_target_hit" in normalized_stop_reason:
+            normalized_stop_reason = "profit_target_hit"
+        elif "loss_limit_hit" in normalized_stop_reason:
+            normalized_stop_reason = "loss_limit_hit"
+        threshold_status = ""
+        stopped_reason_text = "规则日风控已停止，当前轮次已停止"
+        if normalized_stop_reason == "profit_target_hit":
+            threshold_status = "profit_target_hit"
+            stopped_reason_text = "自动触发达到日止盈阈值，当前轮次已停止"
+        elif normalized_stop_reason == "loss_limit_hit":
+            threshold_status = "loss_limit_hit"
+            stopped_reason_text = "自动触发达到日止损阈值，当前轮次已停止"
+
         with self._connect() as conn:
             job_cursor = conn.execute(
                 """
@@ -2999,9 +3013,107 @@ class DatabaseRepository:
                     str(stat_date or "").strip(),
                 ),
             )
+            affected_subscription_rows = conn.execute(
+                """
+                SELECT DISTINCT subscription_id
+                FROM auto_trigger_rule_runs
+                WHERE rule_id = ?
+                  AND user_id = ?
+                  AND stat_date = ?
+                """,
+                (int(rule_id), int(user_id), str(stat_date or "").strip()),
+            ).fetchall()
+            subscription_ids = []
+            for row in affected_subscription_rows:
+                subscription_value = row["subscription_id"] if "subscription_id" in row.keys() else None
+                if subscription_value is None:
+                    continue
+                subscription_ids.append(int(subscription_value))
+            financial_cursor = None
+            runtime_cursor = None
+            if subscription_ids and threshold_status:
+                placeholders = ",".join(["?"] * len(subscription_ids))
+                conn.execute(
+                    """
+                    INSERT INTO subscription_financial_state(
+                        subscription_id, user_id, realized_profit, realized_loss, net_profit,
+                        threshold_status, stopped_reason, baseline_reset_at, baseline_reset_note,
+                        last_settled_event_id, last_settled_at, updated_at
+                    )
+                    SELECT
+                        us.id,
+                        us.user_id,
+                        0, 0, 0,
+                        ?, ?, NULL, '',
+                        NULL, NULL, ?
+                    FROM user_subscriptions us
+                    WHERE us.user_id = ?
+                      AND us.id IN (""" + placeholders + """)
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM subscription_financial_state sfs
+                          WHERE sfs.subscription_id = us.id
+                      )
+                    """,
+                    (
+                        threshold_status,
+                        stopped_reason_text,
+                        now,
+                        int(user_id),
+                        *subscription_ids,
+                    ),
+                )
+                financial_cursor = conn.execute(
+                    """
+                    UPDATE subscription_financial_state
+                    SET threshold_status = CASE
+                            WHEN threshold_status = '' THEN ?
+                            ELSE threshold_status
+                        END,
+                        stopped_reason = CASE
+                            WHEN stopped_reason = '' THEN ?
+                            ELSE stopped_reason
+                        END,
+                        updated_at = ?
+                    WHERE user_id = ?
+                      AND subscription_id IN (""" + placeholders + """)
+                    """,
+                    (
+                        threshold_status,
+                        stopped_reason_text,
+                        now,
+                        int(user_id),
+                        *subscription_ids,
+                    ),
+                )
+                runtime_cursor = conn.execute(
+                    """
+                    UPDATE subscription_runtime_runs
+                    SET status = 'closed',
+                        ended_at = COALESCE(ended_at, ?),
+                        end_reason = CASE
+                            WHEN end_reason = '' THEN ?
+                            ELSE end_reason
+                        END,
+                        updated_at = ?
+                    WHERE user_id = ?
+                      AND status = 'active'
+                      AND subscription_id IN (""" + placeholders + """)
+                    """,
+                    (
+                        now,
+                        threshold_status,
+                        now,
+                        int(user_id),
+                        *subscription_ids,
+                    ),
+                )
         return {
             "expired_job_count": int(job_cursor.rowcount or 0),
             "cancelled_event_count": int(event_cursor.rowcount or 0),
+            "stopped_subscription_count": len(subscription_ids) if threshold_status else 0,
+            "updated_financial_count": int(financial_cursor.rowcount or 0) if financial_cursor is not None else 0,
+            "closed_runtime_run_count": int(runtime_cursor.rowcount or 0) if runtime_cursor is not None else 0,
         }
 
     def prune_auto_trigger_rule_runtime_data(
