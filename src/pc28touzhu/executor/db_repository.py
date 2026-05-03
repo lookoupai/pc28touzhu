@@ -4102,6 +4102,17 @@ class DatabaseRepository:
         normalized_result = str(result_type or "").strip().lower()
         if normalized_result not in {"hit", "refund", "miss"}:
             raise ValueError("result_type 仅支持 hit/refund/miss")
+        current_status = str(current_event.get("status") or "").strip()
+        if current_status == "settled":
+            return {
+                "event": current_event,
+                "state": self.get_subscription_progression_state(int(subscription_id)),
+                "financial": self.get_subscription_financial_state(int(subscription_id)),
+                "subscription": self.get_subscription(int(subscription_id)) or {},
+                "auto_trigger_daily_risk": {},
+            }
+        if current_status not in {"pending", "placed"}:
+            raise ValueError("当前没有待结算的倍投状态")
 
         step = int(current_event["progression_step"] or 1)
         max_steps = max(1, int(current_event.get("max_steps") or 1))

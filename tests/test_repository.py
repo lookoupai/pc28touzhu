@@ -831,6 +831,80 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(history[0]["stat_date"], stat_date)
         self.assertEqual(history[0]["net_profit"], 7)
 
+    def test_progression_event_settlement_is_idempotent_after_closed_runtime(self):
+        user_id = self.repo.create_user("sub-idempotent-settle-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-idempotent-settle",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={
+                "mode": "follow",
+                "stake_amount": 10,
+                "risk_control": {"enabled": True, "profit_target": 1},
+            },
+        )
+        signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407013",
+            bet_type="big_small",
+            bet_value="大",
+        )
+        event = self.repo.create_progression_event_record(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            signal_id=signal["id"],
+            issue_no="20260407013",
+            progression_step=1,
+            stake_amount=10,
+            base_stake=10,
+            multiplier=2,
+            max_steps=3,
+            refund_action="hold",
+            cap_action="reset",
+            status="placed",
+        )
+
+        first = self.repo.settle_progression_event(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            result_type="hit",
+            progression_event_id=event["id"],
+        )
+        runs_after_first = self.repo.list_subscription_runtime_runs(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            limit=5,
+        )
+        stat_date = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        stats_after_first = self.repo.list_user_daily_subscription_stats(user_id=user_id, stat_date=stat_date)
+
+        second = self.repo.settle_progression_event(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            result_type="hit",
+            progression_event_id=event["id"],
+        )
+        runs_after_second = self.repo.list_subscription_runtime_runs(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            limit=5,
+        )
+        stats_after_second = self.repo.list_user_daily_subscription_stats(user_id=user_id, stat_date=stat_date)
+
+        self.assertEqual(first["event"]["id"], second["event"]["id"])
+        self.assertEqual(second["event"]["status"], "settled")
+        self.assertEqual(second["financial"]["net_profit"], first["financial"]["net_profit"])
+        self.assertEqual(len(runs_after_second), len(runs_after_first))
+        self.assertEqual(runs_after_second[0]["id"], runs_after_first[0]["id"])
+        self.assertEqual(runs_after_second[0]["settled_event_count"], 1)
+        self.assertEqual(stats_after_second[0]["settled_event_count"], stats_after_first[0]["settled_event_count"])
+        self.assertEqual(stats_after_second[0]["net_profit"], stats_after_first[0]["net_profit"])
+
     def test_progression_event_settlement_uses_pc28_rule_for_daxiao(self):
         user_id = self.repo.create_user("sub-pc28-basic-profit-user")
         source_id = self.repo.create_source_record(
