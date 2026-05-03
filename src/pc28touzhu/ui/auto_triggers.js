@@ -171,13 +171,33 @@
         return '<span class="pill ' + escapeHtml(status) + '">' + escapeHtml(labels[status] || status || "--") + '</span>';
     }
 
+    function subscriptionStatusText(status) {
+        const labels = {
+            active: "启用",
+            standby: "待命触发",
+            inactive: "停用",
+            archived: "归档",
+        };
+        return labels[status] || status || "--";
+    }
+
     function eventReasonText(event) {
         const matchedText = (event.matched_conditions || []).map(conditionText).join("；");
         if (event.reason === "multiple_metrics_matched") {
             return "当前方案多指标同时命中，已仅跳过该方案" + (matchedText ? "：" + matchedText : "");
         }
         if (event.reason === "subscription_not_ready_for_restart") {
-            return "当前方案未处于待命触发，且本轮也未触发止盈/止损，已跳过自动开始新一轮。";
+            const restartState = (event.snapshot && event.snapshot.restart_state) || {};
+            const statDate = event.snapshot && event.snapshot.stat_date ? String(event.snapshot.stat_date) : "";
+            const prefix = statDate ? ("统计日 " + statDate + "：") : "";
+            const thresholdStatus = String(restartState.threshold_status || "").trim();
+            if (thresholdStatus === "profit_target_hit") {
+                return prefix + "当前方案已触发止盈，但未处于待命触发，已跳过自动开始新一轮。";
+            }
+            if (thresholdStatus === "loss_limit_hit") {
+                return prefix + "当前方案已触发止损，但未处于待命触发，已跳过自动开始新一轮。";
+            }
+            return prefix + "当前方案状态为" + subscriptionStatusText(String(restartState.subscription_status || "")) + "，且未触发止盈/止损重开条件，已跳过自动开始新一轮。";
         }
         return matchedText || event.reason || "--";
     }

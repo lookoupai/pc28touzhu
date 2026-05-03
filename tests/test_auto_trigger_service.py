@@ -1070,6 +1070,10 @@ class AutoTriggerServiceTests(unittest.TestCase):
         event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
         self.assertEqual(event["status"], "skipped")
         self.assertEqual(event["reason"], "subscription_not_ready_for_restart")
+        self.assertEqual(event["snapshot"]["restart_state"]["subscription_status"], "active")
+        self.assertEqual(event["snapshot"]["restart_state"]["threshold_status"], "")
+        self.assertFalse(event["snapshot"]["restart_state"]["can_restart"])
+        self.assertTrue(event["snapshot"]["stat_date"])
 
 
 if __name__ == "__main__":

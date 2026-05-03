@@ -694,6 +694,8 @@ def _record_event(
     trigger_match: Optional[dict] = None,
     dispatch_result: Optional[dict] = None,
     play_filter_result: Optional[dict] = None,
+    restart_state: Optional[dict] = None,
+    stat_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     source = subscription.get("source") if isinstance(subscription.get("source"), dict) else {}
     latest_issue_no = str((performance or {}).get("latest_settled_issue") or "")
@@ -715,6 +717,10 @@ def _record_event(
         snapshot["dispatch_result"] = dispatch_result
     if play_filter_result is not None:
         snapshot["play_filter_result"] = play_filter_result
+    if restart_state is not None:
+        snapshot["restart_state"] = restart_state
+    if stat_date is not None:
+        snapshot["stat_date"] = str(stat_date)
     if status == "skipped":
         latest_skipped = repository.get_latest_auto_trigger_event(
             rule_id=int(rule["id"]),
@@ -786,10 +792,18 @@ def _subscription_threshold_status(subscription: Dict[str, Any]) -> str:
     return str(financial.get("threshold_status") or "").strip()
 
 
+def _subscription_restart_state(subscription: Dict[str, Any]) -> Dict[str, Any]:
+    subscription_status = str(subscription.get("status") or "").strip()
+    threshold_status = _subscription_threshold_status(subscription)
+    return {
+        "subscription_status": subscription_status,
+        "threshold_status": threshold_status,
+        "can_restart": subscription_status == "standby" or threshold_status in {"profit_target_hit", "loss_limit_hit"},
+    }
+
+
 def _can_restart_subscription_cycle(subscription: Dict[str, Any]) -> bool:
-    if str(subscription.get("status") or "") == "standby":
-        return True
-    return _subscription_threshold_status(subscription) in {"profit_target_hit", "loss_limit_hit"}
+    return bool(_subscription_restart_state(subscription).get("can_restart"))
 
 
 def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher=None) -> Dict[str, Any]:
@@ -837,8 +851,20 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                 events.append(_record_event(repository, rule=rule, subscription=subscription, performance=None, status="skipped", reason="subscription_has_open_run"))
                 summary["skipped_count"] += 1
                 continue
-            if not _can_restart_subscription_cycle(subscription):
-                events.append(_record_event(repository, rule=rule, subscription=subscription, performance=None, status="skipped", reason="subscription_not_ready_for_restart"))
+            restart_state = _subscription_restart_state(subscription)
+            if not restart_state.get("can_restart"):
+                events.append(
+                    _record_event(
+                        repository,
+                        rule=rule,
+                        subscription=subscription,
+                        performance=None,
+                        status="skipped",
+                        reason="subscription_not_ready_for_restart",
+                        restart_state=restart_state,
+                        stat_date=stat_date,
+                    )
+                )
                 summary["skipped_count"] += 1
                 continue
 
