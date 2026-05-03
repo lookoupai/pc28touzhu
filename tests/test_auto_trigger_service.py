@@ -69,11 +69,36 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self,
         issue_no="20260418000",
         big_small_rate=38.0,
+        big_small_recent_20_rate=None,
         combo_rate=19.0,
+        odd_even_rate=50.0,
+        odd_even_recent_20_rate=None,
         big_small_miss_streak=0,
         odd_even_miss_streak=0,
         combo_miss_streak=0,
     ):
+        big_small_metric = {
+            "label": "大小",
+            "recent_100": {"hit_rate": big_small_rate, "sample_count": 100, "hit_count": int(big_small_rate)},
+            "streaks": {"current_miss_streak": big_small_miss_streak},
+        }
+        if big_small_recent_20_rate is not None:
+            big_small_metric["recent_20"] = {
+                "hit_rate": big_small_recent_20_rate,
+                "sample_count": 20,
+                "hit_count": int(big_small_recent_20_rate * 20 / 100),
+            }
+        odd_even_metric = {
+            "label": "单双",
+            "recent_100": {"hit_rate": odd_even_rate, "sample_count": 100, "hit_count": int(odd_even_rate)},
+            "streaks": {"current_miss_streak": odd_even_miss_streak},
+        }
+        if odd_even_recent_20_rate is not None:
+            odd_even_metric["recent_20"] = {
+                "hit_rate": odd_even_recent_20_rate,
+                "sample_count": 20,
+                "hit_count": int(odd_even_recent_20_rate * 20 / 100),
+            }
         return {
             "schema_version": "1.0",
             "predictor_id": 5,
@@ -81,16 +106,8 @@ class AutoTriggerServiceTests(unittest.TestCase):
             "lottery_type": "pc28",
             "latest_settled_issue": issue_no,
             "metrics": {
-                "big_small": {
-                    "label": "大小",
-                    "recent_100": {"hit_rate": big_small_rate, "sample_count": 100, "hit_count": int(big_small_rate)},
-                    "streaks": {"current_miss_streak": big_small_miss_streak},
-                },
-                "odd_even": {
-                    "label": "单双",
-                    "recent_100": {"hit_rate": 50.0, "sample_count": 100, "hit_count": 50},
-                    "streaks": {"current_miss_streak": odd_even_miss_streak},
-                },
+                "big_small": big_small_metric,
+                "odd_even": odd_even_metric,
                 "combo": {
                     "label": "组合",
                     "recent_100": {"hit_rate": combo_rate, "sample_count": 100, "hit_count": int(combo_rate)},
@@ -129,6 +146,81 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(jobs[0]["subscription_id"], self.subscription["id"])
         updated_rule = self.repo.get_auto_trigger_rule(rule["id"])
         self.assertEqual(updated_rule["last_triggered_issue_no"], "20260418000")
+
+    def test_hit_rate_condition_uses_configured_recent_window(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "近20期高命中自动跟单",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {
+                        "metric": "odd_even",
+                        "operator": "gt",
+                        "threshold": 55,
+                        "window_size": 20,
+                        "min_sample_count": 20,
+                    }
+                ],
+                "action": {"dispatch_latest_signal": False},
+            },
+        )
+
+        result = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(odd_even_rate=40.0, odd_even_recent_20_rate=60.0),
+        )
+
+        event = result["rules"][0]["events"][0]
+        self.assertEqual(event["status"], "triggered")
+        self.assertEqual(event["matched_conditions"][0]["window"], "recent_20")
+        self.assertEqual(event["matched_conditions"][0]["window_size"], 20)
+        self.assertEqual(event["matched_conditions"][0]["actual_hit_rate"], 60.0)
+
+    def test_hit_rate_condition_does_not_fallback_to_recent_100_when_window_missing(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "缺少近20期不触发",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {
+                        "metric": "odd_even",
+                        "operator": "gt",
+                        "threshold": 55,
+                        "window_size": 20,
+                        "min_sample_count": 20,
+                    }
+                ],
+                "action": {"dispatch_latest_signal": False},
+            },
+        )
+
+        result = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(odd_even_rate=80.0),
+        )
+
+        self.assertEqual(result["summary"]["triggered_count"], 0)
+        self.assertEqual(result["rules"][0]["events"], [])
 
     def test_daily_profit_target_stops_rule_and_blocks_following_dispatch(self):
         self.repo.update_subscription_status(

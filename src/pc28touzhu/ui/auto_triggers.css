@@ -483,7 +483,7 @@ select[multiple].text-input {
 
 .condition-row {
     display: grid;
-    grid-template-columns: minmax(110px, 0.9fr) minmax(110px, 0.9fr) minmax(110px, 0.8fr) minmax(100px, 0.7fr) minmax(110px, 0.7fr) minmax(170px, auto);
+    grid-template-columns: minmax(105px, 0.8fr) minmax(105px, 0.8fr) minmax(105px, 0.7fr) minmax(110px, 0.8fr) minmax(95px, 0.6fr) minmax(105px, 0.6fr) minmax(170px, auto);
     gap: 10px;
     align-items: end;
     padding: 12px;

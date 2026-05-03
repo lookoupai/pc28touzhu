@@ -27,6 +27,11 @@
         ["gt", "高于"],
         ["gte", "高于或等于"],
     ];
+    const hitRateWindowOptions = [
+        [20, "近20期"],
+        [50, "近50期"],
+        [100, "近100期"],
+    ];
 
     function $(id) {
         return document.getElementById(id);
@@ -184,8 +189,9 @@
         if (type === "miss_streak") {
             return (metric ? metric[1] : condition.metric) + "当前连挂" + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "期";
         }
+        const windowSize = Number(condition.window_size || String(condition.window || "").replace("recent_", "") || 100);
         const sampleText = condition.min_sample_count ? "（样本>=" + String(condition.min_sample_count) + "）" : "";
-        return (metric ? metric[1] : condition.metric) + "近100期命中率" + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "%" + sampleText;
+        return (metric ? metric[1] : condition.metric) + "近" + String(windowSize || 100) + "期命中率" + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "%" + sampleText;
     }
 
     function actionText(action) {
@@ -340,6 +346,7 @@
         const item = condition || {type: "hit_rate", metric: "big_small", operator: "lt", threshold: 40, min_sample_count: 100};
         const conditionType = item.type || "hit_rate";
         const thresholdLabel = conditionType === "miss_streak" ? "连挂期数" : "阈值 %";
+        const windowSize = Number(item.window_size || String(item.window || "").replace("recent_", "") || 100);
         function options(optionsList, current) {
             return optionsList.map(function (option) {
                 return '<option value="' + escapeHtml(option[0]) + '"' + (option[0] === current ? " selected" : "") + '>' + escapeHtml(option[1]) + '</option>';
@@ -349,6 +356,7 @@
             '<div class="condition-row">' +
                 '<label class="field"><span>条件</span><select class="text-input condition-type">' + options(conditionTypeOptions, conditionType) + '</select></label>' +
                 '<label class="field"><span>玩法</span><select class="text-input condition-metric">' + options(metricOptions, item.metric) + '</select></label>' +
+                '<label class="field condition-window-field"><span>统计期数</span><select class="text-input condition-window">' + options(hitRateWindowOptions, windowSize) + '</select></label>' +
                 '<label class="field"><span>比较</span><select class="text-input condition-operator">' + options(operatorOptions, item.operator) + '</select></label>' +
                 '<label class="field condition-threshold-field"><span class="condition-threshold-label">' + escapeHtml(thresholdLabel) + '</span><input class="text-input condition-threshold" type="number" min="0" max="100" step="0.01" value="' + escapeHtml(item.threshold) + '"></label>' +
                 '<label class="field condition-sample-field"><span>样本下限</span><input class="text-input condition-sample" type="number" min="1" step="1" value="' + escapeHtml(item.min_sample_count || 100) + '"></label>' +
@@ -395,10 +403,16 @@
         const isMissStreak = type === "miss_streak";
         const threshold = row.querySelector(".condition-threshold");
         const operator = row.querySelector(".condition-operator");
+        const windowInput = row.querySelector(".condition-window");
+        const sampleInput = row.querySelector(".condition-sample");
         row.querySelector(".condition-threshold-label").textContent = isMissStreak ? "连挂期数" : "阈值 %";
         threshold.max = isMissStreak ? "" : "100";
         threshold.step = isMissStreak ? "1" : "0.01";
+        row.querySelector(".condition-window-field").hidden = isMissStreak;
         row.querySelector(".condition-sample-field").hidden = isMissStreak;
+        if (!isMissStreak && Number(sampleInput.value || 0) > Number(windowInput.value || 100)) {
+            sampleInput.value = String(windowInput.value || 100);
+        }
         if (preferDefaultOperator && isMissStreak && operator.value === "lt") {
             operator.value = "gte";
         }
@@ -455,11 +469,15 @@
 
     function collectConditions(container) {
         return Array.from(container.querySelectorAll(":scope > .condition-row")).map(function (row) {
+            const type = row.querySelector(".condition-type").value || "hit_rate";
+            const windowSize = Number(row.querySelector(".condition-window").value || 100);
             return {
-                type: row.querySelector(".condition-type").value || "hit_rate",
+                type: type,
                 metric: row.querySelector(".condition-metric").value,
                 operator: row.querySelector(".condition-operator").value,
                 threshold: Number(row.querySelector(".condition-threshold").value),
+                window_size: type === "hit_rate" ? windowSize : 0,
+                window: type === "hit_rate" ? ("recent_" + String(windowSize)) : "current",
                 min_sample_count: Number(row.querySelector(".condition-sample").value || 100),
             };
         });
@@ -632,7 +650,7 @@
         });
         $("conditionRows").addEventListener("change", function (event) {
             const target = event.target;
-            if (target instanceof HTMLElement && target.classList.contains("condition-type")) {
+            if (target instanceof HTMLElement && (target.classList.contains("condition-type") || target.classList.contains("condition-window"))) {
                 const row = target.closest(".condition-row");
                 if (row) {
                     updateConditionRowVisibility(row, true);
@@ -641,7 +659,7 @@
         });
         $("guardGroupRows").addEventListener("change", function (event) {
             const target = event.target;
-            if (target instanceof HTMLElement && target.classList.contains("condition-type")) {
+            if (target instanceof HTMLElement && (target.classList.contains("condition-type") || target.classList.contains("condition-window"))) {
                 const row = target.closest(".condition-row");
                 if (row) {
                     updateConditionRowVisibility(row, true);

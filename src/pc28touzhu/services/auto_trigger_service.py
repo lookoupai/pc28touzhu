@@ -17,6 +17,7 @@ ALLOWED_CONDITION_TYPES = {"hit_rate", "miss_streak"}
 ALLOWED_OPERATORS = {"lt", "lte", "gt", "gte"}
 ALLOWED_SCOPE_MODES = {"all_subscriptions", "selected_subscriptions"}
 ALLOWED_PLAY_FILTER_ACTIONS = {"keep", "matched_metric", "fixed_metric"}
+ALLOWED_HIT_RATE_WINDOW_SIZES = {20, 50, 100}
 METRIC_LABELS = {
     "big_small": "大小",
     "odd_even": "单双",
@@ -140,11 +141,24 @@ def _normalize_conditions(value: Any) -> list[dict]:
         min_sample_count = int(item.get("min_sample_count") or 100)
         if min_sample_count < 1:
             raise ValueError("conditions[%s].min_sample_count 必须大于 0" % index)
+        window_size = 100
+        if condition_type == "hit_rate":
+            raw_window_size = item.get("window_size")
+            if raw_window_size in (None, ""):
+                window_match = re.fullmatch(r"recent_(\d+)", str(item.get("window") or "").strip())
+                raw_window_size = window_match.group(1) if window_match else 100
+            try:
+                window_size = int(raw_window_size)
+            except (TypeError, ValueError):
+                raise ValueError("conditions[%s].window_size 仅支持 20、50、100" % index)
+            if window_size not in ALLOWED_HIT_RATE_WINDOW_SIZES:
+                raise ValueError("conditions[%s].window_size 仅支持 20、50、100" % index)
         normalized.append(
             {
                 "type": condition_type,
                 "metric": metric,
-                "window": "recent_100" if condition_type == "hit_rate" else "current",
+                "window": "recent_%s" % window_size if condition_type == "hit_rate" else "current",
+                "window_size": window_size if condition_type == "hit_rate" else 0,
                 "operator": operator,
                 "threshold": int(threshold) if condition_type == "miss_streak" else round(threshold, 2),
                 "min_sample_count": min_sample_count,
@@ -484,9 +498,10 @@ def _match_condition(condition: Dict[str, Any], performance: Dict[str, Any]) -> 
             }
         return None
 
-    recent_100 = metric_payload.get("recent_100") if isinstance(metric_payload.get("recent_100"), dict) else {}
-    hit_rate = recent_100.get("hit_rate")
-    sample_count = int(recent_100.get("sample_count") or 0)
+    window_key = str(condition.get("window") or "recent_100").strip() or "recent_100"
+    recent_stats = metric_payload.get(window_key) if isinstance(metric_payload.get(window_key), dict) else {}
+    hit_rate = recent_stats.get("hit_rate")
+    sample_count = int(recent_stats.get("sample_count") or 0)
     if hit_rate is None or sample_count < int(condition.get("min_sample_count") or 1):
         return None
     rate = float(hit_rate)
@@ -495,7 +510,7 @@ def _match_condition(condition: Dict[str, Any], performance: Dict[str, Any]) -> 
             **condition,
             "actual_hit_rate": rate,
             "sample_count": sample_count,
-            "hit_count": int(recent_100.get("hit_count") or 0),
+            "hit_count": int(recent_stats.get("hit_count") or 0),
             "metric_label": METRIC_LABELS.get(metric_key, metric_key),
         }
     return None
