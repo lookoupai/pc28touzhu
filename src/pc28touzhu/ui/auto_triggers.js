@@ -184,7 +184,8 @@
         if (type === "miss_streak") {
             return (metric ? metric[1] : condition.metric) + "当前连挂" + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "期";
         }
-        return (metric ? metric[1] : condition.metric) + "近100期命中率" + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "%";
+        const sampleText = condition.min_sample_count ? "（样本>=" + String(condition.min_sample_count) + "）" : "";
+        return (metric ? metric[1] : condition.metric) + "近100期命中率" + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "%" + sampleText;
     }
 
     function actionText(action) {
@@ -350,7 +351,7 @@
                 '<label class="field"><span>玩法</span><select class="text-input condition-metric">' + options(metricOptions, item.metric) + '</select></label>' +
                 '<label class="field"><span>比较</span><select class="text-input condition-operator">' + options(operatorOptions, item.operator) + '</select></label>' +
                 '<label class="field condition-threshold-field"><span class="condition-threshold-label">' + escapeHtml(thresholdLabel) + '</span><input class="text-input condition-threshold" type="number" min="0" max="100" step="0.01" value="' + escapeHtml(item.threshold) + '"></label>' +
-                '<label class="field condition-sample-field"><span>最少样本</span><input class="text-input condition-sample" type="number" min="1" step="1" value="' + escapeHtml(item.min_sample_count || 100) + '"></label>' +
+                '<label class="field condition-sample-field"><span>样本下限</span><input class="text-input condition-sample" type="number" min="1" step="1" value="' + escapeHtml(item.min_sample_count || 100) + '"></label>' +
                 '<div class="condition-actions">' +
                     '<button class="ghost-btn move-condition-up-btn" type="button">上移</button>' +
                     '<button class="ghost-btn move-condition-down-btn" type="button">下移</button>' +
