@@ -119,23 +119,41 @@ def _subscription_play_net_profit(
     subscription_id: int,
     user_id: int,
     play_key: str,
+    baseline_reset_at: Optional[str] = None,
 ) -> float:
     normalized_play_key = str(play_key or "").strip()
     if not normalized_play_key:
         return 0.0
-    rows = conn.execute(
-        """
-        SELECT e.net_delta AS net_delta,
-               s.bet_type AS bet_type,
-               s.bet_value AS bet_value
-        FROM subscription_progression_events e
-        JOIN normalized_signals s ON s.id = e.signal_id
-        WHERE e.subscription_id = ?
-          AND e.user_id = ?
-          AND COALESCE(e.resolved_result_type, '') != ''
-        """,
-        (int(subscription_id), int(user_id)),
-    ).fetchall()
+    normalized_baseline = str(baseline_reset_at or "").strip()
+    if normalized_baseline:
+        rows = conn.execute(
+            """
+            SELECT e.net_delta AS net_delta,
+                   s.bet_type AS bet_type,
+                   s.bet_value AS bet_value
+            FROM subscription_progression_events e
+            JOIN normalized_signals s ON s.id = e.signal_id
+            WHERE e.subscription_id = ?
+              AND e.user_id = ?
+              AND e.status = 'settled'
+              AND COALESCE(e.settled_at, '') > ?
+            """,
+            (int(subscription_id), int(user_id), normalized_baseline),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT e.net_delta AS net_delta,
+                   s.bet_type AS bet_type,
+                   s.bet_value AS bet_value
+            FROM subscription_progression_events e
+            JOIN normalized_signals s ON s.id = e.signal_id
+            WHERE e.subscription_id = ?
+              AND e.user_id = ?
+              AND e.status = 'settled'
+            """,
+            (int(subscription_id), int(user_id)),
+        ).fetchall()
     total = 0.0
     for row in rows:
         row_play_key = _signal_risk_play_key({"bet_type": row["bet_type"], "bet_value": row["bet_value"]})
@@ -4256,6 +4274,7 @@ class DatabaseRepository:
                         subscription_id=int(subscription_id),
                         user_id=int(user_id),
                         play_key=str(risk_control.get("play_key") or ""),
+                        baseline_reset_at=current_financial.get("baseline_reset_at"),
                     )
                     if bool(risk_control.get("uses_play_limit"))
                     else next_net_profit

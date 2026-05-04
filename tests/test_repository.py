@@ -1341,6 +1341,187 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(next_big_small_settled["financial"]["net_profit"], 11)
         self.assertEqual(next_big_small_settled["financial"]["threshold_status"], "profit_target_hit")
 
+    def test_play_specific_risk_limits_do_not_carry_over_after_reset(self):
+        """跨轮次不串账：旧轮 big_small 累计 -5，reset 后新轮第一单不应继承旧账。"""
+        from unittest import mock
+        from pc28touzhu.executor import db_repository as repo_module
+
+        user_id = self.repo.create_user("sub-play-risk-cross-round-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-play-risk-cross-round",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={
+                "play_filter": {"mode": "selected", "selected_keys": ["big_small:大", "big_small:小"]},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 1},
+                "settlement_policy": {"rule_source": "follow_signal", "fallback_profit_ratio": 1.0},
+                "risk_control": {
+                    "enabled": True,
+                    "profit_target": 100,
+                    "loss_limit": 100,
+                    "play_limits": {
+                        "big_small": {"profit_target": 0, "loss_limit": 5},
+                    },
+                },
+                "dispatch": {"expire_after_seconds": 120},
+            },
+        )
+
+        # 用单调递增的虚拟时间避免秒级精度边界（生产实战 reset 与新单间隔几分钟，不会触发）
+        clock = ["2026-04-07T10:00:00Z"]
+        def _fake_now():
+            t = clock[0]
+            from datetime import datetime, timezone, timedelta
+            nxt = (datetime.fromisoformat(t.replace("Z", "+00:00")) + timedelta(minutes=1)).astimezone(timezone.utc)
+            clock[0] = nxt.isoformat().replace("+00:00", "Z").replace("microsecond=0", "")
+            # 简化：手工拼成秒级 iso
+            clock[0] = nxt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            return t
+
+        def _settle_miss(issue_no, bet_value="大"):
+            sig = self.repo.create_signal_record(
+                source_id=source_id,
+                lottery_type="pc28",
+                issue_no=issue_no,
+                bet_type="big_small",
+                bet_value=bet_value,
+            )
+            ev = self.repo.create_progression_event_record(
+                subscription_id=subscription["id"],
+                user_id=user_id,
+                signal_id=sig["id"],
+                issue_no=issue_no,
+                progression_step=1,
+                stake_amount=1,
+                base_stake=1,
+                multiplier=1,
+                max_steps=1,
+                refund_action="hold",
+                cap_action="reset",
+                status="placed",
+            )
+            return self.repo.settle_progression_event(
+                subscription_id=subscription["id"],
+                user_id=user_id,
+                result_type="miss",
+                progression_event_id=ev["id"],
+            )
+
+        with mock.patch.object(repo_module, "_utc_now_iso", side_effect=_fake_now):
+            # 第一轮连亏 5 单 -> big_small play_key 累计 -5，触发 loss_limit_hit
+            for i in range(5):
+                settled = _settle_miss(f"2026040700{i}")
+            self.assertEqual(settled["financial"]["net_profit"], -5)
+            self.assertEqual(settled["financial"]["threshold_status"], "loss_limit_hit")
+
+            # reset 当前轮（手动重置场景）
+            self.repo.reset_subscription_runtime(
+                subscription_id=subscription["id"],
+                user_id=user_id,
+                note="手动重置",
+            )
+            financial_after_reset = self.repo.get_subscription_financial_state(subscription["id"])
+            self.assertEqual(financial_after_reset["net_profit"], 0)
+            self.assertEqual(financial_after_reset["threshold_status"], "")
+
+            # 第二轮第一单亏 1：本轮累计 -1，按玩法历史累计若不过滤 = -5 + -1 = -6 ≤ -5 会误触发
+            settled_round2 = _settle_miss("20260408100")
+            self.assertEqual(settled_round2["financial"]["net_profit"], -1)
+            self.assertEqual(
+                settled_round2["financial"]["threshold_status"],
+                "",
+                "新轮 big_small 风控应只看 baseline_reset_at 之后的累计，不能继承旧轮 -5 的累亏",
+            )
+
+            # 第二轮再亏 4 单累计到 -5，本轮才应触发
+            for i in range(1, 5):
+                settled_round2 = _settle_miss(f"2026040810{i}")
+            self.assertEqual(settled_round2["financial"]["net_profit"], -5)
+            self.assertEqual(settled_round2["financial"]["threshold_status"], "loss_limit_hit")
+
+    def test_subscription_play_net_profit_filters_by_baseline_reset_at(self):
+        """直接验证 _subscription_play_net_profit 的过滤逻辑。"""
+        from pc28touzhu.executor.db_repository import _subscription_play_net_profit
+
+        user_id = self.repo.create_user("sub-play-net-profit-filter-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-play-net-profit-filter",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={
+                "play_filter": {"mode": "selected", "selected_keys": ["big_small:大"]},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 1},
+                "risk_control": {"enabled": False, "profit_target": 0, "loss_limit": 0},
+            },
+        )
+        for i, settled_at in enumerate([
+            "2026-04-07T10:00:00Z",
+            "2026-04-07T10:05:00Z",
+            "2026-04-07T11:00:00Z",
+            "2026-04-07T11:05:00Z",
+        ]):
+            sig = self.repo.create_signal_record(
+                source_id=source_id,
+                lottery_type="pc28",
+                issue_no=f"2026040720{i}",
+                bet_type="big_small",
+                bet_value="大",
+            )
+            with self.repo._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO subscription_progression_events(
+                        subscription_id, user_id, signal_id, issue_no, progression_step,
+                        stake_amount, base_stake, multiplier, max_steps, refund_action, cap_action,
+                        status, resolved_result_type, net_delta, settled_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 1, 1, 1, 1, 1, 'hold', 'reset', 'settled', 'miss', ?, ?, ?, ?)
+                    """,
+                    (
+                        int(subscription["id"]),
+                        int(user_id),
+                        int(sig["id"]),
+                        f"2026040720{i}",
+                        -1.0 if i < 2 else -2.0,  # 旧轮 -1*2，新轮 -2*2
+                        settled_at,
+                        settled_at,
+                        settled_at,
+                    ),
+                )
+        baseline = "2026-04-07T10:30:00Z"
+        with self.repo._connect() as conn:
+            no_baseline = _subscription_play_net_profit(
+                conn,
+                subscription_id=int(subscription["id"]),
+                user_id=int(user_id),
+                play_key="big_small",
+            )
+            with_baseline = _subscription_play_net_profit(
+                conn,
+                subscription_id=int(subscription["id"]),
+                user_id=int(user_id),
+                play_key="big_small",
+                baseline_reset_at=baseline,
+            )
+            # 边界：baseline 等于旧轮最后一单的 settled_at，过滤应严格大于
+            tight_baseline = _subscription_play_net_profit(
+                conn,
+                subscription_id=int(subscription["id"]),
+                user_id=int(user_id),
+                play_key="big_small",
+                baseline_reset_at="2026-04-07T10:05:00Z",
+            )
+        self.assertEqual(no_baseline, -6.0)  # 旧轮 -2 + 新轮 -4
+        self.assertEqual(with_baseline, -4.0)  # 仅新轮
+        self.assertEqual(tight_baseline, -4.0)  # 严格大于：旧轮第二单 settled_at == baseline，被排除
+
     def test_dispatch_candidates_skip_risk_blocked_subscription(self):
         user_id = self.repo.create_user("dispatch-risk-blocked-user")
         source_id = self.repo.create_source_record(
