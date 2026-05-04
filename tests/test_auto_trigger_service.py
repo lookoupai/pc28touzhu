@@ -1046,12 +1046,12 @@ class AutoTriggerServiceTests(unittest.TestCase):
         updated = self.repo.get_subscription(self.subscription["id"])
         self.assertEqual(updated["strategy_v2"]["play_filter"]["selected_keys"], ["odd_even:单", "odd_even:双"])
 
-    def test_active_subscription_without_threshold_status_is_skipped(self):
+    def test_active_subscription_without_open_run_can_trigger(self):
         create_auto_trigger_rule(
             self.repo,
             user_id=self.user_id,
             payload={
-                "name": "运行中不强开新轮",
+                "name": "运行中空闲可触发",
                 "scope_mode": "selected_subscriptions",
                 "subscription_ids": [self.subscription["id"]],
                 "cooldown_issues": 0,
@@ -1064,16 +1064,12 @@ class AutoTriggerServiceTests(unittest.TestCase):
 
         result = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
 
-        self.assertEqual(result["summary"]["triggered_count"], 0)
-        self.assertEqual(result["summary"]["skipped_count"], 1)
-        self.assertEqual(self.repo.list_execution_jobs(user_id=self.user_id), [])
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        self.assertEqual(result["summary"]["skipped_count"], 0)
+        self.assertEqual(len(self.repo.list_execution_jobs(user_id=self.user_id)), 1)
         event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
-        self.assertEqual(event["status"], "skipped")
-        self.assertEqual(event["reason"], "subscription_not_ready_for_restart")
-        self.assertEqual(event["snapshot"]["restart_state"]["subscription_status"], "active")
-        self.assertEqual(event["snapshot"]["restart_state"]["threshold_status"], "")
-        self.assertFalse(event["snapshot"]["restart_state"]["can_restart"])
-        self.assertTrue(event["snapshot"]["stat_date"])
+        self.assertEqual(event["status"], "triggered")
+        self.assertEqual(event["reason"], "conditions_matched")
 
 
 if __name__ == "__main__":

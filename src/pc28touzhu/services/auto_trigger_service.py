@@ -798,7 +798,7 @@ def _subscription_restart_state(subscription: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "subscription_status": subscription_status,
         "threshold_status": threshold_status,
-        "can_restart": subscription_status == "standby" or threshold_status in {"profit_target_hit", "loss_limit_hit"},
+        "can_restart": subscription_status in {"active", "standby"} or threshold_status in {"profit_target_hit", "loss_limit_hit"},
     }
 
 
