@@ -2363,6 +2363,132 @@ class DatabaseRepositoryTests(unittest.TestCase):
         candidates = self.repo.list_dispatch_candidates(signal_id)
         self.assertEqual(candidates, [])
 
+    def test_subscription_has_open_run_flags_active_runtime_run_without_pending_bets(self):
+        user_id = self.repo.create_user("sub-open-run-active-runtime-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-open-run-active-runtime",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={"mode": "follow", "stake_amount": 10},
+        )
+        # 没有挂注、也没有 pending 任务时，初始状态应为"空闲"。
+        idle_state = self.repo.subscription_has_open_run(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+        )
+        self.assertFalse(idle_state["has_open_run"])
+        self.assertEqual(idle_state.get("active_run_count", 0), 0)
+
+        # 直接植入一条 active 的 subscription_runtime_runs，模拟"轮次在跑、间隙没挂注"。
+        with self.repo._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO subscription_runtime_runs(
+                    subscription_id, user_id, status, started_issue_no, started_at, start_reason,
+                    ended_at, end_reason, last_issue_no, last_result_type,
+                    realized_profit, realized_loss, net_profit,
+                    settled_event_count, hit_count, miss_count, refund_count,
+                    baseline_reset_at, baseline_reset_note, created_at, updated_at
+                ) VALUES (?, ?, 'active', ?, ?, 'auto_started', NULL, '', ?, '', 0, 0, 0, 0, 0, 0, 0, NULL, '', ?, ?)
+                """,
+                (
+                    int(subscription["id"]),
+                    int(user_id),
+                    "20260504001",
+                    "2026-05-04T06:00:00Z",
+                    "20260504001",
+                    "2026-05-04T06:00:00Z",
+                    "2026-05-04T06:00:00Z",
+                ),
+            )
+
+        active_state = self.repo.subscription_has_open_run(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+        )
+        self.assertTrue(active_state["has_open_run"])
+        self.assertEqual(active_state["open_event_count"], 0)
+        self.assertEqual(active_state["pending_job_count"], 0)
+        self.assertEqual(active_state["active_run_count"], 1)
+
+    def test_reset_subscription_runtime_enforce_threshold_blocks_running_round(self):
+        user_id = self.repo.create_user("sub-reset-enforce-threshold-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-reset-enforce-threshold",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={"mode": "follow", "stake_amount": 10},
+        )
+        # 造一条"在跑"的 active runtime_run，且 threshold_status 留空（未达阈值）。
+        with self.repo._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO subscription_runtime_runs(
+                    subscription_id, user_id, status, started_issue_no, started_at, start_reason,
+                    ended_at, end_reason, last_issue_no, last_result_type,
+                    realized_profit, realized_loss, net_profit,
+                    settled_event_count, hit_count, miss_count, refund_count,
+                    baseline_reset_at, baseline_reset_note, created_at, updated_at
+                ) VALUES (?, ?, 'active', ?, ?, 'auto_started', NULL, '', ?, 'miss', 0, 5, -5, 5, 2, 3, 0, NULL, '', ?, ?)
+                """,
+                (
+                    int(subscription["id"]),
+                    int(user_id),
+                    "20260504010",
+                    "2026-05-04T05:00:00Z",
+                    "20260504014",
+                    "2026-05-04T05:00:00Z",
+                    "2026-05-04T05:30:00Z",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO subscription_financial_state(
+                    subscription_id, user_id, realized_profit, realized_loss, net_profit,
+                    threshold_status, stopped_reason, baseline_reset_at, baseline_reset_note,
+                    last_settled_event_id, last_settled_at, updated_at
+                ) VALUES (?, ?, 0, 5, -5, '', '', NULL, '', NULL, ?, ?)
+                """,
+                (
+                    int(subscription["id"]),
+                    int(user_id),
+                    "2026-05-04T05:30:00Z",
+                    "2026-05-04T05:30:00Z",
+                ),
+            )
+
+        # enforce_threshold=True + 在跑且未达阈值 → 应拒绝
+        with self.assertRaises(ValueError) as ctx:
+            self.repo.reset_subscription_runtime(
+                subscription_id=subscription["id"],
+                user_id=user_id,
+                note="自动触发规则",
+                enforce_threshold=True,
+            )
+        self.assertIn("止盈", str(ctx.exception))
+
+        # enforce_threshold=False（默认）→ 仍允许 reset，向后兼容手动重置场景
+        result = self.repo.reset_subscription_runtime(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            note="手动重置",
+        )
+        self.assertEqual(result["financial"]["net_profit"], 0)
+        runtime_history = self.repo.list_subscription_runtime_runs(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            limit=5,
+        )
+        self.assertEqual(runtime_history[0]["status"], "closed")
+
 
 if __name__ == "__main__":
     unittest.main()

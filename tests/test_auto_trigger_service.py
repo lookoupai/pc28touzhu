@@ -1071,6 +1071,83 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(event["status"], "triggered")
         self.assertEqual(event["reason"], "conditions_matched")
 
+    def test_running_round_below_threshold_is_not_restarted_by_rule(self):
+        """活跃订阅当前轮次仍在跑（有 active runtime_run、未达止盈止损），即使命中条件也不应被自动开新一轮。"""
+        # 模拟"轮次还在跑"：直接植入一条 active 的 subscription_runtime_runs，financial 中 threshold_status 留空
+        with self.repo._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO subscription_runtime_runs(
+                    subscription_id, user_id, status, started_issue_no, started_at, start_reason,
+                    ended_at, end_reason, last_issue_no, last_result_type,
+                    realized_profit, realized_loss, net_profit,
+                    settled_event_count, hit_count, miss_count, refund_count,
+                    baseline_reset_at, baseline_reset_note, created_at, updated_at
+                ) VALUES (?, ?, 'active', ?, ?, 'auto_started', NULL, '', ?, 'miss', 0, 5, -5, 5, 2, 3, 0, NULL, '', ?, ?)
+                """,
+                (
+                    int(self.subscription["id"]),
+                    int(self.user_id),
+                    "20260418000",
+                    "2026-04-18T08:00:00Z",
+                    "20260418004",
+                    "2026-04-18T08:00:00Z",
+                    "2026-04-18T09:00:00Z",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO subscription_financial_state(
+                    subscription_id, user_id, realized_profit, realized_loss, net_profit,
+                    threshold_status, stopped_reason, baseline_reset_at, baseline_reset_note,
+                    last_settled_event_id, last_settled_at, updated_at
+                ) VALUES (?, ?, 0, 5, -5, '', '', NULL, '', NULL, ?, ?)
+                """,
+                (
+                    int(self.subscription["id"]),
+                    int(self.user_id),
+                    "2026-04-18T09:00:00Z",
+                    "2026-04-18T09:00:00Z",
+                ),
+            )
+
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "未达阈值不应打断在跑轮次",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+            },
+        )
+
+        result = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(),
+        )
+
+        # 应被 subscription_has_open_run 拦截，轮次不被打断、信号不下发
+        self.assertEqual(result["summary"]["triggered_count"], 0)
+        self.assertEqual(result["summary"]["skipped_count"], 1)
+        self.assertEqual(len(self.repo.list_execution_jobs(user_id=self.user_id)), 0)
+        skipped_events = self.repo.list_auto_trigger_events(user_id=self.user_id, status="skipped", limit=10)
+        self.assertEqual(len(skipped_events), 1)
+        self.assertEqual(skipped_events[0]["reason"], "subscription_has_open_run")
+
+        # 当前 active runtime_run 应保持不动
+        runtime_history = self.repo.list_subscription_runtime_runs(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            limit=5,
+        )
+        self.assertEqual(runtime_history[0]["status"], "active")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2491,16 +2491,25 @@ class DatabaseRepository:
                  WHERE subscription_id = ? AND user_id = ? AND status IN ('pending', 'placed')) AS open_event_count,
                 (SELECT COUNT(1)
                  FROM execution_jobs
-                 WHERE subscription_id = ? AND user_id = ? AND status = 'pending') AS pending_job_count
+                 WHERE subscription_id = ? AND user_id = ? AND status = 'pending') AS pending_job_count,
+                (SELECT COUNT(1)
+                 FROM subscription_runtime_runs
+                 WHERE subscription_id = ? AND user_id = ? AND status = 'active') AS active_run_count
             """,
-            (int(subscription_id), int(user_id), int(subscription_id), int(user_id)),
+            (
+                int(subscription_id), int(user_id),
+                int(subscription_id), int(user_id),
+                int(subscription_id), int(user_id),
+            ),
         ) or {}
         open_event_count = int(row.get("open_event_count") or 0)
         pending_job_count = int(row.get("pending_job_count") or 0)
+        active_run_count = int(row.get("active_run_count") or 0)
         return {
-            "has_open_run": open_event_count > 0 or pending_job_count > 0,
+            "has_open_run": open_event_count > 0 or pending_job_count > 0 or active_run_count > 0,
             "open_event_count": open_event_count,
             "pending_job_count": pending_job_count,
+            "active_run_count": active_run_count,
         }
 
     def create_auto_trigger_rule_record(
@@ -4448,6 +4457,7 @@ class DatabaseRepository:
         subscription_id: int,
         user_id: int,
         note: str = "",
+        enforce_threshold: bool = False,
     ) -> Dict[str, Any]:
         current = self.get_subscription(int(subscription_id))
         if not current or int(current["user_id"]) != int(user_id):
@@ -4469,6 +4479,12 @@ class DatabaseRepository:
             ).fetchone()
             active_run = self._serialize_subscription_runtime_run_row(dict(active_run_row)) if active_run_row else None
             current_financial = current.get("financial") if isinstance(current.get("financial"), dict) else {}
+            if enforce_threshold and active_run is not None:
+                threshold_status = str(current_financial.get("threshold_status") or "").strip()
+                if threshold_status not in {"profit_target_hit", "loss_limit_hit"}:
+                    raise ValueError(
+                        "当前轮次尚未达到止盈/止损阈值，禁止自动重置（enforce_threshold=True）"
+                    )
             if active_run:
                 end_reason = str(current_financial.get("threshold_status") or "").strip() or "manual_reset"
                 conn.execute(

@@ -1059,10 +1059,21 @@ class FakeRepository:
         self.subscription_financial_states[int(subscription_id)] = financial
         return {"event": event, "state": state, "financial": financial, "subscription": self.get_subscription(subscription_id)}
 
-    def reset_subscription_runtime(self, *, subscription_id, user_id, note=""):
+    def reset_subscription_runtime(self, *, subscription_id, user_id, note="", enforce_threshold=False):
         current = self.get_subscription(subscription_id)
         if not current or int(current["user_id"]) != int(user_id):
             raise ValueError("subscription_id 对应的订阅不存在")
+        if enforce_threshold:
+            financial = self.subscription_financial_states.get(int(subscription_id)) or {}
+            threshold_status = str(financial.get("threshold_status") or "").strip()
+            has_active_run = any(
+                run["subscription_id"] == int(subscription_id) and str(run.get("status") or "") == "active"
+                for run in self.subscription_runtime_runs
+            )
+            if has_active_run and threshold_status not in {"profit_target_hit", "loss_limit_hit"}:
+                raise ValueError(
+                    "当前轮次尚未达到止盈/止损阈值，禁止自动重置（enforce_threshold=True）"
+                )
         voided_event_ids = []
         for event in self.progression_events:
             if event["subscription_id"] == int(subscription_id) and event.get("status") in {"pending", "placed"}:

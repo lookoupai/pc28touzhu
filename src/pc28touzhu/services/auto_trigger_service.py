@@ -795,10 +795,16 @@ def _subscription_threshold_status(subscription: Dict[str, Any]) -> str:
 def _subscription_restart_state(subscription: Dict[str, Any]) -> Dict[str, Any]:
     subscription_status = str(subscription.get("status") or "").strip()
     threshold_status = _subscription_threshold_status(subscription)
+    threshold_reached = threshold_status in {"profit_target_hit", "loss_limit_hit"}
+    # 自动触发"开新一轮"的语义：判定订阅是否处于"可被规则接管"的总状态。
+    # 真正"是否当前轮次还在跑"由 subscription_has_open_run 负责拦截（含 active 的 runtime_run 检查），
+    # 这里只过滤明显不能重启的：archived / paused 等非 active/standby，且未达阈值的情形。
+    can_restart = subscription_status in {"active", "standby"} or threshold_reached
     return {
         "subscription_status": subscription_status,
         "threshold_status": threshold_status,
-        "can_restart": subscription_status in {"active", "standby"} or threshold_status in {"profit_target_hit", "loss_limit_hit"},
+        "threshold_reached": threshold_reached,
+        "can_restart": can_restart,
     }
 
 
@@ -930,6 +936,7 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                 subscription_id=int(subscription["id"]),
                 user_id=int(rule["user_id"]),
                 note="自动触发规则：%s" % str(rule.get("name") or ""),
+                enforce_threshold=True,
             )
             dispatch_result = None
             if bool((rule.get("action") or {}).get("dispatch_latest_signal", True)):
