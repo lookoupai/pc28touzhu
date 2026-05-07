@@ -1,0 +1,16 @@
+services:
+  pc28touzhu:
+    image: lookoupai/pc28touzhu:latest
+    container_name: pc28touzhu
+    pull_policy: always
+    ports:
+      - "35100:35100"
+    volumes:
+      - ./data:/app/data
+    environment:
+      DATABASE_PATH: /app/data/pc28touzhu.db
+      HOST: 0.0.0.0
+      PORT: 35100
+      EXECUTOR_API_TOKEN: ${EXECUTOR_API_TOKEN:-change-me}
+      SESSION_SECRET: ${SESSION_SECRET:-replace-me}
+    restart: unless-stopped
