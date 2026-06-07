@@ -295,6 +295,19 @@
     align-items: flex-start;
 }
 
+.panel-header-actions {
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-end;
+    gap: 12px;
+    flex-wrap: wrap;
+    max-width: min(560px, 100%);
+}
+
+.panel-header-actions .panel-copy {
+    max-width: 420px;
+}
+
 .onboarding-prerequisite {
     margin-top: -4px;
 }

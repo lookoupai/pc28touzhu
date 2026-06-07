@@ -35,6 +35,7 @@ ALLOWED_ENTITY_STATUSES = {"active", "inactive", "archived"}
 ALLOWED_SUBSCRIPTION_STATUSES = ALLOWED_ENTITY_STATUSES | {"standby"}
 ALLOWED_TELEGRAM_AUTH_MODES = {"phone_login", "session_import"}
 AUTHORIZED_TELEGRAM_AUTH_STATE = "authorized"
+DEFAULT_DELIVERY_TARGET_TEST_MESSAGE = "签到"
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 
@@ -1786,7 +1787,7 @@ def test_delivery_target_send(repository: Any, *, delivery_target_id: Any, user_
     target_key = normalize_telegram_target_key(str(current.get("target_key") or ""))
     message_text = str((payload or {}).get("message_text") or "").strip()
     if not message_text:
-        message_text = "【pc28touzhu】测试发送成功。"
+        message_text = DEFAULT_DELIVERY_TARGET_TEST_MESSAGE
 
     executor = get_runtime_config().executor
     sender = TelethonMessageSender(

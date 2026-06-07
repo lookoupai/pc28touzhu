@@ -19,6 +19,7 @@
         subscriptionAllDailyHistories: {},
         lastRecommendedActionKey: null,
         showIssueJobsOnly: false,
+        showArchivedTargets: false,
         scopeFocused: false,
     };
     let currentUserLoadToken = 0;
@@ -36,6 +37,7 @@
     const messageTemplateForm = document.getElementById("messageTemplateForm");
     const subscriptionForm = document.getElementById("subscriptionForm");
     const toggleAutobetBtn = document.getElementById("toggleAutobetBtn");
+    const toggleArchivedTargetsBtn = document.getElementById("toggleArchivedTargetsBtn");
     const batchResolveSubscriptionsBtn = document.getElementById("batchResolveSubscriptionsBtn");
     const subscriptionStatDateInput = document.getElementById("subscriptionStatDateInput");
     const subscriptionStatTodayBtn = document.getElementById("subscriptionStatTodayBtn");
@@ -2421,6 +2423,10 @@
         });
     }
 
+    function archivedTargets() {
+        return state.targets.filter(isArchivedItem);
+    }
+
     function visibleSubscriptions() {
         return state.subscriptions.filter(function (item) {
             return !isArchivedItem(item);
@@ -4077,6 +4083,7 @@
             return;
         }
         const items = visibleTargets();
+        const archivedCount = archivedTargets().length;
         const verifiedCount = items.filter(isTargetWizardVerified).length;
         const templateBoundCount = items.filter(function (item) {
             return Boolean(templateById(item.template_id));
@@ -4092,9 +4099,11 @@
             return Number(failure.count || 0) > 0;
         }).length;
         if (!items.length) {
-            root.innerHTML = '<article class="health-card"><span class="setup-label">当前状态</span><strong>还没有投递群组</strong><p>先新增一个目标群组，再继续测试发送和模板绑定。</p></article>';
+            root.innerHTML = '<article class="health-card"><span class="setup-label">当前状态</span><strong>还没有可用群组</strong><p>' + (archivedCount ? ('已归档 ' + escapeHtml(String(archivedCount)) + ' 个旧群组，不会参与后续发送。') : '先新增一个目标群组，再继续测试发送和模板绑定。') + '</p></article>';
             if (summaryText instanceof HTMLElement) {
-                summaryText.textContent = "当前还没有投递群组，建议先创建第一个群组。";
+                summaryText.textContent = archivedCount
+                    ? "当前没有可用投递群组；已归档群组默认隐藏，需要时可展开查看。"
+                    : "当前还没有投递群组，建议先创建第一个群组。";
             }
             return;
         }
@@ -5169,12 +5178,24 @@
         if (!(targetCards instanceof HTMLElement)) {
             return;
         }
-        if (!state.targets.length) {
-            targetCards.innerHTML = '<article class="config-list-item config-list-empty-card"><strong>当前没有投递群组</strong><p>新增至少一个投递群组后，后续信号才有实际执行落点。</p></article>';
+        const archivedCount = archivedTargets().length;
+        if (toggleArchivedTargetsBtn instanceof HTMLButtonElement) {
+            toggleArchivedTargetsBtn.hidden = archivedCount <= 0;
+            toggleArchivedTargetsBtn.textContent = state.showArchivedTargets ? "隐藏已归档" : ("查看已归档（" + String(archivedCount) + "）");
+            toggleArchivedTargetsBtn.setAttribute("aria-pressed", state.showArchivedTargets ? "true" : "false");
+        }
+        const items = (state.showArchivedTargets ? state.targets : visibleTargets()).slice().sort(function (left, right) {
+            if (isArchivedItem(left) !== isArchivedItem(right)) {
+                return isArchivedItem(left) ? 1 : -1;
+            }
+            return Number(left.id || 0) - Number(right.id || 0);
+        });
+        if (!items.length) {
+            targetCards.innerHTML = '<article class="config-list-item config-list-empty-card"><strong>' + (archivedCount ? '当前没有可用投递群组' : '当前没有投递群组') + '</strong><p>' + (archivedCount ? '旧群组已归档并从日常列表隐藏，不会继续占用配置位置。' : '新增至少一个投递群组后，后续信号才有实际执行落点。') + '</p></article>';
             renderTargetWorkspaceSummary();
             return;
         }
-        targetCards.innerHTML = state.targets.map(function (item) {
+        targetCards.innerHTML = items.map(function (item) {
             const account = accountById(item.telegram_account_id);
             const template = templateById(item.template_id);
             const repair = targetRepairState(item);
@@ -7225,6 +7246,14 @@
         toggleRecentIssueJobsBtn.addEventListener("click", function () {
             state.showIssueJobsOnly = !state.showIssueJobsOnly;
             renderRecentJobs();
+        });
+    }
+
+    if (toggleArchivedTargetsBtn instanceof HTMLButtonElement) {
+        toggleArchivedTargetsBtn.addEventListener("click", function () {
+            state.showArchivedTargets = !state.showArchivedTargets;
+            renderTargetCards();
+            setStatus(state.showArchivedTargets ? "已展开归档群组。" : "已隐藏归档群组。", false);
         });
     }
 

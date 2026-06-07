@@ -3592,6 +3592,50 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(payload["item"]["last_test_error_code"], "")
         self.assertIsNotNone(payload["item"]["last_tested_at"])
 
+    def test_delivery_target_test_send_uses_neutral_default_message(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号A",
+            phone="+12019360000",
+            session_path="/data/u7/account-a",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+        )
+        target = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100111",
+            target_name="投注群",
+            status="inactive",
+        )
+
+        class FakeSender:
+            def __init__(self, *, api_id, api_hash, phone, session):
+                pass
+
+            def connect(self):
+                return None
+
+            def disconnect(self):
+                return None
+
+            def send_text(self, target_key, message_text):
+                return {"message_id": 1, "target_key": target_key, "text": message_text}
+
+        with patch("pc28touzhu.services.platform_service.TelethonMessageSender", FakeSender):
+            status, _, payload = invoke(
+                self.app,
+                build_testing_environ(
+                    "/api/platform/delivery-targets/%s/test-send" % target["id"],
+                    method="POST",
+                    body={},
+                    headers=self.session_headers,
+                ),
+            )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["message_text"], "签到")
+        self.assertEqual(payload["result"]["text"], "签到")
+
     def test_delivery_target_test_send_returns_actionable_reason(self):
         account = self.repository.create_telegram_account_record(
             user_id=1,

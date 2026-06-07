@@ -30,21 +30,24 @@ class TelethonAccountGateway:
         client.connect()
         return client
 
+    def _build_authorization_result(self, client) -> Dict[str, Any]:
+        authorized = bool(client.is_user_authorized())
+        result: Dict[str, Any] = {"authorized": authorized}
+        if not authorized:
+            return result
+        me = client.get_me()
+        result["phone"] = str(getattr(me, "phone", "") or "")
+        first_name = str(getattr(me, "first_name", "") or "").strip()
+        last_name = str(getattr(me, "last_name", "") or "").strip()
+        username = str(getattr(me, "username", "") or "").strip()
+        display_name = " ".join(part for part in [first_name, last_name] if part).strip()
+        result["display_name"] = display_name or username or result["phone"] or ""
+        return result
+
     def inspect_session(self, session_path: str) -> Dict[str, Any]:
         client = self._connect_client(session_path)
         try:
-            authorized = bool(client.is_user_authorized())
-            result: Dict[str, Any] = {"authorized": authorized}
-            if not authorized:
-                return result
-            me = client.get_me()
-            result["phone"] = str(getattr(me, "phone", "") or "")
-            first_name = str(getattr(me, "first_name", "") or "").strip()
-            last_name = str(getattr(me, "last_name", "") or "").strip()
-            username = str(getattr(me, "username", "") or "").strip()
-            display_name = " ".join(part for part in [first_name, last_name] if part).strip()
-            result["display_name"] = display_name or username or result["phone"] or ""
-            return result
+            return self._build_authorization_result(client)
         finally:
             client.disconnect()
 
@@ -73,7 +76,7 @@ class TelethonAccountGateway:
                     return {"authorized": False, "password_required": True}
                 raise
 
-            return self.inspect_session(session_path)
+            return self._build_authorization_result(client)
         finally:
             client.disconnect()
 
@@ -81,6 +84,6 @@ class TelethonAccountGateway:
         client = self._connect_client(session_path)
         try:
             client.sign_in(password=str(password or ""))
-            return self.inspect_session(session_path)
+            return self._build_authorization_result(client)
         finally:
             client.disconnect()
