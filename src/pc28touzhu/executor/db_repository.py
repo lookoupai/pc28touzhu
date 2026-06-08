@@ -3256,6 +3256,108 @@ class DatabaseRepository:
             )
         return self._serialize_auto_trigger_event_row(row) if row else None
 
+    def _close_active_auto_trigger_rule_runs(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        subscription_id: int,
+        user_id: int,
+        now: str,
+        reason: str,
+    ) -> int:
+        cursor = conn.execute(
+            """
+            UPDATE auto_trigger_rule_runs
+            SET status = 'closed',
+                stop_reason = CASE WHEN stop_reason = '' THEN ? ELSE stop_reason END,
+                stopped_at = COALESCE(stopped_at, ?),
+                updated_at = ?
+            WHERE subscription_id = ?
+              AND user_id = ?
+              AND status = 'active'
+            """,
+            (
+                str(reason or "subscription_runtime_closed"),
+                now,
+                now,
+                int(subscription_id),
+                int(user_id),
+            ),
+        )
+        return int(cursor.rowcount or 0)
+
+    def _close_paused_subscription_runs_if_idle(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        subscription_id: int,
+        user_id: int,
+        now: str,
+        reason: str,
+    ) -> Dict[str, int]:
+        status_row = conn.execute(
+            """
+            SELECT status
+            FROM user_subscriptions
+            WHERE id = ? AND user_id = ?
+            LIMIT 1
+            """,
+            (int(subscription_id), int(user_id)),
+        ).fetchone()
+        subscription_status = str(status_row["status"] or "").strip() if status_row else ""
+        if subscription_status not in {"standby", "inactive", "archived"}:
+            return {"closed_runtime_run_count": 0, "closed_rule_run_count": 0}
+
+        open_state = conn.execute(
+            """
+            SELECT
+                (SELECT COUNT(1)
+                 FROM subscription_progression_events
+                 WHERE subscription_id = ? AND user_id = ? AND status IN ('pending', 'placed')) AS open_event_count,
+                (SELECT COUNT(1)
+                 FROM execution_jobs
+                 WHERE subscription_id = ? AND user_id = ? AND status = 'pending') AS pending_job_count
+            """,
+            (
+                int(subscription_id), int(user_id),
+                int(subscription_id), int(user_id),
+            ),
+        ).fetchone()
+        if int(open_state["open_event_count"] or 0) > 0 or int(open_state["pending_job_count"] or 0) > 0:
+            return {"closed_runtime_run_count": 0, "closed_rule_run_count": 0}
+
+        normalized_reason = str(reason or "subscription_paused_idle").strip() or "subscription_paused_idle"
+        runtime_cursor = conn.execute(
+            """
+            UPDATE subscription_runtime_runs
+            SET status = 'closed',
+                ended_at = COALESCE(ended_at, ?),
+                end_reason = CASE WHEN end_reason = '' THEN ? ELSE end_reason END,
+                updated_at = ?
+            WHERE subscription_id = ?
+              AND user_id = ?
+              AND status = 'active'
+            """,
+            (
+                now,
+                normalized_reason,
+                now,
+                int(subscription_id),
+                int(user_id),
+            ),
+        )
+        closed_rule_runs = self._close_active_auto_trigger_rule_runs(
+            conn,
+            subscription_id=int(subscription_id),
+            user_id=int(user_id),
+            now=now,
+            reason=normalized_reason,
+        )
+        return {
+            "closed_runtime_run_count": int(runtime_cursor.rowcount or 0),
+            "closed_rule_run_count": closed_rule_runs,
+        }
+
     def update_subscription_status(self, *, subscription_id: int, user_id: int, status: str) -> Optional[Dict[str, Any]]:
         now = _utc_now_iso()
         with self._connect() as conn:
@@ -3269,6 +3371,13 @@ class DatabaseRepository:
             )
             if cursor.rowcount <= 0:
                 return None
+            self._close_paused_subscription_runs_if_idle(
+                conn,
+                subscription_id=int(subscription_id),
+                user_id=int(user_id),
+                now=now,
+                reason="subscription_status_%s" % str(status or "").strip(),
+            )
         return self.get_subscription(subscription_id)
 
     def update_subscription_record(
@@ -4372,6 +4481,14 @@ class DatabaseRepository:
                     int(active_run["id"]),
                 ),
             )
+            if threshold_status:
+                self._close_active_auto_trigger_rule_runs(
+                    conn,
+                    subscription_id=int(subscription_id),
+                    user_id=int(user_id),
+                    now=now,
+                    reason=threshold_status,
+                )
 
             if source_id is not None:
                 self._upsert_subscription_daily_stat(
@@ -4533,6 +4650,13 @@ class DatabaseRepository:
                         now,
                         int(active_run["id"]),
                     ),
+                )
+                self._close_active_auto_trigger_rule_runs(
+                    conn,
+                    subscription_id=int(subscription_id),
+                    user_id=int(user_id),
+                    now=now,
+                    reason=end_reason,
                 )
             open_events = conn.execute(
                 """
@@ -5435,7 +5559,7 @@ class DatabaseRepository:
             )
             job_row = conn.execute(
                 """
-                SELECT id, signal_id, subscription_id, progression_event_id
+                SELECT id, user_id, signal_id, subscription_id, progression_event_id
                 FROM execution_jobs
                 WHERE id = ?
                 LIMIT 1
@@ -5467,7 +5591,7 @@ class DatabaseRepository:
                         (now, int(job_row["progression_event_id"])),
                     )
                 elif total_count > 0 and terminal_count >= total_count:
-                    conn.execute(
+                    event_cursor = conn.execute(
                         """
                         UPDATE subscription_progression_events
                         SET status = 'void', updated_at = ?
@@ -5475,6 +5599,14 @@ class DatabaseRepository:
                         """,
                         (now, int(job_row["progression_event_id"])),
                     )
+                    if event_cursor.rowcount > 0:
+                        self._close_paused_subscription_runs_if_idle(
+                            conn,
+                            subscription_id=int(job_row["subscription_id"]),
+                            user_id=int(job_row["user_id"]),
+                            now=now,
+                            reason="subscription_paused_after_void_event",
+                        )
 
         return {
             "job_id": normalized_job_id,

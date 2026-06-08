@@ -666,6 +666,212 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIsNotNone(standby)
         self.assertEqual(standby["status"], "standby")
 
+    def test_update_subscription_status_to_standby_closes_idle_runs(self):
+        user_id = self.repo.create_user("sub-standby-closes-idle-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-standby-closes-idle",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={"mode": "follow"},
+            status="active",
+        )
+        rule = self.repo.create_auto_trigger_rule_record(
+            user_id=user_id,
+            name="standby closes idle rule",
+            conditions=[{"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 10}],
+        )
+        self.repo.ensure_auto_trigger_rule_run(
+            rule_id=rule["id"],
+            user_id=user_id,
+            subscription_id=subscription["id"],
+            stat_date="2026-06-08",
+            started_issue_no="3442001",
+        )
+        with self.repo._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO subscription_runtime_runs(
+                    subscription_id, user_id, status, started_issue_no, started_at, start_reason,
+                    ended_at, end_reason, last_issue_no, last_result_type,
+                    realized_profit, realized_loss, net_profit,
+                    settled_event_count, hit_count, miss_count, refund_count,
+                    baseline_reset_at, baseline_reset_note, created_at, updated_at
+                ) VALUES (?, ?, 'active', ?, ?, 'auto_started', NULL, '', ?, '', 0, 0, 0, 0, 0, 0, 0, NULL, '', ?, ?)
+                """,
+                (
+                    int(subscription["id"]),
+                    int(user_id),
+                    "3442001",
+                    "2026-06-08T01:00:00Z",
+                    "3442001",
+                    "2026-06-08T01:00:00Z",
+                    "2026-06-08T01:00:00Z",
+                ),
+            )
+
+        standby = self.repo.update_subscription_status(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            status="standby",
+        )
+
+        self.assertEqual(standby["status"], "standby")
+        runtime_history = self.repo.list_subscription_runtime_runs(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            limit=5,
+        )
+        self.assertEqual(runtime_history[0]["status"], "closed")
+        self.assertEqual(runtime_history[0]["end_reason"], "subscription_status_standby")
+        with self.repo._connect() as conn:
+            active_rule_runs = conn.execute(
+                """
+                SELECT COUNT(1)
+                FROM auto_trigger_rule_runs
+                WHERE subscription_id = ? AND user_id = ? AND status = 'active'
+                """,
+                (int(subscription["id"]), int(user_id)),
+            ).fetchone()[0]
+        self.assertEqual(active_rule_runs, 0)
+
+    def test_paused_subscription_closes_runs_after_failed_job_voids_event(self):
+        user_id = self.repo.create_user("sub-standby-closes-after-void-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-standby-closes-after-void",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={"mode": "follow"},
+            status="active",
+        )
+        target_id = self.repo.create_delivery_target_record(
+            user_id=user_id,
+            executor_type="telegram_group",
+            target_key="-100777",
+            status="active",
+        )["id"]
+        signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="3442002",
+            bet_type="big_small",
+            bet_value="大",
+        )
+        progression_event = self.repo.create_progression_event_record(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            signal_id=signal["id"],
+            issue_no="3442002",
+            progression_step=1,
+            stake_amount=1,
+            base_stake=1,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            status="pending",
+        )
+        job_id = self.repo.create_execution_job(
+            user_id=user_id,
+            signal_id=signal["id"],
+            subscription_id=subscription["id"],
+            progression_event_id=progression_event["id"],
+            delivery_target_id=target_id,
+            executor_type="telegram_group",
+            idempotency_key="standby-void-job",
+            planned_message_text="大1",
+            stake_plan={"mode": "follow", "amount": 1},
+            execute_after="2026-06-08T01:00:00Z",
+            expire_at="2026-06-08T01:02:00Z",
+        )
+        rule = self.repo.create_auto_trigger_rule_record(
+            user_id=user_id,
+            name="standby closes after void rule",
+            conditions=[{"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 10}],
+        )
+        self.repo.ensure_auto_trigger_rule_run(
+            rule_id=rule["id"],
+            user_id=user_id,
+            subscription_id=subscription["id"],
+            stat_date="2026-06-08",
+            started_issue_no="3442002",
+        )
+        with self.repo._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO subscription_runtime_runs(
+                    subscription_id, user_id, status, started_issue_no, started_at, start_reason,
+                    ended_at, end_reason, last_issue_no, last_result_type,
+                    realized_profit, realized_loss, net_profit,
+                    settled_event_count, hit_count, miss_count, refund_count,
+                    baseline_reset_at, baseline_reset_note, created_at, updated_at
+                ) VALUES (?, ?, 'active', ?, ?, 'auto_started', NULL, '', ?, '', 0, 0, 0, 0, 0, 0, 0, NULL, '', ?, ?)
+                """,
+                (
+                    int(subscription["id"]),
+                    int(user_id),
+                    "3442002",
+                    "2026-06-08T01:00:00Z",
+                    "3442002",
+                    "2026-06-08T01:00:00Z",
+                    "2026-06-08T01:00:00Z",
+                ),
+            )
+
+        self.repo.update_subscription_status(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            status="standby",
+        )
+        self.assertTrue(
+            self.repo.subscription_has_open_run(
+                subscription_id=subscription["id"],
+                user_id=user_id,
+            )["has_open_run"]
+        )
+
+        self.repo.report_job_result(
+            job_id=str(job_id),
+            executor_id="executor-001",
+            attempt_no=1,
+            delivery_status="failed",
+            remote_message_id=None,
+            executed_at="2026-06-08T01:01:00Z",
+            raw_result={},
+            error_message="Cannot send requests while disconnected",
+        )
+
+        self.assertEqual(self.repo.get_progression_event(progression_event["id"])["status"], "void")
+        open_state = self.repo.subscription_has_open_run(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+        )
+        self.assertFalse(open_state["has_open_run"])
+        runtime_history = self.repo.list_subscription_runtime_runs(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            limit=5,
+        )
+        self.assertEqual(runtime_history[0]["status"], "closed")
+        self.assertEqual(runtime_history[0]["end_reason"], "subscription_paused_after_void_event")
+        with self.repo._connect() as conn:
+            active_rule_runs = conn.execute(
+                """
+                SELECT COUNT(1)
+                FROM auto_trigger_rule_runs
+                WHERE subscription_id = ? AND user_id = ? AND status = 'active'
+                """,
+                (int(subscription["id"]), int(user_id)),
+            ).fetchone()[0]
+        self.assertEqual(active_rule_runs, 0)
+
     def test_update_subscription_record(self):
         user_id = self.repo.create_user("sub-edit-user")
         source_a = self.repo.create_source_record(
