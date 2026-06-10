@@ -1,9 +1,12 @@
 """自动触发跟单新一轮服务。"""
 from __future__ import annotations
 
+import copy
 import json
 import re
+import time
 from datetime import datetime, timedelta, timezone
+from threading import Lock
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
@@ -33,11 +36,14 @@ EVENT_RETENTION_DAYS = {
     "triggered": 30,
     "failed": 30,
 }
+PERFORMANCE_CACHE_TTL_SECONDS = 60
 RUNTIME_RETENTION_DAYS = {
     "runs": 90,
     "stats": 365,
 }
 SHANGHAI_TZ = timezone(timedelta(hours=8))
+_PERFORMANCE_CACHE_LOCK = Lock()
+_PERFORMANCE_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
 
 
 def _format_utc_iso(value: datetime) -> str:
@@ -438,6 +444,36 @@ def _http_json_fetch(url: str, *, timeout: int = 10) -> dict:
     return payload
 
 
+def clear_auto_trigger_performance_cache() -> None:
+    with _PERFORMANCE_CACHE_LOCK:
+        _PERFORMANCE_CACHE.clear()
+
+
+def _cached_http_json_fetch(url: str) -> dict:
+    normalized_url = str(url or "").strip()
+    now = time.monotonic()
+    with _PERFORMANCE_CACHE_LOCK:
+        cached = _PERFORMANCE_CACHE.get(normalized_url)
+        if cached and cached[0] > now:
+            return copy.deepcopy(cached[1])
+        if cached:
+            _PERFORMANCE_CACHE.pop(normalized_url, None)
+
+    payload = _http_json_fetch(normalized_url)
+    with _PERFORMANCE_CACHE_LOCK:
+        _PERFORMANCE_CACHE[normalized_url] = (
+            time.monotonic() + PERFORMANCE_CACHE_TTL_SECONDS,
+            copy.deepcopy(payload),
+        )
+    return payload
+
+
+def _fetch_performance(url: str, fetcher=None) -> dict:
+    if fetcher is not None:
+        return fetcher(url)
+    return _cached_http_json_fetch(url)
+
+
 def _predictor_id_from_url(url: str) -> Optional[int]:
     match = re.search(r"/predictors/(\d+)(?:/|$)", str(url or ""))
     return int(match.group(1)) if match else None
@@ -821,7 +857,6 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
         user_id=int(rule["user_id"]),
         subscription_ids=subscription_ids,
     )
-    fetch = fetcher or _http_json_fetch
     summary = {"checked_count": 0, "triggered_count": 0, "skipped_count": 0, "failed_count": 0}
     events = []
 
@@ -875,7 +910,7 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                 continue
 
             performance_url = _performance_url_from_source(source)
-            performance = fetch(performance_url)
+            performance = _fetch_performance(performance_url, fetcher=fetcher)
             latest_issue_no = str(performance.get("latest_settled_issue") or "")
             if not latest_issue_no:
                 events.append(_record_event(repository, rule=rule, subscription=subscription, performance=performance, status="skipped", reason="performance_issue_empty"))

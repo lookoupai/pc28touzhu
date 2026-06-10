@@ -4,10 +4,12 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from pc28touzhu.executor.db_repository import DatabaseRepository
 from pc28touzhu.services.dispatch_service import dispatch_signal
 from pc28touzhu.services.auto_trigger_service import (
+    clear_auto_trigger_performance_cache,
     create_auto_trigger_rule,
     list_auto_trigger_rules,
     resume_auto_trigger_rule_day,
@@ -18,6 +20,7 @@ from pc28touzhu.services.auto_trigger_service import (
 
 class AutoTriggerServiceTests(unittest.TestCase):
     def setUp(self):
+        clear_auto_trigger_performance_cache()
         self.tmpdir = tempfile.TemporaryDirectory()
         self.db_path = os.path.join(self.tmpdir.name, "test.db")
         self.repo = DatabaseRepository(self.db_path)
@@ -63,6 +66,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         )
 
     def tearDown(self):
+        clear_auto_trigger_performance_cache()
         self.tmpdir.cleanup()
 
     def _performance_payload(
@@ -115,6 +119,35 @@ class AutoTriggerServiceTests(unittest.TestCase):
                 },
             },
         }
+
+    def test_default_performance_fetcher_reuses_successful_cache(self):
+        for name in ["规则 A", "规则 B"]:
+            create_auto_trigger_rule(
+                self.repo,
+                user_id=self.user_id,
+                payload={
+                    "name": name,
+                    "scope_mode": "selected_subscriptions",
+                    "subscription_ids": [self.subscription["id"]],
+                    "cooldown_issues": 0,
+                    "conditions": [
+                        {"metric": "big_small", "operator": "lt", "threshold": 1, "min_sample_count": 100}
+                    ],
+                    "action": {"dispatch_latest_signal": False},
+                },
+            )
+
+        with patch(
+            "pc28touzhu.services.auto_trigger_service._http_json_fetch",
+            return_value=self._performance_payload(big_small_rate=50.0),
+        ) as fetch:
+            first = run_auto_trigger_cycle(self.repo, user_id=self.user_id)
+            second = run_auto_trigger_cycle(self.repo, user_id=self.user_id)
+
+        self.assertEqual(first["summary"]["checked_count"], 2)
+        self.assertEqual(second["summary"]["checked_count"], 2)
+        self.assertEqual(fetch.call_count, 1)
+        self.assertIn("/api/export/predictors/5/performance", fetch.call_args[0][0])
 
     def test_rule_restarts_subscription_and_dispatches_latest_signal(self):
         self.repo.update_subscription_status(
