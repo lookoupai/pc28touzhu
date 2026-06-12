@@ -37,13 +37,23 @@ EVENT_RETENTION_DAYS = {
     "failed": 30,
 }
 PERFORMANCE_CACHE_TTL_SECONDS = 60
+PERFORMANCE_STALE_TTL_SECONDS = 90
+PERFORMANCE_FAILURE_COOLDOWN_SECONDS = 30
+PERFORMANCE_FETCH_ATTEMPTS = 2
+PERFORMANCE_FETCH_RETRY_DELAY_SECONDS = 0.5
 RUNTIME_RETENTION_DAYS = {
     "runs": 90,
     "stats": 365,
 }
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 _PERFORMANCE_CACHE_LOCK = Lock()
-_PERFORMANCE_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_PERFORMANCE_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+class PerformanceFetchError(RuntimeError):
+    def __init__(self, message: str, *, metadata: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.metadata = metadata or {}
 
 
 def _format_utc_iso(value: datetime) -> str:
@@ -449,28 +459,151 @@ def clear_auto_trigger_performance_cache() -> None:
         _PERFORMANCE_CACHE.clear()
 
 
-def _cached_http_json_fetch(url: str) -> dict:
+def _cache_age_seconds(entry: Dict[str, Any], now: float) -> Optional[float]:
+    fetched_at = entry.get("last_success_at")
+    if fetched_at is None:
+        return None
+    try:
+        return max(0.0, now - float(fetched_at))
+    except (TypeError, ValueError):
+        return None
+
+
+def _performance_metadata(
+    *,
+    url: str,
+    source: str,
+    attempts: int = 0,
+    cache_age_seconds: Optional[float] = None,
+    stale: bool = False,
+    error: str = "",
+) -> Dict[str, Any]:
+    return {
+        "url": str(url or ""),
+        "source": source,
+        "attempts": int(attempts or 0),
+        "cache_age_seconds": round(cache_age_seconds, 3) if cache_age_seconds is not None else None,
+        "stale": bool(stale),
+        "error": str(error or ""),
+    }
+
+
+def _fetch_payload_with_retries(url: str, fetcher, *, attempts: int = PERFORMANCE_FETCH_ATTEMPTS) -> tuple[dict, int]:
+    max_attempts = max(1, int(attempts or 1))
+    last_error: Optional[Exception] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            payload = fetcher(url)
+            if not isinstance(payload, dict):
+                raise ValueError("表现接口返回值必须为 JSON 对象")
+            return payload, attempt
+        except Exception as exc:
+            last_error = exc
+            if attempt >= max_attempts:
+                break
+            time.sleep(PERFORMANCE_FETCH_RETRY_DELAY_SECONDS)
+    if last_error is None:
+        raise ValueError("表现接口拉取失败")
+    raise last_error
+
+
+def _cached_http_json_fetch(url: str) -> tuple[dict, Dict[str, Any]]:
     normalized_url = str(url or "").strip()
     now = time.monotonic()
     with _PERFORMANCE_CACHE_LOCK:
         cached = _PERFORMANCE_CACHE.get(normalized_url)
-        if cached and cached[0] > now:
-            return copy.deepcopy(cached[1])
         if cached:
-            _PERFORMANCE_CACHE.pop(normalized_url, None)
+            payload = cached.get("payload")
+            expires_at = float(cached.get("expires_at") or 0)
+            age = _cache_age_seconds(cached, now)
+            if isinstance(payload, dict) and expires_at > now:
+                return copy.deepcopy(payload), _performance_metadata(
+                    url=normalized_url,
+                    source="cache",
+                    attempts=0,
+                    cache_age_seconds=age,
+                )
+            if float(cached.get("failure_cooldown_until") or 0) > now:
+                error = str(cached.get("last_error") or "performance_fetch_failed")
+                if isinstance(payload, dict) and age is not None and age <= PERFORMANCE_STALE_TTL_SECONDS:
+                    return copy.deepcopy(payload), _performance_metadata(
+                        url=normalized_url,
+                        source="stale_cache",
+                        attempts=0,
+                        cache_age_seconds=age,
+                        stale=True,
+                        error=error,
+                    )
+                raise PerformanceFetchError(
+                    error,
+                    metadata=_performance_metadata(
+                        url=normalized_url,
+                        source="failure_cooldown",
+                        attempts=0,
+                        cache_age_seconds=age,
+                        error=error,
+                    ),
+                )
 
-    payload = _http_json_fetch(normalized_url)
+    try:
+        payload, attempts = _fetch_payload_with_retries(normalized_url, _http_json_fetch)
+    except Exception as exc:
+        error = str(exc) or exc.__class__.__name__
+        with _PERFORMANCE_CACHE_LOCK:
+            cached = _PERFORMANCE_CACHE.get(normalized_url) or {}
+            age = _cache_age_seconds(cached, time.monotonic())
+            cached["last_error"] = error
+            cached["failure_cooldown_until"] = time.monotonic() + PERFORMANCE_FAILURE_COOLDOWN_SECONDS
+            _PERFORMANCE_CACHE[normalized_url] = cached
+            payload = cached.get("payload")
+            if isinstance(payload, dict) and age is not None and age <= PERFORMANCE_STALE_TTL_SECONDS:
+                return copy.deepcopy(payload), _performance_metadata(
+                    url=normalized_url,
+                    source="stale_cache",
+                    attempts=PERFORMANCE_FETCH_ATTEMPTS,
+                    cache_age_seconds=age,
+                    stale=True,
+                    error=error,
+                )
+        raise PerformanceFetchError(
+            error,
+            metadata=_performance_metadata(
+                url=normalized_url,
+                source="network",
+                attempts=PERFORMANCE_FETCH_ATTEMPTS,
+                error=error,
+            ),
+        ) from exc
+
     with _PERFORMANCE_CACHE_LOCK:
-        _PERFORMANCE_CACHE[normalized_url] = (
-            time.monotonic() + PERFORMANCE_CACHE_TTL_SECONDS,
-            copy.deepcopy(payload),
-        )
-    return payload
+        success_at = time.monotonic()
+        _PERFORMANCE_CACHE[normalized_url] = {
+            "expires_at": success_at + PERFORMANCE_CACHE_TTL_SECONDS,
+            "last_success_at": success_at,
+            "payload": copy.deepcopy(payload),
+            "last_error": "",
+            "failure_cooldown_until": 0,
+        }
+    return payload, _performance_metadata(url=normalized_url, source="network", attempts=attempts)
 
 
-def _fetch_performance(url: str, fetcher=None) -> dict:
+def _fetch_performance(url: str, fetcher=None) -> tuple[dict, Dict[str, Any]]:
     if fetcher is not None:
-        return fetcher(url)
+        normalized_url = str(url or "").strip()
+        try:
+            payload, attempts = _fetch_payload_with_retries(normalized_url, fetcher)
+            return payload, _performance_metadata(url=normalized_url, source="injected", attempts=attempts)
+        except Exception as exc:
+            error = str(exc) or exc.__class__.__name__
+            raise PerformanceFetchError(
+                error,
+                metadata=_performance_metadata(
+                    url=normalized_url,
+                    source="injected",
+                    attempts=PERFORMANCE_FETCH_ATTEMPTS,
+                    error=error,
+                ),
+            ) from exc
     return _cached_http_json_fetch(url)
 
 
@@ -731,6 +864,7 @@ def _record_event(
     dispatch_result: Optional[dict] = None,
     play_filter_result: Optional[dict] = None,
     restart_state: Optional[dict] = None,
+    performance_fetch: Optional[dict] = None,
     stat_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     source = subscription.get("source") if isinstance(subscription.get("source"), dict) else {}
@@ -755,21 +889,23 @@ def _record_event(
         snapshot["play_filter_result"] = play_filter_result
     if restart_state is not None:
         snapshot["restart_state"] = restart_state
+    if performance_fetch is not None:
+        snapshot["performance_fetch"] = performance_fetch
     if stat_date is not None:
         snapshot["stat_date"] = str(stat_date)
-    if status == "skipped":
-        latest_skipped = repository.get_latest_auto_trigger_event(
+    if status in {"skipped", "failed"}:
+        latest_event = repository.get_latest_auto_trigger_event(
             rule_id=int(rule["id"]),
             subscription_id=int(subscription["id"]),
-            status="skipped",
+            status=status,
         )
         if (
-            latest_skipped
-            and str(latest_skipped.get("reason") or "") == str(reason or "")
-            and str(latest_skipped.get("latest_issue_no") or "") == latest_issue_no
-            and str(latest_skipped.get("created_at") or "") >= _event_retention_cutoffs()["skipped"]
+            latest_event
+            and str(latest_event.get("reason") or "") == str(reason or "")
+            and str(latest_event.get("latest_issue_no") or "") == latest_issue_no
+            and str(latest_event.get("created_at") or "") >= _event_retention_cutoffs()[status]
         ):
-            return latest_skipped
+            return latest_event
     return repository.record_auto_trigger_event(
         rule_id=int(rule["id"]),
         user_id=int(rule["user_id"]),
@@ -859,6 +995,7 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
     )
     summary = {"checked_count": 0, "triggered_count": 0, "skipped_count": 0, "failed_count": 0}
     events = []
+    performance_results_by_url: Dict[str, tuple[dict, Dict[str, Any]]] = {}
 
     for subscription in subscriptions:
         source = subscription.get("source") if isinstance(subscription.get("source"), dict) else {}
@@ -910,14 +1047,43 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                 continue
 
             performance_url = _performance_url_from_source(source)
-            performance = _fetch_performance(performance_url, fetcher=fetcher)
+            if performance_url in performance_results_by_url:
+                performance, performance_fetch = performance_results_by_url[performance_url]
+                performance = copy.deepcopy(performance)
+                performance_fetch = {**performance_fetch, "source": "cycle_cache", "attempts": 0}
+            else:
+                performance, performance_fetch = _fetch_performance(performance_url, fetcher=fetcher)
+                performance_results_by_url[performance_url] = (
+                    copy.deepcopy(performance),
+                    dict(performance_fetch),
+                )
             latest_issue_no = str(performance.get("latest_settled_issue") or "")
             if not latest_issue_no:
-                events.append(_record_event(repository, rule=rule, subscription=subscription, performance=performance, status="skipped", reason="performance_issue_empty"))
+                events.append(
+                    _record_event(
+                        repository,
+                        rule=rule,
+                        subscription=subscription,
+                        performance=performance,
+                        status="skipped",
+                        reason="performance_issue_empty",
+                        performance_fetch=performance_fetch,
+                    )
+                )
                 summary["skipped_count"] += 1
                 continue
             if _is_in_cooldown(repository, rule, int(subscription["id"]), latest_issue_no):
-                events.append(_record_event(repository, rule=rule, subscription=subscription, performance=performance, status="skipped", reason="cooldown"))
+                events.append(
+                    _record_event(
+                        repository,
+                        rule=rule,
+                        subscription=subscription,
+                        performance=performance,
+                        status="skipped",
+                        reason="cooldown",
+                        performance_fetch=performance_fetch,
+                    )
+                )
                 summary["skipped_count"] += 1
                 continue
 
@@ -938,6 +1104,7 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                         reason="multiple_metrics_matched",
                         matched_conditions=skipped_matches,
                         trigger_match=trigger_match,
+                        performance_fetch=performance_fetch,
                     )
                 )
                 summary["skipped_count"] += 1
@@ -996,6 +1163,7 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                 trigger_match=trigger_match,
                 dispatch_result=dispatch_result,
                 play_filter_result=play_filter_result,
+                performance_fetch=performance_fetch,
             )
             repository.mark_auto_trigger_rule_triggered(
                 rule_id=int(rule["id"]),
@@ -1006,6 +1174,7 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
             summary["triggered_count"] += 1
         except Exception as exc:
             try:
+                performance_fetch = exc.metadata if isinstance(exc, PerformanceFetchError) else None
                 events.append(
                     _record_event(
                         repository,
@@ -1014,6 +1183,7 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                         performance=None,
                         status="failed",
                         reason=str(exc) or exc.__class__.__name__,
+                        performance_fetch=performance_fetch,
                     )
                 )
             finally:

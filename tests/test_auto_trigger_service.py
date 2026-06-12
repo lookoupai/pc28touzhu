@@ -149,6 +149,116 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(fetch.call_count, 1)
         self.assertIn("/api/export/predictors/5/performance", fetch.call_args[0][0])
 
+    def test_default_performance_fetcher_retries_transient_failure(self):
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "临时失败重试",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "gt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": False},
+            },
+        )
+
+        with patch("pc28touzhu.services.auto_trigger_service.time.sleep") as sleep:
+            with patch(
+                "pc28touzhu.services.auto_trigger_service._http_json_fetch",
+                side_effect=[TimeoutError("timed out"), self._performance_payload(big_small_rate=50.0)],
+            ) as fetch:
+                result = run_auto_trigger_cycle(self.repo, user_id=self.user_id)
+
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        self.assertEqual(fetch.call_count, 2)
+        sleep.assert_called_once()
+        event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(event["snapshot"]["performance_fetch"]["attempts"], 2)
+        self.assertEqual(event["snapshot"]["performance_fetch"]["source"], "network")
+
+    def test_default_performance_fetcher_uses_recent_success_when_fetch_fails(self):
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "最近成功兜底",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "gt", "threshold": 60, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": False},
+            },
+        )
+
+        with patch(
+            "pc28touzhu.services.auto_trigger_service._http_json_fetch",
+            return_value=self._performance_payload(big_small_rate=50.0),
+        ):
+            with patch("pc28touzhu.services.auto_trigger_service.PERFORMANCE_CACHE_TTL_SECONDS", 0):
+                first = run_auto_trigger_cycle(self.repo, user_id=self.user_id)
+        rule = self.repo.list_auto_trigger_rules(user_id=self.user_id)[0]
+        update_auto_trigger_rule(
+            self.repo,
+            rule_id=rule["id"],
+            user_id=self.user_id,
+            payload={
+                **rule,
+                "conditions": [
+                    {"metric": "big_small", "operator": "gt", "threshold": 40, "min_sample_count": 100}
+                ],
+            },
+        )
+        with patch("pc28touzhu.services.auto_trigger_service.time.sleep"):
+            with patch(
+                "pc28touzhu.services.auto_trigger_service._http_json_fetch",
+                side_effect=TimeoutError("timed out"),
+            ) as fetch:
+                second = run_auto_trigger_cycle(self.repo, user_id=self.user_id)
+
+        self.assertEqual(first["summary"]["triggered_count"], 0)
+        self.assertEqual(second["summary"]["triggered_count"], 1)
+        self.assertEqual(fetch.call_count, 2)
+        event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(event["snapshot"]["performance_fetch"]["source"], "stale_cache")
+        self.assertTrue(event["snapshot"]["performance_fetch"]["stale"])
+        self.assertEqual(event["snapshot"]["performance_fetch"]["error"], "timed out")
+
+    def test_default_performance_fetcher_skips_network_during_failure_cooldown(self):
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "失败冷却",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "gt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": False},
+            },
+        )
+
+        with patch("pc28touzhu.services.auto_trigger_service.time.sleep"):
+            with patch(
+                "pc28touzhu.services.auto_trigger_service._http_json_fetch",
+                side_effect=TimeoutError("timed out"),
+            ) as fetch:
+                first = run_auto_trigger_cycle(self.repo, user_id=self.user_id)
+                second = run_auto_trigger_cycle(self.repo, user_id=self.user_id)
+
+        self.assertEqual(first["summary"]["failed_count"], 1)
+        self.assertEqual(second["summary"]["failed_count"], 1)
+        self.assertEqual(fetch.call_count, 2)
+        failed_events = self.repo.list_auto_trigger_events(user_id=self.user_id, status="failed", limit=10)
+        self.assertEqual(len(failed_events), 1)
+        self.assertEqual(failed_events[0]["reason"], "timed out")
+
     def test_rule_restarts_subscription_and_dispatches_latest_signal(self):
         self.repo.update_subscription_status(
             subscription_id=self.subscription["id"],
@@ -943,6 +1053,33 @@ class AutoTriggerServiceTests(unittest.TestCase):
         skipped_events = self.repo.list_auto_trigger_events(user_id=self.user_id, status="skipped", limit=10)
         self.assertEqual(len(skipped_events), 1)
         self.assertEqual(skipped_events[0]["reason"], "subscription_has_open_run")
+
+    def test_repeated_failed_event_is_deduplicated(self):
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "失败去重",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "combo", "operator": "lt", "threshold": 20, "min_sample_count": 100}
+                ],
+            },
+        )
+
+        def failing_fetcher(_url):
+            raise RuntimeError("performance_unavailable")
+
+        first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=failing_fetcher)
+        second = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=failing_fetcher)
+
+        self.assertEqual(first["summary"]["failed_count"], 1)
+        self.assertEqual(second["summary"]["failed_count"], 1)
+        failed_events = self.repo.list_auto_trigger_events(user_id=self.user_id, status="failed", limit=10)
+        self.assertEqual(len(failed_events), 1)
+        self.assertEqual(failed_events[0]["reason"], "performance_unavailable")
 
     def test_auto_trigger_cycle_prunes_expired_events(self):
         rule = create_auto_trigger_rule(
