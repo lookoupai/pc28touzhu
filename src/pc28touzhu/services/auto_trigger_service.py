@@ -1080,12 +1080,17 @@ def _dispatch_latest_signal_if_available(
     signal = repository.get_latest_ready_signal_for_source(source_id=int(subscription["source_id"]))
     if not signal:
         return {"skipped": True, "reason": "latest_signal_not_found", "created_count": 0}
-    distance = _issue_distance(str(signal.get("issue_no") or ""), latest_settled_issue_no)
-    if distance is None or distance <= 0:
+    signal_issue_no = str(signal.get("issue_no") or "")
+    distance = _issue_distance(signal_issue_no, latest_settled_issue_no)
+    if distance is None:
+        should_skip = signal_issue_no != str(latest_settled_issue_no or "")
+    else:
+        should_skip = distance < 0
+    if should_skip:
         return {
             "skipped": True,
             "reason": "latest_signal_not_newer_than_performance",
-            "signal_issue_no": str(signal.get("issue_no") or ""),
+            "signal_issue_no": signal_issue_no,
             "latest_settled_issue_no": str(latest_settled_issue_no or ""),
             "created_count": 0,
         }

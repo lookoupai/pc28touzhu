@@ -1377,6 +1377,45 @@ class AutoTriggerServiceTests(unittest.TestCase):
             self.assertTrue(event["auto_trigger_rule_run_id"])
             self.assertTrue(event["auto_trigger_stat_date"])
 
+    def test_route_dispatch_allows_signal_matching_performance_issue(self):
+        first_target = self.repo.list_delivery_targets(self.user_id)[0]
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "同期期号路由自动投注",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "routes": [
+                    {
+                        "delivery_target_id": first_target["id"],
+                        "name": "测试群路由",
+                        "risk_mode": "inherit",
+                    },
+                ],
+            },
+        )["item"]
+
+        result = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(issue_no="20260418001"),
+        )
+
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        event = result["rules"][0]["events"][0]
+        self.assertEqual(event["snapshot"]["dispatch_result"]["created_count"], 1)
+        jobs = self.repo.list_execution_jobs(user_id=self.user_id)
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["auto_trigger_route_id"], rule["routes"][0]["id"])
+        progression_event = self.repo.get_progression_event(jobs[0]["progression_event_id"])
+        self.assertEqual(progression_event["auto_trigger_route_id"], rule["routes"][0]["id"])
+
     def test_route_profit_target_stops_only_that_route(self):
         second_target = self.repo.create_delivery_target_record(
             user_id=self.user_id,
