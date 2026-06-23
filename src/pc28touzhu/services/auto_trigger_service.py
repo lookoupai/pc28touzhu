@@ -12,6 +12,7 @@ from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 from pc28touzhu.domain.subscription_strategy import upgrade_subscription_strategy
+from pc28touzhu.domain.settlement_rules import normalize_settlement_rule_id
 from pc28touzhu.services.dispatch_service import dispatch_signal
 
 
@@ -20,6 +21,11 @@ ALLOWED_CONDITION_TYPES = {"hit_rate", "miss_streak"}
 ALLOWED_OPERATORS = {"lt", "lte", "gt", "gte"}
 ALLOWED_SCOPE_MODES = {"all_subscriptions", "selected_subscriptions"}
 ALLOWED_PLAY_FILTER_ACTIONS = {"keep", "matched_metric", "fixed_metric"}
+ALLOWED_ROUTE_RISK_MODES = {"inherit", "override", "disabled"}
+ALLOWED_ROUTE_SETTLEMENT_MODES = {"inherit", "override"}
+ALLOWED_ROUTE_STAKING_MODES = {"inherit", "override"}
+ALLOWED_ROUTE_PLAY_FILTER_MODES = {"inherit", "keep", "matched_metric", "fixed_metric"}
+ALLOWED_ROUTE_TEMPLATE_MODES = {"target_default", "override"}
 ALLOWED_HIT_RATE_WINDOW_SIZES = {20, 50, 100}
 METRIC_LABELS = {
     "big_small": "大小",
@@ -238,6 +244,118 @@ def _normalize_daily_risk_control(value: Any) -> dict:
     }
 
 
+def _normalize_route_settlement_policy(value: Any) -> dict:
+    payload = value if isinstance(value, dict) else {}
+    settlement_rule_id = normalize_settlement_rule_id(
+        payload.get("settlement_rule_id"),
+        allow_empty=False,
+    )
+    return {
+        "rule_source": "subscription_fixed",
+        "settlement_rule_id": settlement_rule_id,
+        "fallback_profit_ratio": max(0.0001, round(float(payload.get("fallback_profit_ratio") or 1.0), 4)),
+    }
+
+
+def _normalize_route_staking_policy(value: Any) -> dict:
+    payload = value if isinstance(value, dict) else {}
+    mode = str(payload.get("mode") or "fixed").strip() or "fixed"
+    if mode not in {"fixed", "follow_source", "martingale"}:
+        raise ValueError("routes[].staking_policy.mode 仅支持 fixed、follow_source 或 martingale")
+    fixed_amount = _round_money(payload.get("fixed_amount"))
+    base_stake = _round_money(payload.get("base_stake"))
+    multiplier = float(payload.get("multiplier") or 2)
+    max_steps = int(payload.get("max_steps") or 1)
+    refund_action = str(payload.get("refund_action") or "hold").strip() or "hold"
+    cap_action = str(payload.get("cap_action") or "reset").strip() or "reset"
+    if refund_action not in {"hold", "reset"}:
+        raise ValueError("routes[].staking_policy.refund_action 仅支持 hold 或 reset")
+    if cap_action not in {"hold", "reset"}:
+        raise ValueError("routes[].staking_policy.cap_action 仅支持 hold 或 reset")
+    if mode == "fixed" and fixed_amount <= 0:
+        raise ValueError("routes[].staking_policy.fixed_amount 必须大于 0")
+    if mode == "martingale":
+        if base_stake <= 0:
+            raise ValueError("routes[].staking_policy.base_stake 必须大于 0")
+        if multiplier <= 1:
+            raise ValueError("routes[].staking_policy.multiplier 必须大于 1")
+    return {
+        "mode": mode,
+        "fixed_amount": fixed_amount if mode == "fixed" else None,
+        "base_stake": base_stake if mode == "martingale" else None,
+        "multiplier": round(float(multiplier), 4),
+        "max_steps": max(1, max_steps),
+        "refund_action": refund_action,
+        "cap_action": cap_action,
+    }
+
+
+def _normalize_route_play_filter(mode: str, value: Any) -> dict:
+    payload = value if isinstance(value, dict) else {}
+    fixed_metric = str(payload.get("fixed_metric") or payload.get("metric") or "").strip()
+    if mode == "fixed_metric" and fixed_metric not in ALLOWED_METRICS:
+        raise ValueError("routes[].play_filter.fixed_metric 不能为空")
+    return {"fixed_metric": fixed_metric if fixed_metric in ALLOWED_METRICS else ""}
+
+
+def _normalize_rule_routes(value: Any, *, source: Optional[Dict[str, Any]] = None) -> list[dict]:
+    if value is None:
+        return list((source or {}).get("routes") or [])
+    if not isinstance(value, list):
+        raise ValueError("routes 必须为数组")
+    normalized: list[dict] = []
+    seen_targets: set[int] = set()
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, dict):
+            raise ValueError("routes[%s] 必须为对象" % index)
+        delivery_target_id = _to_positive_int(item.get("delivery_target_id"), "routes[%s].delivery_target_id" % index)
+        route_id = _to_positive_int(item.get("id"), "routes[%s].id" % index, allow_none=True)
+        status = str(item.get("status") or "active").strip() or "active"
+        if status not in {"active", "inactive", "archived"}:
+            raise ValueError("routes[%s].status 仅支持 active、inactive、archived" % index)
+        risk_mode = str(item.get("risk_mode") or "inherit").strip() or "inherit"
+        if risk_mode not in ALLOWED_ROUTE_RISK_MODES:
+            raise ValueError("routes[%s].risk_mode 不支持" % index)
+        settlement_mode = str(item.get("settlement_mode") or "inherit").strip() or "inherit"
+        if settlement_mode not in ALLOWED_ROUTE_SETTLEMENT_MODES:
+            raise ValueError("routes[%s].settlement_mode 不支持" % index)
+        staking_mode = str(item.get("staking_mode") or "inherit").strip() or "inherit"
+        if staking_mode not in ALLOWED_ROUTE_STAKING_MODES:
+            raise ValueError("routes[%s].staking_mode 不支持" % index)
+        play_filter_mode = str(item.get("play_filter_mode") or "inherit").strip() or "inherit"
+        if play_filter_mode not in ALLOWED_ROUTE_PLAY_FILTER_MODES:
+            raise ValueError("routes[%s].play_filter_mode 不支持" % index)
+        template_mode = str(item.get("template_mode") or "target_default").strip() or "target_default"
+        if template_mode not in ALLOWED_ROUTE_TEMPLATE_MODES:
+            raise ValueError("routes[%s].template_mode 不支持" % index)
+        template_id = _to_positive_int(item.get("template_id"), "routes[%s].template_id" % index, allow_none=True)
+        if template_mode == "override" and template_id is None:
+            raise ValueError("routes[%s].template_id 不能为空" % index)
+        route = {
+            "delivery_target_id": delivery_target_id,
+            "name": str(item.get("name") or "").strip(),
+            "status": status,
+            "sort_order": int(item.get("sort_order") if item.get("sort_order") not in {None, ""} else index - 1),
+            "risk_mode": risk_mode,
+            "risk_control": _normalize_daily_risk_control(item.get("risk_control") or {}) if risk_mode == "override" else {},
+            "settlement_mode": settlement_mode,
+            "settlement_policy": _normalize_route_settlement_policy(item.get("settlement_policy") or {}) if settlement_mode == "override" else {},
+            "staking_mode": staking_mode,
+            "staking_policy": _normalize_route_staking_policy(item.get("staking_policy") or {}) if staking_mode == "override" else {},
+            "play_filter_mode": play_filter_mode,
+            "play_filter": _normalize_route_play_filter(play_filter_mode, item.get("play_filter") or {}),
+            "template_mode": template_mode,
+            "template_id": template_id if template_mode == "override" else None,
+        }
+        if route_id is not None:
+            route["id"] = route_id
+        if delivery_target_id in seen_targets and route_id is None:
+            raise ValueError("routes 中不能重复配置相同投递群组")
+        seen_targets.add(delivery_target_id)
+        normalized.append(route)
+    return normalized
+
+
 def normalize_rule_payload(payload: Dict[str, Any], *, current: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     source = current or {}
     name = str(payload.get("name", source.get("name") or "") or "").strip()
@@ -272,12 +390,14 @@ def normalize_rule_payload(payload: Dict[str, Any], *, current: Optional[Dict[st
             payload.get("daily_risk_control", source.get("daily_risk_control") or {})
         ),
         "cooldown_issues": cooldown_issues,
+        "routes": _normalize_rule_routes(payload.get("routes", None), source=source),
     }
 
 
 def create_auto_trigger_rule(repository: Any, *, user_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     normalized_user_id = _to_positive_int(user_id, "user_id")
     normalized = normalize_rule_payload(payload)
+    _validate_rule_routes(repository, user_id=normalized_user_id, routes=normalized.get("routes") or [])
     item = repository.create_auto_trigger_rule_record(user_id=normalized_user_id, **normalized)
     return {"item": item}
 
@@ -320,6 +440,22 @@ def _resume_stopped_rule_day_if_allowed(
     )
 
 
+def _validate_rule_routes(repository: Any, *, user_id: int, routes: list[dict]) -> None:
+    for route in routes or []:
+        target = repository.get_delivery_target(int(route["delivery_target_id"]))
+        if not target or int(target.get("user_id") or 0) != int(user_id):
+            raise ValueError("routes[].delivery_target_id 对应的投递群组不存在")
+        if str(target.get("status") or "") == "archived":
+            raise ValueError("routes[].delivery_target_id 对应的投递群组已归档")
+        template_id = route.get("template_id")
+        if template_id is not None:
+            template = repository.get_message_template(int(template_id))
+            if not template or int(template.get("user_id") or 0) != int(user_id):
+                raise ValueError("routes[].template_id 对应的消息模板不存在")
+            if str(template.get("status") or "active") == "archived":
+                raise ValueError("routes[].template_id 对应的消息模板已归档")
+
+
 def update_auto_trigger_rule(repository: Any, *, rule_id: Any, user_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     normalized_rule_id = _to_positive_int(rule_id, "rule_id")
     normalized_user_id = _to_positive_int(user_id, "user_id")
@@ -327,6 +463,7 @@ def update_auto_trigger_rule(repository: Any, *, rule_id: Any, user_id: Any, pay
     if not current or int(current.get("user_id") or 0) != normalized_user_id:
         raise ValueError("rule_id 对应的自动触发规则不存在")
     normalized = normalize_rule_payload(payload, current=current)
+    _validate_rule_routes(repository, user_id=normalized_user_id, routes=normalized.get("routes") or [])
     item = repository.update_auto_trigger_rule_record(rule_id=normalized_rule_id, user_id=normalized_user_id, **normalized)
     if not item:
         raise ValueError("rule_id 对应的自动触发规则不存在")
@@ -412,11 +549,24 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = N
             user_id=int(rule["user_id"]),
             stat_date=resolved_stat_date,
         )
+        routes = []
+        for route in rule.get("routes") or []:
+            routes.append(
+                {
+                    **route,
+                    "daily_stat": repository.get_auto_trigger_route_daily_stat(
+                        route_id=int(route["id"]),
+                        user_id=int(rule["user_id"]),
+                        stat_date=resolved_stat_date,
+                    ),
+                }
+            )
         items.append(
             {
                 **rule,
                 "stat_date": resolved_stat_date,
                 "daily_stat": daily_stat,
+                "routes": routes,
             }
         )
     return {"items": items}
@@ -959,6 +1109,45 @@ def _is_rule_day_stopped(repository: Any, rule: Dict[str, Any], *, stat_date: st
     return {"stopped": str(stat.get("status") or "") == "stopped", "stat": stat}
 
 
+def _active_routes_for_subscription(
+    repository: Any,
+    *,
+    rule: Dict[str, Any],
+    subscription: Dict[str, Any],
+    stat_date: str,
+) -> tuple[list[dict], list[dict]]:
+    active_routes = []
+    skipped_routes = []
+    for route in rule.get("routes") or []:
+        route_id = int(route.get("id") or 0)
+        if route_id <= 0:
+            continue
+        if str(route.get("status") or "active") != "active":
+            skipped_routes.append({"route_id": route_id, "reason": "route_not_active"})
+            continue
+        if str(route.get("target_status") or "active") != "active":
+            skipped_routes.append({"route_id": route_id, "reason": "target_not_active"})
+            continue
+        stat = repository.get_auto_trigger_route_daily_stat(
+            route_id=route_id,
+            user_id=int(rule["user_id"]),
+            stat_date=stat_date,
+        )
+        if str(stat.get("status") or "") == "stopped":
+            skipped_routes.append({"route_id": route_id, "reason": "route_daily_risk_stopped", "stat": stat})
+            continue
+        open_state = repository.auto_trigger_route_has_open_run(
+            route_id=route_id,
+            subscription_id=int(subscription["id"]),
+            user_id=int(rule["user_id"]),
+        )
+        if open_state.get("has_open_run"):
+            skipped_routes.append({"route_id": route_id, "reason": "route_has_open_run", "open_state": open_state})
+            continue
+        active_routes.append(route)
+    return active_routes, skipped_routes
+
+
 def _subscription_threshold_status(subscription: Dict[str, Any]) -> str:
     financial = subscription.get("financial") if isinstance(subscription.get("financial"), dict) else {}
     return str(financial.get("threshold_status") or "").strip()
@@ -988,6 +1177,7 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
     daily_risk_control = rule.get("daily_risk_control") if isinstance(rule.get("daily_risk_control"), dict) else {}
     stat_date = _today_stat_date(timezone_name=str(daily_risk_control.get("timezone") or "Asia/Shanghai"))
     day_state = _is_rule_day_stopped(repository, rule, stat_date=stat_date)
+    has_routes = bool(rule.get("routes"))
     subscription_ids = rule.get("subscription_ids") if rule.get("scope_mode") == "selected_subscriptions" else None
     subscriptions = repository.list_auto_trigger_candidate_subscriptions(
         user_id=int(rule["user_id"]),
@@ -1001,7 +1191,7 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
         source = subscription.get("source") if isinstance(subscription.get("source"), dict) else {}
         summary["checked_count"] += 1
         try:
-            if day_state.get("stopped"):
+            if day_state.get("stopped") and not has_routes:
                 events.append(
                     _record_event(
                         repository,
@@ -1024,27 +1214,50 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                 events.append(_record_event(repository, rule=rule, subscription=subscription, performance=None, status="skipped", reason="source_not_active"))
                 summary["skipped_count"] += 1
                 continue
-            open_state = repository.subscription_has_open_run(subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]))
-            if open_state.get("has_open_run"):
-                events.append(_record_event(repository, rule=rule, subscription=subscription, performance=None, status="skipped", reason="subscription_has_open_run"))
-                summary["skipped_count"] += 1
-                continue
-            restart_state = _subscription_restart_state(subscription)
-            if not restart_state.get("can_restart"):
-                events.append(
-                    _record_event(
-                        repository,
-                        rule=rule,
-                        subscription=subscription,
-                        performance=None,
-                        status="skipped",
-                        reason="subscription_not_ready_for_restart",
-                        restart_state=restart_state,
-                        stat_date=stat_date,
+            restart_state = None
+            if not has_routes:
+                open_state = repository.subscription_has_open_run(subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]))
+                if open_state.get("has_open_run"):
+                    events.append(_record_event(repository, rule=rule, subscription=subscription, performance=None, status="skipped", reason="subscription_has_open_run"))
+                    summary["skipped_count"] += 1
+                    continue
+                restart_state = _subscription_restart_state(subscription)
+                if not restart_state.get("can_restart"):
+                    events.append(
+                        _record_event(
+                            repository,
+                            rule=rule,
+                            subscription=subscription,
+                            performance=None,
+                            status="skipped",
+                            reason="subscription_not_ready_for_restart",
+                            restart_state=restart_state,
+                            stat_date=stat_date,
+                        )
                     )
+                    summary["skipped_count"] += 1
+                    continue
+            else:
+                active_routes, skipped_routes = _active_routes_for_subscription(
+                    repository,
+                    rule=rule,
+                    subscription=subscription,
+                    stat_date=stat_date,
                 )
-                summary["skipped_count"] += 1
-                continue
+                if not active_routes:
+                    events.append(
+                        _record_event(
+                            repository,
+                            rule=rule,
+                            subscription=subscription,
+                            performance=None,
+                            status="skipped",
+                            reason="no_active_route",
+                            play_filter_result={"stat_date": stat_date, "skipped_routes": skipped_routes},
+                        )
+                    )
+                    summary["skipped_count"] += 1
+                    continue
 
             performance_url = _performance_url_from_source(source)
             if performance_url in performance_results_by_url:
@@ -1121,12 +1334,21 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                 subscription = activated
                 subscription["source"] = source
 
-            play_filter_result = _apply_subscription_play_filter(
-                repository,
-                rule=rule,
-                subscription=subscription,
-                matched_conditions=matched,
-            )
+            play_filter_result = None
+            if has_routes:
+                play_filter_result = {
+                    "mode": "route_scoped",
+                    "matched_conditions": matched,
+                    "active_route_count": len(active_routes),
+                    "skipped_routes": skipped_routes,
+                }
+            else:
+                play_filter_result = _apply_subscription_play_filter(
+                    repository,
+                    rule=rule,
+                    subscription=subscription,
+                    matched_conditions=matched,
+                )
             rule_run = repository.ensure_auto_trigger_rule_run(
                 rule_id=int(rule["id"]),
                 user_id=int(rule["user_id"]),
@@ -1134,23 +1356,33 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                 stat_date=stat_date,
                 started_issue_no=latest_issue_no,
             )
-            repository.reset_subscription_runtime(
-                subscription_id=int(subscription["id"]),
-                user_id=int(rule["user_id"]),
-                note="自动触发规则：%s" % str(rule.get("name") or ""),
-                enforce_threshold=True,
-            )
+            if not has_routes:
+                repository.reset_subscription_runtime(
+                    subscription_id=int(subscription["id"]),
+                    user_id=int(rule["user_id"]),
+                    note="自动触发规则：%s" % str(rule.get("name") or ""),
+                    enforce_threshold=True,
+                )
             dispatch_result = None
             if bool((rule.get("action") or {}).get("dispatch_latest_signal", True)):
+                dispatch_context = {
+                    "rule_id": int(rule["id"]),
+                    "rule_run_id": int(rule_run["id"]),
+                    "stat_date": stat_date,
+                }
+                if has_routes:
+                    dispatch_context.update(
+                        {
+                            "routes": active_routes,
+                            "matched_conditions": matched,
+                            "rule_action": rule.get("action") if isinstance(rule.get("action"), dict) else {},
+                        }
+                    )
                 dispatch_result = _dispatch_latest_signal_if_available(
                     repository,
                     subscription=subscription,
                     latest_settled_issue_no=latest_issue_no,
-                    auto_trigger_context={
-                        "rule_id": int(rule["id"]),
-                        "rule_run_id": int(rule_run["id"]),
-                        "stat_date": stat_date,
-                    },
+                    auto_trigger_context=dispatch_context,
                 )
             event = _record_event(
                 repository,

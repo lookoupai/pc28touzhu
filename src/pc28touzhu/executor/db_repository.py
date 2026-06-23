@@ -405,6 +405,7 @@ class DatabaseRepository:
             result_context_json TEXT NOT NULL DEFAULT '{}',
             auto_trigger_rule_id INTEGER,
             auto_trigger_rule_run_id INTEGER,
+            auto_trigger_route_id INTEGER,
             auto_trigger_stat_date TEXT NOT NULL DEFAULT '',
             settled_at TEXT,
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
@@ -412,7 +413,7 @@ class DatabaseRepository:
             FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id),
             FOREIGN KEY(user_id) REFERENCES users(id),
             FOREIGN KEY(signal_id) REFERENCES normalized_signals(id),
-            UNIQUE(subscription_id, signal_id)
+            FOREIGN KEY(auto_trigger_route_id) REFERENCES auto_trigger_rule_routes(id)
         )
         """,
         """
@@ -437,6 +438,7 @@ class DatabaseRepository:
             signal_id INTEGER NOT NULL,
             subscription_id INTEGER,
             progression_event_id INTEGER,
+            auto_trigger_route_id INTEGER,
             delivery_target_id INTEGER NOT NULL,
             telegram_account_id INTEGER,
             executor_type TEXT NOT NULL,
@@ -453,6 +455,7 @@ class DatabaseRepository:
             FOREIGN KEY(signal_id) REFERENCES normalized_signals(id),
             FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id),
             FOREIGN KEY(progression_event_id) REFERENCES subscription_progression_events(id),
+            FOREIGN KEY(auto_trigger_route_id) REFERENCES auto_trigger_rule_routes(id),
             FOREIGN KEY(delivery_target_id) REFERENCES delivery_targets(id),
             FOREIGN KEY(telegram_account_id) REFERENCES telegram_accounts(id),
             UNIQUE(user_id, idempotency_key)
@@ -670,6 +673,77 @@ class DatabaseRepository:
             UNIQUE(rule_id, subscription_id, stat_date)
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS auto_trigger_rule_routes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            delivery_target_id INTEGER NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'active',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            risk_mode TEXT NOT NULL DEFAULT 'inherit',
+            risk_control_json TEXT NOT NULL DEFAULT '{}',
+            settlement_mode TEXT NOT NULL DEFAULT 'inherit',
+            settlement_policy_json TEXT NOT NULL DEFAULT '{}',
+            staking_mode TEXT NOT NULL DEFAULT 'inherit',
+            staking_policy_json TEXT NOT NULL DEFAULT '{}',
+            play_filter_mode TEXT NOT NULL DEFAULT 'inherit',
+            play_filter_json TEXT NOT NULL DEFAULT '{}',
+            template_mode TEXT NOT NULL DEFAULT 'target_default',
+            template_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            FOREIGN KEY(rule_id) REFERENCES auto_trigger_rules(id),
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            FOREIGN KEY(delivery_target_id) REFERENCES delivery_targets(id),
+            FOREIGN KEY(template_id) REFERENCES message_templates(id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS auto_trigger_route_daily_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            route_id INTEGER NOT NULL,
+            rule_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            stat_date TEXT NOT NULL,
+            profit_amount REAL NOT NULL DEFAULT 0,
+            loss_amount REAL NOT NULL DEFAULT 0,
+            net_profit REAL NOT NULL DEFAULT 0,
+            settled_event_count INTEGER NOT NULL DEFAULT 0,
+            hit_count INTEGER NOT NULL DEFAULT 0,
+            miss_count INTEGER NOT NULL DEFAULT 0,
+            refund_count INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active',
+            stopped_reason TEXT NOT NULL DEFAULT '',
+            stopped_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            FOREIGN KEY(route_id) REFERENCES auto_trigger_rule_routes(id),
+            FOREIGN KEY(rule_id) REFERENCES auto_trigger_rules(id),
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            UNIQUE(route_id, stat_date)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS auto_trigger_route_progression_state (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            route_id INTEGER NOT NULL,
+            rule_id INTEGER NOT NULL,
+            subscription_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            current_step INTEGER NOT NULL DEFAULT 1,
+            last_signal_id INTEGER,
+            last_issue_no TEXT NOT NULL DEFAULT '',
+            last_result_type TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            FOREIGN KEY(route_id) REFERENCES auto_trigger_rule_routes(id),
+            FOREIGN KEY(rule_id) REFERENCES auto_trigger_rules(id),
+            FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id),
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            UNIQUE(route_id, subscription_id)
+        )
+        """,
         "CREATE INDEX IF NOT EXISTS idx_execution_jobs_status_time ON execution_jobs(status, execute_after, expire_at)",
         "CREATE INDEX IF NOT EXISTS idx_execution_attempts_job ON execution_attempts(job_id, attempt_no)",
         "CREATE INDEX IF NOT EXISTS idx_platform_alert_records_status_seen ON platform_alert_records(status, last_seen_at)",
@@ -685,6 +759,9 @@ class DatabaseRepository:
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_events_user_time ON auto_trigger_events(user_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_rule_daily_stats_user_date ON auto_trigger_rule_daily_stats(user_id, stat_date, status)",
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_rule_runs_subscription ON auto_trigger_rule_runs(subscription_id, user_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_auto_trigger_rule_routes_rule_status ON auto_trigger_rule_routes(rule_id, status, sort_order)",
+        "CREATE INDEX IF NOT EXISTS idx_auto_trigger_route_daily_stats_user_date ON auto_trigger_route_daily_stats(user_id, stat_date, status)",
+        "CREATE INDEX IF NOT EXISTS idx_auto_trigger_route_progression_state_route ON auto_trigger_route_progression_state(route_id, subscription_id)",
     ]
 
     def __init__(self, db_path: str = "pc28touzhu.db"):
@@ -707,6 +784,7 @@ class DatabaseRepository:
             self._ensure_message_template_columns(conn)
             self._ensure_execution_job_columns(conn)
             self._ensure_progression_event_columns(conn)
+            self._ensure_progression_event_route_indexes(conn)
             self._ensure_subscription_runtime_run_columns(conn)
             self._ensure_auto_trigger_rule_columns(conn)
             self._ensure_user_telegram_indexes(conn)
@@ -785,6 +863,7 @@ class DatabaseRepository:
         column_definitions = {
             "subscription_id": "ALTER TABLE execution_jobs ADD COLUMN subscription_id INTEGER",
             "progression_event_id": "ALTER TABLE execution_jobs ADD COLUMN progression_event_id INTEGER",
+            "auto_trigger_route_id": "ALTER TABLE execution_jobs ADD COLUMN auto_trigger_route_id INTEGER",
         }
         for column_name, ddl in column_definitions.items():
             if column_name not in existing_columns:
@@ -802,11 +881,89 @@ class DatabaseRepository:
             "result_context_json": "ALTER TABLE subscription_progression_events ADD COLUMN result_context_json TEXT NOT NULL DEFAULT '{}'",
             "auto_trigger_rule_id": "ALTER TABLE subscription_progression_events ADD COLUMN auto_trigger_rule_id INTEGER",
             "auto_trigger_rule_run_id": "ALTER TABLE subscription_progression_events ADD COLUMN auto_trigger_rule_run_id INTEGER",
+            "auto_trigger_route_id": "ALTER TABLE subscription_progression_events ADD COLUMN auto_trigger_route_id INTEGER",
             "auto_trigger_stat_date": "ALTER TABLE subscription_progression_events ADD COLUMN auto_trigger_stat_date TEXT NOT NULL DEFAULT ''",
         }
         for column_name, ddl in column_definitions.items():
             if column_name not in existing_columns:
                 conn.execute(ddl)
+
+    def _ensure_progression_event_route_indexes(self, conn: sqlite3.Connection) -> None:
+        indexes = conn.execute("PRAGMA index_list(subscription_progression_events)").fetchall()
+        for index in indexes:
+            index_name = str(index["name"])
+            if index_name.startswith("sqlite_autoindex_subscription_progression_events_"):
+                self._rebuild_progression_events_without_table_unique(conn)
+                break
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_progression_events_subscription_signal_legacy
+            ON subscription_progression_events(subscription_id, signal_id)
+            WHERE auto_trigger_route_id IS NULL
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_progression_events_subscription_signal_route
+            ON subscription_progression_events(subscription_id, signal_id, auto_trigger_route_id)
+            WHERE auto_trigger_route_id IS NOT NULL
+            """
+        )
+
+    def _rebuild_progression_events_without_table_unique(self, conn: sqlite3.Connection) -> None:
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS subscription_progression_events_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    subscription_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    signal_id INTEGER NOT NULL,
+                    issue_no TEXT NOT NULL DEFAULT '',
+                    progression_step INTEGER NOT NULL DEFAULT 1,
+                    stake_amount REAL NOT NULL DEFAULT 0,
+                    base_stake REAL NOT NULL DEFAULT 0,
+                    multiplier REAL NOT NULL DEFAULT 2,
+                    max_steps INTEGER NOT NULL DEFAULT 1,
+                    refund_action TEXT NOT NULL DEFAULT 'hold',
+                    cap_action TEXT NOT NULL DEFAULT 'reset',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    resolved_result_type TEXT NOT NULL DEFAULT '',
+                    settlement_rule_id TEXT NOT NULL DEFAULT '',
+                    profit_delta REAL NOT NULL DEFAULT 0,
+                    loss_delta REAL NOT NULL DEFAULT 0,
+                    net_delta REAL NOT NULL DEFAULT 0,
+                    settlement_snapshot_json TEXT NOT NULL DEFAULT '{}',
+                    result_context_json TEXT NOT NULL DEFAULT '{}',
+                    auto_trigger_rule_id INTEGER,
+                    auto_trigger_rule_run_id INTEGER,
+                    auto_trigger_route_id INTEGER,
+                    auto_trigger_stat_date TEXT NOT NULL DEFAULT '',
+                    settled_at TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                    FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id),
+                    FOREIGN KEY(user_id) REFERENCES users(id),
+                    FOREIGN KEY(signal_id) REFERENCES normalized_signals(id),
+                    FOREIGN KEY(auto_trigger_route_id) REFERENCES auto_trigger_rule_routes(id)
+                )
+                """
+            )
+            source_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(subscription_progression_events)").fetchall()}
+            target_columns = [str(row["name"]) for row in conn.execute("PRAGMA table_info(subscription_progression_events_new)").fetchall()]
+            selected_columns = [column for column in target_columns if column in source_columns]
+            if selected_columns:
+                columns_sql = ", ".join(selected_columns)
+                conn.execute(
+                    "INSERT OR IGNORE INTO subscription_progression_events_new(%s) SELECT %s FROM subscription_progression_events"
+                    % (columns_sql, columns_sql)
+                )
+            conn.execute("DROP TABLE subscription_progression_events")
+            conn.execute("ALTER TABLE subscription_progression_events_new RENAME TO subscription_progression_events")
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON")
 
     def _ensure_subscription_runtime_run_columns(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute("PRAGMA table_info(subscription_runtime_runs)").fetchall()
@@ -1035,6 +1192,7 @@ class DatabaseRepository:
             "result_context": _safe_json_loads(row.get("result_context_json")),
             "auto_trigger_rule_id": int(row["auto_trigger_rule_id"]) if row.get("auto_trigger_rule_id") is not None else None,
             "auto_trigger_rule_run_id": int(row["auto_trigger_rule_run_id"]) if row.get("auto_trigger_rule_run_id") is not None else None,
+            "auto_trigger_route_id": int(row["auto_trigger_route_id"]) if row.get("auto_trigger_route_id") is not None else None,
             "auto_trigger_stat_date": str(row.get("auto_trigger_stat_date") or ""),
             "settled_at": row.get("settled_at"),
             "created_at": row.get("created_at"),
@@ -1105,6 +1263,72 @@ class DatabaseRepository:
             "updated_at": row.get("updated_at"),
         }
 
+    def _serialize_auto_trigger_rule_route_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": int(row["id"]),
+            "rule_id": int(row["rule_id"]),
+            "user_id": int(row["user_id"]),
+            "delivery_target_id": int(row["delivery_target_id"]),
+            "name": str(row.get("name") or ""),
+            "status": str(row.get("status") or "active"),
+            "sort_order": int(row.get("sort_order") or 0),
+            "risk_mode": str(row.get("risk_mode") or "inherit"),
+            "risk_control": _safe_json_loads(row.get("risk_control_json")),
+            "settlement_mode": str(row.get("settlement_mode") or "inherit"),
+            "settlement_policy": _safe_json_loads(row.get("settlement_policy_json")),
+            "staking_mode": str(row.get("staking_mode") or "inherit"),
+            "staking_policy": _safe_json_loads(row.get("staking_policy_json")),
+            "play_filter_mode": str(row.get("play_filter_mode") or "inherit"),
+            "play_filter": _safe_json_loads(row.get("play_filter_json")),
+            "template_mode": str(row.get("template_mode") or "target_default"),
+            "template_id": int(row["template_id"]) if row.get("template_id") is not None else None,
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+            "target_key": str(row.get("target_key") or ""),
+            "target_name": str(row.get("target_name") or ""),
+            "target_status": str(row.get("target_status") or ""),
+            "executor_type": str(row.get("executor_type") or "telegram_group"),
+            "target_template_id": int(row["target_template_id"]) if row.get("target_template_id") is not None else None,
+            "telegram_account_id": int(row["telegram_account_id"]) if row.get("telegram_account_id") is not None else None,
+            "telegram_account_label": str(row.get("telegram_account_label") or ""),
+            "telegram_account_status": str(row.get("telegram_account_status") or ""),
+        }
+
+    def _serialize_auto_trigger_route_daily_stat_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": int(row["id"]) if row.get("id") is not None else None,
+            "route_id": int(row["route_id"]),
+            "rule_id": int(row["rule_id"]),
+            "user_id": int(row["user_id"]),
+            "stat_date": str(row.get("stat_date") or ""),
+            "profit_amount": _round_money(row.get("profit_amount")),
+            "loss_amount": _round_money(row.get("loss_amount")),
+            "net_profit": _round_money(row.get("net_profit")),
+            "settled_event_count": int(row.get("settled_event_count") or 0),
+            "hit_count": int(row.get("hit_count") or 0),
+            "miss_count": int(row.get("miss_count") or 0),
+            "refund_count": int(row.get("refund_count") or 0),
+            "status": str(row.get("status") or "active"),
+            "stopped_reason": str(row.get("stopped_reason") or ""),
+            "stopped_at": row.get("stopped_at"),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+
+    def _serialize_auto_trigger_route_progression_state_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": int(row["id"]) if row.get("id") is not None else None,
+            "route_id": int(row["route_id"]),
+            "rule_id": int(row["rule_id"]),
+            "subscription_id": int(row["subscription_id"]),
+            "user_id": int(row["user_id"]),
+            "current_step": int(row.get("current_step") or 1),
+            "last_signal_id": int(row["last_signal_id"]) if row.get("last_signal_id") is not None else None,
+            "last_issue_no": str(row.get("last_issue_no") or ""),
+            "last_result_type": str(row.get("last_result_type") or ""),
+            "updated_at": row.get("updated_at"),
+        }
+
     def _serialize_auto_trigger_rule_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "id": int(row["id"]),
@@ -1126,6 +1350,7 @@ class DatabaseRepository:
             "last_triggered_at": row.get("last_triggered_at"),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
+            "routes": [],
         }
 
     def _serialize_auto_trigger_event_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
@@ -1182,6 +1407,7 @@ class DatabaseRepository:
             "signal_id": int(row["signal_id"]),
             "subscription_id": int(row["subscription_id"]) if row.get("subscription_id") is not None else None,
             "progression_event_id": int(row["progression_event_id"]) if row.get("progression_event_id") is not None else None,
+            "auto_trigger_route_id": int(row["auto_trigger_route_id"]) if row.get("auto_trigger_route_id") is not None else None,
             "delivery_target_id": int(row["delivery_target_id"]),
             "telegram_account_id": int(row["telegram_account_id"]) if row["telegram_account_id"] is not None else None,
             "executor_type": str(row["executor_type"]),
@@ -2544,6 +2770,7 @@ class DatabaseRepository:
         action: Optional[dict] = None,
         daily_risk_control: Optional[dict] = None,
         cooldown_issues: int = 10,
+        routes: Optional[list[dict]] = None,
     ) -> Dict[str, Any]:
         now = _utc_now_iso()
         with self._connect() as conn:
@@ -2572,11 +2799,22 @@ class DatabaseRepository:
                 ),
             )
             rule_id = int(cur.lastrowid)
+            self._sync_auto_trigger_rule_routes(
+                conn,
+                rule_id=rule_id,
+                user_id=int(user_id),
+                routes=routes or [],
+                updated_at=now,
+            )
         return self.get_auto_trigger_rule(rule_id) or {}
 
     def get_auto_trigger_rule(self, rule_id: int) -> Optional[Dict[str, Any]]:
         row = self._fetch_one("SELECT * FROM auto_trigger_rules WHERE id = ?", (int(rule_id),))
-        return self._serialize_auto_trigger_rule_row(row) if row else None
+        if not row:
+            return None
+        item = self._serialize_auto_trigger_rule_row(row)
+        item["routes"] = self.list_auto_trigger_rule_routes(rule_id=int(rule_id), user_id=int(item["user_id"]))
+        return item
 
     def list_auto_trigger_rules(self, *, user_id: Optional[int] = None, status: Optional[str] = None) -> list[Dict[str, Any]]:
         clauses = []
@@ -2592,7 +2830,208 @@ class DatabaseRepository:
             "SELECT * FROM auto_trigger_rules" + where + " ORDER BY id DESC",
             tuple(params),
         )
-        return [self._serialize_auto_trigger_rule_row(row) for row in rows]
+        items = [self._serialize_auto_trigger_rule_row(row) for row in rows]
+        route_map: dict[int, list[Dict[str, Any]]] = {}
+        rule_ids = [int(item["id"]) for item in items]
+        if rule_ids:
+            placeholders = ",".join(["?"] * len(rule_ids))
+            route_params: list[Any] = list(rule_ids)
+            route_where = "r.rule_id IN (%s)" % placeholders
+            if user_id is not None:
+                route_where += " AND r.user_id = ?"
+                route_params.append(int(user_id))
+            route_rows = self._fetch_all(
+                """
+                SELECT
+                    r.*,
+                    dt.target_key,
+                    dt.target_name,
+                    dt.status AS target_status,
+                    dt.executor_type,
+                    dt.template_id AS target_template_id,
+                    dt.telegram_account_id,
+                    ta.label AS telegram_account_label,
+                    ta.status AS telegram_account_status
+                FROM auto_trigger_rule_routes r
+                JOIN delivery_targets dt ON dt.id = r.delivery_target_id
+                LEFT JOIN telegram_accounts ta ON ta.id = dt.telegram_account_id
+                WHERE """ + route_where + """
+                ORDER BY r.rule_id ASC, r.sort_order ASC, r.id ASC
+                """,
+                tuple(route_params),
+            )
+            for row in route_rows:
+                route = self._serialize_auto_trigger_rule_route_row(row)
+                route_map.setdefault(int(route["rule_id"]), []).append(route)
+        for item in items:
+            item["routes"] = route_map.get(int(item["id"]), [])
+        return items
+
+    def get_auto_trigger_rule_route(self, route_id: int) -> Optional[Dict[str, Any]]:
+        row = self._fetch_one(
+            """
+            SELECT
+                r.*,
+                dt.target_key,
+                dt.target_name,
+                dt.status AS target_status,
+                dt.executor_type,
+                dt.template_id AS target_template_id,
+                dt.telegram_account_id,
+                ta.label AS telegram_account_label,
+                ta.status AS telegram_account_status
+            FROM auto_trigger_rule_routes r
+            JOIN delivery_targets dt ON dt.id = r.delivery_target_id
+            LEFT JOIN telegram_accounts ta ON ta.id = dt.telegram_account_id
+            WHERE r.id = ?
+            LIMIT 1
+            """,
+            (int(route_id),),
+        )
+        return self._serialize_auto_trigger_rule_route_row(row) if row else None
+
+    def list_auto_trigger_rule_routes(
+        self,
+        *,
+        rule_id: int,
+        user_id: int,
+        status: Optional[str] = None,
+    ) -> list[Dict[str, Any]]:
+        clauses = ["r.rule_id = ?", "r.user_id = ?"]
+        params: list[Any] = [int(rule_id), int(user_id)]
+        if status:
+            clauses.append("r.status = ?")
+            params.append(str(status))
+        rows = self._fetch_all(
+            """
+            SELECT
+                r.*,
+                dt.target_key,
+                dt.target_name,
+                dt.status AS target_status,
+                dt.executor_type,
+                dt.template_id AS target_template_id,
+                dt.telegram_account_id,
+                ta.label AS telegram_account_label,
+                ta.status AS telegram_account_status
+            FROM auto_trigger_rule_routes r
+            JOIN delivery_targets dt ON dt.id = r.delivery_target_id
+            LEFT JOIN telegram_accounts ta ON ta.id = dt.telegram_account_id
+            WHERE """ + " AND ".join(clauses) + """
+            ORDER BY r.sort_order ASC, r.id ASC
+            """,
+            tuple(params),
+        )
+        return [self._serialize_auto_trigger_rule_route_row(row) for row in rows]
+
+    def _sync_auto_trigger_rule_routes(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        rule_id: int,
+        user_id: int,
+        routes: list[dict],
+        updated_at: str,
+    ) -> None:
+        rows = conn.execute(
+            "SELECT id FROM auto_trigger_rule_routes WHERE rule_id = ? AND user_id = ?",
+            (int(rule_id), int(user_id)),
+        ).fetchall()
+        existing_ids = {int(row["id"]) for row in rows}
+        seen_ids: set[int] = set()
+        for index, route in enumerate(routes or []):
+            route_id = route.get("id")
+            normalized_route_id = int(route_id) if route_id not in {None, ""} else None
+            sort_order = int(route.get("sort_order") if route.get("sort_order") not in {None, ""} else index)
+            route_values = (
+                int(rule_id),
+                int(user_id),
+                int(route["delivery_target_id"]),
+                str(route.get("name") or ""),
+                str(route.get("status") or "active"),
+                sort_order,
+                str(route.get("risk_mode") or "inherit"),
+                _safe_json_dumps(route.get("risk_control") or {}),
+                str(route.get("settlement_mode") or "inherit"),
+                _safe_json_dumps(route.get("settlement_policy") or {}),
+                str(route.get("staking_mode") or "inherit"),
+                _safe_json_dumps(route.get("staking_policy") or {}),
+                str(route.get("play_filter_mode") or "inherit"),
+                _safe_json_dumps(route.get("play_filter") or {}),
+                str(route.get("template_mode") or "target_default"),
+                int(route["template_id"]) if route.get("template_id") is not None else None,
+                updated_at,
+            )
+            if normalized_route_id is not None and normalized_route_id in existing_ids:
+                seen_ids.add(normalized_route_id)
+                conn.execute(
+                    """
+                    UPDATE auto_trigger_rule_routes
+                    SET delivery_target_id = ?,
+                        name = ?,
+                        status = ?,
+                        sort_order = ?,
+                        risk_mode = ?,
+                        risk_control_json = ?,
+                        settlement_mode = ?,
+                        settlement_policy_json = ?,
+                        staking_mode = ?,
+                        staking_policy_json = ?,
+                        play_filter_mode = ?,
+                        play_filter_json = ?,
+                        template_mode = ?,
+                        template_id = ?,
+                        updated_at = ?
+                    WHERE id = ? AND rule_id = ? AND user_id = ?
+                    """,
+                    (
+                        route_values[2],
+                        route_values[3],
+                        route_values[4],
+                        route_values[5],
+                        route_values[6],
+                        route_values[7],
+                        route_values[8],
+                        route_values[9],
+                        route_values[10],
+                        route_values[11],
+                        route_values[12],
+                        route_values[13],
+                        route_values[14],
+                        route_values[15],
+                        updated_at,
+                        normalized_route_id,
+                        int(rule_id),
+                        int(user_id),
+                    ),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    INSERT INTO auto_trigger_rule_routes(
+                        rule_id, user_id, delivery_target_id, name, status, sort_order,
+                        risk_mode, risk_control_json, settlement_mode, settlement_policy_json,
+                        staking_mode, staking_policy_json, play_filter_mode, play_filter_json,
+                        template_mode, template_id, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (*route_values, updated_at),
+                )
+                seen_ids.add(int(cur.lastrowid))
+        archived_ids = sorted(existing_ids - seen_ids)
+        if archived_ids:
+            placeholders = ",".join(["?"] * len(archived_ids))
+            conn.execute(
+                """
+                UPDATE auto_trigger_rule_routes
+                SET status = 'archived',
+                    updated_at = ?
+                WHERE rule_id = ?
+                  AND user_id = ?
+                  AND id IN (""" + placeholders + """)
+                """,
+                (updated_at, int(rule_id), int(user_id), *archived_ids),
+            )
 
     def update_auto_trigger_rule_record(
         self,
@@ -2609,6 +3048,7 @@ class DatabaseRepository:
         action: Optional[dict],
         daily_risk_control: Optional[dict],
         cooldown_issues: int,
+        routes: Optional[list[dict]] = None,
     ) -> Optional[Dict[str, Any]]:
         now = _utc_now_iso()
         with self._connect() as conn:
@@ -2646,6 +3086,13 @@ class DatabaseRepository:
             )
             if cursor.rowcount <= 0:
                 return None
+            self._sync_auto_trigger_rule_routes(
+                conn,
+                rule_id=int(rule_id),
+                user_id=int(user_id),
+                routes=routes or [],
+                updated_at=now,
+            )
         return self.get_auto_trigger_rule(rule_id)
 
     def update_auto_trigger_rule_status(self, *, rule_id: int, user_id: int, status: str) -> Optional[Dict[str, Any]]:
@@ -2817,6 +3264,98 @@ class DatabaseRepository:
             "stopped_at": None,
             "created_at": None,
             "updated_at": None,
+        }
+
+    def get_auto_trigger_route_daily_stat(self, *, route_id: int, user_id: int, stat_date: str) -> Dict[str, Any]:
+        route = self.get_auto_trigger_rule_route(int(route_id))
+        rule_id = int(route["rule_id"]) if route else 0
+        row = self._fetch_one(
+            """
+            SELECT *
+            FROM auto_trigger_route_daily_stats
+            WHERE route_id = ? AND user_id = ? AND stat_date = ?
+            LIMIT 1
+            """,
+            (int(route_id), int(user_id), str(stat_date or "").strip()),
+        )
+        if row:
+            return self._serialize_auto_trigger_route_daily_stat_row(row)
+        return {
+            "id": None,
+            "route_id": int(route_id),
+            "rule_id": rule_id,
+            "user_id": int(user_id),
+            "stat_date": str(stat_date or "").strip(),
+            "profit_amount": 0.0,
+            "loss_amount": 0.0,
+            "net_profit": 0.0,
+            "settled_event_count": 0,
+            "hit_count": 0,
+            "miss_count": 0,
+            "refund_count": 0,
+            "status": "active",
+            "stopped_reason": "",
+            "stopped_at": None,
+            "created_at": None,
+            "updated_at": None,
+        }
+
+    def get_auto_trigger_route_progression_state(self, *, route_id: int, subscription_id: int, user_id: int) -> Dict[str, Any]:
+        route = self.get_auto_trigger_rule_route(int(route_id))
+        rule_id = int(route["rule_id"]) if route else 0
+        row = self._fetch_one(
+            """
+            SELECT *
+            FROM auto_trigger_route_progression_state
+            WHERE route_id = ? AND subscription_id = ? AND user_id = ?
+            LIMIT 1
+            """,
+            (int(route_id), int(subscription_id), int(user_id)),
+        )
+        if row:
+            return self._serialize_auto_trigger_route_progression_state_row(row)
+        return {
+            "id": None,
+            "route_id": int(route_id),
+            "rule_id": rule_id,
+            "subscription_id": int(subscription_id),
+            "user_id": int(user_id),
+            "current_step": 1,
+            "last_signal_id": None,
+            "last_issue_no": "",
+            "last_result_type": "",
+            "updated_at": None,
+        }
+
+    def auto_trigger_route_has_open_run(self, *, route_id: int, subscription_id: int, user_id: int) -> Dict[str, Any]:
+        self.expire_due_jobs()
+        row = self._fetch_one(
+            """
+            SELECT
+                (SELECT COUNT(1)
+                 FROM subscription_progression_events
+                 WHERE subscription_id = ?
+                   AND user_id = ?
+                   AND auto_trigger_route_id = ?
+                   AND status IN ('pending', 'placed')) AS open_event_count,
+                (SELECT COUNT(1)
+                 FROM execution_jobs
+                 WHERE subscription_id = ?
+                   AND user_id = ?
+                   AND auto_trigger_route_id = ?
+                   AND status = 'pending') AS pending_job_count
+            """,
+            (
+                int(subscription_id), int(user_id), int(route_id),
+                int(subscription_id), int(user_id), int(route_id),
+            ),
+        ) or {}
+        open_event_count = int(row.get("open_event_count") or 0)
+        pending_job_count = int(row.get("pending_job_count") or 0)
+        return {
+            "has_open_run": open_event_count > 0 or pending_job_count > 0,
+            "open_event_count": open_event_count,
+            "pending_job_count": pending_job_count,
         }
 
     def get_auto_trigger_rule_run(self, rule_run_id: int) -> Optional[Dict[str, Any]]:
@@ -3024,6 +3563,257 @@ class DatabaseRepository:
             (int(rule_id), int(user_id), str(stat_date or "").strip()),
         ).fetchone()
         return self._serialize_auto_trigger_rule_daily_stat_row(dict(row)) if row else {}
+
+    def upsert_auto_trigger_route_daily_stat(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        route_id: int,
+        rule_id: int,
+        user_id: int,
+        stat_date: str,
+        profit_delta: float,
+        loss_delta: float,
+        net_delta: float,
+        result_type: str,
+        updated_at: str,
+    ) -> Dict[str, Any]:
+        hit_count = 1 if result_type == "hit" else 0
+        miss_count = 1 if result_type == "miss" else 0
+        refund_count = 1 if result_type == "refund" else 0
+        conn.execute(
+            """
+            INSERT INTO auto_trigger_route_daily_stats(
+                route_id, rule_id, user_id, stat_date,
+                profit_amount, loss_amount, net_profit,
+                settled_event_count, hit_count, miss_count, refund_count,
+                status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+            ON CONFLICT(route_id, stat_date) DO UPDATE SET
+                rule_id = excluded.rule_id,
+                user_id = excluded.user_id,
+                profit_amount = ROUND(auto_trigger_route_daily_stats.profit_amount + excluded.profit_amount, 2),
+                loss_amount = ROUND(auto_trigger_route_daily_stats.loss_amount + excluded.loss_amount, 2),
+                net_profit = ROUND(auto_trigger_route_daily_stats.net_profit + excluded.net_profit, 2),
+                settled_event_count = auto_trigger_route_daily_stats.settled_event_count + excluded.settled_event_count,
+                hit_count = auto_trigger_route_daily_stats.hit_count + excluded.hit_count,
+                miss_count = auto_trigger_route_daily_stats.miss_count + excluded.miss_count,
+                refund_count = auto_trigger_route_daily_stats.refund_count + excluded.refund_count,
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(route_id),
+                int(rule_id),
+                int(user_id),
+                str(stat_date or "").strip(),
+                _round_money(profit_delta),
+                _round_money(loss_delta),
+                _round_money(net_delta),
+                1,
+                hit_count,
+                miss_count,
+                refund_count,
+                updated_at,
+                updated_at,
+            ),
+        )
+        row = conn.execute(
+            """
+            SELECT *
+            FROM auto_trigger_route_daily_stats
+            WHERE route_id = ? AND user_id = ? AND stat_date = ?
+            LIMIT 1
+            """,
+            (int(route_id), int(user_id), str(stat_date or "").strip()),
+        ).fetchone()
+        return self._serialize_auto_trigger_route_daily_stat_row(dict(row)) if row else {}
+
+    def upsert_auto_trigger_route_progression_state(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        route_id: int,
+        rule_id: int,
+        subscription_id: int,
+        user_id: int,
+        current_step: int,
+        last_signal_id: Optional[int],
+        last_issue_no: str,
+        last_result_type: str,
+        updated_at: str,
+    ) -> Dict[str, Any]:
+        conn.execute(
+            """
+            INSERT INTO auto_trigger_route_progression_state(
+                route_id, rule_id, subscription_id, user_id,
+                current_step, last_signal_id, last_issue_no, last_result_type, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(route_id, subscription_id) DO UPDATE SET
+                rule_id = excluded.rule_id,
+                user_id = excluded.user_id,
+                current_step = excluded.current_step,
+                last_signal_id = excluded.last_signal_id,
+                last_issue_no = excluded.last_issue_no,
+                last_result_type = excluded.last_result_type,
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(route_id),
+                int(rule_id),
+                int(subscription_id),
+                int(user_id),
+                max(1, int(current_step or 1)),
+                int(last_signal_id) if last_signal_id is not None else None,
+                str(last_issue_no or ""),
+                str(last_result_type or ""),
+                updated_at,
+            ),
+        )
+        row = conn.execute(
+            """
+            SELECT *
+            FROM auto_trigger_route_progression_state
+            WHERE route_id = ? AND subscription_id = ? AND user_id = ?
+            LIMIT 1
+            """,
+            (int(route_id), int(subscription_id), int(user_id)),
+        ).fetchone()
+        return self._serialize_auto_trigger_route_progression_state_row(dict(row)) if row else {}
+
+    def stop_auto_trigger_route_day(
+        self,
+        *,
+        route_id: int,
+        user_id: int,
+        stat_date: str,
+        reason: str,
+    ) -> Dict[str, Any]:
+        route = self.get_auto_trigger_rule_route(int(route_id))
+        if not route or int(route.get("user_id") or 0) != int(user_id):
+            raise ValueError("route_id 对应的自动触发路由不存在")
+        now = _utc_now_iso()
+        normalized_stat_date = str(stat_date or "").strip()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO auto_trigger_route_daily_stats(
+                    route_id, rule_id, user_id, stat_date, status,
+                    stopped_reason, stopped_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'stopped', ?, ?, ?, ?)
+                ON CONFLICT(route_id, stat_date) DO UPDATE SET
+                    rule_id = excluded.rule_id,
+                    user_id = excluded.user_id,
+                    status = 'stopped',
+                    stopped_reason = CASE
+                        WHEN auto_trigger_route_daily_stats.stopped_reason = '' THEN excluded.stopped_reason
+                        ELSE auto_trigger_route_daily_stats.stopped_reason
+                    END,
+                    stopped_at = COALESCE(auto_trigger_route_daily_stats.stopped_at, excluded.stopped_at),
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    int(route_id),
+                    int(route["rule_id"]),
+                    int(user_id),
+                    normalized_stat_date,
+                    str(reason or ""),
+                    now,
+                    now,
+                    now,
+                ),
+            )
+        return self.get_auto_trigger_route_daily_stat(route_id=route_id, user_id=user_id, stat_date=normalized_stat_date)
+
+    def resume_auto_trigger_route_day(
+        self,
+        *,
+        route_id: int,
+        user_id: int,
+        stat_date: str,
+    ) -> Dict[str, Any]:
+        now = _utc_now_iso()
+        normalized_stat_date = str(stat_date or "").strip()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE auto_trigger_route_daily_stats
+                SET status = 'active',
+                    stopped_reason = '',
+                    stopped_at = NULL,
+                    updated_at = ?
+                WHERE route_id = ? AND user_id = ? AND stat_date = ? AND status = 'stopped'
+                """,
+                (now, int(route_id), int(user_id), normalized_stat_date),
+            )
+        return self.get_auto_trigger_route_daily_stat(route_id=route_id, user_id=user_id, stat_date=normalized_stat_date)
+
+    def cancel_pending_auto_trigger_route_jobs(
+        self,
+        *,
+        route_id: int,
+        user_id: int,
+        stat_date: str,
+        reason: str,
+    ) -> Dict[str, Any]:
+        now = _utc_now_iso()
+        normalized_stat_date = str(stat_date or "").strip()
+        with self._connect() as conn:
+            job_cursor = conn.execute(
+                """
+                UPDATE execution_jobs
+                SET status = 'expired',
+                    error_message = ?,
+                    updated_at = ?
+                WHERE user_id = ?
+                  AND auto_trigger_route_id = ?
+                  AND status = 'pending'
+                  AND progression_event_id IN (
+                      SELECT id
+                      FROM subscription_progression_events
+                      WHERE auto_trigger_route_id = ?
+                        AND user_id = ?
+                        AND auto_trigger_stat_date = ?
+                  )
+                """,
+                (
+                    str(reason or "路由日风控已停止"),
+                    now,
+                    int(user_id),
+                    int(route_id),
+                    int(route_id),
+                    int(user_id),
+                    normalized_stat_date,
+                ),
+            )
+            event_cursor = conn.execute(
+                """
+                UPDATE subscription_progression_events
+                SET status = 'cancelled',
+                    result_context_json = ?,
+                    updated_at = ?
+                WHERE auto_trigger_route_id = ?
+                  AND user_id = ?
+                  AND auto_trigger_stat_date = ?
+                  AND status = 'pending'
+                  AND id NOT IN (
+                      SELECT progression_event_id
+                      FROM execution_jobs
+                      WHERE progression_event_id IS NOT NULL
+                        AND status NOT IN ('pending', 'expired')
+                  )
+                """,
+                (
+                    _safe_json_dumps({"cancel_reason": str(reason or "路由日风控已停止")}),
+                    now,
+                    int(route_id),
+                    int(user_id),
+                    normalized_stat_date,
+                ),
+            )
+        return {
+            "expired_job_count": int(job_cursor.rowcount or 0),
+            "cancelled_event_count": int(event_cursor.rowcount or 0),
+        }
 
     def cancel_pending_auto_trigger_rule_jobs(
         self,
@@ -4069,15 +4859,31 @@ class DatabaseRepository:
             )
         return self.get_subscription_progression_state(subscription_id)
 
-    def get_progression_event_by_signal(self, *, subscription_id: int, signal_id: int) -> Optional[Dict[str, Any]]:
-        row = self._fetch_one(
-            """
-            SELECT * FROM subscription_progression_events
-            WHERE subscription_id = ? AND signal_id = ?
-            LIMIT 1
-            """,
-            (int(subscription_id), int(signal_id)),
-        )
+    def get_progression_event_by_signal(
+        self,
+        *,
+        subscription_id: int,
+        signal_id: int,
+        auto_trigger_route_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if auto_trigger_route_id is None:
+            row = self._fetch_one(
+                """
+                SELECT * FROM subscription_progression_events
+                WHERE subscription_id = ? AND signal_id = ? AND auto_trigger_route_id IS NULL
+                LIMIT 1
+                """,
+                (int(subscription_id), int(signal_id)),
+            )
+        else:
+            row = self._fetch_one(
+                """
+                SELECT * FROM subscription_progression_events
+                WHERE subscription_id = ? AND signal_id = ? AND auto_trigger_route_id = ?
+                LIMIT 1
+                """,
+                (int(subscription_id), int(signal_id), int(auto_trigger_route_id)),
+            )
         return self._serialize_progression_event_row(row) if row else None
 
     def get_latest_pending_progression_event(self, *, subscription_id: int) -> Optional[Dict[str, Any]]:
@@ -4145,31 +4951,37 @@ class DatabaseRepository:
         settlement_snapshot: Optional[dict] = None,
         auto_trigger_rule_id: Optional[int] = None,
         auto_trigger_rule_run_id: Optional[int] = None,
+        auto_trigger_route_id: Optional[int] = None,
         auto_trigger_stat_date: str = "",
         status: str = "pending",
     ) -> Dict[str, Any]:
-        existing = self.get_progression_event_by_signal(subscription_id=subscription_id, signal_id=signal_id)
+        existing = self.get_progression_event_by_signal(
+            subscription_id=subscription_id,
+            signal_id=signal_id,
+            auto_trigger_route_id=auto_trigger_route_id,
+        )
         if existing:
             return existing
         now = _utc_now_iso()
         with self._connect() as conn:
-            self._ensure_active_subscription_runtime_run(
-                conn,
-                subscription_id=int(subscription_id),
-                user_id=int(user_id),
-                issue_no=str(issue_no or ""),
-                signal_id=int(signal_id),
-                started_at=now,
-            )
+            if auto_trigger_route_id is None:
+                self._ensure_active_subscription_runtime_run(
+                    conn,
+                    subscription_id=int(subscription_id),
+                    user_id=int(user_id),
+                    issue_no=str(issue_no or ""),
+                    signal_id=int(signal_id),
+                    started_at=now,
+                )
             cur = conn.execute(
                 """
                 INSERT INTO subscription_progression_events(
                     subscription_id, user_id, signal_id, issue_no, progression_step, stake_amount,
                     base_stake, multiplier, max_steps, refund_action, cap_action,
                     settlement_rule_id, settlement_snapshot_json,
-                    auto_trigger_rule_id, auto_trigger_rule_run_id, auto_trigger_stat_date,
+                    auto_trigger_rule_id, auto_trigger_rule_run_id, auto_trigger_route_id, auto_trigger_stat_date,
                     status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(subscription_id),
@@ -4187,6 +4999,7 @@ class DatabaseRepository:
                     _safe_json_dumps(settlement_snapshot or {}),
                     int(auto_trigger_rule_id) if auto_trigger_rule_id is not None else None,
                     int(auto_trigger_rule_run_id) if auto_trigger_rule_run_id is not None else None,
+                    int(auto_trigger_route_id) if auto_trigger_route_id is not None else None,
                     str(auto_trigger_stat_date or ""),
                     str(status or "pending"),
                     now,
@@ -4216,6 +5029,223 @@ class DatabaseRepository:
             )
         return self.get_progression_event(progression_event_id)
 
+    def _settle_auto_trigger_route_progression_event(
+        self,
+        *,
+        current_event: Dict[str, Any],
+        subscription_id: int,
+        user_id: int,
+        normalized_result: str,
+        next_step: int,
+        result_context: Optional[dict] = None,
+    ) -> Dict[str, Any]:
+        route_id = int(current_event["auto_trigger_route_id"])
+        now = _utc_now_iso()
+        signal = self.get_signal(int(current_event["signal_id"])) if current_event.get("signal_id") is not None else None
+        auto_trigger_daily_risk: Dict[str, Any] = {}
+
+        with self._connect() as conn:
+            route_row = conn.execute(
+                """
+                SELECT r.*, ar.daily_risk_control_json
+                FROM auto_trigger_rule_routes r
+                LEFT JOIN auto_trigger_rules ar ON ar.id = r.rule_id
+                WHERE r.id = ? AND r.user_id = ?
+                LIMIT 1
+                """,
+                (route_id, int(user_id)),
+            ).fetchone()
+            if not route_row:
+                raise ValueError("auto_trigger_route_id 对应的自动触发路由不存在")
+            route = dict(route_row)
+            rule_id = int(route["rule_id"])
+
+            subscription_row = conn.execute(
+                "SELECT source_id, strategy_json FROM user_subscriptions WHERE id = ? AND user_id = ? LIMIT 1",
+                (int(subscription_id), int(user_id)),
+            ).fetchone()
+            strategy = _safe_json_loads(subscription_row["strategy_json"]) if subscription_row else {}
+            source_id = int(subscription_row["source_id"]) if subscription_row and subscription_row["source_id"] is not None else None
+
+            conn.execute(
+                """
+                UPDATE subscription_progression_events
+                SET status = 'settled',
+                    resolved_result_type = ?,
+                    settled_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (normalized_result, now, now, int(current_event["id"])),
+            )
+            self.upsert_auto_trigger_route_progression_state(
+                conn,
+                route_id=route_id,
+                rule_id=rule_id,
+                subscription_id=int(subscription_id),
+                user_id=int(user_id),
+                current_step=max(1, int(next_step or 1)),
+                last_signal_id=int(current_event["signal_id"]) if current_event.get("signal_id") is not None else None,
+                last_issue_no=str(current_event.get("issue_no") or ""),
+                last_result_type=normalized_result,
+                updated_at=now,
+            )
+
+            stake_amount = _round_money(current_event.get("stake_amount"))
+            settlement_context = _event_settlement_context(
+                current_event=current_event,
+                signal=signal,
+                strategy=strategy,
+            )
+            profit_delta = 0.0
+            loss_delta = 0.0
+            net_delta = 0.0
+            if normalized_result == "hit":
+                profit_delta = _progression_hit_profit_delta(
+                    settlement_context=settlement_context,
+                    signal=signal,
+                    stake_amount=stake_amount,
+                )
+                net_delta = profit_delta
+            elif normalized_result == "miss":
+                loss_delta = stake_amount
+                net_delta = -stake_amount
+
+            settlement_snapshot = dict(settlement_context.get("snapshot") or {})
+            result_context_payload = {
+                "result_type": normalized_result,
+                "next_step": max(1, int(next_step or 1)),
+                "route_id": route_id,
+            }
+            if isinstance(result_context, dict):
+                result_context_payload.update(result_context)
+            conn.execute(
+                """
+                UPDATE subscription_progression_events
+                SET settlement_rule_id = ?,
+                    profit_delta = ?,
+                    loss_delta = ?,
+                    net_delta = ?,
+                    settlement_snapshot_json = ?,
+                    result_context_json = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    str(settlement_context.get("settlement_rule_id") or ""),
+                    profit_delta,
+                    loss_delta,
+                    net_delta,
+                    _safe_json_dumps(settlement_snapshot),
+                    _safe_json_dumps(result_context_payload),
+                    now,
+                    int(current_event["id"]),
+                ),
+            )
+
+            if source_id is not None:
+                self._upsert_subscription_daily_stat(
+                    conn,
+                    stat_date=_shanghai_date(now),
+                    user_id=int(user_id),
+                    subscription_id=int(subscription_id),
+                    source_id=int(source_id),
+                    profit_delta=profit_delta,
+                    loss_delta=loss_delta,
+                    net_delta=net_delta,
+                    result_type=normalized_result,
+                    updated_at=now,
+                )
+
+            stat_date = str(current_event.get("auto_trigger_stat_date") or "").strip() or _shanghai_date(now)
+            self.upsert_auto_trigger_rule_daily_stat(
+                conn,
+                rule_id=rule_id,
+                user_id=int(user_id),
+                stat_date=stat_date,
+                profit_delta=profit_delta,
+                loss_delta=loss_delta,
+                net_delta=net_delta,
+                result_type=normalized_result,
+                updated_at=now,
+            )
+            route_stat = self.upsert_auto_trigger_route_daily_stat(
+                conn,
+                route_id=route_id,
+                rule_id=rule_id,
+                user_id=int(user_id),
+                stat_date=stat_date,
+                profit_delta=profit_delta,
+                loss_delta=loss_delta,
+                net_delta=net_delta,
+                result_type=normalized_result,
+                updated_at=now,
+            )
+
+            risk_mode = str(route.get("risk_mode") or "inherit").strip() or "inherit"
+            if risk_mode == "override":
+                daily_risk_control = _safe_json_loads(route.get("risk_control_json"))
+            elif risk_mode == "disabled":
+                daily_risk_control = {"enabled": False}
+            else:
+                daily_risk_control = _safe_json_loads(route.get("daily_risk_control_json"))
+
+            stop_reason = ""
+            if str(route_stat.get("status") or "") == "stopped":
+                stop_reason = str(route_stat.get("stopped_reason") or "daily_risk_stopped")
+            elif bool(daily_risk_control.get("enabled")):
+                profit_target = _round_money(daily_risk_control.get("profit_target"))
+                loss_limit = _round_money(daily_risk_control.get("loss_limit"))
+                current_route_net = _round_money(route_stat.get("net_profit"))
+                if profit_target > 0 and current_route_net >= profit_target:
+                    stop_reason = "profit_target_hit"
+                elif loss_limit > 0 and current_route_net <= -loss_limit:
+                    stop_reason = "loss_limit_hit"
+                if stop_reason:
+                    conn.execute(
+                        """
+                        UPDATE auto_trigger_route_daily_stats
+                        SET status = 'stopped',
+                            stopped_reason = ?,
+                            stopped_at = COALESCE(stopped_at, ?),
+                            updated_at = ?
+                        WHERE route_id = ? AND user_id = ? AND stat_date = ?
+                        """,
+                        (stop_reason, now, now, route_id, int(user_id), stat_date),
+                    )
+
+            auto_trigger_daily_risk = {
+                "scope": "route",
+                "stopped": bool(stop_reason),
+                "reason": stop_reason,
+                "rule_id": rule_id,
+                "route_id": route_id,
+                "stat_date": stat_date,
+                "net_profit": _round_money(route_stat.get("net_profit")),
+                "risk_mode": risk_mode,
+                "cancel_pending_jobs": bool(daily_risk_control.get("cancel_pending_jobs", True)),
+            }
+
+        if auto_trigger_daily_risk.get("stopped") and auto_trigger_daily_risk.get("cancel_pending_jobs", True):
+            auto_trigger_daily_risk["cancel"] = self.cancel_pending_auto_trigger_route_jobs(
+                route_id=route_id,
+                user_id=int(user_id),
+                stat_date=str(auto_trigger_daily_risk["stat_date"]),
+                reason="路由日风控已停止：%s" % str(auto_trigger_daily_risk.get("reason") or ""),
+            )
+
+        return {
+            "event": self.get_progression_event(int(current_event["id"])) or {},
+            "state": self.get_auto_trigger_route_progression_state(
+                route_id=route_id,
+                subscription_id=int(subscription_id),
+                user_id=int(user_id),
+            ),
+            "financial": self.get_subscription_financial_state(int(subscription_id)),
+            "subscription": self.get_subscription(int(subscription_id)) or {},
+            "auto_trigger_daily_risk": auto_trigger_daily_risk,
+        }
+
     def settle_progression_event(
         self,
         *,
@@ -4239,10 +5269,24 @@ class DatabaseRepository:
         if normalized_result not in {"hit", "refund", "miss"}:
             raise ValueError("result_type 仅支持 hit/refund/miss")
         current_status = str(current_event.get("status") or "").strip()
+        auto_trigger_route_id = (
+            int(current_event["auto_trigger_route_id"])
+            if current_event.get("auto_trigger_route_id") is not None
+            else None
+        )
         if current_status == "settled":
+            state = (
+                self.get_auto_trigger_route_progression_state(
+                    route_id=auto_trigger_route_id,
+                    subscription_id=int(subscription_id),
+                    user_id=int(user_id),
+                )
+                if auto_trigger_route_id is not None
+                else self.get_subscription_progression_state(int(subscription_id))
+            )
             return {
                 "event": current_event,
-                "state": self.get_subscription_progression_state(int(subscription_id)),
+                "state": state,
                 "financial": self.get_subscription_financial_state(int(subscription_id)),
                 "subscription": self.get_subscription(int(subscription_id)) or {},
                 "auto_trigger_daily_risk": {},
@@ -4263,6 +5307,16 @@ class DatabaseRepository:
                 next_step = 1 if cap_action == "reset" else max_steps
             else:
                 next_step = step + 1
+
+        if auto_trigger_route_id is not None:
+            return self._settle_auto_trigger_route_progression_event(
+                current_event=current_event,
+                subscription_id=int(subscription_id),
+                user_id=int(user_id),
+                normalized_result=normalized_result,
+                next_step=max(1, int(next_step or 1)),
+                result_context=result_context,
+            )
 
         now = _utc_now_iso()
         auto_trigger_daily_risk: Dict[str, Any] = {}
@@ -4748,6 +5802,7 @@ class DatabaseRepository:
         signal_id: int,
         subscription_id: Optional[int] = None,
         progression_event_id: Optional[int] = None,
+        auto_trigger_route_id: Optional[int] = None,
         delivery_target_id: int,
         telegram_account_id: Optional[int] = None,
         executor_type: str,
@@ -4762,15 +5817,17 @@ class DatabaseRepository:
             cur = conn.execute(
                 """
                 INSERT INTO execution_jobs(
-                    user_id, signal_id, subscription_id, progression_event_id, delivery_target_id, telegram_account_id, executor_type, idempotency_key,
+                    user_id, signal_id, subscription_id, progression_event_id, auto_trigger_route_id,
+                    delivery_target_id, telegram_account_id, executor_type, idempotency_key,
                     planned_message_text, stake_plan_json, execute_after, expire_at, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(user_id),
                     int(signal_id),
                     int(subscription_id) if subscription_id is not None else None,
                     int(progression_event_id) if progression_event_id is not None else None,
+                    int(auto_trigger_route_id) if auto_trigger_route_id is not None else None,
                     int(delivery_target_id),
                     telegram_account_id,
                     executor_type,
@@ -5367,6 +6424,7 @@ class DatabaseRepository:
         signal_id: int,
         subscription_id: Optional[int] = None,
         progression_event_id: Optional[int] = None,
+        auto_trigger_route_id: Optional[int] = None,
         delivery_target_id: int,
         telegram_account_id: Optional[int] = None,
         executor_type: str,
@@ -5389,6 +6447,7 @@ class DatabaseRepository:
             signal_id=signal_id,
             subscription_id=subscription_id,
             progression_event_id=progression_event_id,
+            auto_trigger_route_id=auto_trigger_route_id,
             delivery_target_id=delivery_target_id,
             telegram_account_id=telegram_account_id,
             executor_type=executor_type,
@@ -5574,9 +6633,9 @@ class DatabaseRepository:
                         SUM(CASE WHEN status IN ('failed', 'expired', 'skipped') THEN 1 ELSE 0 END) AS terminal_count,
                         COUNT(*) AS total_count
                     FROM execution_jobs
-                    WHERE signal_id = ? AND subscription_id = ?
+                    WHERE progression_event_id = ?
                     """,
-                    (int(job_row["signal_id"]), int(job_row["subscription_id"])),
+                    (int(job_row["progression_event_id"]),),
                 ).fetchone()
                 delivered_count = int(aggregate["delivered_count"] or 0) if aggregate else 0
                 terminal_count = int(aggregate["terminal_count"] or 0) if aggregate else 0
@@ -5600,13 +6659,18 @@ class DatabaseRepository:
                         (now, int(job_row["progression_event_id"])),
                     )
                     if event_cursor.rowcount > 0:
-                        self._close_paused_subscription_runs_if_idle(
-                            conn,
-                            subscription_id=int(job_row["subscription_id"]),
-                            user_id=int(job_row["user_id"]),
-                            now=now,
-                            reason="subscription_paused_after_void_event",
-                        )
+                        event_row = conn.execute(
+                            "SELECT auto_trigger_route_id FROM subscription_progression_events WHERE id = ? LIMIT 1",
+                            (int(job_row["progression_event_id"]),),
+                        ).fetchone()
+                        if not event_row or event_row["auto_trigger_route_id"] is None:
+                            self._close_paused_subscription_runs_if_idle(
+                                conn,
+                                subscription_id=int(job_row["subscription_id"]),
+                                user_id=int(job_row["user_id"]),
+                                now=now,
+                                reason="subscription_paused_after_void_event",
+                            )
 
         return {
             "job_id": normalized_job_id,

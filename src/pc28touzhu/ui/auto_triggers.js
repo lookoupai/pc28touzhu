@@ -5,6 +5,8 @@
         events: [],
         subscriptions: [],
         sources: [],
+        deliveryTargets: [],
+        templates: [],
         editingRuleId: "",
         statDate: "",
         eventLimit: 30,
@@ -31,6 +33,12 @@
         [20, "近20期"],
         [50, "近50期"],
         [100, "近100期"],
+    ];
+    const settlementRuleOptions = [
+        ["pc28_netdisk_regular", "PC28 网盘常规"],
+        ["pc28_netdisk_abc", "PC28 网盘 ABC"],
+        ["pc28_high_regular", "PC28 高赔常规"],
+        ["pc28_high_abc", "PC28 高赔 ABC"],
     ];
 
     function $(id) {
@@ -143,6 +151,16 @@
         const source = sourceById(item.source_id);
         const name = source ? source.name : ("来源 #" + String(item.source_id));
         return "#" + String(item.id) + " " + name + " / " + subscriptionStatusText(item.status);
+    }
+
+    function targetLabel(item) {
+        const name = item.target_name || item.target_key || ("投递群组 #" + String(item.id));
+        const account = item.telegram_account_id ? (" / 账号 #" + String(item.telegram_account_id)) : "";
+        return "#" + String(item.id) + " " + name + account;
+    }
+
+    function templateLabel(item) {
+        return "#" + String(item.id) + " " + (item.name || item.template_text || "消息模板");
     }
 
     function renderSummary() {
@@ -300,12 +318,17 @@
                 const groupConditions = (group.conditions || []).map(conditionText).join("；") || "--";
                 return "条件区" + String(index + 1) + "：" + groupConditions;
             }).join(" / ");
+            const routeCount = (rule.routes || []).filter(function (route) { return route.status !== "archived"; }).length;
+            const stoppedRouteCount = (rule.routes || []).filter(function (route) {
+                return route.daily_stat && route.daily_stat.status === "stopped";
+            }).length;
             return '' +
                 '<article class="rule-card' + selected + '">' +
                     '<div class="rule-card-head"><div><strong>' + escapeHtml(rule.name) + '</strong><p class="meta-line">' + escapeHtml(scope) + '</p></div>' + statusPill(rule.status) + '</div>' +
                     '<p class="meta-line">开始条件：' + escapeHtml(conditions) + '</p>' +
                     (guardGroups ? '<p class="meta-line">同时达成：' + escapeHtml(guardGroups) + '</p>' : '') +
                     '<p class="meta-line">' + escapeHtml(actionText(rule.action)) + '</p>' +
+                    (routeCount ? '<p class="meta-line">投注路由：' + escapeHtml(routeCount) + ' 条' + (stoppedRouteCount ? '，今日已停 ' + escapeHtml(stoppedRouteCount) + ' 条' : '') + '</p>' : '') +
                     (dailyRiskText(rule) ? '<p class="meta-line">' + escapeHtml(dailyRiskText(rule)) + '</p>' : '') +
                     '<p class="meta-line">' + escapeHtml(dailyProfitText(rule)) + '</p>' +
                     '<p class="meta-line">' + escapeHtml(dailySettlementText(rule)) + '</p>' +
@@ -418,6 +441,72 @@
         $("guardGroupRows").querySelectorAll(".condition-row").forEach(updateConditionRowVisibility);
     }
 
+    function selectOptions(items, selectedValue, labeler) {
+        return (items || []).map(function (item) {
+            return '<option value="' + escapeHtml(item.id) + '"' + (String(item.id) === String(selectedValue || "") ? " selected" : "") + '>' +
+                escapeHtml(labeler(item)) +
+                '</option>';
+        }).join("");
+    }
+
+    function routeRowHtml(route, index) {
+        const item = route || {};
+        const riskMode = item.risk_mode || "inherit";
+        const settlementMode = item.settlement_mode || "inherit";
+        const stakingMode = item.staking_mode || "inherit";
+        const playFilterMode = item.play_filter_mode || "inherit";
+        const templateMode = item.template_mode || "target_default";
+        const riskControl = item.risk_control || {};
+        const settlementPolicy = item.settlement_policy || {};
+        const stakingPolicy = item.staking_policy || {};
+        const playFilter = item.play_filter || {};
+        return '' +
+            '<article class="route-card" data-route-index="' + escapeHtml(index) + '">' +
+                '<input type="hidden" class="route-id" value="' + escapeHtml(item.id || "") + '">' +
+                '<div class="route-card-head">' +
+                    '<strong>路由 ' + escapeHtml(index + 1) + '</strong>' +
+                    '<button class="ghost-btn remove-route-btn" type="button">删除</button>' +
+                '</div>' +
+                '<div class="route-grid">' +
+                    '<label class="field"><span>投递群组</span><select class="text-input route-target" required>' + selectOptions(state.deliveryTargets, item.delivery_target_id, targetLabel) + '</select></label>' +
+                    '<label class="field"><span>名称</span><input class="text-input route-name" type="text" value="' + escapeHtml(item.name || "") + '" placeholder="例如：正式群"></label>' +
+                    '<label class="field"><span>状态</span><select class="text-input route-status">' + options([["active", "启用"], ["inactive", "停用"], ["archived", "归档"]], item.status || "active") + '</select></label>' +
+                    '<label class="field"><span>风控</span><select class="text-input route-risk-mode">' + options([["inherit", "继承规则"], ["override", "单独设置"], ["disabled", "关闭"]], riskMode) + '</select></label>' +
+                    '<div class="route-risk-fields">' +
+                        '<label class="field"><span>路由止盈</span><input class="text-input route-profit-target" type="number" min="0" step="0.01" value="' + escapeHtml(riskControl.profit_target || 0) + '"></label>' +
+                        '<label class="field"><span>路由止损</span><input class="text-input route-loss-limit" type="number" min="0" step="0.01" value="' + escapeHtml(riskControl.loss_limit || 0) + '"></label>' +
+                    '</div>' +
+                    '<label class="field"><span>结算</span><select class="text-input route-settlement-mode">' + options([["inherit", "继承跟单方案"], ["override", "单独设置"]], settlementMode) + '</select></label>' +
+                    '<label class="field route-settlement-field"><span>结算规则</span><select class="text-input route-settlement-rule">' + options(settlementRuleOptions, settlementPolicy.settlement_rule_id || "pc28_netdisk_regular") + '</select></label>' +
+                    '<label class="field"><span>投注</span><select class="text-input route-staking-mode">' + options([["inherit", "继承跟单方案"], ["override", "固定金额"]], stakingMode) + '</select></label>' +
+                    '<label class="field route-staking-field"><span>固定金额</span><input class="text-input route-fixed-amount" type="number" min="0.01" step="0.01" value="' + escapeHtml(stakingPolicy.fixed_amount || 10) + '"></label>' +
+                    '<label class="field"><span>玩法</span><select class="text-input route-play-filter-mode">' + options([["inherit", "继承规则动作"], ["keep", "保持跟单方案"], ["matched_metric", "命中玩法"], ["fixed_metric", "固定玩法"]], playFilterMode) + '</select></label>' +
+                    '<label class="field route-fixed-metric-field"><span>固定玩法</span><select class="text-input route-fixed-metric">' + options(metricOptions, playFilter.fixed_metric || "big_small") + '</select></label>' +
+                    '<label class="field"><span>模板</span><select class="text-input route-template-mode">' + options([["target_default", "群组默认"], ["override", "单独模板"]], templateMode) + '</select></label>' +
+                    '<label class="field route-template-field"><span>消息模板</span><select class="text-input route-template">' + selectOptions(state.templates, item.template_id, templateLabel) + '</select></label>' +
+                '</div>' +
+            '</article>';
+    }
+
+    function updateRouteRowVisibility(card) {
+        const riskMode = card.querySelector(".route-risk-mode").value;
+        const settlementMode = card.querySelector(".route-settlement-mode").value;
+        const stakingMode = card.querySelector(".route-staking-mode").value;
+        const playFilterMode = card.querySelector(".route-play-filter-mode").value;
+        const templateMode = card.querySelector(".route-template-mode").value;
+        card.querySelector(".route-risk-fields").hidden = riskMode !== "override";
+        card.querySelector(".route-settlement-field").hidden = settlementMode !== "override";
+        card.querySelector(".route-staking-field").hidden = stakingMode !== "override";
+        card.querySelector(".route-fixed-metric-field").hidden = playFilterMode !== "fixed_metric";
+        card.querySelector(".route-template-field").hidden = templateMode !== "override";
+    }
+
+    function renderRoutes(routes) {
+        const items = routes || [];
+        $("routeRows").innerHTML = items.map(routeRowHtml).join("");
+        $("routeRows").querySelectorAll(".route-card").forEach(updateRouteRowVisibility);
+    }
+
     function updateConditionRowVisibility(row, preferDefaultOperator) {
         const type = row.querySelector(".condition-type").value || "hit_rate";
         const isMissStreak = type === "miss_streak";
@@ -465,6 +554,7 @@
         renderSubscriptionOptions(item.subscription_ids || []);
         renderConditions(item.conditions || []);
         renderGuardGroups(item.guard_groups || []);
+        renderRoutes(item.routes || []);
         $("editorTitle").textContent = item.id ? "编辑触发规则" : "新建触发规则";
         $("cancelEditBtn").hidden = !item.id;
         updateScopeVisibility();
@@ -515,6 +605,58 @@
         });
     }
 
+    function collectRoutes() {
+        return Array.from(document.querySelectorAll(".route-card")).map(function (card, index) {
+            const riskMode = card.querySelector(".route-risk-mode").value;
+            const settlementMode = card.querySelector(".route-settlement-mode").value;
+            const stakingMode = card.querySelector(".route-staking-mode").value;
+            const playFilterMode = card.querySelector(".route-play-filter-mode").value;
+            const templateMode = card.querySelector(".route-template-mode").value;
+            const route = {
+                id: card.querySelector(".route-id").value ? Number(card.querySelector(".route-id").value) : undefined,
+                delivery_target_id: Number(card.querySelector(".route-target").value),
+                name: card.querySelector(".route-name").value.trim(),
+                status: card.querySelector(".route-status").value,
+                sort_order: index,
+                risk_mode: riskMode,
+                settlement_mode: settlementMode,
+                staking_mode: stakingMode,
+                play_filter_mode: playFilterMode,
+                template_mode: templateMode,
+            };
+            if (riskMode === "override") {
+                route.risk_control = {
+                    enabled: true,
+                    profit_target: Number(card.querySelector(".route-profit-target").value || 0),
+                    loss_limit: Number(card.querySelector(".route-loss-limit").value || 0),
+                    timezone: "Asia/Shanghai",
+                    cancel_pending_jobs: true,
+                };
+            }
+            if (settlementMode === "override") {
+                route.settlement_policy = {
+                    settlement_rule_id: card.querySelector(".route-settlement-rule").value,
+                    fallback_profit_ratio: 1,
+                };
+            }
+            if (stakingMode === "override") {
+                route.staking_policy = {
+                    mode: "fixed",
+                    fixed_amount: Number(card.querySelector(".route-fixed-amount").value || 0),
+                };
+            }
+            if (playFilterMode === "fixed_metric") {
+                route.play_filter = {fixed_metric: card.querySelector(".route-fixed-metric").value};
+            }
+            if (templateMode === "override") {
+                route.template_id = Number(card.querySelector(".route-template").value);
+            }
+            return route;
+        }).filter(function (route) {
+            return Number(route.delivery_target_id || 0) > 0;
+        });
+    }
+
     function collectPayload() {
         const form = $("ruleForm");
         return {
@@ -539,6 +681,7 @@
                 timezone: "Asia/Shanghai",
                 cancel_pending_jobs: form.elements.daily_cancel_pending_jobs.checked,
             },
+            routes: collectRoutes(),
         };
     }
 
@@ -561,6 +704,8 @@
         const payloads = await Promise.all([
             request("/api/platform/sources"),
             request("/api/platform/subscriptions"),
+            request("/api/platform/delivery-targets"),
+            request("/api/platform/message-templates"),
             request("/api/platform/auto-trigger-rules" + statDateQuery),
             request(
                 "/api/platform/auto-trigger-events?limit=" + encodeURIComponent(String(state.eventLimit)) +
@@ -569,8 +714,10 @@
         ]);
         state.sources = payloads[0].items || [];
         state.subscriptions = payloads[1].items || [];
-        state.rules = payloads[2].items || [];
-        state.events = payloads[3].items || [];
+        state.deliveryTargets = (payloads[2].items || []).filter(function (item) { return item.status !== "archived"; });
+        state.templates = (payloads[3].items || []).filter(function (item) { return item.status !== "archived"; });
+        state.rules = payloads[4].items || [];
+        state.events = payloads[5].items || [];
         renderSummary();
         renderRuleList();
         renderEvents();
@@ -668,6 +815,17 @@
             $("guardGroupRows").insertAdjacentHTML("beforeend", guardGroupHtml(null, index));
             $("guardGroupRows").lastElementChild.querySelectorAll(".condition-row").forEach(updateConditionRowVisibility);
         });
+        $("addRouteBtn").addEventListener("click", function () {
+            const index = document.querySelectorAll(".route-card").length;
+            $("routeRows").insertAdjacentHTML("beforeend", routeRowHtml(null, index));
+            updateRouteRowVisibility($("routeRows").lastElementChild);
+        });
+        $("routeRows").addEventListener("change", function (event) {
+            const target = event.target;
+            if (target instanceof HTMLElement && target.closest(".route-card")) {
+                updateRouteRowVisibility(target.closest(".route-card"));
+            }
+        });
         $("conditionRows").addEventListener("change", function (event) {
             const target = event.target;
             if (target instanceof HTMLElement && (target.classList.contains("condition-type") || target.classList.contains("condition-window"))) {
@@ -705,6 +863,14 @@
                 if (group) {
                     group.remove();
                     renderGuardGroups(collectGuardGroups());
+                }
+                return;
+            }
+            if (target.classList.contains("remove-route-btn")) {
+                const route = target.closest(".route-card");
+                if (route) {
+                    route.remove();
+                    renderRoutes(collectRoutes());
                 }
                 return;
             }

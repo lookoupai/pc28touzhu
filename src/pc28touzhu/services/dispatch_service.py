@@ -10,7 +10,15 @@ from pc28touzhu.domain.subscription_strategy import (
     resolve_dispatch_policy,
     resolve_settlement_runtime_policy,
     resolve_staking_runtime_policy,
+    upgrade_subscription_strategy,
 )
+
+
+PLAY_FILTER_KEYS_BY_METRIC = {
+    "big_small": ["big_small:大", "big_small:小"],
+    "odd_even": ["odd_even:单", "odd_even:双"],
+    "combo": ["combo:大单", "combo:大双", "combo:小单", "combo:小双"],
+}
 
 
 def _utc_now() -> datetime:
@@ -165,6 +173,226 @@ def _build_stake_plan(strategy: Dict[str, Any], signal: Dict[str, Any], current_
     return stake_plan
 
 
+def _route_effective_strategy(
+    base_strategy: Dict[str, Any],
+    route: Dict[str, Any],
+    auto_trigger_context: Dict[str, Any] | None,
+) -> Dict[str, Any]:
+    strategy = upgrade_subscription_strategy(base_strategy or {})
+
+    if str(route.get("staking_mode") or "inherit") == "override" and isinstance(route.get("staking_policy"), dict):
+        strategy["staking_policy"] = dict(route.get("staking_policy") or {})
+
+    if str(route.get("settlement_mode") or "inherit") == "override" and isinstance(route.get("settlement_policy"), dict):
+        strategy["settlement_policy"] = dict(route.get("settlement_policy") or {})
+
+    play_filter_mode = str(route.get("play_filter_mode") or "inherit").strip() or "inherit"
+    if play_filter_mode == "inherit":
+        rule_action = (auto_trigger_context or {}).get("rule_action")
+        rule_action = rule_action if isinstance(rule_action, dict) else {}
+        play_filter_mode = str(rule_action.get("play_filter_action") or "keep").strip() or "keep"
+        if play_filter_mode == "fixed_metric":
+            fixed_metric = str(rule_action.get("fixed_metric") or "").strip()
+        else:
+            fixed_metric = ""
+    else:
+        route_play_filter = route.get("play_filter") if isinstance(route.get("play_filter"), dict) else {}
+        fixed_metric = str(route_play_filter.get("fixed_metric") or route_play_filter.get("metric") or "").strip()
+
+    target_metric = ""
+    if play_filter_mode == "fixed_metric":
+        target_metric = fixed_metric
+    elif play_filter_mode == "matched_metric":
+        matched_conditions = (auto_trigger_context or {}).get("matched_conditions")
+        if isinstance(matched_conditions, list) and matched_conditions:
+            target_metric = str((matched_conditions[0] or {}).get("metric") or "").strip()
+
+    if target_metric in PLAY_FILTER_KEYS_BY_METRIC:
+        strategy["play_filter"] = {
+            "mode": "selected",
+            "selected_keys": list(PLAY_FILTER_KEYS_BY_METRIC[target_metric]),
+        }
+
+    return strategy
+
+
+def _route_template_id(route: Dict[str, Any]) -> int | None:
+    if str(route.get("template_mode") or "target_default") == "override" and route.get("template_id") is not None:
+        return int(route["template_id"])
+    if route.get("target_template_id") is not None:
+        return int(route["target_template_id"])
+    return None
+
+
+def _route_is_stopped(repository: Any, *, route: Dict[str, Any], user_id: int, stat_date: str) -> bool:
+    stat = repository.get_auto_trigger_route_daily_stat(
+        route_id=int(route["id"]),
+        user_id=int(user_id),
+        stat_date=stat_date,
+    )
+    return str(stat.get("status") or "") == "stopped"
+
+
+def _dispatch_signal_for_auto_trigger_routes(
+    repository: Any,
+    signal: Dict[str, Any],
+    *,
+    subscription_id: int,
+    auto_trigger_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    subscription = repository.get_subscription(int(subscription_id))
+    if not subscription:
+        raise ValueError("subscription_id 对应的订阅不存在")
+    routes = [
+        item for item in (auto_trigger_context.get("routes") or [])
+        if isinstance(item, dict) and str(item.get("status") or "active") == "active"
+    ]
+    user_id = int(subscription["user_id"])
+    stat_date = str(auto_trigger_context.get("stat_date") or "").strip()
+
+    now = _utc_now()
+    base_execute_after = max(_parse_iso_z(signal.get("published_at")), now)
+    created_count = 0
+    existing_count = 0
+    skipped_count = 0
+    jobs = []
+
+    for route in routes:
+        route_id = int(route["id"])
+        delivery_target_id = int(route["delivery_target_id"])
+        if str(route.get("target_status") or "active") != "active":
+            skipped_count += 1
+            continue
+        account_status = str(route.get("telegram_account_status") or "active")
+        if route.get("telegram_account_id") is not None and account_status != "active":
+            skipped_count += 1
+            continue
+        if stat_date and _route_is_stopped(repository, route=route, user_id=user_id, stat_date=stat_date):
+            skipped_count += 1
+            continue
+        if repository.auto_trigger_route_has_open_run(
+            route_id=route_id,
+            subscription_id=int(subscription_id),
+            user_id=user_id,
+        ).get("has_open_run"):
+            skipped_count += 1
+            continue
+
+        strategy = _route_effective_strategy(
+            subscription.get("strategy_v2") or subscription.get("strategy") or {},
+            route,
+            auto_trigger_context,
+        )
+        if not strategy_matches_signal(strategy, signal):
+            skipped_count += 1
+            continue
+
+        progression_event = repository.get_progression_event_by_signal(
+            subscription_id=int(subscription_id),
+            signal_id=int(signal["id"]),
+            auto_trigger_route_id=route_id,
+        )
+        if not progression_event:
+            progression_state = repository.get_auto_trigger_route_progression_state(
+                route_id=route_id,
+                subscription_id=int(subscription_id),
+                user_id=user_id,
+            )
+            stake_plan_preview = _build_stake_plan(
+                strategy,
+                signal,
+                current_step=int(progression_state.get("current_step") or 1),
+            )
+            settlement_policy = resolve_settlement_runtime_policy(strategy, signal.get("normalized_payload"))
+            progression_event = repository.create_progression_event_record(
+                subscription_id=int(subscription_id),
+                user_id=user_id,
+                signal_id=int(signal["id"]),
+                issue_no=str(signal.get("issue_no") or ""),
+                progression_step=int(stake_plan_preview["current_step"]),
+                stake_amount=float(stake_plan_preview["amount"]),
+                base_stake=float(stake_plan_preview["base_stake"]),
+                multiplier=float(stake_plan_preview["multiplier"]),
+                max_steps=int(stake_plan_preview["max_steps"]),
+                refund_action=str(stake_plan_preview["refund_action"]),
+                cap_action=str(stake_plan_preview["cap_action"]),
+                settlement_rule_id=str(settlement_policy.get("settlement_rule_id") or ""),
+                settlement_snapshot=build_settlement_snapshot(
+                    rule_source=str(settlement_policy.get("rule_source") or ""),
+                    settlement_rule_id=settlement_policy.get("settlement_rule_id"),
+                    fallback_profit_ratio=float(settlement_policy.get("fallback_profit_ratio") or 1.0),
+                    resolved_from=str(settlement_policy.get("resolved_from") or ""),
+                    signal=signal,
+                ),
+                auto_trigger_rule_id=(
+                    int(auto_trigger_context["rule_id"]) if auto_trigger_context.get("rule_id") else None
+                ),
+                auto_trigger_rule_run_id=(
+                    int(auto_trigger_context["rule_run_id"]) if auto_trigger_context.get("rule_run_id") else None
+                ),
+                auto_trigger_route_id=route_id,
+                auto_trigger_stat_date=stat_date,
+                status="pending",
+            )
+
+        current_step = int((progression_event or {}).get("progression_step") or 1)
+        stake_plan = _build_stake_plan(strategy, signal, current_step=current_step)
+        stake_plan.setdefault("meta", {})
+        stake_plan["meta"].update({
+            "progression_event_id": int(progression_event["id"]),
+            "progression_step": current_step,
+            "auto_trigger_route_id": route_id,
+        })
+
+        template = None
+        template_id = _route_template_id(route)
+        if template_id is not None and hasattr(repository, "get_message_template"):
+            template = repository.get_message_template(template_id)
+        planned_message_text = _message_text_from_template(signal, float(stake_plan["amount"]), template)
+        execute_after = base_execute_after
+        expire_after_seconds = int(resolve_dispatch_policy(strategy).get("expire_after_seconds") or 120)
+        expire_at = execute_after + timedelta(seconds=max(30, expire_after_seconds))
+        idempotency_key = "signal:%s:rule:%s:route:%s:target:%s" % (
+            signal["id"],
+            auto_trigger_context.get("rule_id") or "",
+            route_id,
+            delivery_target_id,
+        )
+
+        created = repository.create_execution_job_record(
+            user_id=user_id,
+            signal_id=int(signal["id"]),
+            subscription_id=int(subscription_id),
+            progression_event_id=int(progression_event["id"]),
+            auto_trigger_route_id=route_id,
+            delivery_target_id=delivery_target_id,
+            telegram_account_id=(
+                int(route["telegram_account_id"]) if route.get("telegram_account_id") is not None else None
+            ),
+            executor_type=str(route.get("executor_type") or "telegram_group"),
+            idempotency_key=idempotency_key,
+            planned_message_text=planned_message_text,
+            stake_plan=stake_plan,
+            execute_after=_iso_z(execute_after),
+            expire_at=_iso_z(expire_at),
+        )
+        jobs.append(created["job"])
+        if created["created"]:
+            created_count += 1
+        else:
+            existing_count += 1
+
+    return {
+        "signal_id": int(signal["id"]),
+        "subscription_id": int(subscription_id),
+        "candidate_count": len(routes),
+        "created_count": created_count,
+        "existing_count": existing_count,
+        "skipped_count": skipped_count,
+        "jobs": jobs,
+    }
+
+
 def _candidate_matches_subscription_targets(candidate: Dict[str, Any]) -> bool:
     strategy = candidate.get("strategy_json")
     if isinstance(strategy, str):
@@ -196,6 +424,17 @@ def dispatch_signal(
     signal = repository.get_signal(signal_id)
     if not signal:
         raise ValueError("signal 不存在")
+    if (
+        subscription_id is not None
+        and isinstance(auto_trigger_context, dict)
+        and isinstance(auto_trigger_context.get("routes"), list)
+    ):
+        return _dispatch_signal_for_auto_trigger_routes(
+            repository,
+            signal,
+            subscription_id=int(subscription_id),
+            auto_trigger_context=auto_trigger_context,
+        )
 
     raw_candidates = (
         repository.list_dispatch_candidates_for_subscription(signal_id, subscription_id=subscription_id)
