@@ -385,16 +385,17 @@
         }).join("");
     }
 
+    function options(optionsList, current) {
+        return optionsList.map(function (option) {
+            return '<option value="' + escapeHtml(option[0]) + '"' + (String(option[0]) === String(current) ? " selected" : "") + '>' + escapeHtml(option[1]) + '</option>';
+        }).join("");
+    }
+
     function conditionRowHtml(condition) {
         const item = condition || {type: "hit_rate", metric: "big_small", operator: "lt", threshold: 40, min_sample_count: 100};
         const conditionType = item.type || "hit_rate";
         const thresholdLabel = conditionType === "miss_streak" ? "连挂期数" : "阈值 %";
         const windowSize = Number(item.window_size || String(item.window || "").replace("recent_", "") || 100);
-        function options(optionsList, current) {
-            return optionsList.map(function (option) {
-                return '<option value="' + escapeHtml(option[0]) + '"' + (option[0] === current ? " selected" : "") + '>' + escapeHtml(option[1]) + '</option>';
-            }).join("");
-        }
         return '' +
             '<div class="condition-row">' +
                 '<label class="field"><span>条件</span><select class="text-input condition-type">' + options(conditionTypeOptions, conditionType) + '</select></label>' +
