@@ -1141,6 +1141,15 @@ def _active_routes_for_subscription(
         if str(stat.get("status") or "") == "stopped":
             skipped_routes.append({"route_id": route_id, "reason": "route_daily_risk_stopped", "stat": stat})
             continue
+        if hasattr(repository, "get_auto_trigger_route_subscription_financial_state"):
+            financial = repository.get_auto_trigger_route_subscription_financial_state(
+                route_id=route_id,
+                subscription_id=int(subscription["id"]),
+                user_id=int(rule["user_id"]),
+            )
+            if str(financial.get("threshold_status") or "") in {"profit_target_hit", "loss_limit_hit"}:
+                skipped_routes.append({"route_id": route_id, "reason": "route_subscription_risk_stopped", "financial": financial})
+                continue
         open_state = repository.auto_trigger_route_has_open_run(
             route_id=route_id,
             subscription_id=int(subscription["id"]),
@@ -1368,6 +1377,18 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                     note="自动触发规则：%s" % str(rule.get("name") or ""),
                     enforce_threshold=True,
                 )
+            elif hasattr(repository, "reset_auto_trigger_route_subscription_runtime"):
+                for route in active_routes:
+                    repository.reset_auto_trigger_route_subscription_runtime(
+                        route_id=int(route["id"]),
+                        rule_id=int(rule["id"]),
+                        subscription_id=int(subscription["id"]),
+                        user_id=int(rule["user_id"]),
+                        note="自动触发规则：%s / 路由：%s" % (
+                            str(rule.get("name") or ""),
+                            str(route.get("name") or route.get("target_name") or route.get("id") or ""),
+                        ),
+                    )
             dispatch_result = None
             if bool((rule.get("action") or {}).get("dispatch_latest_signal", True)):
                 dispatch_context = {

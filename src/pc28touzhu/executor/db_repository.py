@@ -744,6 +744,67 @@ class DatabaseRepository:
             UNIQUE(route_id, subscription_id)
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS auto_trigger_route_subscription_financial_state (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            route_id INTEGER NOT NULL,
+            rule_id INTEGER NOT NULL,
+            subscription_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            realized_profit REAL NOT NULL DEFAULT 0,
+            realized_loss REAL NOT NULL DEFAULT 0,
+            net_profit REAL NOT NULL DEFAULT 0,
+            threshold_status TEXT NOT NULL DEFAULT '',
+            stopped_reason TEXT NOT NULL DEFAULT '',
+            baseline_reset_at TEXT,
+            baseline_reset_note TEXT NOT NULL DEFAULT '',
+            last_settled_event_id INTEGER,
+            last_settled_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            FOREIGN KEY(route_id) REFERENCES auto_trigger_rule_routes(id),
+            FOREIGN KEY(rule_id) REFERENCES auto_trigger_rules(id),
+            FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id),
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            FOREIGN KEY(last_settled_event_id) REFERENCES subscription_progression_events(id),
+            UNIQUE(route_id, subscription_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS auto_trigger_route_subscription_runtime_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            route_id INTEGER NOT NULL,
+            rule_id INTEGER NOT NULL,
+            subscription_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            play_filter_json TEXT NOT NULL DEFAULT '{}',
+            started_signal_id INTEGER,
+            started_issue_no TEXT NOT NULL DEFAULT '',
+            started_at TEXT NOT NULL,
+            start_reason TEXT NOT NULL DEFAULT '',
+            ended_at TEXT,
+            end_reason TEXT NOT NULL DEFAULT '',
+            last_issue_no TEXT NOT NULL DEFAULT '',
+            last_result_type TEXT NOT NULL DEFAULT '',
+            realized_profit REAL NOT NULL DEFAULT 0,
+            realized_loss REAL NOT NULL DEFAULT 0,
+            net_profit REAL NOT NULL DEFAULT 0,
+            settled_event_count INTEGER NOT NULL DEFAULT 0,
+            hit_count INTEGER NOT NULL DEFAULT 0,
+            miss_count INTEGER NOT NULL DEFAULT 0,
+            refund_count INTEGER NOT NULL DEFAULT 0,
+            baseline_reset_at TEXT,
+            baseline_reset_note TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            FOREIGN KEY(route_id) REFERENCES auto_trigger_rule_routes(id),
+            FOREIGN KEY(rule_id) REFERENCES auto_trigger_rules(id),
+            FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id),
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            FOREIGN KEY(started_signal_id) REFERENCES normalized_signals(id)
+        )
+        """,
         "CREATE INDEX IF NOT EXISTS idx_execution_jobs_status_time ON execution_jobs(status, execute_after, expire_at)",
         "CREATE INDEX IF NOT EXISTS idx_execution_attempts_job ON execution_attempts(job_id, attempt_no)",
         "CREATE INDEX IF NOT EXISTS idx_platform_alert_records_status_seen ON platform_alert_records(status, last_seen_at)",
@@ -762,6 +823,8 @@ class DatabaseRepository:
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_rule_routes_rule_status ON auto_trigger_rule_routes(rule_id, status, sort_order)",
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_route_daily_stats_user_date ON auto_trigger_route_daily_stats(user_id, stat_date, status)",
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_route_progression_state_route ON auto_trigger_route_progression_state(route_id, subscription_id)",
+        "CREATE INDEX IF NOT EXISTS idx_auto_trigger_route_subscription_financial ON auto_trigger_route_subscription_financial_state(route_id, subscription_id, user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_auto_trigger_route_subscription_runs ON auto_trigger_route_subscription_runtime_runs(route_id, subscription_id, user_id, status)",
     ]
 
     def __init__(self, db_path: str = "pc28touzhu.db"):
@@ -1138,10 +1201,48 @@ class DatabaseRepository:
             "updated_at": None,
         }
 
+    def _default_route_subscription_financial_state(self, *, route_id: int, rule_id: int, subscription_id: int, user_id: int) -> Dict[str, Any]:
+        return {
+            "id": None,
+            "route_id": int(route_id),
+            "rule_id": int(rule_id),
+            "subscription_id": int(subscription_id),
+            "user_id": int(user_id),
+            "realized_profit": 0.0,
+            "realized_loss": 0.0,
+            "net_profit": 0.0,
+            "threshold_status": "",
+            "stopped_reason": "",
+            "baseline_reset_at": None,
+            "baseline_reset_note": "",
+            "last_settled_event_id": None,
+            "last_settled_at": None,
+            "updated_at": None,
+        }
+
     def _serialize_subscription_financial_state_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "subscription_id": int(row["subscription_id"]),
             "user_id": int(row["user_id"]) if row.get("user_id") is not None else None,
+            "realized_profit": _round_money(row.get("realized_profit")),
+            "realized_loss": _round_money(row.get("realized_loss")),
+            "net_profit": _round_money(row.get("net_profit")),
+            "threshold_status": str(row.get("threshold_status") or ""),
+            "stopped_reason": str(row.get("stopped_reason") or ""),
+            "baseline_reset_at": row.get("baseline_reset_at"),
+            "baseline_reset_note": str(row.get("baseline_reset_note") or ""),
+            "last_settled_event_id": int(row["last_settled_event_id"]) if row.get("last_settled_event_id") is not None else None,
+            "last_settled_at": row.get("last_settled_at"),
+            "updated_at": row.get("updated_at"),
+        }
+
+    def _serialize_route_subscription_financial_state_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": int(row["id"]) if row.get("id") is not None else None,
+            "route_id": int(row["route_id"]),
+            "rule_id": int(row["rule_id"]),
+            "subscription_id": int(row["subscription_id"]),
+            "user_id": int(row["user_id"]),
             "realized_profit": _round_money(row.get("realized_profit")),
             "realized_loss": _round_money(row.get("realized_loss")),
             "net_profit": _round_money(row.get("net_profit")),
@@ -1202,6 +1303,8 @@ class DatabaseRepository:
     def _serialize_subscription_runtime_run_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "id": int(row["id"]),
+            "auto_trigger_route_id": int(row["route_id"]) if row.get("route_id") is not None else None,
+            "auto_trigger_rule_id": int(row["rule_id"]) if row.get("rule_id") is not None else None,
             "subscription_id": int(row["subscription_id"]),
             "user_id": int(row["user_id"]),
             "status": str(row.get("status") or "active"),
@@ -4262,6 +4365,33 @@ class DatabaseRepository:
             return self._default_subscription_financial_state(int(subscription_id))
         return self._serialize_subscription_financial_state_row(row)
 
+    def get_auto_trigger_route_subscription_financial_state(
+        self,
+        *,
+        route_id: int,
+        subscription_id: int,
+        user_id: int,
+    ) -> Dict[str, Any]:
+        route = self.get_auto_trigger_rule_route(int(route_id))
+        rule_id = int(route["rule_id"]) if route else 0
+        row = self._fetch_one(
+            """
+            SELECT *
+            FROM auto_trigger_route_subscription_financial_state
+            WHERE route_id = ? AND subscription_id = ? AND user_id = ?
+            LIMIT 1
+            """,
+            (int(route_id), int(subscription_id), int(user_id)),
+        )
+        if row:
+            return self._serialize_route_subscription_financial_state_row(row)
+        return self._default_route_subscription_financial_state(
+            route_id=int(route_id),
+            rule_id=rule_id,
+            subscription_id=int(subscription_id),
+            user_id=int(user_id),
+        )
+
     def _bootstrap_subscription_runtime_run(
         self,
         conn: sqlite3.Connection,
@@ -4439,6 +4569,155 @@ class DatabaseRepository:
             issue_no=str(issue_no or ""),
             signal_id=int(signal_id) if signal_id is not None else None,
             started_at=str(started_at or _utc_now_iso()),
+        )
+
+    def _ensure_active_route_subscription_runtime_run(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        route_id: int,
+        rule_id: int,
+        subscription_id: int,
+        user_id: int,
+        issue_no: str,
+        signal_id: Optional[int],
+        started_at: str,
+        strategy: Optional[dict] = None,
+    ) -> Dict[str, Any]:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM auto_trigger_route_subscription_runtime_runs
+            WHERE route_id = ? AND subscription_id = ? AND user_id = ? AND status = 'active'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(route_id), int(subscription_id), int(user_id)),
+        ).fetchone()
+        if row:
+            return self._serialize_subscription_runtime_run_row(dict(row))
+        financial = self.get_auto_trigger_route_subscription_financial_state(
+            route_id=int(route_id),
+            subscription_id=int(subscription_id),
+            user_id=int(user_id),
+        )
+        play_filter_snapshot = _subscription_play_filter_snapshot(strategy or {})
+        cur = conn.execute(
+            """
+            INSERT INTO auto_trigger_route_subscription_runtime_runs(
+                route_id, rule_id, subscription_id, user_id, status, play_filter_json,
+                started_signal_id, started_issue_no, started_at, start_reason,
+                ended_at, end_reason, last_issue_no, last_result_type,
+                realized_profit, realized_loss, net_profit,
+                settled_event_count, hit_count, miss_count, refund_count,
+                baseline_reset_at, baseline_reset_note,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, NULL, '', '', '', 0, 0, 0, 0, 0, 0, 0, ?, ?, ?, ?)
+            """,
+            (
+                int(route_id),
+                int(rule_id),
+                int(subscription_id),
+                int(user_id),
+                _safe_json_dumps(play_filter_snapshot),
+                int(signal_id) if signal_id is not None else None,
+                str(issue_no or ""),
+                str(started_at or _utc_now_iso()),
+                "baseline_reset" if financial.get("baseline_reset_at") else "auto_started",
+                financial.get("baseline_reset_at"),
+                str(financial.get("baseline_reset_note") or ""),
+                str(started_at or _utc_now_iso()),
+                str(started_at or _utc_now_iso()),
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM auto_trigger_route_subscription_runtime_runs WHERE id = ? LIMIT 1",
+            (int(cur.lastrowid),),
+        ).fetchone()
+        return self._serialize_subscription_runtime_run_row(dict(row)) if row else {}
+
+    def reset_auto_trigger_route_subscription_runtime(
+        self,
+        *,
+        route_id: int,
+        rule_id: int,
+        subscription_id: int,
+        user_id: int,
+        note: str = "",
+    ) -> Dict[str, Any]:
+        now = _utc_now_iso()
+        reset_note = str(note or "").strip()
+        with self._connect() as conn:
+            active_run = conn.execute(
+                """
+                SELECT *
+                FROM auto_trigger_route_subscription_runtime_runs
+                WHERE route_id = ? AND subscription_id = ? AND user_id = ? AND status = 'active'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (int(route_id), int(subscription_id), int(user_id)),
+            ).fetchone()
+            financial = self.get_auto_trigger_route_subscription_financial_state(
+                route_id=int(route_id),
+                subscription_id=int(subscription_id),
+                user_id=int(user_id),
+            )
+            if active_run:
+                conn.execute(
+                    """
+                    UPDATE auto_trigger_route_subscription_runtime_runs
+                    SET status = 'closed',
+                        ended_at = ?,
+                        end_reason = ?,
+                        realized_profit = ?,
+                        realized_loss = ?,
+                        net_profit = ?,
+                        baseline_reset_at = ?,
+                        baseline_reset_note = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        now,
+                        str(financial.get("threshold_status") or "auto_trigger_restart"),
+                        _round_money(financial.get("realized_profit")),
+                        _round_money(financial.get("realized_loss")),
+                        _round_money(financial.get("net_profit")),
+                        financial.get("baseline_reset_at"),
+                        str(reset_note or financial.get("baseline_reset_note") or ""),
+                        now,
+                        int(active_run["id"]),
+                    ),
+                )
+            conn.execute(
+                """
+                INSERT INTO auto_trigger_route_subscription_financial_state(
+                    route_id, rule_id, subscription_id, user_id,
+                    realized_profit, realized_loss, net_profit,
+                    threshold_status, stopped_reason, baseline_reset_at, baseline_reset_note,
+                    last_settled_event_id, last_settled_at, updated_at
+                ) VALUES (?, ?, ?, ?, 0, 0, 0, '', '', ?, ?, NULL, NULL, ?)
+                ON CONFLICT(route_id, subscription_id) DO UPDATE SET
+                    rule_id = excluded.rule_id,
+                    user_id = excluded.user_id,
+                    realized_profit = 0,
+                    realized_loss = 0,
+                    net_profit = 0,
+                    threshold_status = '',
+                    stopped_reason = '',
+                    baseline_reset_at = excluded.baseline_reset_at,
+                    baseline_reset_note = excluded.baseline_reset_note,
+                    last_settled_event_id = NULL,
+                    last_settled_at = NULL,
+                    updated_at = excluded.updated_at
+                """,
+                (int(route_id), int(rule_id), int(subscription_id), int(user_id), now, reset_note, now),
+            )
+        return self.get_auto_trigger_route_subscription_financial_state(
+            route_id=int(route_id),
+            subscription_id=int(subscription_id),
+            user_id=int(user_id),
         )
 
     def list_subscription_runtime_runs(self, *, subscription_id: int, user_id: int, limit: int = 5) -> list[Dict[str, Any]]:
@@ -4973,6 +5252,25 @@ class DatabaseRepository:
                     signal_id=int(signal_id),
                     started_at=now,
                 )
+            else:
+                route = self.get_auto_trigger_rule_route(int(auto_trigger_route_id))
+                rule_id = int(route["rule_id"]) if route else int(auto_trigger_rule_id or 0)
+                subscription_row = conn.execute(
+                    "SELECT strategy_json FROM user_subscriptions WHERE id = ? AND user_id = ? LIMIT 1",
+                    (int(subscription_id), int(user_id)),
+                ).fetchone()
+                strategy = _safe_json_loads(subscription_row["strategy_json"]) if subscription_row else {}
+                self._ensure_active_route_subscription_runtime_run(
+                    conn,
+                    route_id=int(auto_trigger_route_id),
+                    rule_id=rule_id,
+                    subscription_id=int(subscription_id),
+                    user_id=int(user_id),
+                    issue_no=str(issue_no or ""),
+                    signal_id=int(signal_id),
+                    started_at=now,
+                    strategy=strategy,
+                )
             cur = conn.execute(
                 """
                 INSERT INTO subscription_progression_events(
@@ -5188,20 +5486,45 @@ class DatabaseRepository:
             elif risk_mode == "disabled":
                 daily_risk_control = {"enabled": False}
             else:
-                daily_risk_control = _safe_json_loads(route.get("daily_risk_control_json"))
+                daily_risk_control = _subscription_risk_control(strategy, signal)
 
-            stop_reason = ""
+            route_financial_row = conn.execute(
+                """
+                SELECT *
+                FROM auto_trigger_route_subscription_financial_state
+                WHERE route_id = ? AND subscription_id = ? AND user_id = ?
+                LIMIT 1
+                """,
+                (route_id, int(subscription_id), int(user_id)),
+            ).fetchone()
+            current_route_financial = (
+                self._serialize_route_subscription_financial_state_row(dict(route_financial_row))
+                if route_financial_row
+                else self._default_route_subscription_financial_state(
+                    route_id=route_id,
+                    rule_id=rule_id,
+                    subscription_id=int(subscription_id),
+                    user_id=int(user_id),
+                )
+            )
+            next_realized_profit = _round_money(current_route_financial["realized_profit"] + profit_delta)
+            next_realized_loss = _round_money(current_route_financial["realized_loss"] + loss_delta)
+            next_net_profit = _round_money(current_route_financial["net_profit"] + net_delta)
+
+            route_stop_reason = ""
+            subscription_stop_reason = ""
             if str(route_stat.get("status") or "") == "stopped":
-                stop_reason = str(route_stat.get("stopped_reason") or "daily_risk_stopped")
+                route_stop_reason = str(route_stat.get("stopped_reason") or "daily_risk_stopped")
             elif bool(daily_risk_control.get("enabled")):
                 profit_target = _round_money(daily_risk_control.get("profit_target"))
                 loss_limit = _round_money(daily_risk_control.get("loss_limit"))
-                current_route_net = _round_money(route_stat.get("net_profit"))
+                current_route_net = next_net_profit
                 if profit_target > 0 and current_route_net >= profit_target:
-                    stop_reason = "profit_target_hit"
+                    subscription_stop_reason = "profit_target_hit"
                 elif loss_limit > 0 and current_route_net <= -loss_limit:
-                    stop_reason = "loss_limit_hit"
-                if stop_reason:
+                    subscription_stop_reason = "loss_limit_hit"
+                if subscription_stop_reason and risk_mode == "override":
+                    route_stop_reason = subscription_stop_reason
                     conn.execute(
                         """
                         UPDATE auto_trigger_route_daily_stats
@@ -5211,22 +5534,118 @@ class DatabaseRepository:
                             updated_at = ?
                         WHERE route_id = ? AND user_id = ? AND stat_date = ?
                         """,
-                        (stop_reason, now, now, route_id, int(user_id), stat_date),
+                        (route_stop_reason, now, now, route_id, int(user_id), stat_date),
                     )
+            stopped_reason = ""
+            if subscription_stop_reason == "profit_target_hit":
+                stopped_reason = "达到止盈阈值，当前路由方案轮次已停止"
+            elif subscription_stop_reason == "loss_limit_hit":
+                stopped_reason = "达到止损阈值，当前路由方案轮次已停止"
+            elif route_stop_reason:
+                stopped_reason = "路由风控已停止：%s" % route_stop_reason
+            conn.execute(
+                """
+                INSERT INTO auto_trigger_route_subscription_financial_state(
+                    route_id, rule_id, subscription_id, user_id,
+                    realized_profit, realized_loss, net_profit,
+                    threshold_status, stopped_reason, baseline_reset_at, baseline_reset_note,
+                    last_settled_event_id, last_settled_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(route_id, subscription_id) DO UPDATE SET
+                    rule_id = excluded.rule_id,
+                    user_id = excluded.user_id,
+                    realized_profit = excluded.realized_profit,
+                    realized_loss = excluded.realized_loss,
+                    net_profit = excluded.net_profit,
+                    threshold_status = excluded.threshold_status,
+                    stopped_reason = excluded.stopped_reason,
+                    baseline_reset_at = excluded.baseline_reset_at,
+                    baseline_reset_note = excluded.baseline_reset_note,
+                    last_settled_event_id = excluded.last_settled_event_id,
+                    last_settled_at = excluded.last_settled_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    route_id,
+                    rule_id,
+                    int(subscription_id),
+                    int(user_id),
+                    next_realized_profit,
+                    next_realized_loss,
+                    next_net_profit,
+                    subscription_stop_reason,
+                    stopped_reason,
+                    current_route_financial.get("baseline_reset_at"),
+                    str(current_route_financial.get("baseline_reset_note") or ""),
+                    int(current_event["id"]),
+                    now,
+                    now,
+                ),
+            )
+            active_run = self._ensure_active_route_subscription_runtime_run(
+                conn,
+                route_id=route_id,
+                rule_id=rule_id,
+                subscription_id=int(subscription_id),
+                user_id=int(user_id),
+                issue_no=str(current_event.get("issue_no") or ""),
+                signal_id=int(current_event["signal_id"]) if current_event.get("signal_id") is not None else None,
+                started_at=now,
+                strategy=strategy,
+            )
+            conn.execute(
+                """
+                UPDATE auto_trigger_route_subscription_runtime_runs
+                SET status = ?,
+                    ended_at = ?,
+                    end_reason = ?,
+                    last_issue_no = ?,
+                    last_result_type = ?,
+                    realized_profit = ?,
+                    realized_loss = ?,
+                    net_profit = ?,
+                    settled_event_count = ?,
+                    hit_count = ?,
+                    miss_count = ?,
+                    refund_count = ?,
+                    baseline_reset_at = ?,
+                    baseline_reset_note = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    "closed" if subscription_stop_reason else "active",
+                    now if subscription_stop_reason else None,
+                    subscription_stop_reason,
+                    str(current_event.get("issue_no") or ""),
+                    normalized_result,
+                    next_realized_profit,
+                    next_realized_loss,
+                    next_net_profit,
+                    int(active_run.get("settled_event_count") or 0) + 1,
+                    int(active_run.get("hit_count") or 0) + (1 if normalized_result == "hit" else 0),
+                    int(active_run.get("miss_count") or 0) + (1 if normalized_result == "miss" else 0),
+                    int(active_run.get("refund_count") or 0) + (1 if normalized_result == "refund" else 0),
+                    current_route_financial.get("baseline_reset_at"),
+                    str(current_route_financial.get("baseline_reset_note") or ""),
+                    now,
+                    int(active_run["id"]),
+                ),
+            )
 
             auto_trigger_daily_risk = {
                 "scope": "route",
-                "stopped": bool(stop_reason),
-                "reason": stop_reason,
+                "stopped": bool(subscription_stop_reason or route_stop_reason),
+                "reason": subscription_stop_reason or route_stop_reason,
                 "rule_id": rule_id,
                 "route_id": route_id,
                 "stat_date": stat_date,
-                "net_profit": _round_money(route_stat.get("net_profit")),
+                "net_profit": next_net_profit,
                 "risk_mode": risk_mode,
                 "cancel_pending_jobs": bool(daily_risk_control.get("cancel_pending_jobs", True)),
             }
 
-        if auto_trigger_daily_risk.get("stopped") and auto_trigger_daily_risk.get("cancel_pending_jobs", True):
+        if route_stop_reason and auto_trigger_daily_risk.get("cancel_pending_jobs", True):
             auto_trigger_daily_risk["cancel"] = self.cancel_pending_auto_trigger_route_jobs(
                 route_id=route_id,
                 user_id=int(user_id),
