@@ -1108,9 +1108,18 @@ def _dispatch_latest_signal_if_available(
     latest_settled_issue_no: str,
     auto_trigger_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    signal = repository.get_latest_ready_signal_for_source(source_id=int(subscription["source_id"]))
+    signal_bet_type = _signal_bet_type_for_auto_trigger_context(auto_trigger_context)
+    signal = repository.get_latest_ready_signal_for_source(
+        source_id=int(subscription["source_id"]),
+        bet_type=signal_bet_type,
+    )
     if not signal:
-        return {"skipped": True, "reason": "latest_signal_not_found", "created_count": 0}
+        return {
+            "skipped": True,
+            "reason": "latest_signal_not_found",
+            "bet_type": signal_bet_type or "",
+            "created_count": 0,
+        }
     signal_issue_no = str(signal.get("issue_no") or "")
     distance = _issue_distance(signal_issue_no, latest_settled_issue_no)
     if distance is None:
@@ -1131,6 +1140,22 @@ def _dispatch_latest_signal_if_available(
         subscription_id=int(subscription["id"]),
         auto_trigger_context=auto_trigger_context,
     )
+
+
+def _signal_bet_type_for_auto_trigger_context(auto_trigger_context: Optional[Dict[str, Any]]) -> Optional[str]:
+    context = auto_trigger_context if isinstance(auto_trigger_context, dict) else {}
+    rule_action = context.get("rule_action") if isinstance(context.get("rule_action"), dict) else {}
+    play_filter_action = str(rule_action.get("play_filter_action") or "keep").strip() or "keep"
+    if play_filter_action == "fixed_metric":
+        fixed_metric = str(rule_action.get("fixed_metric") or "").strip()
+        return fixed_metric if fixed_metric in ALLOWED_METRICS else None
+    if play_filter_action != "matched_metric":
+        return None
+    matched_conditions = context.get("matched_conditions") if isinstance(context.get("matched_conditions"), list) else []
+    if not matched_conditions:
+        return None
+    metric = str((matched_conditions[0] or {}).get("metric") or "").strip()
+    return metric if metric in ALLOWED_METRICS else None
 
 
 def _is_rule_day_stopped(repository: Any, rule: Dict[str, Any], *, stat_date: str) -> Dict[str, Any]:

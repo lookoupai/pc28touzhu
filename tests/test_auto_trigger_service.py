@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -364,6 +365,62 @@ class AutoTriggerServiceTests(unittest.TestCase):
 
         self.assertEqual(result["summary"]["triggered_count"], 0)
         self.assertEqual(result["rules"][0]["events"], [])
+
+    def test_route_trigger_dispatches_signal_for_matched_metric(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
+        target = self.repo.list_delivery_targets(self.user_id)[0]
+        self.repo.create_signal_record(
+            source_id=self.source["id"],
+            lottery_type="pc28",
+            issue_no="20260418002",
+            bet_type="big_small",
+            bet_value="小",
+            normalized_payload={"message_text": "小10"},
+            published_at="2026-04-18T09:35:00Z",
+        )
+        self.repo.create_signal_record(
+            source_id=self.source["id"],
+            lottery_type="pc28",
+            issue_no="20260418002",
+            bet_type="combo",
+            bet_value="小双",
+            normalized_payload={"message_text": "小双10"},
+            published_at="2026-04-18T09:35:00Z",
+        )
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "匹配玩法发单",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True, "play_filter_action": "matched_metric"},
+                "routes": [{"delivery_target_id": target["id"], "name": "测试路由"}],
+            },
+        )
+
+        result = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(issue_no="20260418001"),
+        )
+
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        event = result["rules"][0]["events"][0]
+        self.assertEqual(event["snapshot"]["dispatch_result"]["created_count"], 1)
+        jobs = self.repo.list_execution_jobs(user_id=self.user_id)
+        self.assertEqual(len(jobs), 1)
+        signal = self.repo.get_signal(jobs[0]["signal_id"])
+        self.assertEqual(signal["bet_type"], "big_small")
+        self.assertEqual(jobs[0]["planned_message_text"], "小10")
 
     def test_daily_profit_target_stops_rule_and_blocks_following_dispatch(self):
         self.repo.update_subscription_status(
@@ -1415,6 +1472,162 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(jobs[0]["auto_trigger_route_id"], rule["routes"][0]["id"])
         progression_event = self.repo.get_progression_event(jobs[0]["progression_event_id"])
         self.assertEqual(progression_event["auto_trigger_route_id"], rule["routes"][0]["id"])
+
+    def test_active_route_continues_when_global_subscription_threshold_is_stopped(self):
+        first_target = self.repo.list_delivery_targets(self.user_id)[0]
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "路由续单不受全局订阅旧风控影响",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "routes": [
+                    {
+                        "delivery_target_id": first_target["id"],
+                        "name": "测试群路由",
+                        "risk_mode": "inherit",
+                    },
+                ],
+            },
+        )["item"]
+
+        first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+        self.assertEqual(first["summary"]["triggered_count"], 1)
+        route_id = rule["routes"][0]["id"]
+        first_job = self.repo.list_execution_jobs(user_id=self.user_id)[0]
+        first_event = self.repo.get_progression_event(first_job["progression_event_id"])
+        self.repo.settle_progression_event(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            result_type="refund",
+            progression_event_id=first_event["id"],
+        )
+        self.repo.report_job_result(
+            job_id=str(first_job["id"]),
+            executor_id="test-executor",
+            attempt_no=1,
+            delivery_status="sent",
+            remote_message_id="remote-route-1",
+            executed_at="2026-04-18T09:32:00Z",
+            raw_result={},
+            error_message=None,
+        )
+        with self.repo._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO subscription_financial_state(
+                    subscription_id, user_id, realized_profit, realized_loss, net_profit,
+                    threshold_status, stopped_reason, baseline_reset_at, baseline_reset_note,
+                    last_settled_event_id, last_settled_at, updated_at
+                ) VALUES (?, ?, 0, 10, -10, 'loss_limit_hit', '旧订阅止损状态', NULL, '', NULL, ?, ?)
+                ON CONFLICT(subscription_id) DO UPDATE SET
+                    threshold_status = excluded.threshold_status,
+                    stopped_reason = excluded.stopped_reason,
+                    updated_at = excluded.updated_at
+                """,
+                (self.subscription["id"], self.user_id, "2026-04-18T09:33:00Z", "2026-04-18T09:33:00Z"),
+            )
+
+        next_signal = self.repo.create_signal_record(
+            source_id=self.source["id"],
+            lottery_type="pc28",
+            issue_no="20260418002",
+            bet_type="big_small",
+            bet_value="小",
+            normalized_payload={"message_text": "小10"},
+            published_at="2026-04-18T09:35:00Z",
+        )
+        second = dispatch_signal(self.repo, next_signal["id"])
+
+        self.assertEqual(second["created_count"], 1)
+        self.assertEqual(second["jobs"][0]["auto_trigger_route_id"], route_id)
+        second_event = self.repo.get_progression_event(second["jobs"][0]["progression_event_id"])
+        self.assertEqual(second_event["auto_trigger_route_id"], route_id)
+        self.assertEqual(self.repo.get_subscription_financial_state(self.subscription["id"])["threshold_status"], "loss_limit_hit")
+
+    def test_route_runtime_play_filter_uses_matched_metric_strategy(self):
+        current_subscription = self.repo.get_subscription(self.subscription["id"])
+        strategy = dict(current_subscription["strategy_v2"])
+        strategy["play_filter"] = {
+            "mode": "selected",
+            "selected_keys": ["combo:大单", "combo:大双", "combo:小单", "combo:小双"],
+        }
+        self.repo.update_subscription_record(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            source_id=self.subscription["source_id"],
+            strategy=strategy,
+        )
+        self.repo.create_signal_record(
+            source_id=self.source["id"],
+            lottery_type="pc28",
+            issue_no="20260418002",
+            bet_type="odd_even",
+            bet_value="单",
+            normalized_payload={"message_text": "单10"},
+            published_at="2026-04-18T09:35:00Z",
+        )
+        first_target = self.repo.list_delivery_targets(self.user_id)[0]
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "命中玩法写入路由运行态",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "odd_even", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True, "play_filter_action": "matched_metric"},
+                "routes": [
+                    {
+                        "delivery_target_id": first_target["id"],
+                        "name": "测试群路由",
+                        "risk_mode": "inherit",
+                    },
+                ],
+            },
+        )["item"]
+
+        result = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(
+                big_small_rate=50,
+                odd_even_rate=38,
+                combo_rate=50,
+            ),
+        )
+
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        jobs = self.repo.list_execution_jobs(user_id=self.user_id)
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["auto_trigger_route_id"], rule["routes"][0]["id"])
+        signal = self.repo.get_signal(jobs[0]["signal_id"])
+        self.assertEqual(signal["bet_type"], "odd_even")
+        with self.repo._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT play_filter_json
+                FROM auto_trigger_route_subscription_runtime_runs
+                WHERE route_id = ? AND subscription_id = ? AND status = 'active'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (rule["routes"][0]["id"], self.subscription["id"]),
+            ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(
+            json.loads(row["play_filter_json"]),
+            {"mode": "selected", "selected_keys": ["odd_even:单", "odd_even:双"]},
+        )
 
     def test_route_profit_target_stops_only_that_route(self):
         second_target = self.repo.create_delivery_target_record(

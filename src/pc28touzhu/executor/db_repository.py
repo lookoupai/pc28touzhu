@@ -5330,6 +5330,7 @@ class DatabaseRepository:
         auto_trigger_rule_run_id: Optional[int] = None,
         auto_trigger_route_id: Optional[int] = None,
         auto_trigger_stat_date: str = "",
+        runtime_strategy: Optional[dict] = None,
         status: str = "pending",
     ) -> Dict[str, Any]:
         existing = self.get_progression_event_by_signal(
@@ -5353,11 +5354,14 @@ class DatabaseRepository:
             else:
                 route = self.get_auto_trigger_rule_route(int(auto_trigger_route_id))
                 rule_id = int(route["rule_id"]) if route else int(auto_trigger_rule_id or 0)
-                subscription_row = conn.execute(
-                    "SELECT strategy_json FROM user_subscriptions WHERE id = ? AND user_id = ? LIMIT 1",
-                    (int(subscription_id), int(user_id)),
-                ).fetchone()
-                strategy = _safe_json_loads(subscription_row["strategy_json"]) if subscription_row else {}
+                if isinstance(runtime_strategy, dict):
+                    strategy = runtime_strategy
+                else:
+                    subscription_row = conn.execute(
+                        "SELECT strategy_json FROM user_subscriptions WHERE id = ? AND user_id = ? LIMIT 1",
+                        (int(subscription_id), int(user_id)),
+                    ).fetchone()
+                    strategy = _safe_json_loads(subscription_row["strategy_json"]) if subscription_row else {}
                 self._ensure_active_route_subscription_runtime_run(
                     conn,
                     route_id=int(auto_trigger_route_id),
@@ -6888,6 +6892,102 @@ class DatabaseRepository:
             items.append(row)
         return items
 
+    def list_active_auto_trigger_route_dispatch_candidates(self, signal_id: int) -> list[Dict[str, Any]]:
+        query = """
+            SELECT
+                r.*,
+                dt.target_key,
+                dt.target_name,
+                dt.status AS target_status,
+                dt.executor_type,
+                dt.template_id AS target_template_id,
+                dt.telegram_account_id,
+                ta.label AS telegram_account_label,
+                ta.status AS telegram_account_status,
+                s.id AS signal_id,
+                s.source_id,
+                s.issue_no,
+                s.bet_type,
+                s.bet_value,
+                s.lottery_type,
+                s.normalized_payload,
+                s.published_at,
+                us.id AS subscription_id,
+                us.strategy_json,
+                run.id AS runtime_run_id,
+                run.play_filter_json AS runtime_play_filter_json,
+                started_signal.bet_type AS started_signal_bet_type,
+                rr.id AS rule_run_id,
+                rr.stat_date AS stat_date,
+                rule.action_json AS rule_action_json
+            FROM normalized_signals s
+            JOIN user_subscriptions us ON us.source_id = s.source_id
+            JOIN auto_trigger_route_subscription_runtime_runs run
+              ON run.subscription_id = us.id
+             AND run.user_id = us.user_id
+             AND run.status = 'active'
+            JOIN auto_trigger_rule_routes r
+              ON r.id = run.route_id
+             AND r.rule_id = run.rule_id
+             AND r.user_id = run.user_id
+            JOIN auto_trigger_rules rule
+              ON rule.id = r.rule_id
+             AND rule.user_id = r.user_id
+            JOIN delivery_targets dt ON dt.id = r.delivery_target_id
+            LEFT JOIN telegram_accounts ta ON ta.id = dt.telegram_account_id
+            LEFT JOIN normalized_signals started_signal ON started_signal.id = run.started_signal_id
+            LEFT JOIN auto_trigger_route_subscription_financial_state route_financial
+              ON route_financial.route_id = r.id
+             AND route_financial.subscription_id = us.id
+            LEFT JOIN auto_trigger_rule_runs rr
+              ON rr.id = (
+                SELECT latest_run.id
+                FROM auto_trigger_rule_runs latest_run
+                WHERE latest_run.rule_id = r.rule_id
+                  AND latest_run.subscription_id = us.id
+                  AND latest_run.user_id = us.user_id
+                  AND latest_run.status = 'active'
+                ORDER BY latest_run.id DESC
+                LIMIT 1
+              )
+            WHERE s.id = ?
+              AND s.status = 'ready'
+              AND us.status = 'active'
+              AND rule.status = 'active'
+              AND r.status = 'active'
+              AND dt.status = 'active'
+              AND (dt.telegram_account_id IS NULL OR ta.status = 'active')
+              AND COALESCE(route_financial.threshold_status, '') = ''
+            ORDER BY us.user_id ASC, r.sort_order ASC, r.id ASC
+        """
+        rows = self._fetch_all(query, (int(signal_id),))
+        items: list[Dict[str, Any]] = []
+        for row in rows:
+            route = self._serialize_auto_trigger_rule_route_row(row)
+            items.append(
+                {
+                    "signal_id": int(row["signal_id"]),
+                    "source_id": int(row["source_id"]),
+                    "issue_no": str(row.get("issue_no") or ""),
+                    "bet_type": str(row.get("bet_type") or ""),
+                    "bet_value": str(row.get("bet_value") or ""),
+                    "lottery_type": str(row.get("lottery_type") or ""),
+                    "normalized_payload": _safe_json_loads(row.get("normalized_payload")),
+                    "published_at": row.get("published_at"),
+                    "subscription_id": int(row["subscription_id"]),
+                    "user_id": int(route["user_id"]),
+                    "strategy_json": _safe_json_loads(row.get("strategy_json")),
+                    "route": route,
+                    "runtime_run_id": int(row["runtime_run_id"]),
+                    "runtime_play_filter": _safe_json_loads(row.get("runtime_play_filter_json")),
+                    "started_signal_bet_type": str(row.get("started_signal_bet_type") or ""),
+                    "rule_run_id": int(row["rule_run_id"]) if row.get("rule_run_id") is not None else None,
+                    "stat_date": str(row.get("stat_date") or ""),
+                    "rule_action": _safe_json_loads(row.get("rule_action_json")),
+                }
+            )
+        return items
+
     def list_dispatch_candidates_for_subscription(self, signal_id: int, *, subscription_id: int) -> list[Dict[str, Any]]:
         query = """
             SELECT
@@ -6930,8 +7030,25 @@ class DatabaseRepository:
             items.append(row)
         return items
 
-    def get_latest_ready_signal_for_source(self, *, source_id: int, issue_no: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        if issue_no:
+    def get_latest_ready_signal_for_source(
+        self,
+        *,
+        source_id: int,
+        issue_no: Optional[str] = None,
+        bet_type: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        normalized_bet_type = str(bet_type or "").strip()
+        if issue_no and normalized_bet_type:
+            row = self._fetch_one(
+                """
+                SELECT * FROM normalized_signals
+                WHERE source_id = ? AND issue_no = ? AND bet_type = ? AND status = 'ready'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (int(source_id), str(issue_no), normalized_bet_type),
+            )
+        elif issue_no:
             row = self._fetch_one(
                 """
                 SELECT * FROM normalized_signals
@@ -6940,6 +7057,16 @@ class DatabaseRepository:
                 LIMIT 1
                 """,
                 (int(source_id), str(issue_no)),
+            )
+        elif normalized_bet_type:
+            row = self._fetch_one(
+                """
+                SELECT * FROM normalized_signals
+                WHERE source_id = ? AND bet_type = ? AND status = 'ready'
+                ORDER BY CAST(COALESCE(NULLIF(issue_no, ''), '0') AS INTEGER) DESC, id DESC
+                LIMIT 1
+                """,
+                (int(source_id), normalized_bet_type),
             )
         else:
             row = self._fetch_one(

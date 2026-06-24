@@ -233,6 +233,55 @@ def _route_is_stopped(repository: Any, *, route: Dict[str, Any], user_id: int, s
     return str(stat.get("status") or "") == "stopped"
 
 
+def _route_subscription_is_stopped(
+    repository: Any,
+    *,
+    route: Dict[str, Any],
+    subscription_id: int,
+    user_id: int,
+) -> bool:
+    if not hasattr(repository, "get_auto_trigger_route_subscription_financial_state"):
+        return False
+    financial = repository.get_auto_trigger_route_subscription_financial_state(
+        route_id=int(route["id"]),
+        subscription_id=int(subscription_id),
+        user_id=int(user_id),
+    )
+    return str(financial.get("threshold_status") or "") in {"profit_target_hit", "loss_limit_hit"}
+
+
+def _route_play_filter_mode(route: Dict[str, Any], rule_action: Dict[str, Any] | None) -> str:
+    mode = str(route.get("play_filter_mode") or "inherit").strip() or "inherit"
+    if mode != "inherit":
+        return mode
+    action = rule_action if isinstance(rule_action, dict) else {}
+    return str(action.get("play_filter_action") or "keep").strip() or "keep"
+
+
+def _route_continuation_strategy(
+    base_strategy: Dict[str, Any],
+    route: Dict[str, Any],
+    candidate: Dict[str, Any],
+) -> Dict[str, Any]:
+    rule_action = candidate.get("rule_action") if isinstance(candidate.get("rule_action"), dict) else {}
+    started_metric = str(candidate.get("started_signal_bet_type") or "").strip()
+    context: Dict[str, Any] = {"rule_action": rule_action}
+    if started_metric in PLAY_FILTER_KEYS_BY_METRIC:
+        context["matched_conditions"] = [{"metric": started_metric}]
+    strategy = _route_effective_strategy(base_strategy, route, context)
+
+    play_filter_mode = _route_play_filter_mode(route, rule_action)
+    runtime_play_filter = candidate.get("runtime_play_filter")
+    if play_filter_mode not in {"matched_metric", "fixed_metric"} and isinstance(runtime_play_filter, dict):
+        mode = str(runtime_play_filter.get("mode") or "all").strip()
+        selected_keys = list(runtime_play_filter.get("selected_keys") or [])
+        strategy["play_filter"] = {
+            "mode": "selected" if mode == "selected" and selected_keys else "all",
+            "selected_keys": selected_keys if mode == "selected" and selected_keys else [],
+        }
+    return strategy
+
+
 def _dispatch_signal_for_auto_trigger_routes(
     repository: Any,
     signal: Dict[str, Any],
@@ -270,6 +319,14 @@ def _dispatch_signal_for_auto_trigger_routes(
         if stat_date and _route_is_stopped(repository, route=route, user_id=user_id, stat_date=stat_date):
             skipped_count += 1
             continue
+        if _route_subscription_is_stopped(
+            repository,
+            route=route,
+            subscription_id=int(subscription_id),
+            user_id=user_id,
+        ):
+            skipped_count += 1
+            continue
         if repository.auto_trigger_route_has_open_run(
             route_id=route_id,
             subscription_id=int(subscription_id),
@@ -278,10 +335,14 @@ def _dispatch_signal_for_auto_trigger_routes(
             skipped_count += 1
             continue
 
-        strategy = _route_effective_strategy(
-            subscription.get("strategy_v2") or subscription.get("strategy") or {},
-            route,
-            auto_trigger_context,
+        strategy = (
+            route["_runtime_strategy"]
+            if isinstance(route.get("_runtime_strategy"), dict)
+            else _route_effective_strategy(
+                subscription.get("strategy_v2") or subscription.get("strategy") or {},
+                route,
+                auto_trigger_context,
+            )
         )
         if not strategy_matches_signal(strategy, signal):
             skipped_count += 1
@@ -332,6 +393,7 @@ def _dispatch_signal_for_auto_trigger_routes(
                 ),
                 auto_trigger_route_id=route_id,
                 auto_trigger_stat_date=stat_date,
+                runtime_strategy=strategy,
                 status="pending",
             )
 
@@ -393,6 +455,69 @@ def _dispatch_signal_for_auto_trigger_routes(
     }
 
 
+def _dispatch_signal_for_active_auto_trigger_routes(repository: Any, signal: Dict[str, Any]) -> Dict[str, Any]:
+    if not hasattr(repository, "list_active_auto_trigger_route_dispatch_candidates"):
+        return {
+            "signal_id": int(signal["id"]),
+            "candidate_count": 0,
+            "created_count": 0,
+            "existing_count": 0,
+            "skipped_count": 0,
+            "jobs": [],
+        }
+
+    candidates = repository.list_active_auto_trigger_route_dispatch_candidates(int(signal["id"]))
+    created_count = 0
+    existing_count = 0
+    skipped_count = 0
+    jobs = []
+
+    for candidate in candidates:
+        route = candidate.get("route") if isinstance(candidate.get("route"), dict) else {}
+        if not route:
+            skipped_count += 1
+            continue
+        strategy = _route_continuation_strategy(
+            candidate.get("strategy_json") if isinstance(candidate.get("strategy_json"), dict) else {},
+            route,
+            candidate,
+        )
+        if not strategy_matches_signal(strategy, signal):
+            skipped_count += 1
+            continue
+        route_with_strategy = {**route, "_runtime_strategy": strategy}
+        context = {
+            "rule_id": int(route["rule_id"]),
+            "rule_run_id": candidate.get("rule_run_id"),
+            "stat_date": str(candidate.get("stat_date") or ""),
+            "routes": [route_with_strategy],
+            "rule_action": candidate.get("rule_action") if isinstance(candidate.get("rule_action"), dict) else {},
+        }
+        started_metric = str(candidate.get("started_signal_bet_type") or "").strip()
+        if started_metric in PLAY_FILTER_KEYS_BY_METRIC:
+            context["matched_conditions"] = [{"metric": started_metric}]
+
+        result = _dispatch_signal_for_auto_trigger_routes(
+            repository,
+            signal,
+            subscription_id=int(candidate["subscription_id"]),
+            auto_trigger_context=context,
+        )
+        created_count += int(result.get("created_count") or 0)
+        existing_count += int(result.get("existing_count") or 0)
+        skipped_count += int(result.get("skipped_count") or 0)
+        jobs.extend(result.get("jobs") or [])
+
+    return {
+        "signal_id": int(signal["id"]),
+        "candidate_count": len(candidates),
+        "created_count": created_count,
+        "existing_count": existing_count,
+        "skipped_count": skipped_count,
+        "jobs": jobs,
+    }
+
+
 def _candidate_matches_subscription_targets(candidate: Dict[str, Any]) -> bool:
     strategy = candidate.get("strategy_json")
     if isinstance(strategy, str):
@@ -436,6 +561,7 @@ def dispatch_signal(
             auto_trigger_context=auto_trigger_context,
         )
 
+    active_route_result = _dispatch_signal_for_active_auto_trigger_routes(repository, signal)
     raw_candidates = (
         repository.list_dispatch_candidates_for_subscription(signal_id, subscription_id=subscription_id)
         if subscription_id is not None and hasattr(repository, "list_dispatch_candidates_for_subscription")
@@ -559,9 +685,9 @@ def dispatch_signal(
     return {
         "signal_id": int(signal_id),
         "subscription_id": int(subscription_id) if subscription_id is not None else None,
-        "candidate_count": len(candidates),
-        "created_count": created_count,
-        "existing_count": existing_count,
-        "skipped_count": skipped_count,
-        "jobs": jobs,
+        "candidate_count": len(candidates) + int(active_route_result.get("candidate_count") or 0),
+        "created_count": created_count + int(active_route_result.get("created_count") or 0),
+        "existing_count": existing_count + int(active_route_result.get("existing_count") or 0),
+        "skipped_count": skipped_count + int(active_route_result.get("skipped_count") or 0),
+        "jobs": list(active_route_result.get("jobs") or []) + jobs,
     }
