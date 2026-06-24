@@ -513,13 +513,15 @@ select[multiple].text-input {
     align-items: end;
 }
 
-.route-risk-fields {
+.route-risk-fields,
+.route-subscription-risk-fields {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
 }
 
 .route-risk-fields[hidden],
+.route-subscription-risk-fields[hidden],
 .route-settlement-field[hidden],
 .route-staking-field[hidden],
 .route-fixed-metric-field[hidden],

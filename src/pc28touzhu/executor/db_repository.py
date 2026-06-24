@@ -113,6 +113,19 @@ def _subscription_risk_control(strategy: Optional[dict], signal: Optional[dict] 
     }
 
 
+def _risk_stop_reason(risk_control: Dict[str, Any], *, net_profit: Any) -> str:
+    if not bool(risk_control.get("enabled")):
+        return ""
+    profit_target = _round_money(risk_control.get("profit_target"))
+    loss_limit = _round_money(risk_control.get("loss_limit"))
+    current_net_profit = _round_money(net_profit)
+    if profit_target > 0 and current_net_profit >= profit_target:
+        return "profit_target_hit"
+    if loss_limit > 0 and current_net_profit <= -loss_limit:
+        return "loss_limit_hit"
+    return ""
+
+
 def _subscription_play_net_profit(
     conn: sqlite3.Connection,
     *,
@@ -684,6 +697,10 @@ class DatabaseRepository:
             sort_order INTEGER NOT NULL DEFAULT 0,
             risk_mode TEXT NOT NULL DEFAULT 'inherit',
             risk_control_json TEXT NOT NULL DEFAULT '{}',
+            route_risk_mode TEXT NOT NULL DEFAULT 'inherit_rule',
+            route_risk_control_json TEXT NOT NULL DEFAULT '{}',
+            subscription_risk_mode TEXT NOT NULL DEFAULT 'inherit_rule',
+            subscription_risk_control_json TEXT NOT NULL DEFAULT '{}',
             settlement_mode TEXT NOT NULL DEFAULT 'inherit',
             settlement_policy_json TEXT NOT NULL DEFAULT '{}',
             staking_mode TEXT NOT NULL DEFAULT 'inherit',
@@ -850,6 +867,7 @@ class DatabaseRepository:
             self._ensure_progression_event_route_indexes(conn)
             self._ensure_subscription_runtime_run_columns(conn)
             self._ensure_auto_trigger_rule_columns(conn)
+            self._ensure_auto_trigger_rule_route_columns(conn)
             self._ensure_user_telegram_indexes(conn)
             conn.commit()
 
@@ -1054,6 +1072,41 @@ class DatabaseRepository:
         for column_name, ddl in column_definitions.items():
             if column_name not in existing_columns:
                 conn.execute(ddl)
+
+    def _ensure_auto_trigger_rule_route_columns(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(auto_trigger_rule_routes)").fetchall()
+        existing_columns = {str(row["name"]) for row in rows}
+        column_definitions = {
+            "route_risk_mode": "ALTER TABLE auto_trigger_rule_routes ADD COLUMN route_risk_mode TEXT NOT NULL DEFAULT 'inherit_rule'",
+            "route_risk_control_json": "ALTER TABLE auto_trigger_rule_routes ADD COLUMN route_risk_control_json TEXT NOT NULL DEFAULT '{}'",
+            "subscription_risk_mode": "ALTER TABLE auto_trigger_rule_routes ADD COLUMN subscription_risk_mode TEXT NOT NULL DEFAULT 'inherit_rule'",
+            "subscription_risk_control_json": "ALTER TABLE auto_trigger_rule_routes ADD COLUMN subscription_risk_control_json TEXT NOT NULL DEFAULT '{}'",
+        }
+        added_columns: set[str] = set()
+        for column_name, ddl in column_definitions.items():
+            if column_name not in existing_columns:
+                conn.execute(ddl)
+                added_columns.add(column_name)
+        if added_columns:
+            conn.execute(
+                """
+                UPDATE auto_trigger_rule_routes
+                SET route_risk_mode = CASE
+                        WHEN risk_mode = 'override' THEN 'override'
+                        WHEN risk_mode = 'disabled' THEN 'disabled'
+                        ELSE 'inherit_rule'
+                    END,
+                    route_risk_control_json = CASE
+                        WHEN risk_mode = 'override' THEN risk_control_json
+                        ELSE '{}'
+                    END,
+                    subscription_risk_mode = CASE
+                        WHEN risk_mode = 'disabled' THEN 'disabled'
+                        ELSE 'inherit_subscription'
+                    END,
+                    subscription_risk_control_json = '{}'
+                """
+            )
 
     def _fetch_one(self, query: str, params: tuple) -> Optional[Dict[str, Any]]:
         with self._connect() as conn:
@@ -1367,6 +1420,25 @@ class DatabaseRepository:
         }
 
     def _serialize_auto_trigger_rule_route_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        legacy_risk_mode = str(row.get("risk_mode") or "inherit")
+        route_risk_mode = str(row.get("route_risk_mode") or "").strip()
+        route_risk_control = _safe_json_loads(row.get("route_risk_control_json"))
+        subscription_risk_mode = str(row.get("subscription_risk_mode") or "").strip()
+        subscription_risk_control = _safe_json_loads(row.get("subscription_risk_control_json"))
+        legacy_risk_control = _safe_json_loads(row.get("risk_control_json"))
+        if not route_risk_mode:
+            route_risk_mode = {"inherit": "inherit_rule", "override": "override", "disabled": "disabled"}.get(
+                legacy_risk_mode,
+                "inherit_rule",
+            )
+        if not route_risk_control and route_risk_mode == "override":
+            route_risk_control = legacy_risk_control
+        if not subscription_risk_mode:
+            subscription_risk_mode = {
+                "inherit": "inherit_subscription",
+                "override": "inherit_subscription",
+                "disabled": "disabled",
+            }.get(legacy_risk_mode, "inherit_rule")
         return {
             "id": int(row["id"]),
             "rule_id": int(row["rule_id"]),
@@ -1375,8 +1447,12 @@ class DatabaseRepository:
             "name": str(row.get("name") or ""),
             "status": str(row.get("status") or "active"),
             "sort_order": int(row.get("sort_order") or 0),
-            "risk_mode": str(row.get("risk_mode") or "inherit"),
-            "risk_control": _safe_json_loads(row.get("risk_control_json")),
+            "risk_mode": legacy_risk_mode,
+            "risk_control": legacy_risk_control,
+            "route_risk_mode": route_risk_mode,
+            "route_risk_control": route_risk_control,
+            "subscription_risk_mode": subscription_risk_mode,
+            "subscription_risk_control": subscription_risk_control,
             "settlement_mode": str(row.get("settlement_mode") or "inherit"),
             "settlement_policy": _safe_json_loads(row.get("settlement_policy_json")),
             "staking_mode": str(row.get("staking_mode") or "inherit"),
@@ -3046,6 +3122,14 @@ class DatabaseRepository:
             route_id = route.get("id")
             normalized_route_id = int(route_id) if route_id not in {None, ""} else None
             sort_order = int(route.get("sort_order") if route.get("sort_order") not in {None, ""} else index)
+            route_risk_mode = str(route.get("route_risk_mode") or "inherit_rule")
+            route_risk_control = route.get("route_risk_control") or {}
+            subscription_risk_mode = str(route.get("subscription_risk_mode") or "inherit_rule")
+            subscription_risk_control = route.get("subscription_risk_control") or {}
+            legacy_risk_mode = {"inherit_rule": "inherit", "override": "override", "disabled": "disabled"}.get(
+                route_risk_mode,
+                "inherit",
+            )
             route_values = (
                 int(rule_id),
                 int(user_id),
@@ -3053,8 +3137,12 @@ class DatabaseRepository:
                 str(route.get("name") or ""),
                 str(route.get("status") or "active"),
                 sort_order,
-                str(route.get("risk_mode") or "inherit"),
-                _safe_json_dumps(route.get("risk_control") or {}),
+                legacy_risk_mode,
+                _safe_json_dumps(route_risk_control),
+                route_risk_mode,
+                _safe_json_dumps(route_risk_control),
+                subscription_risk_mode,
+                _safe_json_dumps(subscription_risk_control),
                 str(route.get("settlement_mode") or "inherit"),
                 _safe_json_dumps(route.get("settlement_policy") or {}),
                 str(route.get("staking_mode") or "inherit"),
@@ -3063,7 +3151,6 @@ class DatabaseRepository:
                 _safe_json_dumps(route.get("play_filter") or {}),
                 str(route.get("template_mode") or "target_default"),
                 int(route["template_id"]) if route.get("template_id") is not None else None,
-                updated_at,
             )
             if normalized_route_id is not None and normalized_route_id in existing_ids:
                 seen_ids.add(normalized_route_id)
@@ -3076,6 +3163,10 @@ class DatabaseRepository:
                         sort_order = ?,
                         risk_mode = ?,
                         risk_control_json = ?,
+                        route_risk_mode = ?,
+                        route_risk_control_json = ?,
+                        subscription_risk_mode = ?,
+                        subscription_risk_control_json = ?,
                         settlement_mode = ?,
                         settlement_policy_json = ?,
                         staking_mode = ?,
@@ -3102,6 +3193,10 @@ class DatabaseRepository:
                         route_values[13],
                         route_values[14],
                         route_values[15],
+                        route_values[16],
+                        route_values[17],
+                        route_values[18],
+                        route_values[19],
                         updated_at,
                         normalized_route_id,
                         int(rule_id),
@@ -3113,12 +3208,15 @@ class DatabaseRepository:
                     """
                     INSERT INTO auto_trigger_rule_routes(
                         rule_id, user_id, delivery_target_id, name, status, sort_order,
-                        risk_mode, risk_control_json, settlement_mode, settlement_policy_json,
+                        risk_mode, risk_control_json,
+                        route_risk_mode, route_risk_control_json,
+                        subscription_risk_mode, subscription_risk_control_json,
+                        settlement_mode, settlement_policy_json,
                         staking_mode, staking_policy_json, play_filter_mode, play_filter_json,
                         template_mode, template_id, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (*route_values, updated_at),
+                    (*route_values, updated_at, updated_at),
                 )
                 seen_ids.add(int(cur.lastrowid))
         archived_ids = sorted(existing_ids - seen_ids)
@@ -5480,14 +5578,6 @@ class DatabaseRepository:
                 updated_at=now,
             )
 
-            risk_mode = str(route.get("risk_mode") or "inherit").strip() or "inherit"
-            if risk_mode == "override":
-                daily_risk_control = _safe_json_loads(route.get("risk_control_json"))
-            elif risk_mode == "disabled":
-                daily_risk_control = {"enabled": False}
-            else:
-                daily_risk_control = _subscription_risk_control(strategy, signal)
-
             route_financial_row = conn.execute(
                 """
                 SELECT *
@@ -5511,20 +5601,44 @@ class DatabaseRepository:
             next_realized_loss = _round_money(current_route_financial["realized_loss"] + loss_delta)
             next_net_profit = _round_money(current_route_financial["net_profit"] + net_delta)
 
+            route_risk_mode = str(route.get("route_risk_mode") or "").strip()
+            if not route_risk_mode:
+                route_risk_mode = {"inherit": "inherit_rule", "override": "override", "disabled": "disabled"}.get(
+                    str(route.get("risk_mode") or "inherit"),
+                    "inherit_rule",
+                )
+            if route_risk_mode == "override":
+                route_risk_control = _safe_json_loads(route.get("route_risk_control_json"))
+                if not route_risk_control:
+                    route_risk_control = _safe_json_loads(route.get("risk_control_json"))
+            elif route_risk_mode == "disabled":
+                route_risk_control = {"enabled": False}
+            else:
+                route_risk_control = _safe_json_loads(route.get("daily_risk_control_json"))
+
+            subscription_risk_mode = str(route.get("subscription_risk_mode") or "").strip()
+            if not subscription_risk_mode:
+                subscription_risk_mode = {
+                    "inherit": "inherit_subscription",
+                    "override": "inherit_subscription",
+                    "disabled": "disabled",
+                }.get(str(route.get("risk_mode") or "inherit"), "inherit_rule")
+            if subscription_risk_mode == "override":
+                subscription_risk_control = _safe_json_loads(route.get("subscription_risk_control_json"))
+            elif subscription_risk_mode == "inherit_subscription":
+                subscription_risk_control = _subscription_risk_control(strategy, signal)
+            elif subscription_risk_mode == "disabled":
+                subscription_risk_control = {"enabled": False}
+            else:
+                subscription_risk_control = _safe_json_loads(route.get("daily_risk_control_json"))
+
             route_stop_reason = ""
             subscription_stop_reason = ""
             if str(route_stat.get("status") or "") == "stopped":
                 route_stop_reason = str(route_stat.get("stopped_reason") or "daily_risk_stopped")
-            elif bool(daily_risk_control.get("enabled")):
-                profit_target = _round_money(daily_risk_control.get("profit_target"))
-                loss_limit = _round_money(daily_risk_control.get("loss_limit"))
-                current_route_net = next_net_profit
-                if profit_target > 0 and current_route_net >= profit_target:
-                    subscription_stop_reason = "profit_target_hit"
-                elif loss_limit > 0 and current_route_net <= -loss_limit:
-                    subscription_stop_reason = "loss_limit_hit"
-                if subscription_stop_reason and risk_mode == "override":
-                    route_stop_reason = subscription_stop_reason
+            else:
+                route_stop_reason = _risk_stop_reason(route_risk_control, net_profit=route_stat.get("net_profit"))
+                if route_stop_reason:
                     conn.execute(
                         """
                         UPDATE auto_trigger_route_daily_stats
@@ -5536,6 +5650,7 @@ class DatabaseRepository:
                         """,
                         (route_stop_reason, now, now, route_id, int(user_id), stat_date),
                     )
+            subscription_stop_reason = _risk_stop_reason(subscription_risk_control, net_profit=next_net_profit)
             stopped_reason = ""
             if subscription_stop_reason == "profit_target_hit":
                 stopped_reason = "达到止盈阈值，当前路由方案轮次已停止"
@@ -5593,6 +5708,7 @@ class DatabaseRepository:
                 started_at=now,
                 strategy=strategy,
             )
+            run_stop_reason = subscription_stop_reason or route_stop_reason
             conn.execute(
                 """
                 UPDATE auto_trigger_route_subscription_runtime_runs
@@ -5614,9 +5730,9 @@ class DatabaseRepository:
                 WHERE id = ?
                 """,
                 (
-                    "closed" if subscription_stop_reason else "active",
-                    now if subscription_stop_reason else None,
-                    subscription_stop_reason,
+                    "closed" if run_stop_reason else "active",
+                    now if run_stop_reason else None,
+                    run_stop_reason,
                     str(current_event.get("issue_no") or ""),
                     normalized_result,
                     next_realized_profit,
@@ -5641,8 +5757,9 @@ class DatabaseRepository:
                 "route_id": route_id,
                 "stat_date": stat_date,
                 "net_profit": next_net_profit,
-                "risk_mode": risk_mode,
-                "cancel_pending_jobs": bool(daily_risk_control.get("cancel_pending_jobs", True)),
+                "route_risk_mode": route_risk_mode,
+                "subscription_risk_mode": subscription_risk_mode,
+                "cancel_pending_jobs": bool(route_risk_control.get("cancel_pending_jobs", True)),
             }
 
         if route_stop_reason and auto_trigger_daily_risk.get("cancel_pending_jobs", True):

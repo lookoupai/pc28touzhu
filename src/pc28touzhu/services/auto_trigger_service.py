@@ -21,7 +21,8 @@ ALLOWED_CONDITION_TYPES = {"hit_rate", "miss_streak"}
 ALLOWED_OPERATORS = {"lt", "lte", "gt", "gte"}
 ALLOWED_SCOPE_MODES = {"all_subscriptions", "selected_subscriptions"}
 ALLOWED_PLAY_FILTER_ACTIONS = {"keep", "matched_metric", "fixed_metric"}
-ALLOWED_ROUTE_RISK_MODES = {"inherit", "override", "disabled"}
+ALLOWED_ROUTE_RISK_MODES = {"inherit_rule", "override", "disabled"}
+ALLOWED_ROUTE_SUBSCRIPTION_RISK_MODES = {"inherit_rule", "inherit_subscription", "override", "disabled"}
 ALLOWED_ROUTE_SETTLEMENT_MODES = {"inherit", "override"}
 ALLOWED_ROUTE_STAKING_MODES = {"inherit", "override"}
 ALLOWED_ROUTE_PLAY_FILTER_MODES = {"inherit", "keep", "matched_metric", "fixed_metric"}
@@ -313,9 +314,25 @@ def _normalize_rule_routes(value: Any, *, source: Optional[Dict[str, Any]] = Non
         status = str(item.get("status") or "active").strip() or "active"
         if status not in {"active", "inactive", "archived"}:
             raise ValueError("routes[%s].status 仅支持 active、inactive、archived" % index)
-        risk_mode = str(item.get("risk_mode") or "inherit").strip() or "inherit"
-        if risk_mode not in ALLOWED_ROUTE_RISK_MODES:
-            raise ValueError("routes[%s].risk_mode 不支持" % index)
+        legacy_risk_mode = str(item.get("risk_mode") or "").strip()
+        route_risk_mode = str(item.get("route_risk_mode") or "").strip()
+        subscription_risk_mode = str(item.get("subscription_risk_mode") or "").strip()
+        if not route_risk_mode:
+            route_risk_mode = {
+                "inherit": "inherit_rule",
+                "override": "override",
+                "disabled": "disabled",
+            }.get(legacy_risk_mode, "inherit_rule")
+        if not subscription_risk_mode:
+            subscription_risk_mode = {
+                "inherit": "inherit_subscription",
+                "override": "inherit_subscription",
+                "disabled": "disabled",
+            }.get(legacy_risk_mode, "inherit_rule")
+        if route_risk_mode not in ALLOWED_ROUTE_RISK_MODES:
+            raise ValueError("routes[%s].route_risk_mode 不支持" % index)
+        if subscription_risk_mode not in ALLOWED_ROUTE_SUBSCRIPTION_RISK_MODES:
+            raise ValueError("routes[%s].subscription_risk_mode 不支持" % index)
         settlement_mode = str(item.get("settlement_mode") or "inherit").strip() or "inherit"
         if settlement_mode not in ALLOWED_ROUTE_SETTLEMENT_MODES:
             raise ValueError("routes[%s].settlement_mode 不支持" % index)
@@ -336,8 +353,22 @@ def _normalize_rule_routes(value: Any, *, source: Optional[Dict[str, Any]] = Non
             "name": str(item.get("name") or "").strip(),
             "status": status,
             "sort_order": int(item.get("sort_order") if item.get("sort_order") not in {None, ""} else index - 1),
-            "risk_mode": risk_mode,
-            "risk_control": _normalize_daily_risk_control(item.get("risk_control") or {}) if risk_mode == "override" else {},
+            "risk_mode": {"inherit_rule": "inherit", "override": "override", "disabled": "disabled"}[route_risk_mode],
+            "risk_control": _normalize_daily_risk_control(
+                item.get("route_risk_control") or item.get("risk_control") or {}
+            )
+            if route_risk_mode == "override"
+            else {},
+            "route_risk_mode": route_risk_mode,
+            "route_risk_control": _normalize_daily_risk_control(
+                item.get("route_risk_control") or item.get("risk_control") or {}
+            )
+            if route_risk_mode == "override"
+            else {},
+            "subscription_risk_mode": subscription_risk_mode,
+            "subscription_risk_control": _normalize_daily_risk_control(item.get("subscription_risk_control") or {})
+            if subscription_risk_mode == "override"
+            else {},
             "settlement_mode": settlement_mode,
             "settlement_policy": _normalize_route_settlement_policy(item.get("settlement_policy") or {}) if settlement_mode == "override" else {},
             "staking_mode": staking_mode,

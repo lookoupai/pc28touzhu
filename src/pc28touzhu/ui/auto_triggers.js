@@ -452,12 +452,14 @@
 
     function routeRowHtml(route, index) {
         const item = route || {};
-        const riskMode = item.risk_mode || "inherit";
+        const routeRiskMode = item.route_risk_mode || (item.risk_mode === "override" ? "override" : (item.risk_mode === "disabled" ? "disabled" : "inherit_rule"));
+        const subscriptionRiskMode = item.subscription_risk_mode || (item.risk_mode === "disabled" ? "disabled" : (item.risk_mode ? "inherit_subscription" : "inherit_rule"));
         const settlementMode = item.settlement_mode || "inherit";
         const stakingMode = item.staking_mode || "inherit";
         const playFilterMode = item.play_filter_mode || "inherit";
         const templateMode = item.template_mode || "target_default";
-        const riskControl = item.risk_control || {};
+        const routeRiskControl = item.route_risk_control || item.risk_control || {};
+        const subscriptionRiskControl = item.subscription_risk_control || {};
         const settlementPolicy = item.settlement_policy || {};
         const stakingPolicy = item.staking_policy || {};
         const playFilter = item.play_filter || {};
@@ -472,10 +474,15 @@
                     '<label class="field"><span>投递群组</span><select class="text-input route-target" required>' + selectOptions(state.deliveryTargets, item.delivery_target_id, targetLabel) + '</select></label>' +
                     '<label class="field"><span>名称</span><input class="text-input route-name" type="text" value="' + escapeHtml(item.name || "") + '" placeholder="例如：正式群"></label>' +
                     '<label class="field"><span>状态</span><select class="text-input route-status">' + options([["active", "启用"], ["inactive", "停用"], ["archived", "归档"]], item.status || "active") + '</select></label>' +
-                    '<label class="field"><span>风控</span><select class="text-input route-risk-mode">' + options([["inherit", "继承规则"], ["override", "单独设置"], ["disabled", "关闭"]], riskMode) + '</select></label>' +
+                    '<label class="field"><span>路由风控</span><select class="text-input route-risk-mode">' + options([["inherit_rule", "继承规则默认"], ["override", "单独设置"], ["disabled", "关闭"]], routeRiskMode) + '</select></label>' +
                     '<div class="route-risk-fields">' +
-                        '<label class="field"><span>路由止盈</span><input class="text-input route-profit-target" type="number" min="0" step="0.01" value="' + escapeHtml(riskControl.profit_target || 0) + '"></label>' +
-                        '<label class="field"><span>路由止损</span><input class="text-input route-loss-limit" type="number" min="0" step="0.01" value="' + escapeHtml(riskControl.loss_limit || 0) + '"></label>' +
+                        '<label class="field"><span>路由止盈</span><input class="text-input route-profit-target" type="number" min="0" step="0.01" value="' + escapeHtml(routeRiskControl.profit_target || 0) + '"></label>' +
+                        '<label class="field"><span>路由止损</span><input class="text-input route-loss-limit" type="number" min="0" step="0.01" value="' + escapeHtml(routeRiskControl.loss_limit || 0) + '"></label>' +
+                    '</div>' +
+                    '<label class="field"><span>方案风控</span><select class="text-input route-subscription-risk-mode">' + options([["inherit_rule", "继承规则默认"], ["inherit_subscription", "继承跟单方案"], ["override", "单独设置"], ["disabled", "关闭"]], subscriptionRiskMode) + '</select></label>' +
+                    '<div class="route-subscription-risk-fields">' +
+                        '<label class="field"><span>方案止盈</span><input class="text-input route-subscription-profit-target" type="number" min="0" step="0.01" value="' + escapeHtml(subscriptionRiskControl.profit_target || 0) + '"></label>' +
+                        '<label class="field"><span>方案止损</span><input class="text-input route-subscription-loss-limit" type="number" min="0" step="0.01" value="' + escapeHtml(subscriptionRiskControl.loss_limit || 0) + '"></label>' +
                     '</div>' +
                     '<label class="field"><span>结算</span><select class="text-input route-settlement-mode">' + options([["inherit", "继承跟单方案"], ["override", "单独设置"]], settlementMode) + '</select></label>' +
                     '<label class="field route-settlement-field"><span>结算规则</span><select class="text-input route-settlement-rule">' + options(settlementRuleOptions, settlementPolicy.settlement_rule_id || "pc28_netdisk_regular") + '</select></label>' +
@@ -491,11 +498,13 @@
 
     function updateRouteRowVisibility(card) {
         const riskMode = card.querySelector(".route-risk-mode").value;
+        const subscriptionRiskMode = card.querySelector(".route-subscription-risk-mode").value;
         const settlementMode = card.querySelector(".route-settlement-mode").value;
         const stakingMode = card.querySelector(".route-staking-mode").value;
         const playFilterMode = card.querySelector(".route-play-filter-mode").value;
         const templateMode = card.querySelector(".route-template-mode").value;
         card.querySelector(".route-risk-fields").hidden = riskMode !== "override";
+        card.querySelector(".route-subscription-risk-fields").hidden = subscriptionRiskMode !== "override";
         card.querySelector(".route-settlement-field").hidden = settlementMode !== "override";
         card.querySelector(".route-staking-field").hidden = stakingMode !== "override";
         card.querySelector(".route-fixed-metric-field").hidden = playFilterMode !== "fixed_metric";
@@ -609,6 +618,7 @@
     function collectRoutes() {
         return Array.from(document.querySelectorAll(".route-card")).map(function (card, index) {
             const riskMode = card.querySelector(".route-risk-mode").value;
+            const subscriptionRiskMode = card.querySelector(".route-subscription-risk-mode").value;
             const settlementMode = card.querySelector(".route-settlement-mode").value;
             const stakingMode = card.querySelector(".route-staking-mode").value;
             const playFilterMode = card.querySelector(".route-play-filter-mode").value;
@@ -619,19 +629,29 @@
                 name: card.querySelector(".route-name").value.trim(),
                 status: card.querySelector(".route-status").value,
                 sort_order: index,
-                risk_mode: riskMode,
+                route_risk_mode: riskMode,
+                subscription_risk_mode: subscriptionRiskMode,
                 settlement_mode: settlementMode,
                 staking_mode: stakingMode,
                 play_filter_mode: playFilterMode,
                 template_mode: templateMode,
             };
             if (riskMode === "override") {
-                route.risk_control = {
+                route.route_risk_control = {
                     enabled: true,
                     profit_target: Number(card.querySelector(".route-profit-target").value || 0),
                     loss_limit: Number(card.querySelector(".route-loss-limit").value || 0),
                     timezone: "Asia/Shanghai",
                     cancel_pending_jobs: true,
+                };
+            }
+            if (subscriptionRiskMode === "override") {
+                route.subscription_risk_control = {
+                    enabled: true,
+                    profit_target: Number(card.querySelector(".route-subscription-profit-target").value || 0),
+                    loss_limit: Number(card.querySelector(".route-subscription-loss-limit").value || 0),
+                    timezone: "Asia/Shanghai",
+                    cancel_pending_jobs: false,
                 };
             }
             if (settlementMode === "override") {

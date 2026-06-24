@@ -1442,14 +1442,14 @@ class AutoTriggerServiceTests(unittest.TestCase):
                     {
                         "delivery_target_id": first_target["id"],
                         "name": "A 路由",
-                        "risk_mode": "override",
-                        "risk_control": {"enabled": True, "profit_target": 9, "loss_limit": 0},
+                        "route_risk_mode": "inherit_rule",
+                        "subscription_risk_mode": "disabled",
                     },
                     {
                         "delivery_target_id": second_target["id"],
                         "name": "B 路由",
-                        "risk_mode": "override",
-                        "risk_control": {"enabled": True, "profit_target": 9, "loss_limit": 0},
+                        "route_risk_mode": "inherit_rule",
+                        "subscription_risk_mode": "disabled",
                     },
                 ],
             },
@@ -1529,7 +1529,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(len(route_b_jobs), 2)
         self.assertEqual(len(route_a_jobs), 1)
 
-    def test_route_inherits_subscription_risk_without_stopping_whole_rule(self):
+    def test_route_subscription_risk_stops_only_that_route_subscription(self):
         current_subscription = self.repo.get_subscription(self.subscription["id"])
         strategy = dict(current_subscription["strategy_v2"])
         strategy["risk_control"] = {"enabled": True, "profit_target": 0, "loss_limit": 10}
@@ -1551,7 +1551,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             self.repo,
             user_id=self.user_id,
             payload={
-                "name": "继承方案风控",
+                "name": "路由方案风控",
                 "scope_mode": "selected_subscriptions",
                 "subscription_ids": [self.subscription["id"]],
                 "cooldown_issues": 0,
@@ -1561,8 +1561,18 @@ class AutoTriggerServiceTests(unittest.TestCase):
                 "action": {"dispatch_latest_signal": True},
                 "daily_risk_control": {"enabled": True, "profit_target": 20, "loss_limit": 20},
                 "routes": [
-                    {"delivery_target_id": first_target["id"], "name": "A 路由", "risk_mode": "inherit"},
-                    {"delivery_target_id": second_target["id"], "name": "B 路由", "risk_mode": "disabled"},
+                    {
+                        "delivery_target_id": first_target["id"],
+                        "name": "A 路由",
+                        "route_risk_mode": "inherit_rule",
+                        "subscription_risk_mode": "inherit_subscription",
+                    },
+                    {
+                        "delivery_target_id": second_target["id"],
+                        "name": "B 路由",
+                        "route_risk_mode": "disabled",
+                        "subscription_risk_mode": "disabled",
+                    },
                 ],
             },
         )["item"]
@@ -1585,6 +1595,8 @@ class AutoTriggerServiceTests(unittest.TestCase):
         )
 
         self.assertTrue(settled["auto_trigger_daily_risk"]["stopped"])
+        self.assertEqual(settled["auto_trigger_daily_risk"]["reason"], "loss_limit_hit")
+        self.assertEqual(settled["auto_trigger_daily_risk"]["subscription_risk_mode"], "inherit_subscription")
         route_financial = self.repo.get_auto_trigger_route_subscription_financial_state(
             route_id=route_a_id,
             subscription_id=self.subscription["id"],
@@ -1600,6 +1612,12 @@ class AutoTriggerServiceTests(unittest.TestCase):
             stat_date=event_a["auto_trigger_stat_date"],
         )
         self.assertEqual(rule_stat["status"], "active")
+        route_stat = self.repo.get_auto_trigger_route_daily_stat(
+            route_id=route_a_id,
+            user_id=self.user_id,
+            stat_date=event_a["auto_trigger_stat_date"],
+        )
+        self.assertEqual(route_stat["status"], "active")
         job_b = next(job for job in jobs if job["auto_trigger_route_id"] == route_b_id)
         event_b = self.repo.get_progression_event(job_b["progression_event_id"])
         self.repo.settle_progression_event(
