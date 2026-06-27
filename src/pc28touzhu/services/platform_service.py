@@ -314,6 +314,24 @@ def _normalize_entity_status(value: Any, field_name: str = "status") -> str:
     return text
 
 
+def _subscription_runtime_history(repository: Any, *, subscription_id: int, user_id: int) -> list[Dict[str, Any]]:
+    # 跟单方案挂了自动触发路由时，轮次以「路由级」runtime_run 为准（每条路由独立记轮）；
+    # 没有路由级记录的老方案回退到订阅级 runtime_run，保持旧行为不变。
+    if hasattr(repository, "list_auto_trigger_route_subscription_runtime_runs"):
+        route_runs = repository.list_auto_trigger_route_subscription_runtime_runs(
+            subscription_id=int(subscription_id),
+            user_id=int(user_id),
+            limit=20,
+        )
+        if route_runs:
+            return route_runs
+    return repository.list_subscription_runtime_runs(
+        subscription_id=int(subscription_id),
+        user_id=int(user_id),
+        limit=5,
+    )
+
+
 def _normalize_subscription_status(value: Any, field_name: str = "status") -> str:
     text = str(value or "").strip()
     if text not in ALLOWED_SUBSCRIPTION_STATUSES:
@@ -1124,10 +1142,10 @@ def list_subscriptions(repository: Any, user_id: Any, stat_date: Any = None) -> 
                 user_id=normalized_user_id,
                 limit=7,
             ),
-            "runtime_history": repository.list_subscription_runtime_runs(
+            "runtime_history": _subscription_runtime_history(
+                repository,
                 subscription_id=int(item["id"]),
                 user_id=normalized_user_id,
-                limit=5,
             ),
         }
         for item in items

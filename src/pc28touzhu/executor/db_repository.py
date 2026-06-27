@@ -4761,6 +4761,16 @@ class DatabaseRepository:
                 subscription_id=int(subscription_id),
                 user_id=int(user_id),
             )
+            threshold_status = str(financial.get("threshold_status") or "").strip()
+            # 跨天延续保护：只有旧轮确实达到止盈/止损阈值才允许自动重置开新轮；
+            # 旧轮仍 active 但未达阈值（典型如 0 点前触发、0 点后仍在跑的轮次）时不许提前打断。
+            # 但若该路由有 pending 的倍投事件/任务在排队（说明旧轮仍未结算完、本轮还没真正"开完"），允许重置以接管下一轮派单。
+            if active_run and threshold_status not in {"profit_target_hit", "loss_limit_hit"}:
+                return self.get_auto_trigger_route_subscription_financial_state(
+                    route_id=int(route_id),
+                    subscription_id=int(subscription_id),
+                    user_id=int(user_id),
+                )
             if active_run:
                 conn.execute(
                     """
@@ -4839,6 +4849,113 @@ class DatabaseRepository:
                 (int(subscription_id), int(user_id), max(1, min(int(limit or 5), 20))),
             ).fetchall()
         return [self._serialize_subscription_runtime_run_row(dict(row)) for row in rows]
+
+    def _reconcile_route_subscription_runtime_run_closure(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        route_id: int,
+        subscription_id: int,
+        user_id: int,
+    ) -> None:
+        active_run_row = conn.execute(
+            """
+            SELECT *
+            FROM auto_trigger_route_subscription_runtime_runs
+            WHERE route_id = ? AND subscription_id = ? AND user_id = ? AND status = 'active'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(route_id), int(subscription_id), int(user_id)),
+        ).fetchone()
+        if not active_run_row:
+            return
+
+        financial_row = conn.execute(
+            """
+            SELECT *
+            FROM auto_trigger_route_subscription_financial_state
+            WHERE route_id = ? AND subscription_id = ? AND user_id = ?
+            LIMIT 1
+            """,
+            (int(route_id), int(subscription_id), int(user_id)),
+        ).fetchone()
+        if not financial_row:
+            return
+
+        threshold_status = str(financial_row["threshold_status"] or "").strip()
+        if threshold_status not in {"profit_target_hit", "loss_limit_hit"}:
+            return
+
+        ended_at = financial_row["last_settled_at"] or financial_row["updated_at"] or _utc_now_iso()
+        conn.execute(
+            """
+            UPDATE auto_trigger_route_subscription_runtime_runs
+            SET status = 'closed',
+                ended_at = COALESCE(ended_at, ?),
+                end_reason = CASE WHEN end_reason = '' THEN ? ELSE end_reason END,
+                updated_at = ?
+            WHERE id = ? AND status = 'active'
+            """,
+            (
+                ended_at,
+                threshold_status,
+                _utc_now_iso(),
+                int(active_run_row["id"]),
+            ),
+        )
+
+    def list_auto_trigger_route_subscription_runtime_runs(
+        self,
+        *,
+        subscription_id: int,
+        user_id: int,
+        limit: int = 5,
+    ) -> list[Dict[str, Any]]:
+        with self._connect() as conn:
+            route_rows = conn.execute(
+                """
+                SELECT DISTINCT route_id
+                FROM auto_trigger_route_subscription_runtime_runs
+                WHERE subscription_id = ? AND user_id = ?
+                """,
+                (int(subscription_id), int(user_id)),
+            ).fetchall()
+            for row in route_rows:
+                self._reconcile_route_subscription_runtime_run_closure(
+                    conn,
+                    route_id=int(row["route_id"]),
+                    subscription_id=int(subscription_id),
+                    user_id=int(user_id),
+                )
+            rows = conn.execute(
+                """
+                SELECT
+                    run.*,
+                    route.name AS route_name,
+                    dt.target_name AS route_target_name
+                FROM auto_trigger_route_subscription_runtime_runs run
+                LEFT JOIN auto_trigger_rule_routes route ON route.id = run.route_id
+                LEFT JOIN delivery_targets dt ON dt.id = route.delivery_target_id
+                WHERE run.subscription_id = ? AND run.user_id = ?
+                ORDER BY
+                    run.route_id ASC,
+                    CASE WHEN run.status = 'active' THEN 0 ELSE 1 END ASC,
+                    run.started_at DESC,
+                    run.id DESC
+                LIMIT ?
+                """,
+                (int(subscription_id), int(user_id), max(1, min(int(limit or 5), 50))),
+            ).fetchall()
+        return [
+            {
+                **self._serialize_subscription_runtime_run_row(dict(row)),
+                "route_id": int(row["route_id"]) if row["route_id"] is not None else None,
+                "route_name": str(row["route_name"] or row["route_target_name"] or ""),
+                "scope": "route",
+            }
+            for row in rows
+        ]
 
     def _reconcile_subscription_runtime_run_closure(
         self,

@@ -1873,5 +1873,146 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(len(route_a_jobs), 1)
 
 
+    def test_route_runtime_run_blocks_early_restart_until_threshold_hit(self):
+        # 跨天延续保护：路由级轮次仍在 active 且未达止盈/止损时，
+        # 新一次自动触发不应提前 reset 旧轮、开新一轮（修复"净盈亏为正却被 auto_trigger_restart 打断"）。
+        first_target = self.repo.list_delivery_targets(self.user_id)[0]
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "未达阈值禁止提前重开",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "daily_risk_control": {"enabled": True, "profit_target": 20, "loss_limit": 20},
+                "routes": [
+                    {
+                        "delivery_target_id": first_target["id"],
+                        "name": "测试群路由",
+                        "risk_mode": "inherit",
+                    },
+                ],
+            },
+        )["item"]
+        route_id = rule["routes"][0]["id"]
+
+        first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+        self.assertEqual(first["summary"]["triggered_count"], 1)
+        first_job = self.repo.list_execution_jobs(user_id=self.user_id)[0]
+        first_event = self.repo.get_progression_event(first_job["progression_event_id"])
+        # 命中结算：净盈亏为正，远未到止盈 20，旧轮必须保持 active。
+        self.repo.settle_progression_event(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            result_type="hit",
+            progression_event_id=first_event["id"],
+        )
+        self.repo.report_job_result(
+            job_id=str(first_job["id"]),
+            executor_id="test-executor",
+            attempt_no=1,
+            delivery_status="sent",
+            remote_message_id="remote-route-keep",
+            executed_at="2026-04-18T09:32:00Z",
+            raw_result={},
+            error_message=None,
+        )
+        route_financial = self.repo.get_auto_trigger_route_subscription_financial_state(
+            route_id=route_id,
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+        )
+        self.assertEqual(route_financial["threshold_status"], "")
+        self.repo.create_signal_record(
+            source_id=self.source["id"],
+            lottery_type="pc28",
+            issue_no="20260418003",
+            bet_type="big_small",
+            bet_value="小",
+            normalized_payload={"message_text": "小10"},
+            published_at="2026-04-18T09:35:00Z",
+        )
+        # 第二次触发条件仍满足，旧轮未达阈值 -> 不开新轮（reset 被跨天延续保护挡住），
+        # 但允许复用旧轮继续派单（triggered=1、不新增 runtime_run）。
+        second = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(issue_no="20260418002"),
+        )
+        self.assertEqual(second["summary"]["triggered_count"], 1)
+        # 路由级 runtime_run 仍只有一条，且保持 active（未被 auto_trigger_restart 提前关闭）。
+        runs = self.repo.list_auto_trigger_route_subscription_runtime_runs(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            limit=5,
+        )
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["status"], "active")
+        self.assertEqual(runs[0]["end_reason"], "")
+        # 财务未被清零，旧轮的净盈亏延续保留。
+        route_financial_after = self.repo.get_auto_trigger_route_subscription_financial_state(
+            route_id=route_id,
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+        )
+        self.assertEqual(route_financial_after["threshold_status"], "")
+        self.assertGreater(route_financial_after["net_profit"], 0)
+
+    def test_route_runtime_history_lists_route_scoped_runs(self):
+        # 方案挂了路由时，轮次历史应读取路由级 runtime_run，并带上 route_name / scope=route。
+        first_target = self.repo.list_delivery_targets(self.user_id)[0]
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "轮次历史读取路由级",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "daily_risk_control": {"enabled": True, "profit_target": 9, "loss_limit": 0},
+                "routes": [
+                    {
+                        "delivery_target_id": first_target["id"],
+                        "name": "测试群路由",
+                        "risk_mode": "inherit",
+                    },
+                ],
+            },
+        )["item"]
+        route_id = rule["routes"][0]["id"]
+
+        first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+        self.assertEqual(first["summary"]["triggered_count"], 1)
+        job = self.repo.list_execution_jobs(user_id=self.user_id)[0]
+        event = self.repo.get_progression_event(job["progression_event_id"])
+        self.repo.settle_progression_event(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            result_type="hit",
+            progression_event_id=event["id"],
+        )
+
+        runs = self.repo.list_auto_trigger_route_subscription_runtime_runs(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            limit=5,
+        )
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["scope"], "route")
+        self.assertEqual(runs[0]["route_id"], route_id)
+        self.assertEqual(runs[0]["route_name"], "测试群路由")
+        self.assertEqual(runs[0]["status"], "closed")
+        self.assertEqual(runs[0]["end_reason"], "profit_target_hit")
+
+
 if __name__ == "__main__":
     unittest.main()
