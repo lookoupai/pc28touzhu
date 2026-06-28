@@ -1963,6 +1963,115 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(route_financial_after["threshold_status"], "")
         self.assertGreater(route_financial_after["net_profit"], 0)
 
+    def test_active_route_cycle_keeps_started_stat_date_after_midnight(self):
+        first_target = self.repo.list_delivery_targets(self.user_id)[0]
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "跨日轮次归属日",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "daily_risk_control": {
+                    "enabled": True,
+                    "profit_target": 20,
+                    "loss_limit": 20,
+                    "timezone": "Asia/Shanghai",
+                },
+                "routes": [
+                    {
+                        "delivery_target_id": first_target["id"],
+                        "name": "测试群路由",
+                        "route_risk_mode": "inherit_rule",
+                        "subscription_risk_mode": "inherit_subscription",
+                    },
+                ],
+            },
+        )["item"]
+        route_id = rule["routes"][0]["id"]
+
+        first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+        self.assertEqual(first["summary"]["triggered_count"], 1)
+        first_job = self.repo.list_execution_jobs(user_id=self.user_id)[0]
+        first_event = self.repo.get_progression_event(first_job["progression_event_id"])
+        self.repo.settle_progression_event(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            result_type="refund",
+            progression_event_id=first_event["id"],
+        )
+        self.repo.report_job_result(
+            job_id=str(first_job["id"]),
+            executor_id="test-executor",
+            attempt_no=1,
+            delivery_status="sent",
+            remote_message_id="remote-cross-day-1",
+            executed_at="2026-06-27T15:35:00Z",
+            raw_result={},
+            error_message=None,
+        )
+        with self.repo._connect() as conn:
+            conn.execute(
+                """
+                UPDATE auto_trigger_route_subscription_runtime_runs
+                SET started_at = ?, created_at = ?, updated_at = ?
+                WHERE route_id = ? AND subscription_id = ? AND user_id = ? AND status = 'active'
+                """,
+                (
+                    "2026-06-27T15:27:52Z",
+                    "2026-06-27T15:27:52Z",
+                    "2026-06-27T15:35:00Z",
+                    route_id,
+                    self.subscription["id"],
+                    self.user_id,
+                ),
+            )
+
+        second_signal = self.repo.create_signal_record(
+            source_id=self.source["id"],
+            lottery_type="pc28",
+            issue_no="20260418002",
+            bet_type="big_small",
+            bet_value="小",
+            normalized_payload={"message_text": "小10"},
+            published_at="2026-06-28T00:05:00Z",
+        )
+        second = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(issue_no="20260418001"),
+        )
+
+        self.assertEqual(second["summary"]["triggered_count"], 1)
+        second_event = self.repo.get_progression_event_by_signal(
+            subscription_id=self.subscription["id"],
+            signal_id=second_signal["id"],
+            auto_trigger_route_id=route_id,
+        )
+        self.assertIsNotNone(second_event)
+        self.assertEqual(second_event["auto_trigger_stat_date"], "2026-06-27")
+        rule_run = self.repo.get_auto_trigger_rule_run(second_event["auto_trigger_rule_run_id"])
+        self.assertEqual(rule_run["stat_date"], "2026-06-27")
+
+        self.repo.settle_progression_event(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            result_type="miss",
+            progression_event_id=second_event["id"],
+        )
+        stat = self.repo.get_auto_trigger_rule_daily_stat(
+            rule_id=rule["id"],
+            user_id=self.user_id,
+            stat_date="2026-06-27",
+        )
+        self.assertEqual(stat["settled_event_count"], 1)
+        self.assertEqual(stat["loss_amount"], 10.0)
+
     def test_route_runtime_history_lists_route_scoped_runs(self):
         # 方案挂了路由时，轮次历史应读取路由级 runtime_run，并带上 route_name / scope=route。
         first_target = self.repo.list_delivery_targets(self.user_id)[0]

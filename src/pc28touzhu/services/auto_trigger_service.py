@@ -106,6 +106,21 @@ def _today_stat_date(*, now: Optional[datetime] = None, timezone_name: str = "As
     return (now or datetime.now(timezone.utc)).astimezone(tz).strftime("%Y-%m-%d")
 
 
+def _stat_date_from_iso(value: Any, *, timezone_name: str = "Asia/Shanghai") -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return ""
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return _today_stat_date(now=parsed, timezone_name=timezone_name)
+
+
 def _normalize_stat_date(value: Any, *, timezone_name: str = "Asia/Shanghai") -> str:
     text = str(value or "").strip()
     if not text:
@@ -1170,6 +1185,32 @@ def _is_rule_day_stopped(repository: Any, rule: Dict[str, Any], *, stat_date: st
     return {"stopped": str(stat.get("status") or "") == "stopped", "stat": stat}
 
 
+def _active_route_cycle_context(
+    repository: Any,
+    *,
+    route_id: int,
+    subscription: Dict[str, Any],
+    user_id: int,
+    fallback_stat_date: str,
+    timezone_name: str,
+) -> Dict[str, Any]:
+    active_run = None
+    if hasattr(repository, "get_active_auto_trigger_route_subscription_runtime_run"):
+        active_run = repository.get_active_auto_trigger_route_subscription_runtime_run(
+            route_id=route_id,
+            subscription_id=int(subscription["id"]),
+            user_id=int(user_id),
+        )
+    started_stat_date = _stat_date_from_iso(
+        (active_run or {}).get("started_at"),
+        timezone_name=timezone_name,
+    )
+    return {
+        "stat_date": started_stat_date or str(fallback_stat_date or "").strip(),
+        "active_run": active_run,
+    }
+
+
 def _active_routes_for_subscription(
     repository: Any,
     *,
@@ -1179,6 +1220,8 @@ def _active_routes_for_subscription(
 ) -> tuple[list[dict], list[dict]]:
     active_routes = []
     skipped_routes = []
+    daily_risk_control = rule.get("daily_risk_control") if isinstance(rule.get("daily_risk_control"), dict) else {}
+    timezone_name = str(daily_risk_control.get("timezone") or "Asia/Shanghai")
     for route in rule.get("routes") or []:
         route_id = int(route.get("id") or 0)
         if route_id <= 0:
@@ -1189,13 +1232,24 @@ def _active_routes_for_subscription(
         if str(route.get("target_status") or "active") != "active":
             skipped_routes.append({"route_id": route_id, "reason": "target_not_active"})
             continue
+        cycle_context = _active_route_cycle_context(
+            repository,
+            route_id=route_id,
+            subscription=subscription,
+            user_id=int(rule["user_id"]),
+            fallback_stat_date=stat_date,
+            timezone_name=timezone_name,
+        )
+        route_stat_date = str(cycle_context.get("stat_date") or stat_date)
         stat = repository.get_auto_trigger_route_daily_stat(
             route_id=route_id,
             user_id=int(rule["user_id"]),
-            stat_date=stat_date,
+            stat_date=route_stat_date,
         )
         if str(stat.get("status") or "") == "stopped":
-            skipped_routes.append({"route_id": route_id, "reason": "route_daily_risk_stopped", "stat": stat})
+            skipped_routes.append(
+                {"route_id": route_id, "reason": "route_daily_risk_stopped", "stat_date": route_stat_date, "stat": stat}
+            )
             continue
         if hasattr(repository, "get_auto_trigger_route_subscription_financial_state"):
             financial = repository.get_auto_trigger_route_subscription_financial_state(
@@ -1204,7 +1258,14 @@ def _active_routes_for_subscription(
                 user_id=int(rule["user_id"]),
             )
             if str(financial.get("threshold_status") or "") in {"profit_target_hit", "loss_limit_hit"}:
-                skipped_routes.append({"route_id": route_id, "reason": "route_subscription_risk_stopped", "financial": financial})
+                skipped_routes.append(
+                    {
+                        "route_id": route_id,
+                        "reason": "route_subscription_risk_stopped",
+                        "stat_date": route_stat_date,
+                        "financial": financial,
+                    }
+                )
                 continue
         open_state = repository.auto_trigger_route_has_open_run(
             route_id=route_id,
@@ -1212,9 +1273,27 @@ def _active_routes_for_subscription(
             user_id=int(rule["user_id"]),
         )
         if open_state.get("has_open_run"):
-            skipped_routes.append({"route_id": route_id, "reason": "route_has_open_run", "open_state": open_state})
+            skipped_routes.append(
+                {
+                    "route_id": route_id,
+                    "reason": "route_has_open_run",
+                    "stat_date": route_stat_date,
+                    "open_state": open_state,
+                }
+            )
             continue
-        active_routes.append(route)
+        active_run = cycle_context.get("active_run")
+        active_routes.append(
+            {
+                **route,
+                "_auto_trigger_stat_date": route_stat_date,
+                "_active_runtime_run_id": (
+                    int(active_run["id"])
+                    if isinstance(active_run, dict) and active_run.get("id")
+                    else None
+                ),
+            }
+        )
     return active_routes, skipped_routes
 
 
@@ -1419,39 +1498,58 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                     subscription=subscription,
                     matched_conditions=matched,
                 )
-            rule_run = repository.ensure_auto_trigger_rule_run(
-                rule_id=int(rule["id"]),
-                user_id=int(rule["user_id"]),
-                subscription_id=int(subscription["id"]),
-                stat_date=stat_date,
-                started_issue_no=latest_issue_no,
-            )
             if not has_routes:
+                rule_run = repository.ensure_auto_trigger_rule_run(
+                    rule_id=int(rule["id"]),
+                    user_id=int(rule["user_id"]),
+                    subscription_id=int(subscription["id"]),
+                    stat_date=stat_date,
+                    started_issue_no=latest_issue_no,
+                )
                 repository.reset_subscription_runtime(
                     subscription_id=int(subscription["id"]),
                     user_id=int(rule["user_id"]),
                     note="自动触发规则：%s" % str(rule.get("name") or ""),
                     enforce_threshold=True,
                 )
-            elif hasattr(repository, "reset_auto_trigger_route_subscription_runtime"):
+            else:
+                prepared_routes = []
                 for route in active_routes:
-                    repository.reset_auto_trigger_route_subscription_runtime(
-                        route_id=int(route["id"]),
+                    route_stat_date = str(route.get("_auto_trigger_stat_date") or stat_date)
+                    route_rule_run = repository.ensure_auto_trigger_rule_run(
                         rule_id=int(rule["id"]),
-                        subscription_id=int(subscription["id"]),
                         user_id=int(rule["user_id"]),
-                        note="自动触发规则：%s / 路由：%s" % (
-                            str(rule.get("name") or ""),
-                            str(route.get("name") or route.get("target_name") or route.get("id") or ""),
-                        ),
+                        subscription_id=int(subscription["id"]),
+                        stat_date=route_stat_date,
+                        started_issue_no=latest_issue_no,
                     )
+                    prepared_route = {
+                        **route,
+                        "_auto_trigger_rule_run_id": int(route_rule_run["id"]) if route_rule_run.get("id") else None,
+                        "_auto_trigger_stat_date": route_stat_date,
+                    }
+                    if hasattr(repository, "reset_auto_trigger_route_subscription_runtime"):
+                        repository.reset_auto_trigger_route_subscription_runtime(
+                            route_id=int(route["id"]),
+                            rule_id=int(rule["id"]),
+                            subscription_id=int(subscription["id"]),
+                            user_id=int(rule["user_id"]),
+                            note="自动触发规则：%s / 路由：%s" % (
+                                str(rule.get("name") or ""),
+                                str(route.get("name") or route.get("target_name") or route.get("id") or ""),
+                            ),
+                        )
+                    prepared_routes.append(prepared_route)
+                active_routes = prepared_routes
+                rule_run = None
             dispatch_result = None
             if bool((rule.get("action") or {}).get("dispatch_latest_signal", True)):
                 dispatch_context = {
                     "rule_id": int(rule["id"]),
-                    "rule_run_id": int(rule_run["id"]),
                     "stat_date": stat_date,
                 }
+                if rule_run:
+                    dispatch_context["rule_run_id"] = int(rule_run["id"])
                 if has_routes:
                     dispatch_context.update(
                         {

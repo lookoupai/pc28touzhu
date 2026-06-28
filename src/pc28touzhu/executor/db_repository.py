@@ -3579,6 +3579,32 @@ class DatabaseRepository:
         )
         return self._serialize_auto_trigger_rule_run_row(row) if row else None
 
+    def get_active_auto_trigger_route_subscription_runtime_run(
+        self,
+        *,
+        route_id: int,
+        subscription_id: int,
+        user_id: int,
+    ) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            self._reconcile_route_subscription_runtime_run_closure(
+                conn,
+                route_id=int(route_id),
+                subscription_id=int(subscription_id),
+                user_id=int(user_id),
+            )
+            row = conn.execute(
+                """
+                SELECT *
+                FROM auto_trigger_route_subscription_runtime_runs
+                WHERE route_id = ? AND subscription_id = ? AND user_id = ? AND status = 'active'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (int(route_id), int(subscription_id), int(user_id)),
+            ).fetchone()
+        return self._serialize_subscription_runtime_run_row(dict(row)) if row else None
+
     def ensure_auto_trigger_rule_run(
         self,
         *,

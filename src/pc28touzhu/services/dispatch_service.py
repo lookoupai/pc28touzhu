@@ -308,6 +308,8 @@ def _dispatch_signal_for_auto_trigger_routes(
 
     for route in routes:
         route_id = int(route["id"])
+        route_stat_date = str(route.get("_auto_trigger_stat_date") or stat_date).strip()
+        route_rule_run_id = route.get("_auto_trigger_rule_run_id") or auto_trigger_context.get("rule_run_id")
         delivery_target_id = int(route["delivery_target_id"])
         if str(route.get("target_status") or "active") != "active":
             skipped_count += 1
@@ -316,7 +318,12 @@ def _dispatch_signal_for_auto_trigger_routes(
         if route.get("telegram_account_id") is not None and account_status != "active":
             skipped_count += 1
             continue
-        if stat_date and _route_is_stopped(repository, route=route, user_id=user_id, stat_date=stat_date):
+        if route_stat_date and _route_is_stopped(
+            repository,
+            route=route,
+            user_id=user_id,
+            stat_date=route_stat_date,
+        ):
             skipped_count += 1
             continue
         if _route_subscription_is_stopped(
@@ -389,10 +396,10 @@ def _dispatch_signal_for_auto_trigger_routes(
                     int(auto_trigger_context["rule_id"]) if auto_trigger_context.get("rule_id") else None
                 ),
                 auto_trigger_rule_run_id=(
-                    int(auto_trigger_context["rule_run_id"]) if auto_trigger_context.get("rule_run_id") else None
+                    int(route_rule_run_id) if route_rule_run_id else None
                 ),
                 auto_trigger_route_id=route_id,
-                auto_trigger_stat_date=stat_date,
+                auto_trigger_stat_date=route_stat_date,
                 runtime_strategy=strategy,
                 status="pending",
             )
