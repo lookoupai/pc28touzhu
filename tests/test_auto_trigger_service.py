@@ -1473,6 +1473,44 @@ class AutoTriggerServiceTests(unittest.TestCase):
         progression_event = self.repo.get_progression_event(jobs[0]["progression_event_id"])
         self.assertEqual(progression_event["auto_trigger_route_id"], rule["routes"][0]["id"])
 
+    def test_route_open_run_skip_uses_specific_reason_and_deduplicates(self):
+        first_target = self.repo.list_delivery_targets(self.user_id)[0]
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "路由在跑时跳过",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "routes": [
+                    {
+                        "delivery_target_id": first_target["id"],
+                        "name": "测试群路由",
+                        "risk_mode": "inherit",
+                    },
+                ],
+            },
+        )
+
+        first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+        second = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+        third = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+
+        self.assertEqual(first["summary"]["triggered_count"], 1)
+        self.assertEqual(second["summary"]["skipped_count"], 1)
+        self.assertEqual(third["summary"]["skipped_count"], 1)
+        self.assertEqual(len(self.repo.list_execution_jobs(user_id=self.user_id)), 1)
+        skipped_events = self.repo.list_auto_trigger_events(user_id=self.user_id, status="skipped", limit=10)
+        self.assertEqual(len(skipped_events), 1)
+        self.assertEqual(skipped_events[0]["reason"], "route_has_open_run")
+        skipped_routes = skipped_events[0]["snapshot"]["play_filter_result"]["skipped_routes"]
+        self.assertEqual(skipped_routes[0]["reason"], "route_has_open_run")
+
     def test_active_route_continues_when_global_subscription_threshold_is_stopped(self):
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
         rule = create_auto_trigger_rule(

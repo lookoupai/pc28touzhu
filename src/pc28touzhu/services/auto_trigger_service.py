@@ -1297,6 +1297,25 @@ def _active_routes_for_subscription(
     return active_routes, skipped_routes
 
 
+def _route_skip_reason(skipped_routes: list[dict]) -> str:
+    reasons = {
+        str(route.get("reason") or "").strip()
+        for route in skipped_routes
+        if isinstance(route, dict) and str(route.get("reason") or "").strip()
+    }
+    if len(reasons) == 1:
+        reason = next(iter(reasons))
+        if reason in {
+            "route_has_open_run",
+            "route_daily_risk_stopped",
+            "route_subscription_risk_stopped",
+            "route_not_active",
+            "target_not_active",
+        }:
+            return reason
+    return "no_active_route"
+
+
 def _subscription_threshold_status(subscription: Dict[str, Any]) -> str:
     financial = subscription.get("financial") if isinstance(subscription.get("financial"), dict) else {}
     return str(financial.get("threshold_status") or "").strip()
@@ -1401,7 +1420,7 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
                             subscription=subscription,
                             performance=None,
                             status="skipped",
-                            reason="no_active_route",
+                            reason=_route_skip_reason(skipped_routes),
                             play_filter_result={"stat_date": stat_date, "skipped_routes": skipped_routes},
                         )
                     )
