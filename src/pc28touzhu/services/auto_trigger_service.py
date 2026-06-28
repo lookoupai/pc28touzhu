@@ -1251,22 +1251,6 @@ def _active_routes_for_subscription(
                 {"route_id": route_id, "reason": "route_daily_risk_stopped", "stat_date": route_stat_date, "stat": stat}
             )
             continue
-        if hasattr(repository, "get_auto_trigger_route_subscription_financial_state"):
-            financial = repository.get_auto_trigger_route_subscription_financial_state(
-                route_id=route_id,
-                subscription_id=int(subscription["id"]),
-                user_id=int(rule["user_id"]),
-            )
-            if str(financial.get("threshold_status") or "") in {"profit_target_hit", "loss_limit_hit"}:
-                skipped_routes.append(
-                    {
-                        "route_id": route_id,
-                        "reason": "route_subscription_risk_stopped",
-                        "stat_date": route_stat_date,
-                        "financial": financial,
-                    }
-                )
-                continue
         open_state = repository.auto_trigger_route_has_open_run(
             route_id=route_id,
             subscription_id=int(subscription["id"]),

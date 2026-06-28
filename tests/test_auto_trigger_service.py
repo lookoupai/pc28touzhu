@@ -1910,6 +1910,99 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(len(route_b_jobs), 2)
         self.assertEqual(len(route_a_jobs), 1)
 
+    def test_route_subscription_risk_hit_can_start_next_cycle_after_job_closed(self):
+        current_subscription = self.repo.get_subscription(self.subscription["id"])
+        strategy = dict(current_subscription["strategy_v2"])
+        strategy["risk_control"] = {"enabled": True, "profit_target": 0, "loss_limit": 10}
+        self.repo.update_subscription_record(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            source_id=self.subscription["source_id"],
+            strategy=strategy,
+        )
+        first_target = self.repo.list_delivery_targets(self.user_id)[0]
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "路由单轮止损后重开",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "daily_risk_control": {"enabled": True, "profit_target": 20, "loss_limit": 20},
+                "routes": [
+                    {
+                        "delivery_target_id": first_target["id"],
+                        "name": "A 路由",
+                        "route_risk_mode": "inherit_rule",
+                        "subscription_risk_mode": "inherit_subscription",
+                    },
+                ],
+            },
+        )["item"]
+        route_id = rule["routes"][0]["id"]
+
+        first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+        self.assertEqual(first["summary"]["triggered_count"], 1)
+        first_job = self.repo.list_execution_jobs(user_id=self.user_id)[0]
+        first_event = self.repo.get_progression_event(first_job["progression_event_id"])
+        self.repo.settle_progression_event(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            result_type="miss",
+            progression_event_id=first_event["id"],
+        )
+        self.repo.report_job_result(
+            job_id=str(first_job["id"]),
+            executor_id="test-executor",
+            attempt_no=1,
+            delivery_status="sent",
+            remote_message_id="remote-route-risk-1",
+            executed_at="2026-04-18T09:32:00Z",
+            raw_result={},
+            error_message=None,
+        )
+        stopped_financial = self.repo.get_auto_trigger_route_subscription_financial_state(
+            route_id=route_id,
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+        )
+        self.assertEqual(stopped_financial["threshold_status"], "loss_limit_hit")
+
+        self.repo.create_signal_record(
+            source_id=self.source["id"],
+            lottery_type="pc28",
+            issue_no="20260418003",
+            bet_type="big_small",
+            bet_value="小",
+            normalized_payload={"message_text": "小10"},
+            published_at="2026-04-18T09:35:00Z",
+        )
+        second = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(issue_no="20260418002"),
+        )
+
+        self.assertEqual(second["summary"]["triggered_count"], 1)
+        route_jobs = [
+            job
+            for job in self.repo.list_execution_jobs(user_id=self.user_id, limit=10)
+            if job["auto_trigger_route_id"] == route_id
+        ]
+        self.assertEqual(len(route_jobs), 2)
+        restarted_financial = self.repo.get_auto_trigger_route_subscription_financial_state(
+            route_id=route_id,
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+        )
+        self.assertEqual(restarted_financial["threshold_status"], "")
+        self.assertEqual(restarted_financial["net_profit"], 0.0)
+
 
     def test_route_runtime_run_blocks_early_restart_until_threshold_hit(self):
         # 跨天延续保护：路由级轮次仍在 active 且未达止盈/止损时，
