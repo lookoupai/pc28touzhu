@@ -50,6 +50,14 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("message_templates", names)
         self.assertIn("subscription_financial_state", names)
 
+    def test_connect_configures_sqlite_busy_timeout(self):
+        repo = DatabaseRepository(self.db_path, busy_timeout_seconds=12.5)
+
+        with repo._connect() as conn:
+            busy_timeout_ms = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+
+        self.assertEqual(busy_timeout_ms, 12500)
+
     def test_pull_ready_jobs_shapes_payload(self):
         user_id = self.repo.create_user("u1")
         source_id = self.repo.create_source("internal_ai", "src", owner_user_id=user_id)

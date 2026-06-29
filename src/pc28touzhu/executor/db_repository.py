@@ -19,6 +19,7 @@ from pc28touzhu.domain.subscription_strategy import (
 
 
 SHANGHAI_TZ = timezone(timedelta(hours=8))
+DEFAULT_SQLITE_BUSY_TIMEOUT_SECONDS = 30.0
 
 
 def _utc_now_iso() -> str:
@@ -844,12 +845,20 @@ class DatabaseRepository:
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_route_subscription_runs ON auto_trigger_route_subscription_runtime_runs(route_id, subscription_id, user_id, status)",
     ]
 
-    def __init__(self, db_path: str = "pc28touzhu.db"):
+    def __init__(
+        self,
+        db_path: str = "pc28touzhu.db",
+        *,
+        busy_timeout_seconds: float = DEFAULT_SQLITE_BUSY_TIMEOUT_SECONDS,
+    ):
         self.db_path = db_path
+        self.busy_timeout_seconds = max(0.0, float(busy_timeout_seconds))
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        busy_timeout_ms = int(round(self.busy_timeout_seconds * 1000))
+        conn = sqlite3.connect(self.db_path, timeout=self.busy_timeout_seconds)
         conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
