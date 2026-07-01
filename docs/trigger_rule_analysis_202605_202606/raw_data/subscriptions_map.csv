@@ -1,0 +1,7 @@
+sub_id,source_name,play_filter_metric,play_filter_keys,risk_control,profit_target,loss_limit,note
+2,找平衡,combo,"combo:大单,combo:大双,combo:小单,combo:小双",enabled,,,
+3,追长龙,combo,"combo:大单,combo:大双,combo:小单,combo:小双",enabled,,,
+4,小六壬预测,big_small,"big_small:大,big_small:小",enabled,,,
+5,频次趋势 V1,combo,"combo:大单,combo:大双,combo:小单,combo:小双",enabled,,,
+6,组合马尔可夫 V1,odd_even,"odd_even:单,odd_even:双",enabled,,,
+7,遗漏回补 V1,combo,"combo:大单,combo:大双,combo:小单,combo:小双",enabled,,sub7于2026-05-25创建,5月无数据

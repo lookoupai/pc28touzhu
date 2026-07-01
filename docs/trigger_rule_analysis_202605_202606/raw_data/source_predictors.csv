@@ -1,0 +1,14 @@
+pid,name,lottery_type,enabled,method,primary_metric,engine_type,algorithm_key
+1,小六壬预测,pc28,1,小六壬,big_small,ai,
+2,贝叶斯推理引擎,pc28,1,高斯朴素贝叶斯,odd_even,ai,
+3,泊松分布模型,jingcai_football,1,泊松分布模型,spf,ai,
+4,追长龙,pc28,1,追长龙,combo,ai,
+5,找平衡,pc28,1,追求平均50胜率,big_small,ai,
+6,埃罗预测法,jingcai_football,1,埃罗预测法,spf,ai,
+7,频次趋势 V1,pc28,1,频次趋势,big_small,machine,pc28_frequency_v1
+8,组合马尔可夫 V1,pc28,1,组合马尔可夫,combo,machine,pc28_combo_markov_v1
+9,遗漏回补 V1,pc28,1,遗漏回补 V1,big_small,machine,pc28_omission_reversion_v1
+10,赔率基线 V1,jingcai_football,1,赔率基线,spf,machine,football_odds_baseline_v1
+11,赔率+状态加权 V1,jingcai_football,1,赔率+状态加权,spf,machine,football_odds_form_weighted_v1
+12,让球一致性 V1,jingcai_football,1,让球一致性,spf,machine,football_handicap_consistency_v1
+13,价值优势 V1,jingcai_football,1,价值优势,spf,machine,football_value_edge_v1
