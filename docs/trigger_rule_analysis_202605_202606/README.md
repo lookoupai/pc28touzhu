@@ -21,6 +21,7 @@ docs/trigger_rule_analysis_202605_202606/
 ├── 04_来源项目回测_阈值与下侧风险.md           ← AITradingSimulator回测验证
 ├── 05_结论与配置建议.md                        ← 最终方案-规则匹配与改参建议
 ├── 06_止盈效果口径与玩法对比.md                ← 止盈率口径修正 + 高倍/网盘/2.0玩法对比
+├── 07_三玩法规则与赔率速查.md                  ← 高倍/网盘/2.0完整规则与赔率速查表
 └── raw_data/
     ├── real_settlement_by_period_metric.csv   ← 本仓真实结算：5月/6月全/6月旧/6月新 ×方案×指标
     ├── june_daily_pnl.csv                     ← 6月每日盈亏（规则1/2）
