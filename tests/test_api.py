@@ -772,7 +772,7 @@ class FakeRepository:
                 return item
         return None
 
-    def list_signals(self, source_id=None, owner_user_id=None):
+    def list_signals(self, source_id=None, owner_user_id=None, limit=None):
         items = list(self.signals)
         if source_id is not None:
             items = [item for item in items if item["source_id"] == int(source_id)]
@@ -781,6 +781,8 @@ class FakeRepository:
                 item for item in items
                 if (self.get_source(item["source_id"]) or {}).get("owner_user_id") == int(owner_user_id)
             ]
+        if limit is not None:
+            items = items[: max(1, int(limit))]
         return items
 
     def create_signal_record(self, **kwargs):
@@ -829,7 +831,7 @@ class FakeRepository:
         source = self.get_source(item["source_id"]) or {}
         return source.get("owner_user_id") == int(user_id)
 
-    def list_raw_items(self, source_id=None, owner_user_id=None):
+    def list_raw_items(self, source_id=None, owner_user_id=None, limit=None):
         items = list(self.raw_items)
         if source_id is not None:
             items = [item for item in items if item["source_id"] == int(source_id)]
@@ -838,6 +840,8 @@ class FakeRepository:
                 item for item in items
                 if (self.get_source(item["source_id"]) or {}).get("owner_user_id") == int(owner_user_id)
             ]
+        if limit is not None:
+            items = items[: max(1, int(limit))]
         return items
 
     def update_raw_item_parse_result(self, raw_item_id, **kwargs):

@@ -824,9 +824,12 @@ class DatabaseRepository:
         )
         """,
         "CREATE INDEX IF NOT EXISTS idx_execution_jobs_status_time ON execution_jobs(status, execute_after, expire_at)",
+        "CREATE INDEX IF NOT EXISTS idx_execution_jobs_user_id_desc ON execution_jobs(user_id, id DESC)",
         "CREATE INDEX IF NOT EXISTS idx_execution_attempts_job ON execution_attempts(job_id, attempt_no)",
         "CREATE INDEX IF NOT EXISTS idx_platform_alert_records_status_seen ON platform_alert_records(status, last_seen_at)",
         "CREATE INDEX IF NOT EXISTS idx_signal_sources_owner ON signal_sources(owner_user_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_source_raw_items_source_id_desc ON source_raw_items(source_id, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_normalized_signals_source_id_desc ON normalized_signals(source_id, id DESC)",
         "CREATE INDEX IF NOT EXISTS idx_telegram_accounts_user ON telegram_accounts(user_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_delivery_targets_user ON delivery_targets(user_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_user_subscriptions_user ON user_subscriptions(user_id, status)",
@@ -2158,7 +2161,17 @@ class DatabaseRepository:
         )
         return row is not None
 
-    def list_raw_items(self, source_id: Optional[int] = None, owner_user_id: Optional[int] = None) -> list[Dict[str, Any]]:
+    def list_raw_items(
+        self,
+        source_id: Optional[int] = None,
+        owner_user_id: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> list[Dict[str, Any]]:
+        limit_clause = ""
+        limit_params: list[Any] = []
+        if limit is not None:
+            limit_clause = " LIMIT ?"
+            limit_params.append(max(1, min(int(limit or 1), 500)))
         if source_id is not None and owner_user_id is not None:
             rows = self._fetch_all(
                 """
@@ -2167,13 +2180,13 @@ class DatabaseRepository:
                 JOIN signal_sources s ON s.id = r.source_id
                 WHERE r.source_id = ? AND s.owner_user_id = ?
                 ORDER BY r.id DESC
-                """,
-                (int(source_id), int(owner_user_id)),
+                """ + limit_clause,
+                tuple([int(source_id), int(owner_user_id)] + limit_params),
             )
         elif source_id is not None:
             rows = self._fetch_all(
-                "SELECT * FROM source_raw_items WHERE source_id = ? ORDER BY id DESC",
-                (int(source_id),),
+                "SELECT * FROM source_raw_items WHERE source_id = ? ORDER BY id DESC" + limit_clause,
+                tuple([int(source_id)] + limit_params),
             )
         elif owner_user_id is not None:
             rows = self._fetch_all(
@@ -2183,11 +2196,11 @@ class DatabaseRepository:
                 JOIN signal_sources s ON s.id = r.source_id
                 WHERE s.owner_user_id = ?
                 ORDER BY r.id DESC
-                """,
-                (int(owner_user_id),),
+                """ + limit_clause,
+                tuple([int(owner_user_id)] + limit_params),
             )
         else:
-            rows = self._fetch_all("SELECT * FROM source_raw_items ORDER BY id DESC")
+            rows = self._fetch_all("SELECT * FROM source_raw_items ORDER BY id DESC" + limit_clause, tuple(limit_params))
         return [self._serialize_raw_item_row(row) for row in rows]
 
     def update_raw_item_parse_result(
@@ -2434,7 +2447,17 @@ class DatabaseRepository:
         )
         return row is not None
 
-    def list_signals(self, source_id: Optional[int] = None, owner_user_id: Optional[int] = None) -> list[Dict[str, Any]]:
+    def list_signals(
+        self,
+        source_id: Optional[int] = None,
+        owner_user_id: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> list[Dict[str, Any]]:
+        limit_clause = ""
+        limit_params: list[Any] = []
+        if limit is not None:
+            limit_clause = " LIMIT ?"
+            limit_params.append(max(1, min(int(limit or 1), 500)))
         if source_id is not None and owner_user_id is not None:
             rows = self._fetch_all(
                 """
@@ -2443,13 +2466,13 @@ class DatabaseRepository:
                 JOIN signal_sources s ON s.id = n.source_id
                 WHERE n.source_id = ? AND s.owner_user_id = ?
                 ORDER BY n.id DESC
-                """,
-                (int(source_id), int(owner_user_id)),
+                """ + limit_clause,
+                tuple([int(source_id), int(owner_user_id)] + limit_params),
             )
         elif source_id is not None:
             rows = self._fetch_all(
-                "SELECT * FROM normalized_signals WHERE source_id = ? ORDER BY id DESC",
-                (int(source_id),),
+                "SELECT * FROM normalized_signals WHERE source_id = ? ORDER BY id DESC" + limit_clause,
+                tuple([int(source_id)] + limit_params),
             )
         elif owner_user_id is not None:
             rows = self._fetch_all(
@@ -2459,11 +2482,11 @@ class DatabaseRepository:
                 JOIN signal_sources s ON s.id = n.source_id
                 WHERE s.owner_user_id = ?
                 ORDER BY n.id DESC
-                """,
-                (int(owner_user_id),),
+                """ + limit_clause,
+                tuple([int(owner_user_id)] + limit_params),
             )
         else:
-            rows = self._fetch_all("SELECT * FROM normalized_signals ORDER BY id DESC")
+            rows = self._fetch_all("SELECT * FROM normalized_signals ORDER BY id DESC" + limit_clause, tuple(limit_params))
         return [self._serialize_signal_row(row) for row in rows]
 
     def create_delivery_target(

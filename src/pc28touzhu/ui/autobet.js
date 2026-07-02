@@ -23,6 +23,7 @@
         scopeFocused: false,
     };
     let currentUserLoadToken = 0;
+    let pipelineDataLoadToken = 0;
 
     const statusMessage = document.getElementById("statusMessage");
     const refreshAutobetBtn = document.getElementById("refreshAutobetBtn");
@@ -119,6 +120,7 @@
         pc28_high_regular: "高赔常规",
         pc28_high_abc: "高赔 ABC",
     };
+    const RECENT_PIPELINE_LIMIT = 200;
     const templatePreviewPayload = document.getElementById("templatePreviewPayload");
     const templatePreviewOutput = document.getElementById("templatePreviewOutput");
     const templatePreviewMeta = document.getElementById("templatePreviewMeta");
@@ -5412,6 +5414,7 @@
     }
 
     function resetCollections() {
+        pipelineDataLoadToken += 1;
         state.sources = [];
         state.rawItems = [];
         state.signals = [];
@@ -5475,13 +5478,14 @@
     }
 
     async function loadPageData() {
+        pipelineDataLoadToken += 1;
         const subscriptionStatDateQuery = state.subscriptionStatDate
             ? ("?stat_date=" + encodeURIComponent(state.subscriptionStatDate))
             : "";
+        state.rawItems = [];
+        state.signals = [];
         const results = await Promise.all([
             request("/api/platform/sources"),
-            request("/api/platform/raw-items"),
-            request("/api/platform/signals"),
             request("/api/platform/telegram-accounts"),
             request("/api/platform/delivery-targets"),
             request("/api/platform/message-templates"),
@@ -5492,18 +5496,41 @@
             request("/api/platform/telegram-binding"),
         ]);
         state.sources = results[0].items || [];
-        state.rawItems = results[1].items || [];
-        state.signals = results[2].items || [];
-        state.accounts = results[3].items || [];
-        state.targets = results[4].items || [];
-        state.templates = results[5].items || [];
-        state.subscriptions = results[6].items || [];
-        state.subscriptionStatDate = results[6].stat_date || state.subscriptionStatDate || todayDateString();
-        state.subscriptionDailySummary = results[6].daily_summary || null;
-        state.jobs = results[7].items || [];
-        state.alerts = results[8].items || [];
-        state.failures = results[9].items || [];
-        state.telegramBinding = results[10].item || null;
+        state.accounts = results[1].items || [];
+        state.targets = results[2].items || [];
+        state.templates = results[3].items || [];
+        state.subscriptions = results[4].items || [];
+        state.subscriptionStatDate = results[4].stat_date || state.subscriptionStatDate || todayDateString();
+        state.subscriptionDailySummary = results[4].daily_summary || null;
+        state.jobs = results[5].items || [];
+        state.alerts = results[6].items || [];
+        state.failures = results[7].items || [];
+        state.telegramBinding = results[8].item || null;
+    }
+
+    async function loadRecentPipelineData() {
+        const token = ++pipelineDataLoadToken;
+        const results = await Promise.allSettled([
+            request("/api/platform/raw-items?limit=" + encodeURIComponent(String(RECENT_PIPELINE_LIMIT))),
+            request("/api/platform/signals?limit=" + encodeURIComponent(String(RECENT_PIPELINE_LIMIT))),
+        ]);
+        if (token !== pipelineDataLoadToken) {
+            return false;
+        }
+        if (results[0].status === "fulfilled") {
+            state.rawItems = results[0].value.items || [];
+        } else {
+            state.rawItems = [];
+        }
+        if (results[1].status === "fulfilled") {
+            state.signals = results[1].value.items || [];
+        } else {
+            state.signals = [];
+        }
+        if (results.some(function (result) { return result.status === "rejected"; })) {
+            throw new Error("最近来源链路数据加载失败，基础配置已刷新。");
+        }
+        return true;
     }
 
     function syncSubscriptionStatDateControls() {
@@ -5548,6 +5575,18 @@
                 state.scopeFocused = true;
             }
             setStatus("自动投注配置已刷新。", false);
+            loadRecentPipelineData().then(function (updated) {
+                if (!updated) {
+                    return;
+                }
+                safeRender("overview", renderOverview);
+                safeRender("source-cards", renderSourceCards);
+                safeRender("source-list", renderSourceList);
+            }).catch(function (error) {
+                safeRender("source-cards", renderSourceCards);
+                safeRender("source-list", renderSourceList);
+                setStatus(error.message || "最近来源链路数据加载失败，基础配置已刷新。", true);
+            });
         } catch (error) {
             resetCollections();
             setStatus(error.message || "自动投注配置页面加载失败", true);

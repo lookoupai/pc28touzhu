@@ -194,6 +194,12 @@ def _to_positive_int(value: Any, field_name: str, *, allow_none: bool = False) -
     return normalized
 
 
+def _to_bounded_limit(value: Any, *, default: Optional[int] = None, maximum: int = 500) -> Optional[int]:
+    if value is None or str(value).strip() == "":
+        return default
+    return max(1, min(int(value), int(maximum)))
+
+
 def _to_non_empty_str(value: Any, field_name: str) -> str:
     text = str(value or "").strip()
     if not text:
@@ -1034,6 +1040,7 @@ def list_raw_items(
     source_id: Optional[Any] = None,
     *,
     owner_user_id: Optional[Any] = None,
+    limit: Optional[Any] = None,
 ) -> Dict[str, Any]:
     normalized_source_id = (
         _to_positive_int(source_id, "source_id", allow_none=True)
@@ -1048,7 +1055,15 @@ def list_raw_items(
     if normalized_source_id is not None and normalized_owner_user_id is not None:
         if not repository.source_belongs_to_user(normalized_source_id, normalized_owner_user_id):
             raise ValueError("source_id 对应的来源不存在")
-    return {"items": repository.list_raw_items(source_id=normalized_source_id, owner_user_id=normalized_owner_user_id)}
+    normalized_limit = _to_bounded_limit(limit, maximum=500)
+    return {
+        "items": repository.list_raw_items(
+            source_id=normalized_source_id,
+            owner_user_id=normalized_owner_user_id,
+            limit=normalized_limit,
+        ),
+        "limit": normalized_limit,
+    }
 
 
 def create_raw_item(repository: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1074,6 +1089,7 @@ def list_signals(
     source_id: Optional[Any] = None,
     *,
     owner_user_id: Optional[Any] = None,
+    limit: Optional[Any] = None,
 ) -> Dict[str, Any]:
     normalized_source_id = (
         _to_positive_int(source_id, "source_id", allow_none=True)
@@ -1088,7 +1104,15 @@ def list_signals(
     if normalized_source_id is not None and normalized_owner_user_id is not None:
         if not repository.source_belongs_to_user(normalized_source_id, normalized_owner_user_id):
             raise ValueError("source_id 对应的来源不存在")
-    return {"items": repository.list_signals(source_id=normalized_source_id, owner_user_id=normalized_owner_user_id)}
+    normalized_limit = _to_bounded_limit(limit, maximum=500)
+    return {
+        "items": repository.list_signals(
+            source_id=normalized_source_id,
+            owner_user_id=normalized_owner_user_id,
+            limit=normalized_limit,
+        ),
+        "limit": normalized_limit,
+    }
 
 
 def create_signal(repository: Any, payload: Dict[str, Any]) -> Dict[str, Any]:

@@ -1216,6 +1216,7 @@ class PlatformApiApplication:
                     self.repository,
                     source_id=_query_value(environ, "source_id"),
                     owner_user_id=self._resolve_owner_query_scope(environ, current_user),
+                    limit=_query_value(environ, "limit", "200"),
                 )
                 return _json_response(start_response, 200, payload)
             if method == "POST":
@@ -1235,6 +1236,7 @@ class PlatformApiApplication:
                     self.repository,
                     source_id=_query_value(environ, "source_id"),
                     owner_user_id=self._resolve_owner_query_scope(environ, current_user),
+                    limit=_query_value(environ, "limit", "200"),
                 )
                 return _json_response(start_response, 200, payload)
             if method == "POST":
