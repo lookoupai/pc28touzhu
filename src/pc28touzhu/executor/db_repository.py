@@ -825,7 +825,9 @@ class DatabaseRepository:
         """,
         "CREATE INDEX IF NOT EXISTS idx_execution_jobs_status_time ON execution_jobs(status, execute_after, expire_at)",
         "CREATE INDEX IF NOT EXISTS idx_execution_jobs_user_id_desc ON execution_jobs(user_id, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_execution_jobs_target_user_desc ON execution_jobs(delivery_target_id, user_id, id DESC)",
         "CREATE INDEX IF NOT EXISTS idx_execution_attempts_job ON execution_attempts(job_id, attempt_no)",
+        "CREATE INDEX IF NOT EXISTS idx_execution_attempts_status_job ON execution_attempts(delivery_status, job_id, id DESC)",
         "CREATE INDEX IF NOT EXISTS idx_platform_alert_records_status_seen ON platform_alert_records(status, last_seen_at)",
         "CREATE INDEX IF NOT EXISTS idx_signal_sources_owner ON signal_sources(owner_user_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_source_raw_items_source_id_desc ON source_raw_items(source_id, id DESC)",
@@ -2169,12 +2171,18 @@ class DatabaseRepository:
         source_id: Optional[int] = None,
         owner_user_id: Optional[int] = None,
         limit: Optional[int] = None,
+        before_id: Optional[int] = None,
     ) -> list[Dict[str, Any]]:
         limit_clause = ""
         limit_params: list[Any] = []
         if limit is not None:
             limit_clause = " LIMIT ?"
             limit_params.append(max(1, min(int(limit or 1), 500)))
+        cursor_clause = ""
+        cursor_params: list[Any] = []
+        if before_id is not None:
+            cursor_clause = " AND r.id < ?"
+            cursor_params.append(int(before_id))
         if source_id is not None and owner_user_id is not None:
             rows = self._fetch_all(
                 """
@@ -2182,28 +2190,37 @@ class DatabaseRepository:
                 FROM source_raw_items r
                 JOIN signal_sources s ON s.id = r.source_id
                 WHERE r.source_id = ? AND s.owner_user_id = ?
+                """ + cursor_clause + """
                 ORDER BY r.id DESC
                 """ + limit_clause,
-                tuple([int(source_id), int(owner_user_id)] + limit_params),
+                tuple([int(source_id), int(owner_user_id)] + cursor_params + limit_params),
             )
         elif source_id is not None:
             rows = self._fetch_all(
-                "SELECT * FROM source_raw_items WHERE source_id = ? ORDER BY id DESC" + limit_clause,
-                tuple([int(source_id)] + limit_params),
+                "SELECT * FROM source_raw_items r WHERE r.source_id = ?" + cursor_clause + " ORDER BY r.id DESC" + limit_clause,
+                tuple([int(source_id)] + cursor_params + limit_params),
             )
         elif owner_user_id is not None:
             rows = self._fetch_all(
                 """
-                SELECT r.*
+                SELECT *
                 FROM source_raw_items r
-                JOIN signal_sources s ON s.id = r.source_id
-                WHERE s.owner_user_id = ?
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM signal_sources s
+                    WHERE s.id = r.source_id
+                      AND s.owner_user_id = ?
+                )
+                """ + cursor_clause + """
                 ORDER BY r.id DESC
                 """ + limit_clause,
-                tuple([int(owner_user_id)] + limit_params),
+                tuple([int(owner_user_id)] + cursor_params + limit_params),
             )
         else:
-            rows = self._fetch_all("SELECT * FROM source_raw_items ORDER BY id DESC" + limit_clause, tuple(limit_params))
+            rows = self._fetch_all(
+                "SELECT * FROM source_raw_items r WHERE 1 = 1" + cursor_clause + " ORDER BY r.id DESC" + limit_clause,
+                tuple(cursor_params + limit_params),
+            )
         return [self._serialize_raw_item_row(row) for row in rows]
 
     def update_raw_item_parse_result(
@@ -2561,12 +2578,18 @@ class DatabaseRepository:
         source_id: Optional[int] = None,
         owner_user_id: Optional[int] = None,
         limit: Optional[int] = None,
+        before_id: Optional[int] = None,
     ) -> list[Dict[str, Any]]:
         limit_clause = ""
         limit_params: list[Any] = []
         if limit is not None:
             limit_clause = " LIMIT ?"
             limit_params.append(max(1, min(int(limit or 1), 500)))
+        cursor_clause = ""
+        cursor_params: list[Any] = []
+        if before_id is not None:
+            cursor_clause = " AND n.id < ?"
+            cursor_params.append(int(before_id))
         if source_id is not None and owner_user_id is not None:
             rows = self._fetch_all(
                 """
@@ -2574,28 +2597,37 @@ class DatabaseRepository:
                 FROM normalized_signals n
                 JOIN signal_sources s ON s.id = n.source_id
                 WHERE n.source_id = ? AND s.owner_user_id = ?
+                """ + cursor_clause + """
                 ORDER BY n.id DESC
                 """ + limit_clause,
-                tuple([int(source_id), int(owner_user_id)] + limit_params),
+                tuple([int(source_id), int(owner_user_id)] + cursor_params + limit_params),
             )
         elif source_id is not None:
             rows = self._fetch_all(
-                "SELECT * FROM normalized_signals WHERE source_id = ? ORDER BY id DESC" + limit_clause,
-                tuple([int(source_id)] + limit_params),
+                "SELECT * FROM normalized_signals n WHERE n.source_id = ?" + cursor_clause + " ORDER BY n.id DESC" + limit_clause,
+                tuple([int(source_id)] + cursor_params + limit_params),
             )
         elif owner_user_id is not None:
             rows = self._fetch_all(
                 """
-                SELECT n.*
+                SELECT *
                 FROM normalized_signals n
-                JOIN signal_sources s ON s.id = n.source_id
-                WHERE s.owner_user_id = ?
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM signal_sources s
+                    WHERE s.id = n.source_id
+                      AND s.owner_user_id = ?
+                )
+                """ + cursor_clause + """
                 ORDER BY n.id DESC
                 """ + limit_clause,
-                tuple([int(owner_user_id)] + limit_params),
+                tuple([int(owner_user_id)] + cursor_params + limit_params),
             )
         else:
-            rows = self._fetch_all("SELECT * FROM normalized_signals ORDER BY id DESC" + limit_clause, tuple(limit_params))
+            rows = self._fetch_all(
+                "SELECT * FROM normalized_signals n WHERE 1 = 1" + cursor_clause + " ORDER BY n.id DESC" + limit_clause,
+                tuple(cursor_params + limit_params),
+            )
         return [self._serialize_signal_row(row) for row in rows]
 
     def create_delivery_target(
@@ -2671,6 +2703,124 @@ class DatabaseRepository:
             (int(user_id),),
         )
         return [self._serialize_target_row(row) for row in rows]
+
+    def list_delivery_target_summaries(self, user_id: int) -> list[Dict[str, Any]]:
+        rows = self._fetch_all(
+            """
+            SELECT
+                dt.*,
+                latest_job.id AS recent_execution_job_id,
+                latest_job.status AS recent_execution_job_status,
+                latest_job.updated_at AS recent_execution_updated_at,
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM execution_attempts a
+                    WHERE a.job_id = latest_job.id
+                ), 0) AS recent_execution_attempt_count,
+                (
+                    SELECT a.delivery_status
+                    FROM execution_attempts a
+                    WHERE a.job_id = latest_job.id
+                    ORDER BY a.id DESC
+                    LIMIT 1
+                ) AS recent_execution_delivery_status,
+                (
+                    SELECT a.executed_at
+                    FROM execution_attempts a
+                    WHERE a.job_id = latest_job.id
+                    ORDER BY a.id DESC
+                    LIMIT 1
+                ) AS recent_execution_attempted_at,
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM (
+                        SELECT fa.id
+                        FROM execution_jobs fj
+                        JOIN execution_attempts fa ON fa.job_id = fj.id
+                        WHERE fj.delivery_target_id = dt.id
+                          AND fj.user_id = dt.user_id
+                          AND (
+                            fj.status IN ('failed', 'expired', 'skipped')
+                            OR fa.delivery_status IN ('failed', 'expired', 'skipped')
+                          )
+                        ORDER BY fa.id DESC
+                        LIMIT 50
+                    ) recent_failures
+                ), 0) AS recent_failure_count,
+                (
+                    SELECT fa.delivery_status
+                    FROM execution_jobs fj
+                    JOIN execution_attempts fa ON fa.job_id = fj.id
+                    WHERE fj.delivery_target_id = dt.id
+                      AND fj.user_id = dt.user_id
+                      AND (
+                        fj.status IN ('failed', 'expired', 'skipped')
+                        OR fa.delivery_status IN ('failed', 'expired', 'skipped')
+                      )
+                    ORDER BY fa.id DESC
+                    LIMIT 1
+                ) AS recent_failure_delivery_status,
+                (
+                    SELECT fa.error_message
+                    FROM execution_jobs fj
+                    JOIN execution_attempts fa ON fa.job_id = fj.id
+                    WHERE fj.delivery_target_id = dt.id
+                      AND fj.user_id = dt.user_id
+                      AND (
+                        fj.status IN ('failed', 'expired', 'skipped')
+                        OR fa.delivery_status IN ('failed', 'expired', 'skipped')
+                      )
+                    ORDER BY fa.id DESC
+                    LIMIT 1
+                ) AS recent_failure_error_message,
+                (
+                    SELECT fa.executed_at
+                    FROM execution_jobs fj
+                    JOIN execution_attempts fa ON fa.job_id = fj.id
+                    WHERE fj.delivery_target_id = dt.id
+                      AND fj.user_id = dt.user_id
+                      AND (
+                        fj.status IN ('failed', 'expired', 'skipped')
+                        OR fa.delivery_status IN ('failed', 'expired', 'skipped')
+                      )
+                    ORDER BY fa.id DESC
+                    LIMIT 1
+                ) AS recent_failure_at
+            FROM delivery_targets dt
+            LEFT JOIN execution_jobs latest_job ON latest_job.id = (
+                SELECT j.id
+                FROM execution_jobs j
+                WHERE j.delivery_target_id = dt.id
+                  AND j.user_id = dt.user_id
+                ORDER BY j.id DESC
+                LIMIT 1
+            )
+            WHERE dt.user_id = ?
+            ORDER BY dt.id ASC
+            """,
+            (int(user_id),),
+        )
+        items = []
+        for row in rows:
+            item = self._serialize_target_row(row)
+            recent_status = str(row.get("recent_execution_delivery_status") or row.get("recent_execution_job_status") or "")
+            if row.get("recent_execution_job_id") is not None:
+                item["recent_execution_at"] = row.get("recent_execution_attempted_at") or row.get("recent_execution_updated_at")
+                item["recent_execution_status"] = recent_status
+                item["recent_execution_attempt_count"] = int(row.get("recent_execution_attempt_count") or 0)
+            failure_count = int(row.get("recent_failure_count") or 0)
+            if failure_count > 0:
+                reason = str(row.get("recent_failure_error_message") or row.get("recent_failure_delivery_status") or "执行失败").strip() or "执行失败"
+                item["recent_failure_summary"] = {
+                    "count": failure_count,
+                    "top_reason": "%s %s次" % (reason, failure_count),
+                    "details": ["%s %s次" % (reason, failure_count)],
+                    "last_failure_at": row.get("recent_failure_at"),
+                }
+            else:
+                item["recent_failure_summary"] = {}
+            items.append(item)
+        return items
 
     def update_delivery_target_status(self, *, delivery_target_id: int, user_id: int, status: str) -> Optional[Dict[str, Any]]:
         now = _utc_now_iso()

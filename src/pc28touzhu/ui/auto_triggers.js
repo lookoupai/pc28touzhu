@@ -724,7 +724,7 @@
         const statDateQuery = state.statDate ? ("?stat_date=" + encodeURIComponent(state.statDate)) : "";
         const payloads = await Promise.all([
             request("/api/platform/sources"),
-            request("/api/platform/subscriptions"),
+            request("/api/platform/subscriptions/summary"),
             request("/api/platform/delivery-targets"),
             request("/api/platform/message-templates"),
             request("/api/platform/auto-trigger-rules" + statDateQuery),

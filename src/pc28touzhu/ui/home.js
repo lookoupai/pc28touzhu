@@ -679,7 +679,7 @@
         const results = await Promise.all([
             request("/api/platform/sources"),
             request("/api/platform/telegram-accounts"),
-            request("/api/platform/subscriptions"),
+            request("/api/platform/subscriptions/summary"),
             request("/api/platform/delivery-targets"),
             request("/api/platform/execution-jobs?limit=20"),
             request("/api/platform/alerts?limit=6"),

@@ -54,12 +54,15 @@ from pc28touzhu.services.platform_service import (
     import_telegram_account_session,
     list_users,
     list_delivery_targets,
+    list_delivery_target_summaries,
     list_telegram_accounts,
     list_raw_items,
     list_signals,
     list_sources,
     list_source_summaries,
     list_subscription_daily_stats,
+    list_subscription_runtime_runs,
+    list_subscription_summaries,
     list_subscriptions,
     normalize_raw_item,
     restart_subscription_cycle,
@@ -853,6 +856,16 @@ class PlatformApiApplication:
                 return _json_response(start_response, 200, payload)
             return _json_response(start_response, 405, {"error": "method not allowed"})
 
+        if path == "/api/platform/subscriptions/summary":
+            if method != "GET":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            payload = list_subscription_summaries(
+                self.repository,
+                user_id=self._resolve_user_query_scope(environ, current_user),
+                stat_date=_query_value(environ, "stat_date"),
+            )
+            return _json_response(start_response, 200, payload)
+
         if path == "/api/platform/auto-trigger-rules":
             if method == "GET":
                 payload = list_auto_trigger_rules(
@@ -990,6 +1003,17 @@ class PlatformApiApplication:
                 limit=_query_value(environ, "limit", "365"),
             )
             return _json_response(start_response, 200, payload)
+        if path.startswith(subscription_status_prefix) and path.endswith("/runtime-runs"):
+            if method != "GET":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            subscription_id = path[len(subscription_status_prefix) : -len("/runtime-runs")]
+            payload = list_subscription_runtime_runs(
+                self.repository,
+                subscription_id=subscription_id,
+                user_id=current_user["id"],
+                limit=_query_value(environ, "limit", "20"),
+            )
+            return _json_response(start_response, 200, payload)
         if path.startswith(subscription_status_prefix) and path.endswith("/progression/resolve"):
             if method != "POST":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
@@ -1119,6 +1143,15 @@ class PlatformApiApplication:
                 return _json_response(start_response, 200, payload)
             return _json_response(start_response, 405, {"error": "method not allowed"})
 
+        if path == "/api/platform/delivery-targets/summary":
+            if method != "GET":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            payload = list_delivery_target_summaries(
+                self.repository,
+                user_id=self._resolve_user_query_scope(environ, current_user),
+            )
+            return _json_response(start_response, 200, payload)
+
         delivery_target_status_prefix = "/api/platform/delivery-targets/"
         if path.startswith(delivery_target_status_prefix) and path.endswith("/test-send"):
             if method != "POST":
@@ -1224,7 +1257,8 @@ class PlatformApiApplication:
                     self.repository,
                     source_id=_query_value(environ, "source_id"),
                     owner_user_id=self._resolve_owner_query_scope(environ, current_user),
-                    limit=_query_value(environ, "limit", "200"),
+                    limit=_query_value(environ, "limit", "50"),
+                    cursor=_query_value(environ, "cursor"),
                 )
                 return _json_response(start_response, 200, payload)
             if method == "POST":
@@ -1244,7 +1278,8 @@ class PlatformApiApplication:
                     self.repository,
                     source_id=_query_value(environ, "source_id"),
                     owner_user_id=self._resolve_owner_query_scope(environ, current_user),
-                    limit=_query_value(environ, "limit", "200"),
+                    limit=_query_value(environ, "limit", "50"),
+                    cursor=_query_value(environ, "cursor"),
                 )
                 return _json_response(start_response, 200, payload)
             if method == "POST":

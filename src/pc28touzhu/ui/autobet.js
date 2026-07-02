@@ -17,6 +17,7 @@
         expandedSubscriptionId: null,
         subscriptionDetailTabs: {},
         subscriptionAllDailyHistories: {},
+        subscriptionRuntimeHistories: {},
         lastRecommendedActionKey: null,
         showIssueJobsOnly: false,
         showArchivedTargets: false,
@@ -2999,6 +3000,10 @@
     }
 
     function subscriptionRuntimeHistory(subscription) {
+        const cached = state.subscriptionRuntimeHistories[String(subscription && subscription.id || "")] || null;
+        if (cached && Array.isArray(cached.items)) {
+            return cached.items;
+        }
         return subscription && Array.isArray(subscription.runtime_history)
             ? subscription.runtime_history
             : [];
@@ -5541,6 +5546,7 @@
         state.expandedSubscriptionId = null;
         state.subscriptionDetailTabs = {};
         state.subscriptionAllDailyHistories = {};
+        state.subscriptionRuntimeHistories = {};
         state.showIssueJobsOnly = false;
         state.scopeFocused = false;
         if (sourceForm instanceof HTMLFormElement) {
@@ -5647,7 +5653,7 @@
                 });
             },
             targets: function () {
-                return request("/api/platform/delivery-targets").then(function (payload) {
+                return request("/api/platform/delivery-targets/summary").then(function (payload) {
                     state.targets = payload.items || [];
                 });
             },
@@ -5657,7 +5663,7 @@
                 });
             },
             subscriptions: function () {
-                return request("/api/platform/subscriptions" + subscriptionStatDateQuery).then(function (payload) {
+                return request("/api/platform/subscriptions/summary" + subscriptionStatDateQuery).then(function (payload) {
                     state.subscriptions = payload.items || [];
                     state.subscriptionStatDate = payload.stat_date || state.subscriptionStatDate || todayDateString();
                     state.subscriptionDailySummary = payload.daily_summary || null;
@@ -7095,6 +7101,19 @@
                 }
                 state.expandedSubscriptionId = String(subscriptionId);
                 state.subscriptionDetailTabs[String(subscriptionId)] = String(tabKey);
+                if (String(tabKey) === "runtime" && !state.subscriptionRuntimeHistories[String(subscriptionId)]) {
+                    try {
+                        setButtonBusy(target, true, "加载中...");
+                        const payload = await request("/api/platform/subscriptions/" + subscriptionId + "/runtime-runs?limit=20");
+                        state.subscriptionRuntimeHistories[String(subscriptionId)] = {
+                            items: payload.items || [],
+                        };
+                    } catch (error) {
+                        setStatus(error.message, true);
+                    } finally {
+                        setButtonBusy(target, false, "轮次历史");
+                    }
+                }
                 renderSubscriptionCards();
                 return;
             }

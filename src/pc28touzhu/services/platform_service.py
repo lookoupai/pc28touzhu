@@ -320,21 +320,22 @@ def _normalize_entity_status(value: Any, field_name: str = "status") -> str:
     return text
 
 
-def _subscription_runtime_history(repository: Any, *, subscription_id: int, user_id: int) -> list[Dict[str, Any]]:
+def _subscription_runtime_history(repository: Any, *, subscription_id: int, user_id: int, limit: int = 5) -> list[Dict[str, Any]]:
     # 跟单方案挂了自动触发路由时，轮次以「路由级」runtime_run 为准（每条路由独立记轮）；
     # 没有路由级记录的老方案回退到订阅级 runtime_run，保持旧行为不变。
+    normalized_limit = max(1, min(int(limit or 5), 50))
     if hasattr(repository, "list_auto_trigger_route_subscription_runtime_runs"):
         route_runs = repository.list_auto_trigger_route_subscription_runtime_runs(
             subscription_id=int(subscription_id),
             user_id=int(user_id),
-            limit=20,
+            limit=normalized_limit,
         )
         if route_runs:
             return route_runs
     return repository.list_subscription_runtime_runs(
         subscription_id=int(subscription_id),
         user_id=int(user_id),
-        limit=5,
+        limit=normalized_limit,
     )
 
 
@@ -1075,6 +1076,7 @@ def list_raw_items(
     *,
     owner_user_id: Optional[Any] = None,
     limit: Optional[Any] = None,
+    cursor: Optional[Any] = None,
 ) -> Dict[str, Any]:
     normalized_source_id = (
         _to_positive_int(source_id, "source_id", allow_none=True)
@@ -1089,14 +1091,26 @@ def list_raw_items(
     if normalized_source_id is not None and normalized_owner_user_id is not None:
         if not repository.source_belongs_to_user(normalized_source_id, normalized_owner_user_id):
             raise ValueError("source_id 对应的来源不存在")
-    normalized_limit = _to_bounded_limit(limit, maximum=500)
+    normalized_limit = _to_bounded_limit(limit, default=50, maximum=200) or 50
+    normalized_cursor = (
+        _to_positive_int(cursor, "cursor", allow_none=True)
+        if cursor is not None and str(cursor).strip() != ""
+        else None
+    )
+    items = repository.list_raw_items(
+        source_id=normalized_source_id,
+        owner_user_id=normalized_owner_user_id,
+        limit=normalized_limit + 1,
+        before_id=normalized_cursor,
+    )
+    has_more = len(items) > normalized_limit
+    visible_items = items[:normalized_limit]
     return {
-        "items": repository.list_raw_items(
-            source_id=normalized_source_id,
-            owner_user_id=normalized_owner_user_id,
-            limit=normalized_limit,
-        ),
+        "items": visible_items,
         "limit": normalized_limit,
+        "cursor": normalized_cursor,
+        "next_cursor": int(visible_items[-1]["id"]) if has_more and visible_items else None,
+        "has_more": has_more,
     }
 
 
@@ -1124,6 +1138,7 @@ def list_signals(
     *,
     owner_user_id: Optional[Any] = None,
     limit: Optional[Any] = None,
+    cursor: Optional[Any] = None,
 ) -> Dict[str, Any]:
     normalized_source_id = (
         _to_positive_int(source_id, "source_id", allow_none=True)
@@ -1138,14 +1153,26 @@ def list_signals(
     if normalized_source_id is not None and normalized_owner_user_id is not None:
         if not repository.source_belongs_to_user(normalized_source_id, normalized_owner_user_id):
             raise ValueError("source_id 对应的来源不存在")
-    normalized_limit = _to_bounded_limit(limit, maximum=500)
+    normalized_limit = _to_bounded_limit(limit, default=50, maximum=200) or 50
+    normalized_cursor = (
+        _to_positive_int(cursor, "cursor", allow_none=True)
+        if cursor is not None and str(cursor).strip() != ""
+        else None
+    )
+    items = repository.list_signals(
+        source_id=normalized_source_id,
+        owner_user_id=normalized_owner_user_id,
+        limit=normalized_limit + 1,
+        before_id=normalized_cursor,
+    )
+    has_more = len(items) > normalized_limit
+    visible_items = items[:normalized_limit]
     return {
-        "items": repository.list_signals(
-            source_id=normalized_source_id,
-            owner_user_id=normalized_owner_user_id,
-            limit=normalized_limit,
-        ),
+        "items": visible_items,
         "limit": normalized_limit,
+        "cursor": normalized_cursor,
+        "next_cursor": int(visible_items[-1]["id"]) if has_more and visible_items else None,
+        "has_more": has_more,
     }
 
 
@@ -1204,12 +1231,37 @@ def list_subscriptions(repository: Any, user_id: Any, stat_date: Any = None) -> 
                 repository,
                 subscription_id=int(item["id"]),
                 user_id=normalized_user_id,
+                limit=5,
             ),
         }
         for item in items
     ]
     return {
         "items": enriched_items,
+        "stat_date": resolved_stat_date,
+        "daily_summary": repository.get_user_daily_profit_summary(user_id=normalized_user_id, stat_date=resolved_stat_date),
+    }
+
+
+def list_subscription_summaries(repository: Any, user_id: Any, stat_date: Any = None) -> Dict[str, Any]:
+    normalized_user_id = _to_positive_int(user_id, "user_id")
+    resolved_stat_date = _normalize_stat_date(stat_date)
+    items = _present_subscription_items(repository.list_subscriptions(user_id=normalized_user_id))
+    daily_stats = repository.list_user_daily_subscription_stats(user_id=normalized_user_id, stat_date=resolved_stat_date)
+    daily_stats_by_subscription = {
+        int(item["subscription_id"]): item
+        for item in daily_stats
+        if item.get("subscription_id") is not None
+    }
+    return {
+        "items": [
+            {
+                **item,
+                "stat_date": resolved_stat_date,
+                "daily_stat": daily_stats_by_subscription.get(int(item["id"])) or _default_subscription_daily_stat(item, stat_date=resolved_stat_date),
+            }
+            for item in items
+        ],
         "stat_date": resolved_stat_date,
         "daily_summary": repository.get_user_daily_profit_summary(user_id=normalized_user_id, stat_date=resolved_stat_date),
     }
@@ -1228,6 +1280,24 @@ def list_subscription_daily_stats(repository: Any, *, subscription_id: Any, user
             user_id=normalized_user_id,
             limit=normalized_limit,
         ),
+        "limit": normalized_limit,
+    }
+
+
+def list_subscription_runtime_runs(repository: Any, *, subscription_id: Any, user_id: Any, limit: Any = 20) -> Dict[str, Any]:
+    normalized_subscription_id = _to_positive_int(subscription_id, "subscription_id")
+    normalized_user_id = _to_positive_int(user_id, "user_id")
+    current = repository.get_subscription(normalized_subscription_id)
+    if not current or int(current["user_id"]) != normalized_user_id:
+        raise ValueError("subscription_id 对应的订阅不存在")
+    normalized_limit = max(1, min(_to_positive_int(limit or 20, "limit"), 50))
+    return {
+        "items": _subscription_runtime_history(
+            repository,
+            subscription_id=normalized_subscription_id,
+            user_id=normalized_user_id,
+            limit=normalized_limit,
+        )[:normalized_limit],
         "limit": normalized_limit,
     }
 
@@ -1760,6 +1830,44 @@ def list_delivery_targets(repository: Any, user_id: Any) -> Dict[str, Any]:
         active_sub_count = sum(1 for entry in subscription_refs if entry.get("status") == "active")
         target["matched_subscription_count"] = len(subscription_refs)
         target["active_matched_subscription_count"] = active_sub_count
+    return {"items": targets}
+
+
+def list_delivery_target_summaries(repository: Any, user_id: Any) -> Dict[str, Any]:
+    normalized_user_id = _to_positive_int(user_id, "user_id")
+    if hasattr(repository, "list_delivery_target_summaries"):
+        targets = repository.list_delivery_target_summaries(user_id=normalized_user_id)
+    else:
+        targets = repository.list_delivery_targets(user_id=normalized_user_id)
+
+    subscriptions = repository.list_subscriptions(user_id=normalized_user_id)
+    sources = repository.list_sources(owner_user_id=normalized_user_id)
+    source_map = {int(source["id"]): source for source in sources if source.get("id") is not None}
+
+    for target in targets:
+        target_id = target.get("id")
+        if target_id is None:
+            continue
+        key = int(target_id)
+        subscription_refs = []
+        for subscription in subscriptions:
+            if not _subscription_includes_delivery_target(subscription, key):
+                continue
+            source_info = source_map.get(int(subscription["source_id"])) if subscription.get("source_id") is not None else None
+            subscription_refs.append(
+                {
+                    "id": subscription.get("id"),
+                    "source_id": subscription.get("source_id"),
+                    "source_name": (source_info or {}).get("name") or ("#" + str(subscription.get("source_id") or "--")),
+                    "status": subscription.get("status"),
+                }
+            )
+        target["subscription_refs"] = subscription_refs
+        active_sub_count = sum(1 for entry in subscription_refs if entry.get("status") == "active")
+        target["matched_subscription_count"] = len(subscription_refs)
+        target["active_matched_subscription_count"] = active_sub_count
+        if target.get("recent_failure_summary") is None:
+            target["recent_failure_summary"] = {}
     return {"items": targets}
 
 

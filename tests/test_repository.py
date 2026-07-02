@@ -2360,6 +2360,62 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertTrue(deleted)
         self.assertIsNone(self.repo.get_telegram_account(deletable_account_id))
 
+    def test_list_delivery_target_summaries_includes_recent_execution_and_failure(self):
+        user_id = self.repo.create_user("target-summary-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="target-summary-source",
+        )["id"]
+        signal_id = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260409002",
+            bet_type="big_small",
+            bet_value="大",
+            normalized_payload={"message_text": "大20"},
+        )["id"]
+        target_id = self.repo.create_delivery_target_record(
+            user_id=user_id,
+            executor_type="telegram_group",
+            target_key="-100404",
+            target_name="摘要群",
+            status="active",
+        )["id"]
+        created = self.repo.create_execution_job_record(
+            user_id=user_id,
+            signal_id=signal_id,
+            delivery_target_id=target_id,
+            telegram_account_id=None,
+            executor_type="telegram_group",
+            idempotency_key="target-summary-job",
+            planned_message_text="大20",
+            stake_plan={"mode": "follow", "amount": 20},
+            execute_after="2026-04-09T00:00:00Z",
+            expire_at="2030-04-09T00:02:00Z",
+        )
+        self.repo.report_job_result(
+            job_id=str(created["job"]["id"]),
+            executor_id="worker-a",
+            attempt_no=1,
+            delivery_status="failed",
+            remote_message_id=None,
+            executed_at="2026-04-09T00:01:00Z",
+            raw_result={"ok": False},
+            error_message="群组不可达",
+        )
+
+        items = self.repo.list_delivery_target_summaries(user_id=user_id)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["id"], target_id)
+        self.assertEqual(items[0]["recent_execution_status"], "failed")
+        self.assertEqual(items[0]["recent_execution_attempt_count"], 1)
+        self.assertEqual(items[0]["recent_execution_at"], "2026-04-09T00:01:00Z")
+        self.assertEqual(items[0]["recent_failure_summary"]["count"], 1)
+        self.assertEqual(items[0]["recent_failure_summary"]["top_reason"], "群组不可达 1次")
+        self.assertEqual(items[0]["recent_failure_summary"]["details"], ["群组不可达 1次"])
+
     def test_create_and_list_signals(self):
         user_id = self.repo.create_user("signal-owner")
         source_id = self.repo.create_source_record(
@@ -2380,6 +2436,41 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["normalized_payload"]["message_text"], "大单20")
 
+    def test_list_signals_supports_limit_and_before_id(self):
+        user_id = self.repo.create_user("signal-page-owner")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="strategy-page",
+        )["id"]
+        first = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407001",
+            bet_type="big_small",
+            bet_value="大",
+        )
+        second = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407002",
+            bet_type="big_small",
+            bet_value="小",
+        )
+        third = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407003",
+            bet_type="big_small",
+            bet_value="大",
+        )
+
+        first_page = self.repo.list_signals(source_id=source_id, limit=2)
+        second_page = self.repo.list_signals(source_id=source_id, limit=2, before_id=second["id"])
+
+        self.assertEqual([item["id"] for item in first_page], [third["id"], second["id"]])
+        self.assertEqual([item["id"] for item in second_page], [first["id"]])
+
     def test_create_and_list_raw_items(self):
         user_id = self.repo.create_user("raw-owner")
         source_id = self.repo.create_source_record(
@@ -2397,6 +2488,23 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(created["external_item_id"], "ext-001")
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["parse_status"], "pending")
+
+    def test_list_raw_items_supports_limit_and_before_id(self):
+        user_id = self.repo.create_user("raw-page-owner")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="telegram_channel",
+            name="raw-page-source",
+        )["id"]
+        first = self.repo.create_raw_item_record(source_id=source_id, issue_no="20260407001", raw_payload={})
+        second = self.repo.create_raw_item_record(source_id=source_id, issue_no="20260407002", raw_payload={})
+        third = self.repo.create_raw_item_record(source_id=source_id, issue_no="20260407003", raw_payload={})
+
+        first_page = self.repo.list_raw_items(source_id=source_id, limit=2)
+        second_page = self.repo.list_raw_items(source_id=source_id, limit=2, before_id=second["id"])
+
+        self.assertEqual([item["id"] for item in first_page], [third["id"], second["id"]])
+        self.assertEqual([item["id"] for item in second_page], [first["id"]])
 
     def test_update_raw_item_parse_result(self):
         user_id = self.repo.create_user("raw-update-user")

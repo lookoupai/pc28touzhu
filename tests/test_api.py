@@ -772,8 +772,8 @@ class FakeRepository:
                 return item
         return None
 
-    def list_signals(self, source_id=None, owner_user_id=None, limit=None):
-        items = list(self.signals)
+    def list_signals(self, source_id=None, owner_user_id=None, limit=None, before_id=None):
+        items = sorted(self.signals, key=lambda item: int(item["id"]), reverse=True)
         if source_id is not None:
             items = [item for item in items if item["source_id"] == int(source_id)]
         if owner_user_id is not None:
@@ -781,6 +781,8 @@ class FakeRepository:
                 item for item in items
                 if (self.get_source(item["source_id"]) or {}).get("owner_user_id") == int(owner_user_id)
             ]
+        if before_id is not None:
+            items = [item for item in items if int(item["id"]) < int(before_id)]
         if limit is not None:
             items = items[: max(1, int(limit))]
         return items
@@ -831,8 +833,8 @@ class FakeRepository:
         source = self.get_source(item["source_id"]) or {}
         return source.get("owner_user_id") == int(user_id)
 
-    def list_raw_items(self, source_id=None, owner_user_id=None, limit=None):
-        items = list(self.raw_items)
+    def list_raw_items(self, source_id=None, owner_user_id=None, limit=None, before_id=None):
+        items = sorted(self.raw_items, key=lambda item: int(item["id"]), reverse=True)
         if source_id is not None:
             items = [item for item in items if item["source_id"] == int(source_id)]
         if owner_user_id is not None:
@@ -840,6 +842,8 @@ class FakeRepository:
                 item for item in items
                 if (self.get_source(item["source_id"]) or {}).get("owner_user_id") == int(owner_user_id)
             ]
+        if before_id is not None:
+            items = [item for item in items if int(item["id"]) < int(before_id)]
         if limit is not None:
             items = items[: max(1, int(limit))]
         return items
@@ -2106,6 +2110,54 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(status, "200 OK")
         self.assertEqual([item["id"] for item in payload["items"]], [own_signal["id"]])
 
+    def test_list_signals_supports_cursor_pagination(self):
+        first = self.repository.create_signal_record(
+            source_id=1,
+            lottery_type="pc28",
+            issue_no="20260410001",
+            bet_type="big_small",
+            bet_value="大",
+        )
+        second = self.repository.create_signal_record(
+            source_id=1,
+            lottery_type="pc28",
+            issue_no="20260410002",
+            bet_type="big_small",
+            bet_value="小",
+        )
+        third = self.repository.create_signal_record(
+            source_id=1,
+            lottery_type="pc28",
+            issue_no="20260410003",
+            bet_type="big_small",
+            bet_value="大",
+        )
+
+        status, _, first_page = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/signals",
+                headers=self.session_headers,
+                query="limit=2",
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual([item["id"] for item in first_page["items"]], [third["id"], second["id"]])
+        self.assertTrue(first_page["has_more"])
+        self.assertEqual(first_page["next_cursor"], second["id"])
+
+        status, _, second_page = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/signals",
+                headers=self.session_headers,
+                query="limit=2&cursor=%s" % second["id"],
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual([item["id"] for item in second_page["items"]], [first["id"]])
+        self.assertFalse(second_page["has_more"])
+
     def test_list_raw_items_returns_only_current_user_items_for_regular_user(self):
         regular_user = self.repository.create_user_record(
             username="raw-user",
@@ -2132,6 +2184,36 @@ class PlatformApiApplicationTests(unittest.TestCase):
         )
         self.assertEqual(status, "200 OK")
         self.assertEqual([item["id"] for item in payload["items"]], [own_raw_item["id"]])
+
+    def test_list_raw_items_supports_cursor_pagination(self):
+        first = self.repository.create_raw_item_record(source_id=1, issue_no="20260411001", raw_payload={"from": "first"})
+        second = self.repository.create_raw_item_record(source_id=1, issue_no="20260411002", raw_payload={"from": "second"})
+        third = self.repository.create_raw_item_record(source_id=1, issue_no="20260411003", raw_payload={"from": "third"})
+
+        status, _, first_page = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/raw-items",
+                headers=self.session_headers,
+                query="limit=2",
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual([item["id"] for item in first_page["items"]], [third["id"], second["id"]])
+        self.assertTrue(first_page["has_more"])
+        self.assertEqual(first_page["next_cursor"], second["id"])
+
+        status, _, second_page = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/raw-items",
+                headers=self.session_headers,
+                query="limit=2&cursor=%s" % second["id"],
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        self.assertEqual([item["id"] for item in second_page["items"]], [first["id"]])
+        self.assertFalse(second_page["has_more"])
 
     def test_list_source_summaries_returns_only_current_user_items_for_regular_user(self):
         regular_user = self.repository.create_user_record(
@@ -2670,6 +2752,110 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(len(payload["items"][0]["runtime_history"]), 1)
         self.assertEqual(payload["items"][0]["runtime_history"][0]["status"], "active")
         self.assertEqual(payload["items"][0]["runtime_history"][0]["net_profit"], 8.5)
+
+    def test_list_subscription_summaries_omits_history(self):
+        created = self.repository.create_subscription_record(
+            user_id=1,
+            source_id=1,
+            strategy={"mode": "follow"},
+        )
+        self.repository.subscription_daily_stats.append(
+            {
+                "id": 1,
+                "stat_date": "2026-04-28",
+                "user_id": 1,
+                "subscription_id": created["id"],
+                "source_id": 1,
+                "profit_amount": 18.5,
+                "loss_amount": 10.0,
+                "net_profit": 8.5,
+                "settled_event_count": 6,
+                "hit_count": 3,
+                "miss_count": 2,
+                "refund_count": 1,
+                "updated_at": "2026-04-28T12:00:00Z",
+            }
+        )
+        self.repository.subscription_runtime_runs.append(
+            {
+                "id": 1,
+                "subscription_id": created["id"],
+                "user_id": 1,
+                "status": "active",
+                "started_issue_no": "20260428001",
+                "started_at": "2026-04-28T10:00:00Z",
+                "start_reason": "auto_started",
+                "ended_at": None,
+                "end_reason": "",
+                "last_issue_no": "20260428006",
+                "last_result_type": "hit",
+                "net_profit": 8.5,
+                "settled_event_count": 6,
+                "hit_count": 3,
+                "miss_count": 2,
+                "refund_count": 1,
+                "created_at": "2026-04-28T10:00:00Z",
+                "updated_at": "2026-04-28T12:00:00Z",
+            }
+        )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions/summary",
+                query="stat_date=2026-04-28",
+                headers=self.session_headers,
+            ),
+        )
+
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["daily_summary"]["net_profit"], 8.5)
+        self.assertEqual(payload["items"][0]["daily_stat"]["net_profit"], 8.5)
+        self.assertNotIn("daily_history", payload["items"][0])
+        self.assertNotIn("runtime_history", payload["items"][0])
+
+    def test_list_subscription_runtime_runs_endpoint(self):
+        created = self.repository.create_subscription_record(
+            user_id=1,
+            source_id=1,
+            strategy={"mode": "follow"},
+        )
+        self.repository.subscription_runtime_runs.append(
+            {
+                "id": 1,
+                "subscription_id": created["id"],
+                "user_id": 1,
+                "status": "active",
+                "started_issue_no": "20260428001",
+                "started_at": "2026-04-28T10:00:00Z",
+                "start_reason": "auto_started",
+                "ended_at": None,
+                "end_reason": "",
+                "last_issue_no": "20260428006",
+                "last_result_type": "hit",
+                "net_profit": 8.5,
+                "settled_event_count": 6,
+                "hit_count": 3,
+                "miss_count": 2,
+                "refund_count": 1,
+                "created_at": "2026-04-28T10:00:00Z",
+                "updated_at": "2026-04-28T12:00:00Z",
+            }
+        )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions/%s/runtime-runs" % created["id"],
+                query="limit=20",
+                headers=self.session_headers,
+            ),
+        )
+
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["limit"], 20)
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertEqual(payload["items"][0]["status"], "active")
 
     def test_list_subscription_daily_stats_endpoint(self):
         created = self.repository.create_subscription_record(
@@ -3285,6 +3471,39 @@ class PlatformApiApplicationTests(unittest.TestCase):
         )
         self.assertEqual(list_status, "200 OK")
         self.assertEqual(len(list_payload["items"]), 1)
+
+    def test_delivery_target_summary_includes_subscription_refs(self):
+        target = self.repository.create_delivery_target_record(
+            user_id=1,
+            executor_type="telegram_group",
+            target_key="-100111",
+            target_name="投注群",
+            status="active",
+        )
+        subscription = self.repository.create_subscription_record(
+            user_id=1,
+            source_id=1,
+            strategy={
+                "mode": "fixed",
+                "stake_amount": 10,
+                "dispatch": {"delivery_target_ids": [target["id"]]},
+            },
+            status="active",
+        )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/delivery-targets/summary",
+                headers=self.session_headers,
+            ),
+        )
+
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertEqual(payload["items"][0]["subscription_refs"][0]["id"], subscription["id"])
+        self.assertEqual(payload["items"][0]["matched_subscription_count"], 1)
+        self.assertEqual(payload["items"][0]["active_matched_subscription_count"], 1)
 
     def test_delivery_targets_list_allows_extra_fields(self):
         enhanced_target = {
