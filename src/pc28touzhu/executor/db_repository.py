@@ -829,7 +829,9 @@ class DatabaseRepository:
         "CREATE INDEX IF NOT EXISTS idx_platform_alert_records_status_seen ON platform_alert_records(status, last_seen_at)",
         "CREATE INDEX IF NOT EXISTS idx_signal_sources_owner ON signal_sources(owner_user_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_source_raw_items_source_id_desc ON source_raw_items(source_id, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_source_raw_items_source_status ON source_raw_items(source_id, parse_status)",
         "CREATE INDEX IF NOT EXISTS idx_normalized_signals_source_id_desc ON normalized_signals(source_id, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_normalized_signals_source_status ON normalized_signals(source_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_telegram_accounts_user ON telegram_accounts(user_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_delivery_targets_user ON delivery_targets(user_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_user_subscriptions_user ON user_subscriptions(user_id, status)",
@@ -1596,6 +1598,7 @@ class DatabaseRepository:
             "id": int(row["id"]),
             "user_id": int(row["user_id"]),
             "signal_id": int(row["signal_id"]),
+            "source_id": int(row["source_id"]) if row.get("source_id") is not None else None,
             "subscription_id": int(row["subscription_id"]) if row.get("subscription_id") is not None else None,
             "progression_event_id": int(row["progression_event_id"]) if row.get("progression_event_id") is not None else None,
             "auto_trigger_route_id": int(row["auto_trigger_route_id"]) if row.get("auto_trigger_route_id") is not None else None,
@@ -2273,6 +2276,112 @@ class DatabaseRepository:
                 (int(owner_user_id),),
             )
         return [self._serialize_source_row(row) for row in rows]
+
+    def list_source_summaries(self, owner_user_id: Optional[int] = None) -> list[Dict[str, Any]]:
+        conditions = []
+        params: list[Any] = []
+        if owner_user_id is not None:
+            conditions.append("ss.owner_user_id = ?")
+            params.append(int(owner_user_id))
+        where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        rows = self._fetch_all(
+            """
+            SELECT
+                ss.*,
+                COALESCE(raw_stats.raw_item_count, 0) AS raw_item_count,
+                COALESCE(raw_stats.pending_raw_count, 0) AS pending_raw_count,
+                COALESCE(raw_stats.failed_raw_count, 0) AS failed_raw_count,
+                latest_raw.id AS latest_raw_id,
+                latest_raw.issue_no AS latest_raw_issue_no,
+                latest_raw.published_at AS latest_raw_published_at,
+                latest_raw.parse_status AS latest_raw_parse_status,
+                latest_raw.parse_error AS latest_raw_parse_error,
+                latest_raw.created_at AS latest_raw_created_at,
+                COALESCE(signal_stats.signal_count, 0) AS signal_count,
+                COALESCE(signal_stats.ready_signal_count, 0) AS ready_signal_count,
+                latest_signal.id AS latest_signal_id,
+                latest_signal.issue_no AS latest_signal_issue_no,
+                latest_signal.bet_type AS latest_signal_bet_type,
+                latest_signal.bet_value AS latest_signal_bet_value,
+                latest_signal.status AS latest_signal_status,
+                latest_signal.published_at AS latest_signal_published_at,
+                latest_signal.created_at AS latest_signal_created_at
+            FROM signal_sources ss
+            LEFT JOIN (
+                SELECT
+                    source_id,
+                    COUNT(1) AS raw_item_count,
+                    SUM(CASE WHEN parse_status = 'pending' THEN 1 ELSE 0 END) AS pending_raw_count,
+                    SUM(CASE WHEN parse_status = 'failed' THEN 1 ELSE 0 END) AS failed_raw_count
+                FROM source_raw_items
+                GROUP BY source_id
+            ) raw_stats ON raw_stats.source_id = ss.id
+            LEFT JOIN source_raw_items latest_raw ON latest_raw.id = (
+                SELECT r.id
+                FROM source_raw_items r
+                WHERE r.source_id = ss.id
+                ORDER BY r.id DESC
+                LIMIT 1
+            )
+            LEFT JOIN (
+                SELECT
+                    source_id,
+                    COUNT(1) AS signal_count,
+                    SUM(CASE WHEN status = 'ready' THEN 1 ELSE 0 END) AS ready_signal_count
+                FROM normalized_signals
+                GROUP BY source_id
+            ) signal_stats ON signal_stats.source_id = ss.id
+            LEFT JOIN normalized_signals latest_signal ON latest_signal.id = (
+                SELECT n.id
+                FROM normalized_signals n
+                WHERE n.source_id = ss.id
+                ORDER BY n.id DESC
+                LIMIT 1
+            )
+            %s
+            ORDER BY ss.id ASC
+            """ % where_clause,
+            tuple(params),
+        )
+        items: list[Dict[str, Any]] = []
+        for row in rows:
+            item = self._serialize_source_row(row)
+            item["pipeline_summary"] = {
+                "raw_item_count": int(row.get("raw_item_count") or 0),
+                "pending_raw_count": int(row.get("pending_raw_count") or 0),
+                "failed_raw_count": int(row.get("failed_raw_count") or 0),
+                "signal_count": int(row.get("signal_count") or 0),
+                "ready_signal_count": int(row.get("ready_signal_count") or 0),
+            }
+            item["latest_raw_item"] = (
+                {
+                    "id": int(row["latest_raw_id"]),
+                    "source_id": int(row["id"]),
+                    "issue_no": str(row.get("latest_raw_issue_no") or ""),
+                    "published_at": row.get("latest_raw_published_at"),
+                    "parse_status": str(row.get("latest_raw_parse_status") or "pending"),
+                    "parse_error": row.get("latest_raw_parse_error"),
+                    "created_at": row.get("latest_raw_created_at"),
+                }
+                if row.get("latest_raw_id") is not None
+                else None
+            )
+            item["latest_signal"] = (
+                {
+                    "id": int(row["latest_signal_id"]),
+                    "source_id": int(row["id"]),
+                    "issue_no": str(row.get("latest_signal_issue_no") or ""),
+                    "bet_type": str(row.get("latest_signal_bet_type") or ""),
+                    "bet_value": str(row.get("latest_signal_bet_value") or ""),
+                    "status": str(row.get("latest_signal_status") or "ready"),
+                    "published_at": row.get("latest_signal_published_at"),
+                    "created_at": row.get("latest_signal_created_at"),
+                }
+                if row.get("latest_signal_id") is not None
+                else None
+            )
+            items.append(item)
+        return items
 
     def update_source_record(
         self,
@@ -6605,6 +6714,7 @@ class DatabaseRepository:
         query = """
             SELECT
                 j.*,
+                s.source_id AS source_id,
                 s.lottery_type,
                 s.issue_no,
                 s.bet_type,

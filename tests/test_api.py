@@ -2133,6 +2133,44 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(status, "200 OK")
         self.assertEqual([item["id"] for item in payload["items"]], [own_raw_item["id"]])
 
+    def test_list_source_summaries_returns_only_current_user_items_for_regular_user(self):
+        regular_user = self.repository.create_user_record(
+            username="summary-user",
+            email="summary@example.com",
+            password_hash=hash_password("summary-pass"),
+            role="user",
+            status="active",
+        )
+        own_source = self.repository.create_source_record(
+            owner_user_id=regular_user["id"],
+            source_type="telegram_channel",
+            name="summary-source",
+            visibility="private",
+            config={"chat_id": "@summary"},
+        )
+        self.repository.create_raw_item_record(source_id=1, issue_no="20260412001", raw_payload={"from": "owner"})
+        self.repository.create_raw_item_record(source_id=own_source["id"], issue_no="20260412002", raw_payload={"from": "regular"})
+        self.repository.create_signal_record(
+            source_id=own_source["id"],
+            lottery_type="pc28",
+            issue_no="20260412002",
+            bet_type="big_small",
+            bet_value="大",
+        )
+
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/sources/summary",
+                headers=self.session_headers_for(regular_user["id"]),
+            ),
+        )
+
+        self.assertEqual(status, "200 OK")
+        self.assertEqual([item["id"] for item in payload["items"]], [own_source["id"]])
+        self.assertEqual(payload["items"][0]["pipeline_summary"]["raw_item_count"], 1)
+        self.assertEqual(payload["items"][0]["pipeline_summary"]["signal_count"], 1)
+
     def test_create_source_returns_item(self):
         self.repository.create_user_record(username="u2", email="", role="user", status="active")
         status, _, payload = invoke(

@@ -672,6 +672,40 @@ def list_sources(repository: Any, owner_user_id: Optional[Any] = None) -> Dict[s
     return {"items": repository.list_sources(owner_user_id=normalized_owner_id)}
 
 
+def _source_summary_fallback(repository: Any, source: Dict[str, Any]) -> Dict[str, Any]:
+    source_id = int(source["id"])
+    latest_raw_items = repository.list_raw_items(source_id=source_id, limit=1)
+    latest_signals = repository.list_signals(source_id=source_id, limit=1)
+    return {
+        **source,
+        "pipeline_summary": {
+            "raw_item_count": int(repository.count_raw_items_by_source(source_id) or 0),
+            "pending_raw_count": 0,
+            "failed_raw_count": 0,
+            "signal_count": int(repository.count_signals_by_source(source_id) or 0),
+            "ready_signal_count": 0,
+        },
+        "latest_raw_item": latest_raw_items[0] if latest_raw_items else None,
+        "latest_signal": latest_signals[0] if latest_signals else None,
+    }
+
+
+def list_source_summaries(repository: Any, owner_user_id: Optional[Any] = None) -> Dict[str, Any]:
+    normalized_owner_id = (
+        _to_positive_int(owner_user_id, "owner_user_id", allow_none=True)
+        if owner_user_id is not None and str(owner_user_id).strip() != ""
+        else None
+    )
+    if hasattr(repository, "list_source_summaries"):
+        return {"items": repository.list_source_summaries(owner_user_id=normalized_owner_id)}
+    return {
+        "items": [
+            _source_summary_fallback(repository, source)
+            for source in repository.list_sources(owner_user_id=normalized_owner_id)
+        ]
+    }
+
+
 def create_source(repository: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     owner_user_id = _to_positive_int(payload.get("owner_user_id"), "owner_user_id", allow_none=True)
     _ensure_user_exists(repository, owner_user_id, field_name="owner_user_id")

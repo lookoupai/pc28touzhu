@@ -2499,6 +2499,12 @@
     }
 
     function sourceJobs(sourceId) {
+        const jobsWithSourceId = state.jobs.filter(function (item) {
+            return Number(item.source_id) === Number(sourceId);
+        });
+        if (jobsWithSourceId.length) {
+            return jobsWithSourceId;
+        }
         const signalIds = {};
         sourceSignals(sourceId).forEach(function (item) {
             signalIds[String(item.id)] = true;
@@ -2529,33 +2535,50 @@
 
     function sourcePipelineState(source) {
         const sourceId = source && source.id;
+        const summary = source && source.pipeline_summary && typeof source.pipeline_summary === "object"
+            ? source.pipeline_summary
+            : null;
         const subscription = sourceSubscription(sourceId);
         const activeSubscription = activeSourceSubscription(sourceId);
         const rawItems = sourceRawItems(sourceId);
         const signals = sourceSignals(sourceId);
         const jobs = sourceJobs(sourceId);
-        const latestRawItem = latestByTime(rawItems, ["created_at", "published_at"]);
-        const latestSignal = latestByTime(signals, ["published_at", "created_at"]);
+        const latestRawItem = source && source.latest_raw_item
+            ? source.latest_raw_item
+            : latestByTime(rawItems, ["created_at", "published_at"]);
+        const latestSignal = source && source.latest_signal
+            ? source.latest_signal
+            : latestByTime(signals, ["published_at", "created_at"]);
         const latestJob = latestByTime(jobs, ["updated_at", "created_at"]);
-        const pendingRawCount = rawItems.filter(function (item) {
-            return String(item.parse_status || "") === "pending";
-        }).length;
-        const failedRawCount = rawItems.filter(function (item) {
-            return String(item.parse_status || "") === "failed";
-        }).length;
-        const readySignalCount = signals.filter(function (item) {
-            return String(item.status || "") === "ready";
-        }).length;
+        const rawItemCount = summary ? Number(summary.raw_item_count || 0) : rawItems.length;
+        const signalCount = summary ? Number(summary.signal_count || 0) : signals.length;
+        const pendingRawCount = summary
+            ? Number(summary.pending_raw_count || 0)
+            : rawItems.filter(function (item) {
+                return String(item.parse_status || "") === "pending";
+            }).length;
+        const failedRawCount = summary
+            ? Number(summary.failed_raw_count || 0)
+            : rawItems.filter(function (item) {
+                return String(item.parse_status || "") === "failed";
+            }).length;
+        const readySignalCount = summary
+            ? Number(summary.ready_signal_count || 0)
+            : signals.filter(function (item) {
+                return String(item.status || "") === "ready";
+            }).length;
         const undispatchedSignalCount = signals.filter(function (item) {
             return !sourceSignalHasJobs(item.id);
         }).length;
         let headline = "还没有开始跑来源链路。";
-        if (activeSubscription && !rawItems.length) {
+        if (activeSubscription && !rawItemCount) {
             headline = "当前来源已经被跟单使用，但还没有抓取到任何原始内容。";
         } else if (pendingRawCount > 0) {
             headline = "最近已经抓到原始内容，但还没完成标准化。";
-        } else if (signals.length && undispatchedSignalCount > 0) {
+        } else if (!summary && signals.length && undispatchedSignalCount > 0) {
             headline = "已经生成标准信号，但还没有继续展开成执行任务。";
+        } else if (signalCount > 0 && !jobs.length) {
+            headline = "已经生成标准信号，最近执行任务可去记录页查看。";
         } else if (jobs.length) {
             headline = "这个来源最近已经跑到执行任务阶段。";
         } else if (!activeSubscription) {
@@ -2567,6 +2590,9 @@
             rawItems: rawItems,
             signals: signals,
             jobs: jobs,
+            rawItemCount: rawItemCount,
+            signalCount: signalCount,
+            jobCount: jobs.length,
             latestRawItem: latestRawItem,
             latestSignal: latestSignal,
             latestJob: latestJob,
@@ -4529,6 +4555,91 @@
         }).join("");
     }
 
+    function renderScopeStatus(scope) {
+        const headline = document.getElementById("autobetReadinessHeadline");
+        const detail = document.getElementById("autobetReadinessDetail");
+        if (!(headline instanceof HTMLElement) || !(detail instanceof HTMLElement)) {
+            return;
+        }
+        const normalized = String(scope || "workbench").trim() || "workbench";
+        if (normalized === "sources") {
+            const items = aiSources();
+            headline.textContent = items.length ? (String(items.length) + " 个来源") : "暂无来源";
+            detail.textContent = items.length ? "当前只加载来源链路相关数据。" : "先导入 AITradingSimulator 方案来源。";
+            return;
+        }
+        if (normalized === "accounts") {
+            const items = visibleAccounts();
+            const authorizedCount = items.filter(isAccountAuthorized).length;
+            headline.textContent = items.length ? (String(authorizedCount) + " 个已授权") : "暂无账号";
+            detail.textContent = items.length ? ("当前共 " + String(items.length) + " 个未归档托管账号。") : "先创建或导入托管账号。";
+            return;
+        }
+        if (normalized === "templates") {
+            const items = state.templates.filter(function (item) {
+                return !isArchivedItem(item);
+            });
+            headline.textContent = items.length ? (String(activeTemplateCount()) + " 个启用") : "暂无模板";
+            detail.textContent = items.length ? ("当前共 " + String(items.length) + " 个未归档模板。") : "先创建下注格式模板。";
+            return;
+        }
+        if (normalized === "targets") {
+            const items = visibleTargets();
+            headline.textContent = items.length ? (String(activeTargets().length) + " 个启用") : "暂无群组";
+            detail.textContent = items.length ? ("当前共 " + String(items.length) + " 个未归档投递群组。") : "先新增并测试投递群组。";
+            return;
+        }
+        if (normalized === "subscriptions") {
+            const items = visibleSubscriptions();
+            headline.textContent = items.length ? (String(activeSubscriptions().length) + " 个启用") : "暂无跟单";
+            detail.textContent = items.length ? ("当前共 " + String(items.length) + " 个未归档跟单策略。") : "先新建一条跟单策略。";
+            return;
+        }
+        renderOverview();
+    }
+
+    function renderLoadedScope(scope) {
+        const normalized = String(scope || "workbench").trim() || "workbench";
+        safeRender("scope-status", function () { renderScopeStatus(normalized); });
+        if (normalized === "sources") {
+            safeRender("source-cards", renderSourceCards);
+            safeRender("source-list", renderSourceList);
+            return;
+        }
+        if (normalized === "accounts") {
+            safeRender("account-cards", renderAccountCards);
+            return;
+        }
+        if (normalized === "templates") {
+            safeRender("template-cards", renderTemplateCards);
+            return;
+        }
+        if (normalized === "targets") {
+            safeRender("target-summary", renderTargetWorkspaceSummary);
+            safeRender("target-cards", renderTargetCards);
+            return;
+        }
+        if (normalized === "subscriptions") {
+            safeRender("subscription-cards", renderSubscriptionCards);
+            return;
+        }
+        safeRender("overview", renderOverview);
+        safeRender("execution-flow", renderExecutionFlowSection);
+        safeRender("workspace-cards", renderWorkspaceCards);
+        safeRender("onboarding", renderOnboardingGuide);
+        safeRender("source-cards", renderSourceCards);
+        safeRender("source-list", renderSourceList);
+        safeRender("account-cards", renderAccountCards);
+        safeRender("target-summary", renderTargetWorkspaceSummary);
+        safeRender("target-cards", renderTargetCards);
+        safeRender("template-cards", renderTemplateCards);
+        safeRender("subscription-cards", renderSubscriptionCards);
+        safeRender("recent-job-summary", renderRecentJobSummary);
+        safeRender("recent-jobs", renderRecentJobs);
+        safeRender("recent-alerts", renderRecentAlerts);
+        safeRender("bot-binding", renderBotBindingSection);
+    }
+
     function renderSelectOptions(selectEl, items, config) {
         if (!(selectEl instanceof HTMLSelectElement)) {
             return;
@@ -5122,10 +5233,10 @@
                 ],
                 summaryMarkup: renderConfigSummaryGrid([
                     renderConfigSummaryItem("跟单状态", activeSubscription ? "已接入跟单" : (subscription ? subscriptionRuntimeLabel(subscription) : "未接入跟单")),
-                    renderConfigSummaryItem("raw", String(pipeline.rawItems.length)),
+                    renderConfigSummaryItem("raw", String(pipeline.rawItemCount)),
                     renderConfigSummaryItem("待标准化", String(pipeline.pendingRawCount)),
-                    renderConfigSummaryItem("signals", String(pipeline.signals.length)),
-                    renderConfigSummaryItem("jobs", String(pipeline.jobs.length)),
+                    renderConfigSummaryItem("signals", String(pipeline.signalCount)),
+                    renderConfigSummaryItem("jobs", String(pipeline.jobCount)),
                 ]),
                 detailMarkup: [
                     renderConfigDetailRows([
@@ -5477,35 +5588,105 @@
         syncBatchResolveButtonState();
     }
 
+    function autobetScopeDataKeys(scope) {
+        const normalized = String(scope || "workbench").trim() || "workbench";
+        if (normalized === "sources") {
+            return ["sources", "subscriptions", "jobs"];
+        }
+        if (normalized === "accounts") {
+            return ["accounts", "targets"];
+        }
+        if (normalized === "templates") {
+            return ["templates", "targets"];
+        }
+        if (normalized === "targets") {
+            return ["accounts", "targets", "templates", "jobs"];
+        }
+        if (normalized === "subscriptions") {
+            return ["sources", "accounts", "targets", "templates", "subscriptions"];
+        }
+        return ["sources", "accounts", "targets", "templates", "subscriptions", "jobs", "alerts", "failures", "telegramBinding"];
+    }
+
+    function shouldLoadRecentPipelineData(scope) {
+        return false;
+    }
+
+    function resetLoadedDataState() {
+        state.sources = [];
+        state.rawItems = [];
+        state.signals = [];
+        state.accounts = [];
+        state.targets = [];
+        state.templates = [];
+        state.subscriptions = [];
+        state.jobs = [];
+        state.alerts = [];
+        state.failures = [];
+        state.telegramBinding = null;
+        state.subscriptionDailySummary = null;
+    }
+
     async function loadPageData() {
         pipelineDataLoadToken += 1;
+        resetLoadedDataState();
+        const scope = currentAutobetScope();
+        const dataKeys = autobetScopeDataKeys(scope);
         const subscriptionStatDateQuery = state.subscriptionStatDate
             ? ("?stat_date=" + encodeURIComponent(state.subscriptionStatDate))
             : "";
-        state.rawItems = [];
-        state.signals = [];
-        const results = await Promise.all([
-            request("/api/platform/sources"),
-            request("/api/platform/telegram-accounts"),
-            request("/api/platform/delivery-targets"),
-            request("/api/platform/message-templates"),
-            request("/api/platform/subscriptions" + subscriptionStatDateQuery),
-            request("/api/platform/execution-jobs?limit=100"),
-            request("/api/platform/alerts?limit=4"),
-            request("/api/platform/execution-failures?limit=20"),
-            request("/api/platform/telegram-binding"),
-        ]);
-        state.sources = results[0].items || [];
-        state.accounts = results[1].items || [];
-        state.targets = results[2].items || [];
-        state.templates = results[3].items || [];
-        state.subscriptions = results[4].items || [];
-        state.subscriptionStatDate = results[4].stat_date || state.subscriptionStatDate || todayDateString();
-        state.subscriptionDailySummary = results[4].daily_summary || null;
-        state.jobs = results[5].items || [];
-        state.alerts = results[6].items || [];
-        state.failures = results[7].items || [];
-        state.telegramBinding = results[8].item || null;
+        const loaders = {
+            sources: function () {
+                return request("/api/platform/sources/summary").then(function (payload) {
+                    state.sources = payload.items || [];
+                });
+            },
+            accounts: function () {
+                return request("/api/platform/telegram-accounts").then(function (payload) {
+                    state.accounts = payload.items || [];
+                });
+            },
+            targets: function () {
+                return request("/api/platform/delivery-targets").then(function (payload) {
+                    state.targets = payload.items || [];
+                });
+            },
+            templates: function () {
+                return request("/api/platform/message-templates").then(function (payload) {
+                    state.templates = payload.items || [];
+                });
+            },
+            subscriptions: function () {
+                return request("/api/platform/subscriptions" + subscriptionStatDateQuery).then(function (payload) {
+                    state.subscriptions = payload.items || [];
+                    state.subscriptionStatDate = payload.stat_date || state.subscriptionStatDate || todayDateString();
+                    state.subscriptionDailySummary = payload.daily_summary || null;
+                });
+            },
+            jobs: function () {
+                return request("/api/platform/execution-jobs?limit=100").then(function (payload) {
+                    state.jobs = payload.items || [];
+                });
+            },
+            alerts: function () {
+                return request("/api/platform/alerts?limit=4").then(function (payload) {
+                    state.alerts = payload.items || [];
+                });
+            },
+            failures: function () {
+                return request("/api/platform/execution-failures?limit=20").then(function (payload) {
+                    state.failures = payload.items || [];
+                });
+            },
+            telegramBinding: function () {
+                return request("/api/platform/telegram-binding").then(function (payload) {
+                    state.telegramBinding = payload.item || null;
+                });
+            },
+        };
+        await Promise.all(dataKeys.map(function (key) {
+            return loaders[key]();
+        }));
     }
 
     async function loadRecentPipelineData() {
@@ -5541,6 +5722,7 @@
 
     async function refreshAll(options) {
         const normalized = options || {};
+        const scope = currentAutobetScope();
         setButtonBusy(refreshAutobetBtn, true, "刷新中...");
         try {
             const user = normalized.skipCurrentUserReload ? state.currentUser : await loadCurrentUser();
@@ -5556,37 +5738,26 @@
             refreshAccountSelects();
             refreshTemplateSelects();
             refreshSubscriptionTargetSelects();
-            safeRender("overview", renderOverview);
-            safeRender("execution-flow", renderExecutionFlowSection);
-            safeRender("workspace-cards", renderWorkspaceCards);
-            safeRender("onboarding", renderOnboardingGuide);
-            safeRender("source-cards", renderSourceCards);
-            safeRender("source-list", renderSourceList);
-            safeRender("account-cards", renderAccountCards);
-            safeRender("target-summary", renderTargetWorkspaceSummary);
-            safeRender("target-cards", renderTargetCards);
-            safeRender("template-cards", renderTemplateCards);
-            safeRender("subscription-cards", renderSubscriptionCards);
-            safeRender("recent-job-summary", renderRecentJobSummary);
-            safeRender("recent-jobs", renderRecentJobs);
-            safeRender("recent-alerts", renderRecentAlerts);
+            renderLoadedScope(scope);
             if (!state.scopeFocused) {
                 focusScopeSectionOnLoad();
                 state.scopeFocused = true;
             }
             setStatus("自动投注配置已刷新。", false);
-            loadRecentPipelineData().then(function (updated) {
-                if (!updated) {
-                    return;
-                }
-                safeRender("overview", renderOverview);
-                safeRender("source-cards", renderSourceCards);
-                safeRender("source-list", renderSourceList);
-            }).catch(function (error) {
-                safeRender("source-cards", renderSourceCards);
-                safeRender("source-list", renderSourceList);
-                setStatus(error.message || "最近来源链路数据加载失败，基础配置已刷新。", true);
-            });
+            if (shouldLoadRecentPipelineData(scope)) {
+                loadRecentPipelineData().then(function (updated) {
+                    if (!updated) {
+                        return;
+                    }
+                    safeRender("scope-status", function () { renderScopeStatus(scope); });
+                    safeRender("source-cards", renderSourceCards);
+                    safeRender("source-list", renderSourceList);
+                }).catch(function (error) {
+                    safeRender("source-cards", renderSourceCards);
+                    safeRender("source-list", renderSourceList);
+                    setStatus(error.message || "最近来源链路数据加载失败，基础配置已刷新。", true);
+                });
+            }
         } catch (error) {
             resetCollections();
             setStatus(error.message || "自动投注配置页面加载失败", true);

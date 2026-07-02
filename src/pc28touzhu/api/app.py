@@ -58,6 +58,7 @@ from pc28touzhu.services.platform_service import (
     list_raw_items,
     list_signals,
     list_sources,
+    list_source_summaries,
     list_subscription_daily_stats,
     list_subscriptions,
     normalize_raw_item,
@@ -696,6 +697,13 @@ class PlatformApiApplication:
                 payload = create_source(self.repository, payload={**_read_json_body(environ), "owner_user_id": current_user["id"]})
                 return _json_response(start_response, 200, payload)
             return _json_response(start_response, 405, {"error": "method not allowed"})
+
+        if path == "/api/platform/sources/summary":
+            if method != "GET":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            owner_user_id = self._resolve_owner_query_scope(environ, current_user)
+            payload = list_source_summaries(self.repository, owner_user_id=owner_user_id)
+            return _json_response(start_response, 200, payload)
 
         source_prefix = "/api/platform/sources/"
         if path.startswith(source_prefix) and path.endswith("/delete"):

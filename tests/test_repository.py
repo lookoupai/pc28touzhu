@@ -629,6 +629,46 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(items[0]["source_type"], "telegram_channel")
         self.assertEqual(items[0]["config"]["chat_id"], "@demo")
 
+    def test_list_source_summaries_includes_pipeline_counts(self):
+        owner_user_id = self.repo.create_user("source-summary-owner")
+        source_id = self.repo.create_source_record(
+            owner_user_id=owner_user_id,
+            source_type="telegram_channel",
+            name="summary-source",
+        )["id"]
+        first_raw = self.repo.create_raw_item_record(
+            source_id=source_id,
+            issue_no="20260407001",
+            raw_payload={"signals": []},
+            parse_status="pending",
+        )
+        latest_raw = self.repo.create_raw_item_record(
+            source_id=source_id,
+            issue_no="20260407002",
+            raw_payload={"signals": []},
+            parse_status="failed",
+        )
+        self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407001",
+            bet_type="big_small",
+            bet_value="大",
+            source_raw_item_id=first_raw["id"],
+            status="ready",
+        )
+
+        items = self.repo.list_source_summaries(owner_user_id=owner_user_id)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["pipeline_summary"]["raw_item_count"], 2)
+        self.assertEqual(items[0]["pipeline_summary"]["pending_raw_count"], 1)
+        self.assertEqual(items[0]["pipeline_summary"]["failed_raw_count"], 1)
+        self.assertEqual(items[0]["pipeline_summary"]["signal_count"], 1)
+        self.assertEqual(items[0]["pipeline_summary"]["ready_signal_count"], 1)
+        self.assertEqual(items[0]["latest_raw_item"]["id"], latest_raw["id"])
+        self.assertEqual(items[0]["latest_signal"]["issue_no"], "20260407001")
+
     def test_create_and_list_subscriptions(self):
         user_id = self.repo.create_user("sub-user")
         source_id = self.repo.create_source_record(
