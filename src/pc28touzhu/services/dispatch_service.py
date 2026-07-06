@@ -250,6 +250,24 @@ def _route_subscription_is_stopped(
     return str(financial.get("threshold_status") or "") in {"profit_target_hit", "loss_limit_hit"}
 
 
+def _auto_trigger_rule_day_is_stopped(
+    repository: Any,
+    *,
+    rule_id: int,
+    user_id: int,
+    stat_date: str,
+) -> bool:
+    normalized_stat_date = str(stat_date or "").strip()
+    if not normalized_stat_date or not hasattr(repository, "get_auto_trigger_rule_daily_stat"):
+        return False
+    stat = repository.get_auto_trigger_rule_daily_stat(
+        rule_id=int(rule_id),
+        user_id=int(user_id),
+        stat_date=normalized_stat_date,
+    )
+    return str(stat.get("status") or "") == "stopped"
+
+
 def _route_play_filter_mode(route: Dict[str, Any], rule_action: Dict[str, Any] | None) -> str:
     mode = str(route.get("play_filter_mode") or "inherit").strip() or "inherit"
     if mode != "inherit":
@@ -311,6 +329,14 @@ def _dispatch_signal_for_auto_trigger_routes(
         route_stat_date = str(route.get("_auto_trigger_stat_date") or stat_date).strip()
         route_rule_run_id = route.get("_auto_trigger_rule_run_id") or auto_trigger_context.get("rule_run_id")
         delivery_target_id = int(route["delivery_target_id"])
+        if auto_trigger_context.get("rule_id") and _auto_trigger_rule_day_is_stopped(
+            repository,
+            rule_id=int(auto_trigger_context["rule_id"]),
+            user_id=user_id,
+            stat_date=route_stat_date or stat_date,
+        ):
+            skipped_count += 1
+            continue
         if str(route.get("target_status") or "active") != "active":
             skipped_count += 1
             continue
@@ -482,6 +508,17 @@ def _dispatch_signal_for_active_auto_trigger_routes(repository: Any, signal: Dic
     for candidate in candidates:
         route = candidate.get("route") if isinstance(candidate.get("route"), dict) else {}
         if not route:
+            skipped_count += 1
+            continue
+        if not candidate.get("rule_run_id"):
+            skipped_count += 1
+            continue
+        if _auto_trigger_rule_day_is_stopped(
+            repository,
+            rule_id=int(route["rule_id"]),
+            user_id=int(candidate["user_id"]),
+            stat_date=str(candidate.get("stat_date") or ""),
+        ):
             skipped_count += 1
             continue
         strategy = _route_continuation_strategy(

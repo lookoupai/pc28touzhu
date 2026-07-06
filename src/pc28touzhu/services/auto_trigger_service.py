@@ -1343,7 +1343,7 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
         source = subscription.get("source") if isinstance(subscription.get("source"), dict) else {}
         summary["checked_count"] += 1
         try:
-            if day_state.get("stopped") and not has_routes:
+            if day_state.get("stopped"):
                 events.append(
                     _record_event(
                         repository,

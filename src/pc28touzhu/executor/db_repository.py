@@ -4082,6 +4082,69 @@ class DatabaseRepository:
         ).fetchone()
         return self._serialize_auto_trigger_rule_daily_stat_row(dict(row)) if row else {}
 
+    def _apply_auto_trigger_rule_daily_risk(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        rule_id: int,
+        user_id: int,
+        stat_date: str,
+        rule_stat: Dict[str, Any],
+        updated_at: str,
+    ) -> Dict[str, Any]:
+        rule_row = conn.execute(
+            "SELECT daily_risk_control_json FROM auto_trigger_rules WHERE id = ? AND user_id = ? LIMIT 1",
+            (int(rule_id), int(user_id)),
+        ).fetchone()
+        daily_risk_control = _safe_json_loads(rule_row["daily_risk_control_json"]) if rule_row else {}
+        stop_reason = ""
+        if bool(daily_risk_control.get("enabled")) and str(rule_stat.get("status") or "") != "stopped":
+            profit_target = _round_money(daily_risk_control.get("profit_target"))
+            loss_limit = _round_money(daily_risk_control.get("loss_limit"))
+            current_rule_net = _round_money(rule_stat.get("net_profit"))
+            if profit_target > 0 and current_rule_net >= profit_target:
+                stop_reason = "profit_target_hit"
+            elif loss_limit > 0 and current_rule_net <= -loss_limit:
+                stop_reason = "loss_limit_hit"
+        if stop_reason:
+            conn.execute(
+                """
+                UPDATE auto_trigger_rule_daily_stats
+                SET status = 'stopped',
+                    stopped_reason = ?,
+                    stopped_at = COALESCE(stopped_at, ?),
+                    updated_at = ?
+                WHERE rule_id = ? AND user_id = ? AND stat_date = ?
+                """,
+                (stop_reason, updated_at, updated_at, int(rule_id), int(user_id), str(stat_date or "").strip()),
+            )
+            conn.execute(
+                """
+                UPDATE auto_trigger_rule_runs
+                SET status = 'stopped',
+                    stop_reason = CASE WHEN stop_reason = '' THEN ? ELSE stop_reason END,
+                    stopped_at = COALESCE(stopped_at, ?),
+                    updated_at = ?
+                WHERE rule_id = ? AND user_id = ? AND stat_date = ? AND status = 'active'
+                """,
+                (stop_reason, updated_at, updated_at, int(rule_id), int(user_id), str(stat_date or "").strip()),
+            )
+            return {
+                "scope": "rule",
+                "stopped": True,
+                "reason": stop_reason,
+                "rule_id": int(rule_id),
+                "stat_date": str(stat_date or "").strip(),
+                "cancel_pending_jobs": bool(daily_risk_control.get("cancel_pending_jobs", True)),
+            }
+        return {
+            "scope": "rule",
+            "stopped": False,
+            "rule_id": int(rule_id),
+            "stat_date": str(stat_date or "").strip(),
+            "net_profit": _round_money(rule_stat.get("net_profit")),
+        }
+
     def upsert_auto_trigger_route_daily_stat(
         self,
         conn: sqlite3.Connection,
@@ -5992,7 +6055,7 @@ class DatabaseRepository:
                 )
 
             stat_date = str(current_event.get("auto_trigger_stat_date") or "").strip() or _shanghai_date(now)
-            self.upsert_auto_trigger_rule_daily_stat(
+            rule_stat = self.upsert_auto_trigger_rule_daily_stat(
                 conn,
                 rule_id=rule_id,
                 user_id=int(user_id),
@@ -6001,6 +6064,14 @@ class DatabaseRepository:
                 loss_delta=loss_delta,
                 net_delta=net_delta,
                 result_type=normalized_result,
+                updated_at=now,
+            )
+            rule_daily_risk = self._apply_auto_trigger_rule_daily_risk(
+                conn,
+                rule_id=rule_id,
+                user_id=int(user_id),
+                stat_date=stat_date,
+                rule_stat=rule_stat,
                 updated_at=now,
             )
             route_stat = self.upsert_auto_trigger_route_daily_stat(
@@ -6187,7 +6258,7 @@ class DatabaseRepository:
                 ),
             )
 
-            auto_trigger_daily_risk = {
+            route_daily_risk = {
                 "scope": "route",
                 "stopped": bool(subscription_stop_reason or route_stop_reason),
                 "reason": subscription_stop_reason or route_stop_reason,
@@ -6199,8 +6270,20 @@ class DatabaseRepository:
                 "subscription_risk_mode": subscription_risk_mode,
                 "cancel_pending_jobs": bool(route_risk_control.get("cancel_pending_jobs", True)),
             }
+            auto_trigger_daily_risk = rule_daily_risk if rule_daily_risk.get("stopped") else route_daily_risk
 
-        if route_stop_reason and auto_trigger_daily_risk.get("cancel_pending_jobs", True):
+        if (
+            auto_trigger_daily_risk.get("scope") == "rule"
+            and auto_trigger_daily_risk.get("stopped")
+            and auto_trigger_daily_risk.get("cancel_pending_jobs", True)
+        ):
+            auto_trigger_daily_risk["cancel"] = self.cancel_pending_auto_trigger_rule_jobs(
+                rule_id=int(auto_trigger_daily_risk["rule_id"]),
+                user_id=int(user_id),
+                stat_date=str(auto_trigger_daily_risk["stat_date"]),
+                reason="规则日风控已停止：%s" % str(auto_trigger_daily_risk.get("reason") or ""),
+            )
+        elif route_stop_reason and auto_trigger_daily_risk.get("cancel_pending_jobs", True):
             auto_trigger_daily_risk["cancel"] = self.cancel_pending_auto_trigger_route_jobs(
                 route_id=route_id,
                 user_id=int(user_id),
@@ -6546,57 +6629,14 @@ class DatabaseRepository:
                     result_type=normalized_result,
                     updated_at=now,
                 )
-                rule_row = conn.execute(
-                    "SELECT daily_risk_control_json FROM auto_trigger_rules WHERE id = ? AND user_id = ? LIMIT 1",
-                    (int(auto_trigger_rule_id), int(user_id)),
-                ).fetchone()
-                daily_risk_control = _safe_json_loads(rule_row["daily_risk_control_json"]) if rule_row else {}
-                stop_reason = ""
-                if bool(daily_risk_control.get("enabled")) and str(rule_stat.get("status") or "") != "stopped":
-                    profit_target = _round_money(daily_risk_control.get("profit_target"))
-                    loss_limit = _round_money(daily_risk_control.get("loss_limit"))
-                    current_rule_net = _round_money(rule_stat.get("net_profit"))
-                    if profit_target > 0 and current_rule_net >= profit_target:
-                        stop_reason = "profit_target_hit"
-                    elif loss_limit > 0 and current_rule_net <= -loss_limit:
-                        stop_reason = "loss_limit_hit"
-                if stop_reason:
-                    conn.execute(
-                        """
-                        UPDATE auto_trigger_rule_daily_stats
-                        SET status = 'stopped',
-                            stopped_reason = ?,
-                            stopped_at = COALESCE(stopped_at, ?),
-                            updated_at = ?
-                        WHERE rule_id = ? AND user_id = ? AND stat_date = ?
-                        """,
-                        (stop_reason, now, now, int(auto_trigger_rule_id), int(user_id), auto_trigger_stat_date),
-                    )
-                    conn.execute(
-                        """
-                        UPDATE auto_trigger_rule_runs
-                        SET status = 'stopped',
-                            stop_reason = CASE WHEN stop_reason = '' THEN ? ELSE stop_reason END,
-                            stopped_at = COALESCE(stopped_at, ?),
-                            updated_at = ?
-                        WHERE rule_id = ? AND user_id = ? AND stat_date = ? AND status = 'active'
-                        """,
-                        (stop_reason, now, now, int(auto_trigger_rule_id), int(user_id), auto_trigger_stat_date),
-                    )
-                    auto_trigger_daily_risk = {
-                        "stopped": True,
-                        "reason": stop_reason,
-                        "rule_id": int(auto_trigger_rule_id),
-                        "stat_date": auto_trigger_stat_date,
-                        "cancel_pending_jobs": bool(daily_risk_control.get("cancel_pending_jobs", True)),
-                    }
-                else:
-                    auto_trigger_daily_risk = {
-                        "stopped": False,
-                        "rule_id": int(auto_trigger_rule_id),
-                        "stat_date": auto_trigger_stat_date,
-                        "net_profit": _round_money(rule_stat.get("net_profit")),
-                    }
+                auto_trigger_daily_risk = self._apply_auto_trigger_rule_daily_risk(
+                    conn,
+                    rule_id=int(auto_trigger_rule_id),
+                    user_id=int(user_id),
+                    stat_date=auto_trigger_stat_date,
+                    rule_stat=rule_stat,
+                    updated_at=now,
+                )
 
         if auto_trigger_daily_risk.get("stopped") and auto_trigger_daily_risk.get("cancel_pending_jobs", True):
             auto_trigger_daily_risk["cancel"] = self.cancel_pending_auto_trigger_rule_jobs(

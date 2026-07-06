@@ -422,6 +422,83 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(signal["bet_type"], "big_small")
         self.assertEqual(jobs[0]["planned_message_text"], "小10")
 
+    def test_route_rule_daily_risk_blocks_restart_and_active_continuation(self):
+        first_target = self.repo.list_delivery_targets(self.user_id)[0]
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "路由结算触发规则日风控",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "daily_risk_control": {"enabled": True, "profit_target": 9, "loss_limit": 0},
+                "routes": [
+                    {
+                        "delivery_target_id": first_target["id"],
+                        "name": "测试群路由",
+                        "route_risk_mode": "disabled",
+                        "subscription_risk_mode": "disabled",
+                    },
+                ],
+            },
+        )["item"]
+        route_id = rule["routes"][0]["id"]
+
+        first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+        self.assertEqual(first["summary"]["triggered_count"], 1)
+        job = self.repo.list_execution_jobs(user_id=self.user_id)[0]
+        event = self.repo.get_progression_event(job["progression_event_id"])
+
+        settled = self.repo.settle_progression_event(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            result_type="hit",
+            progression_event_id=event["id"],
+        )
+
+        self.assertTrue(settled["auto_trigger_daily_risk"]["stopped"])
+        self.assertEqual(settled["auto_trigger_daily_risk"]["scope"], "rule")
+        stat = self.repo.get_auto_trigger_rule_daily_stat(
+            rule_id=rule["id"],
+            user_id=self.user_id,
+            stat_date=event["auto_trigger_stat_date"],
+        )
+        self.assertEqual(stat["status"], "stopped")
+        self.assertEqual(stat["stopped_reason"], "profit_target_hit")
+
+        second = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(issue_no="20260418002"),
+        )
+        self.assertEqual(second["summary"]["triggered_count"], 0)
+        self.assertEqual(second["summary"]["skipped_count"], 1)
+        self.assertEqual(second["rules"][0]["events"][0]["reason"], "daily_risk_stopped")
+
+        next_signal = self.repo.create_signal_record(
+            source_id=self.source["id"],
+            lottery_type="pc28",
+            issue_no="20260418003",
+            bet_type="big_small",
+            bet_value="小",
+            normalized_payload={"message_text": "小10"},
+            published_at="2026-04-18T09:35:00Z",
+        )
+        dispatch_result = dispatch_signal(self.repo, next_signal["id"])
+        self.assertEqual(dispatch_result["created_count"], 0)
+        self.assertEqual(dispatch_result["jobs"], [])
+        next_event = self.repo.get_progression_event_by_signal(
+            subscription_id=self.subscription["id"],
+            signal_id=next_signal["id"],
+            auto_trigger_route_id=route_id,
+        )
+        self.assertIsNone(next_event)
+
     def test_daily_profit_target_stops_rule_and_blocks_following_dispatch(self):
         self.repo.update_subscription_status(
             subscription_id=self.subscription["id"],
@@ -1511,6 +1588,57 @@ class AutoTriggerServiceTests(unittest.TestCase):
         skipped_routes = skipped_events[0]["snapshot"]["play_filter_result"]["skipped_routes"]
         self.assertEqual(skipped_routes[0]["reason"], "route_has_open_run")
 
+    def test_route_dispatch_ignores_legacy_global_subscription_threshold_state(self):
+        with self.repo._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO subscription_financial_state(
+                    subscription_id, user_id, realized_profit, realized_loss, net_profit,
+                    threshold_status, stopped_reason, baseline_reset_at, baseline_reset_note,
+                    last_settled_event_id, last_settled_at, updated_at
+                ) VALUES (?, ?, 0, 10, -10, 'loss_limit_hit', '旧订阅止损状态', NULL, '', NULL, ?, ?)
+                ON CONFLICT(subscription_id) DO UPDATE SET
+                    threshold_status = excluded.threshold_status,
+                    stopped_reason = excluded.stopped_reason,
+                    updated_at = excluded.updated_at
+                """,
+                (self.subscription["id"], self.user_id, "2026-04-18T09:20:00Z", "2026-04-18T09:20:00Z"),
+            )
+        first_target = self.repo.list_delivery_targets(self.user_id)[0]
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "路由初次触发不受全局订阅旧风控影响",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "routes": [
+                    {
+                        "delivery_target_id": first_target["id"],
+                        "name": "测试群路由",
+                        "route_risk_mode": "override",
+                        "route_risk_control": {"enabled": True, "profit_target": 20, "loss_limit": 20},
+                        "subscription_risk_mode": "override",
+                        "subscription_risk_control": {"enabled": True, "profit_target": 20, "loss_limit": 20},
+                    },
+                ],
+            },
+        )
+
+        result = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        event = result["rules"][0]["events"][0]
+        self.assertEqual(event["snapshot"]["dispatch_result"]["created_count"], 1)
+        jobs = self.repo.list_execution_jobs(user_id=self.user_id)
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(self.repo.get_subscription_financial_state(self.subscription["id"])["threshold_status"], "loss_limit_hit")
+
     def test_active_route_continues_when_global_subscription_threshold_is_stopped(self):
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
         rule = create_auto_trigger_rule(
@@ -1688,12 +1816,13 @@ class AutoTriggerServiceTests(unittest.TestCase):
                     {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
                 ],
                 "action": {"dispatch_latest_signal": True},
-                "daily_risk_control": {"enabled": True, "profit_target": 9, "loss_limit": 0},
+                "daily_risk_control": {"enabled": True, "profit_target": 100, "loss_limit": 0},
                 "routes": [
                     {
                         "delivery_target_id": first_target["id"],
                         "name": "A 路由",
-                        "route_risk_mode": "inherit_rule",
+                        "route_risk_mode": "override",
+                        "route_risk_control": {"enabled": True, "profit_target": 9, "loss_limit": 0},
                         "subscription_risk_mode": "disabled",
                     },
                     {
