@@ -2332,6 +2332,107 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(stat["settled_event_count"], 1)
         self.assertEqual(stat["loss_amount"], 10.0)
 
+    def test_stopped_started_route_day_closes_stale_active_run_and_uses_today(self):
+        first_target = self.repo.list_delivery_targets(self.user_id)[0]
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "旧路由轮次残留",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "daily_risk_control": {
+                    "enabled": True,
+                    "profit_target": 20,
+                    "loss_limit": 20,
+                    "timezone": "Asia/Shanghai",
+                },
+                "routes": [
+                    {
+                        "delivery_target_id": first_target["id"],
+                        "name": "测试群路由",
+                        "route_risk_mode": "inherit_rule",
+                        "subscription_risk_mode": "inherit_subscription",
+                    },
+                ],
+            },
+        )["item"]
+        route_id = rule["routes"][0]["id"]
+        today = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+
+        with self.repo._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO auto_trigger_route_subscription_runtime_runs(
+                    route_id, rule_id, subscription_id, user_id, status, play_filter_json,
+                    started_signal_id, started_issue_no, started_at, start_reason,
+                    ended_at, end_reason, last_issue_no, last_result_type,
+                    realized_profit, realized_loss, net_profit,
+                    settled_event_count, hit_count, miss_count, refund_count,
+                    baseline_reset_at, baseline_reset_note, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'active', '{}', ?, ?, ?, 'auto_started', NULL, '', ?, 'hit', ?, 0, ?, 1, 1, 0, 0, NULL, '', ?, ?)
+                """,
+                (
+                    route_id,
+                    rule["id"],
+                    self.subscription["id"],
+                    self.user_id,
+                    self.signal["id"],
+                    "20260629001",
+                    "2026-06-29T03:50:03Z",
+                    "20260629001",
+                    21.99,
+                    21.99,
+                    "2026-06-29T03:50:03Z",
+                    "2026-06-29T03:50:03Z",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO auto_trigger_route_daily_stats(
+                    route_id, rule_id, user_id, stat_date,
+                    profit_amount, loss_amount, net_profit,
+                    settled_event_count, hit_count, miss_count, refund_count,
+                    status, stopped_reason, stopped_at, created_at, updated_at
+                ) VALUES (?, ?, ?, '2026-06-29', 21.99, 0, 21.99, 1, 1, 0, 0, 'stopped', 'profit_target_hit', ?, ?, ?)
+                """,
+                (
+                    route_id,
+                    rule["id"],
+                    self.user_id,
+                    "2026-06-29T04:10:00Z",
+                    "2026-06-29T04:10:00Z",
+                    "2026-06-29T04:10:00Z",
+                ),
+            )
+
+        result = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(issue_no="20260418000"),
+        )
+
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        jobs = self.repo.list_execution_jobs(user_id=self.user_id, limit=5)
+        self.assertEqual(len(jobs), 1)
+        event = self.repo.get_progression_event(jobs[0]["progression_event_id"])
+        self.assertEqual(event["auto_trigger_route_id"], route_id)
+        self.assertEqual(event["auto_trigger_stat_date"], today)
+
+        runs = self.repo.list_auto_trigger_route_subscription_runtime_runs(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            limit=5,
+        )
+        closed_stale_run = next(run for run in runs if run["started_at"] == "2026-06-29T03:50:03Z")
+        self.assertEqual(closed_stale_run["status"], "closed")
+        self.assertEqual(closed_stale_run["end_reason"], "profit_target_hit")
+
     def test_route_runtime_history_lists_route_scoped_runs(self):
         # 方案挂了路由时，轮次历史应读取路由级 runtime_run，并带上 route_name / scope=route。
         first_target = self.repo.list_delivery_targets(self.user_id)[0]

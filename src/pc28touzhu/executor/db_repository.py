@@ -5251,6 +5251,45 @@ class DatabaseRepository:
         if not active_run_row:
             return
 
+        started_stat_date = ""
+        try:
+            started_stat_date = _shanghai_date(active_run_row["started_at"])
+        except (TypeError, ValueError):
+            started_stat_date = ""
+        if started_stat_date:
+            stopped_route_stat = conn.execute(
+                """
+                SELECT stopped_reason, stopped_at, updated_at
+                FROM auto_trigger_route_daily_stats
+                WHERE route_id = ?
+                  AND user_id = ?
+                  AND stat_date = ?
+                  AND status = 'stopped'
+                LIMIT 1
+                """,
+                (int(route_id), int(user_id), started_stat_date),
+            ).fetchone()
+            if stopped_route_stat:
+                stop_reason = str(stopped_route_stat["stopped_reason"] or "route_daily_risk_stopped")
+                ended_at = stopped_route_stat["stopped_at"] or stopped_route_stat["updated_at"] or _utc_now_iso()
+                conn.execute(
+                    """
+                    UPDATE auto_trigger_route_subscription_runtime_runs
+                    SET status = 'closed',
+                        ended_at = COALESCE(ended_at, ?),
+                        end_reason = CASE WHEN end_reason = '' THEN ? ELSE end_reason END,
+                        updated_at = ?
+                    WHERE id = ? AND status = 'active'
+                    """,
+                    (
+                        ended_at,
+                        stop_reason,
+                        _utc_now_iso(),
+                        int(active_run_row["id"]),
+                    ),
+                )
+                return
+
         financial_row = conn.execute(
             """
             SELECT *
