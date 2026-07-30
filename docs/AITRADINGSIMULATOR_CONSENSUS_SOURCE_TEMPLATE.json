@@ -1,0 +1,13 @@
+{
+  "source_type": "ai_trading_simulator_export",
+  "name": "PC28方案单双共识",
+  "config": {
+    "fetch": {
+      "url": "https://your-ai-platform.example.com/api/export/consensus/pc28/signals?predictor_ids=5,7,8&field=odd_even&min_agreement=2&window=30",
+      "headers": {
+        "Accept": "application/json"
+      },
+      "timeout": 10
+    }
+  }
+}

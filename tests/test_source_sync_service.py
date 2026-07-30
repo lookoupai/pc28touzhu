@@ -76,6 +76,18 @@ class SourceSyncServiceTests(unittest.TestCase):
         self.assertEqual(second["summary"]["created_job_count"], 0)
         self.assertEqual(len(self.repo.list_execution_jobs(user_id=self.user_id)), 1)
 
+    def test_run_source_sync_cycle_skips_upstream_no_signal_without_failure(self):
+        result = run_source_sync_cycle(
+            self.repo,
+            fetcher=lambda *args, **kwargs: {"items": []},
+        )
+
+        self.assertEqual(result["summary"]["failed_count"], 0)
+        self.assertEqual(result["summary"]["skipped_no_signal_count"], 1)
+        self.assertEqual(result["sources"][0]["status"], "skipped")
+        self.assertEqual(result["sources"][0]["skipped_reason"], "upstream_no_signal")
+        self.assertEqual(len(self.repo.list_raw_items(source_id=self.source["id"])), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

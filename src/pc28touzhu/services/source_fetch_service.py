@@ -192,6 +192,17 @@ def fetch_source_to_raw_item(repository: Any, source_id: int, fetcher=None) -> D
     timeout = int(fetch_config.get("timeout") or 10)
     payload = (fetcher or _default_fetch_json)(url, headers=headers, timeout=timeout)
 
+    # 共识类来源没有满足门槛的期号时用空 items 表示“本期无信号”，这是正常状态。
+    # 不创建 raw_item，避免后续标准化把空结果误报成来源故障。
+    if source_type == "ai_trading_simulator_export" and isinstance(payload, dict) and payload.get("items") == []:
+        return {
+            "source": source,
+            "raw_item": None,
+            "created": False,
+            "skipped": True,
+            "skipped_reason": "upstream_no_signal",
+        }
+
     raw_item, created = (
         _create_ai_trading_simulator_raw_item(repository, source_id, fetch_config, payload)
         if source_type == "ai_trading_simulator_export"

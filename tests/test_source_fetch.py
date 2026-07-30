@@ -143,6 +143,25 @@ class SourceFetchServiceTests(unittest.TestCase):
         self.assertEqual(signal["normalized_payload"]["source_hints"]["stake"]["multiplier"], 2.0)
         self.assertEqual(signal["normalized_payload"]["source_hints"]["settlement"]["settlement_rule_id"], "pc28_high_regular")
 
+    def test_fetch_ai_trading_simulator_export_empty_items_is_no_signal(self):
+        source = self.repo.create_source_record(
+            owner_user_id=self.user_id,
+            source_type="ai_trading_simulator_export",
+            name="ai-consensus-no-signal",
+            config={"fetch": {"url": "https://example.com/export"}},
+        )
+
+        result = fetch_source_to_raw_item(
+            self.repo,
+            source_id=source["id"],
+            fetcher=lambda *args, **kwargs: {"items": []},
+        )
+
+        self.assertTrue(result["skipped"])
+        self.assertEqual(result["skipped_reason"], "upstream_no_signal")
+        self.assertIsNone(result["raw_item"])
+        self.assertEqual(self.repo.list_raw_items(source_id=source["id"]), [])
+
     def test_fetch_ai_trading_simulator_export_reuses_existing_raw_item(self):
         source = self.repo.create_source_record(
             owner_user_id=self.user_id,

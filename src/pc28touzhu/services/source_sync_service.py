@@ -33,6 +33,7 @@ def run_source_sync_cycle(repository: Any, *, fetcher=None) -> Dict[str, Any]:
         "source_count": len(source_ids),
         "processed_count": 0,
         "skipped_duplicate_count": 0,
+        "skipped_no_signal_count": 0,
         "fetched_count": 0,
         "normalized_signal_count": 0,
         "dispatch_candidate_count": 0,
@@ -61,6 +62,12 @@ def run_source_sync_cycle(repository: Any, *, fetcher=None) -> Dict[str, Any]:
         }
         try:
             fetch_result = fetch_source_to_raw_item(repository, source_id=source_id, fetcher=fetcher)
+            if fetch_result.get("skipped"):
+                result["status"] = "skipped"
+                result["skipped_reason"] = str(fetch_result.get("skipped_reason") or "upstream_no_signal")
+                summary["skipped_no_signal_count"] += 1
+                source_results.append(result)
+                continue
             raw_item = fetch_result.get("raw_item") or {}
             result["raw_item_id"] = raw_item.get("id")
             result["created"] = bool(fetch_result.get("created"))
