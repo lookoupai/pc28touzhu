@@ -2114,12 +2114,27 @@ class DatabaseRepositoryTests(unittest.TestCase):
             strategy={"mode": "follow"},
             status="archived",
         )
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO subscription_runtime_runs(
+                    subscription_id, user_id, status, started_at, start_reason
+                ) VALUES (?, ?, 'closed', '2026-04-07T15:00:00Z', 'test')
+                """,
+                (created["id"], user_id),
+            )
         deleted = self.repo.delete_subscription_record(
             subscription_id=created["id"],
             user_id=user_id,
         )
         self.assertTrue(deleted)
         self.assertIsNone(self.repo.get_subscription(created["id"]))
+        with sqlite3.connect(self.db_path) as conn:
+            runtime_count = conn.execute(
+                "SELECT COUNT(*) FROM subscription_runtime_runs WHERE subscription_id = ?",
+                (created["id"],),
+            ).fetchone()[0]
+        self.assertEqual(runtime_count, 0)
 
     def test_create_and_list_delivery_targets(self):
         user_id = self.repo.create_user("target-user")

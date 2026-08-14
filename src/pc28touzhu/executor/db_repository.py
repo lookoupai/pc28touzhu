@@ -4787,25 +4787,37 @@ class DatabaseRepository:
 
     def delete_subscription_record(self, *, subscription_id: int, user_id: int) -> bool:
         with self._connect() as conn:
+            params = (int(subscription_id), int(user_id))
             conn.execute(
-                "DELETE FROM subscription_daily_stats WHERE subscription_id = ? AND user_id = ?",
-                (int(subscription_id), int(user_id)),
+                """
+                UPDATE execution_jobs
+                SET subscription_id = NULL, progression_event_id = NULL
+                WHERE subscription_id = ? AND user_id = ?
+                """,
+                params,
             )
+            for table_name in (
+                "auto_trigger_route_subscription_financial_state",
+                "auto_trigger_route_progression_state",
+                "auto_trigger_route_subscription_runtime_runs",
+                "auto_trigger_events",
+                "auto_trigger_rule_runs",
+                "subscription_daily_stats",
+                "subscription_financial_state",
+                "subscription_progression_state",
+                "subscription_runtime_runs",
+            ):
+                conn.execute(
+                    f"DELETE FROM {table_name} WHERE subscription_id = ? AND user_id = ?",
+                    params,
+                )
             conn.execute(
                 "DELETE FROM subscription_progression_events WHERE subscription_id = ? AND user_id = ?",
-                (int(subscription_id), int(user_id)),
-            )
-            conn.execute(
-                "DELETE FROM subscription_progression_state WHERE subscription_id = ? AND user_id = ?",
-                (int(subscription_id), int(user_id)),
-            )
-            conn.execute(
-                "DELETE FROM subscription_financial_state WHERE subscription_id = ? AND user_id = ?",
-                (int(subscription_id), int(user_id)),
+                params,
             )
             cursor = conn.execute(
                 "DELETE FROM user_subscriptions WHERE id = ? AND user_id = ?",
-                (int(subscription_id), int(user_id)),
+                params,
             )
             return cursor.rowcount > 0
 

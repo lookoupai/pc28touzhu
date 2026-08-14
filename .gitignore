@@ -33,6 +33,9 @@ env/
 *.log
 *.sqlite3
 *.db
+*.db-*
+*.db.before-*
+*.db.after-*
 *.session
 *.session-journal
 data/
