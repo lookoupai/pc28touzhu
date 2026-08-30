@@ -1,9 +1,28 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Dict
 
-from pc28touzhu.runtime_environment import build_telethon_missing_message, ensure_telethon_session_writable
+from pc28touzhu.runtime_environment import (
+    build_telethon_missing_message,
+    ensure_telethon_session_writable,
+    reset_telethon_session_file,
+)
+
+
+def _extract_flood_wait_seconds(exc: Exception) -> int:
+    seconds = getattr(exc, "seconds", None)
+    try:
+        value = int(seconds)
+        if value > 0:
+            return value
+    except (TypeError, ValueError):
+        pass
+    match = re.search(r"wait of\s+(\d+)\s+seconds", str(exc or ""), re.I)
+    if match:
+        return int(match.group(1))
+    return 0
 
 
 class TelethonAccountGateway:
@@ -52,14 +71,33 @@ class TelethonAccountGateway:
             client.disconnect()
 
     def send_login_code(self, session_path: str, phone: str) -> Dict[str, Any]:
-        client = self._connect_client(session_path)
-        try:
-            sent = client.send_code_request(str(phone or "").strip())
-            return {
-                "phone_code_hash": str(getattr(sent, "phone_code_hash", "") or ""),
-            }
-        finally:
-            client.disconnect()
+        last_error: Exception | None = None
+        restart_errors = {
+            "AuthRestartError",
+            "AuthKeyUnregisteredError",
+            "AuthKeyDuplicatedError",
+            "SessionRevokedError",
+            "SessionExpiredError",
+        }
+        for attempt in range(2):
+            reset_telethon_session_file(session_path)
+            client = self._connect_client(session_path)
+            try:
+                sent = client.send_code_request(str(phone or "").strip())
+                return {
+                    "phone_code_hash": str(getattr(sent, "phone_code_hash", "") or ""),
+                    "session_reset": True,
+                }
+            except Exception as exc:
+                last_error = exc
+                if attempt == 0 and exc.__class__.__name__ in restart_errors:
+                    continue
+                raise
+            finally:
+                client.disconnect()
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("发送验证码失败")
 
     def verify_code(self, session_path: str, *, phone: str, code: str, phone_code_hash: str) -> Dict[str, Any]:
         client = self._connect_client(session_path)
@@ -74,6 +112,10 @@ class TelethonAccountGateway:
                 exc_name = exc.__class__.__name__
                 if exc_name == "SessionPasswordNeededError":
                     return {"authorized": False, "password_required": True}
+                if exc_name in {"PhoneCodeExpiredError", "PhoneCodeInvalidError"}:
+                    return {"authorized": False, "code_invalid": exc_name == "PhoneCodeInvalidError", "login_expired": exc_name == "PhoneCodeExpiredError"}
+                if exc_name in {"AuthRestartError", "SrpIdInvalidError", "AuthKeyUnregisteredError"}:
+                    return {"authorized": False, "login_expired": True}
                 raise
 
             return self._build_authorization_result(client)
@@ -83,7 +125,23 @@ class TelethonAccountGateway:
     def verify_password(self, session_path: str, *, password: str) -> Dict[str, Any]:
         client = self._connect_client(session_path)
         try:
-            client.sign_in(password=str(password or ""))
+            try:
+                client.sign_in(password=str(password or ""))
+            except Exception as exc:
+                exc_name = exc.__class__.__name__
+                if exc_name == "PasswordHashInvalidError":
+                    return {"authorized": False, "password_invalid": True}
+                if exc_name == "PasswordEmptyError":
+                    return {"authorized": False, "password_empty": True}
+                if exc_name == "FloodWaitError" or "wait of" in str(exc).lower():
+                    return {
+                        "authorized": False,
+                        "password_flood": True,
+                        "wait_seconds": _extract_flood_wait_seconds(exc),
+                    }
+                if exc_name in {"SrpIdInvalidError", "AuthRestartError"}:
+                    return {"authorized": False, "login_expired": True}
+                raise
             return self._build_authorization_result(client)
         finally:
             client.disconnect()

@@ -18,6 +18,7 @@
             authorized: "已授权",
             code_sent: "待验证码",
             password_required: "待二次密码",
+            login_expired: "登录已过期",
             pending_import: "待导入",
             new: "待处理",
             pending: "待执行",

@@ -2570,6 +2570,37 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(status, "200 OK")
         self.assertEqual(payload["item"]["auth_state"], "code_sent")
 
+    def test_verify_telegram_account_password_maps_invalid_password_to_400(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="二次密码账号",
+            phone="+12019362923",
+            session_path="/data/u2/login",
+            status="inactive",
+            meta={"auth_mode": "phone_login", "auth_state": "password_required"},
+        )
+        with patch("pc28touzhu.api.app.verify_telegram_account_login_password") as mocked:
+            from pc28touzhu.services.platform_service import ActionableValueError
+
+            mocked.side_effect = ActionableValueError(
+                "二次密码不正确。",
+                reason_code="password_invalid",
+                why="Telegram 拒绝了当前云密码，通常是密码输错，而不是系统故障。",
+                next_step="确认这是 Telegram 设置里的两步验证密码（不是登录密码或验证码），再重试。",
+            )
+            status, _, payload = invoke(
+                self.app,
+                build_testing_environ(
+                    "/api/platform/telegram-accounts/%s/auth/verify-password" % account["id"],
+                    method="POST",
+                    body={"password": "wrong"},
+                    headers=self.session_headers,
+                ),
+            )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertEqual(payload["reason_code"], "password_invalid")
+        self.assertIn("二次密码不正确", payload["error"])
+
     def test_delete_telegram_account_endpoint_requires_archived_and_no_dependencies(self):
         account = self.repository.create_telegram_account_record(
             user_id=1,

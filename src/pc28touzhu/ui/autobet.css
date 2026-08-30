@@ -286,6 +286,35 @@
     line-height: 1.7;
 }
 
+.account-verify-feedback {
+    padding: 10px 12px;
+    border-radius: var(--radius-md, 10px);
+    background: rgba(15, 118, 110, 0.08);
+    color: var(--ink, #14252d);
+}
+
+.account-verify-feedback.is-error {
+    background: rgba(185, 28, 28, 0.08);
+    color: #b91c1c;
+}
+
+.account-verify-fields {
+    align-items: start;
+}
+
+.account-verify-fields label {
+    align-content: start;
+}
+
+.account-verify-fields .text-input {
+    height: 46px;
+    min-height: 46px;
+}
+
+.account-password-hint {
+    margin: 0;
+}
+
 .onboarding-panel {
     display: grid;
     gap: 18px;

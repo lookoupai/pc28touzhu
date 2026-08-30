@@ -423,23 +423,25 @@
                         </form>
                         <div id="accountPostActionHint" class="account-post-action-hint">
                             <strong id="accountPostActionTitle">提交后继续完成账号授权</strong>
-                            <p id="accountPostActionBody">发送验证码后，下方会出现“继续完成账号授权”，继续输入验证码或二次密码即可。</p>
+                            <p id="accountPostActionBody">发送验证码后，下方会出现验证码输入框。登录过期时请先重新发码，不要继续填二次密码。</p>
                         </div>
                         <form id="accountVerifyForm" class="autobet-form account-verify-form" hidden>
                             <input name="telegram_account_id" type="hidden">
                             <div class="account-verify-card">
                                 <strong>继续完成账号授权</strong>
                                 <p id="accountVerifySummary">验证码已发送，请继续填写。</p>
-                                <div class="autobet-form-grid">
+                                <p id="accountVerifyFeedback" class="account-verify-feedback" hidden></p>
+                                <div class="autobet-form-grid account-verify-fields">
                                     <label class="account-code-field">
                                         <span>验证码</span>
                                         <input class="text-input" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="请输入收到的验证码">
                                     </label>
-                                    <label class="account-password-field" hidden>
+                                    <label class="account-password-field">
                                         <span>二次密码</span>
-                                        <input class="text-input" name="password" type="password" autocomplete="current-password" placeholder="请输入 Telegram 二次密码">
+                                        <input class="text-input" name="password" type="password" autocomplete="off" placeholder="请输入 Telegram 两步验证密码（云密码）">
                                     </label>
                                 </div>
+                                <p id="accountPasswordHint" class="field-hint account-password-hint" hidden>二次密码是 Telegram 设置里的两步验证密码，不是手机号登录密码，也不是刚才的验证码。</p>
                                 <div class="form-actions">
                                     <button id="verifyAccountCodeBtn" class="primary-btn" type="submit">提交验证码</button>
                                     <button id="verifyAccountPasswordBtn" class="primary-btn" type="submit" hidden>提交二次密码</button>

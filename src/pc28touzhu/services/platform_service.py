@@ -350,6 +350,25 @@ def _raise_actionable(error: str, *, reason_code: str, why: str, next_step: str)
     raise ActionableValueError(error, reason_code=reason_code, why=why, next_step=next_step)
 
 
+def _format_wait_duration(seconds: Any) -> str:
+    try:
+        value = max(0, int(seconds or 0))
+    except (TypeError, ValueError):
+        value = 0
+    if value <= 0:
+        return "一段时间"
+    hours, remainder = divmod(value, 3600)
+    minutes, remain_seconds = divmod(remainder, 60)
+    parts = []
+    if hours:
+        parts.append("%s 小时" % hours)
+    if minutes:
+        parts.append("%s 分钟" % minutes)
+    if remain_seconds and not hours:
+        parts.append("%s 秒" % remain_seconds)
+    return " ".join(parts) if parts else "一段时间"
+
+
 def _target_test_feedback_from_exception(error: Exception) -> Dict[str, str]:
     error_name = type(error).__name__
     message = str(error or "").strip()
@@ -930,7 +949,41 @@ def begin_telegram_account_login(repository: Any, *, telegram_account_id: Any, u
     if not phone:
         raise ValueError("手机号不能为空")
 
-    result = gateway.send_login_code(str(current.get("session_path") or ""), phone)
+    try:
+        result = gateway.send_login_code(str(current.get("session_path") or ""), phone)
+    except Exception as exc:
+        exc_name = type(exc).__name__
+        message = str(exc or "").strip()
+        next_meta = _clear_pending_login_meta(_normalize_account_meta(current.get("meta")))
+        next_meta.update(
+            {
+                "auth_mode": "phone_login",
+                "auth_state": "login_expired",
+                "last_auth_error": "登录会话已失效，需要重新发送验证码",
+            }
+        )
+        _store_telegram_account(repository, current=current, phone=phone, meta=next_meta)
+        if exc_name == "AuthRestartError" or "Restart the authorization process" in message:
+            _raise_actionable(
+                "Telegram 要求重新开始登录。",
+                reason_code="login_expired",
+                why="当前登录会话已失效，系统已清空旧 session，但这次发码仍被 Telegram 拒绝。继续提交二次密码不会成功。",
+                next_step="请再点一次“重新发送验证码”。若连续失败，等几分钟或改用导入 Session。",
+            )
+        if "Flood" in exc_name or "wait of" in message.lower():
+            _raise_actionable(
+                "验证码发送过于频繁，请稍后再试。",
+                reason_code="send_code_flood",
+                why="Telegram 限制了该账号短时间内重复发送验证码。",
+                next_step="等待几分钟后再重新发送验证码，不要继续提交二次密码。",
+            )
+        _raise_actionable(
+            "发送验证码失败：%s" % (message or exc_name or "未知错误"),
+            reason_code="send_code_failed",
+            why="Telegram 拒绝了这次发码请求，当前登录流程需要重来。",
+            next_step="请稍后重新发送验证码；若反复失败，改用导入 Session。",
+        )
+
     meta = _clear_pending_login_meta(_normalize_account_meta(current.get("meta")))
     meta.update(
         {
@@ -982,6 +1035,29 @@ def verify_telegram_account_login_code(repository: Any, *, telegram_account_id: 
         )
         item = _store_telegram_account(repository, current=current, meta=next_meta)
         return {"item": _decorate_telegram_account(item)}
+    if result.get("code_invalid"):
+        next_meta["last_auth_error"] = "验证码不正确"
+        _store_telegram_account(repository, current=current, meta=next_meta)
+        _raise_actionable(
+            "验证码不正确。",
+            reason_code="code_invalid",
+            why="Telegram 拒绝了当前验证码。",
+            next_step="核对最新验证码后再提交；若已过期，请重新发送验证码。",
+        )
+    if result.get("login_expired"):
+        next_meta.update(
+            {
+                "auth_state": "login_expired",
+                "last_auth_error": "登录会话已过期，请重新发送验证码",
+            }
+        )
+        _store_telegram_account(repository, current=current, meta=next_meta)
+        _raise_actionable(
+            "验证码已过期，需要重新发送。",
+            reason_code="login_expired",
+            why="当前登录会话已经失效，继续提交二次密码不会成功。",
+            next_step="请点击“重新发送验证码”，完成新的验证码后再提交二次密码。",
+        )
 
     next_meta = _clear_pending_login_meta(next_meta)
     next_meta.update(
@@ -1010,10 +1086,66 @@ def verify_telegram_account_login_password(repository: Any, *, telegram_account_
     gateway = auth_gateway or _build_account_gateway()
 
     meta = _normalize_account_meta(current.get("meta"))
+    if str(meta.get("auth_state") or "") != "password_required":
+        _raise_actionable(
+            "当前账号不需要二次密码。",
+            reason_code="password_not_required",
+            why="只有验证码通过后、Telegram 要求云密码时，才需要提交二次密码。",
+            next_step="请先发送并提交验证码；若已过期，重新发送验证码后再试。",
+        )
+
     result = gateway.verify_password(
         str(current.get("session_path") or ""),
         password=_to_non_empty_str(payload.get("password"), "password"),
     )
+
+    if result.get("password_empty"):
+        next_meta = dict(meta)
+        next_meta["last_auth_error"] = "二次密码不能为空"
+        _store_telegram_account(repository, current=current, meta=next_meta)
+        _raise_actionable(
+            "二次密码不能为空。",
+            reason_code="password_empty",
+            why="Telegram 云密码（两步验证密码）没有提交内容。",
+            next_step="输入该 Telegram 账号的二次密码后再提交。",
+        )
+    if result.get("password_invalid"):
+        next_meta = dict(meta)
+        next_meta["last_auth_error"] = "二次密码不正确"
+        _store_telegram_account(repository, current=current, meta=next_meta)
+        _raise_actionable(
+            "二次密码不正确。",
+            reason_code="password_invalid",
+            why="Telegram 拒绝了当前云密码，通常是密码输错，而不是系统故障。",
+            next_step="确认这是 Telegram 设置里的两步验证密码（不是登录密码或验证码），再重试。",
+        )
+    if result.get("password_flood"):
+        wait_text = _format_wait_duration(result.get("wait_seconds"))
+        next_meta = dict(meta)
+        next_meta["last_auth_error"] = "二次密码尝试过于频繁，请等待 %s 后再试" % wait_text
+        _store_telegram_account(repository, current=current, meta=next_meta)
+        _raise_actionable(
+            "二次密码尝试过于频繁，Telegram 要求等待 %s。" % wait_text,
+            reason_code="password_flood",
+            why="连续输错云密码后，Telegram 会暂时锁定二次密码校验（CheckPasswordRequest）。这不是系统故障。",
+            next_step="等待结束后再提交一次正确的 Telegram 两步验证密码。等待期间不要反复提交，也不必重新发送验证码。",
+        )
+    if result.get("login_expired") or not result.get("authorized"):
+        next_meta = dict(meta)
+        next_meta.update(
+            {
+                "auth_state": "login_expired",
+                "last_auth_error": "登录会话已过期，请重新发送验证码",
+            }
+        )
+        _store_telegram_account(repository, current=current, meta=next_meta)
+        _raise_actionable(
+            "二次密码验证未完成，登录会话已过期。",
+            reason_code="login_expired",
+            why="验证码阶段的登录状态已经失效，继续提交二次密码不会成功。",
+            next_step="请点击“重新发送验证码”，完成新的验证码后再提交二次密码。",
+        )
+
     next_meta = _clear_pending_login_meta(meta)
     next_meta.update(
         {

@@ -86,3 +86,18 @@ def ensure_telethon_session_writable(session: str) -> Path:
             % str(session_file.parent)
         )
     return session_file
+
+
+def reset_telethon_session_file(session: str) -> Path:
+    session_file = resolve_telethon_session_file(session)
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    for candidate in (
+        session_file,
+        session_file.with_name(session_file.name + "-journal"),
+        session_file.with_suffix(session_file.suffix + "-journal"),
+    ):
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            continue
+    return ensure_telethon_session_writable(session)

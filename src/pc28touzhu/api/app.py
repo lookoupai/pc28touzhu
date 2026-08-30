@@ -168,7 +168,7 @@ def _text_response(
         ("Content-Type", content_type),
         ("Content-Length", str(len(data))),
     ]
-    if content_type.startswith("text/html"):
+    if content_type.startswith("text/html") or "javascript" in content_type or content_type.startswith("text/css"):
         headers.append(("Cache-Control", "no-store, max-age=0"))
     if extra_headers:
         headers.extend(extra_headers)

@@ -237,9 +237,9 @@
                 "在下方继续输入验证码或二次密码",
             ],
             createText: "创建并发送验证码",
-            editText: "保存并重新发送验证码",
+            editText: "重新发送验证码",
             postActionTitle: "提交后继续完成账号授权",
-            postActionBody: "发送验证码后，下方会出现“继续完成账号授权”，继续输入验证码或二次密码即可。",
+            postActionBody: "发送验证码后，下方会出现验证码输入框。登录过期时请先重新发码，不要继续填二次密码。",
         },
         session_import: {
             badge: "导入 Session",
@@ -966,6 +966,9 @@
         if (authState === "password_required") {
             return "待二次密码";
         }
+        if (authState === "login_expired") {
+            return "登录已过期";
+        }
         if (authState === "pending_import") {
             return "待导入";
         }
@@ -985,6 +988,9 @@
         }
         if (authState === "password_required") {
             return "该账号开启了二次密码，请继续完成验证。";
+        }
+        if (authState === "login_expired") {
+            return "登录会话已过期。请重新发送验证码，不要继续提交二次密码。";
         }
         if (authMode === "session_import") {
             return "请上传商家附带的 Telethon Session 文件。";
@@ -1838,17 +1844,10 @@
         accountVerifyForm.reset();
         accountVerifyForm.hidden = true;
         accountVerifyForm.elements.telegram_account_id.value = "";
-        const codeField = accountVerifyForm.querySelector(".account-code-field");
-        const passwordField = accountVerifyForm.querySelector(".account-password-field");
         const verifyCodeBtn = accountVerifyForm.querySelector("#verifyAccountCodeBtn");
         const verifyPasswordBtn = accountVerifyForm.querySelector("#verifyAccountPasswordBtn");
         const verifySummary = document.getElementById("accountVerifySummary");
-        if (codeField instanceof HTMLElement) {
-            codeField.hidden = false;
-        }
-        if (passwordField instanceof HTMLElement) {
-            passwordField.hidden = true;
-        }
+        const passwordHint = document.getElementById("accountPasswordHint");
         if (verifyCodeBtn instanceof HTMLElement) {
             verifyCodeBtn.hidden = false;
         }
@@ -1858,6 +1857,21 @@
         if (verifySummary instanceof HTMLElement) {
             verifySummary.textContent = "";
         }
+        if (passwordHint instanceof HTMLElement) {
+            passwordHint.hidden = true;
+        }
+        setAccountVerifyFeedback("");
+    }
+
+    function setAccountVerifyFeedback(message, isError) {
+        const feedback = document.getElementById("accountVerifyFeedback");
+        if (!(feedback instanceof HTMLElement)) {
+            return;
+        }
+        const text = String(message || "").trim();
+        feedback.textContent = text;
+        feedback.hidden = !text;
+        feedback.classList.toggle("is-error", Boolean(isError) && Boolean(text));
     }
 
     function renderAccountModeGuide(mode) {
@@ -2378,34 +2392,38 @@
             return;
         }
         const authState = accountAuthState(account);
+        if (authState === "login_expired") {
+            resetAccountVerifyForm();
+            return;
+        }
         const passwordRequired = authState === "password_required";
         accountVerifyForm.hidden = false;
         accountVerifyForm.elements.telegram_account_id.value = String(account.id || "");
         accountVerifyForm.elements.code.value = "";
         accountVerifyForm.elements.password.value = "";
-        const codeField = accountVerifyForm.querySelector(".account-code-field");
-        const passwordField = accountVerifyForm.querySelector(".account-password-field");
         const verifyCodeBtn = accountVerifyForm.querySelector("#verifyAccountCodeBtn");
         const verifyPasswordBtn = accountVerifyForm.querySelector("#verifyAccountPasswordBtn");
         const verifySummary = document.getElementById("accountVerifySummary");
-        if (codeField instanceof HTMLElement) {
-            codeField.hidden = passwordRequired;
-        }
-        if (passwordField instanceof HTMLElement) {
-            passwordField.hidden = !passwordRequired;
-        }
+        const passwordHint = document.getElementById("accountPasswordHint");
         if (verifyCodeBtn instanceof HTMLElement) {
             verifyCodeBtn.hidden = passwordRequired;
         }
         if (verifyPasswordBtn instanceof HTMLElement) {
             verifyPasswordBtn.hidden = !passwordRequired;
         }
+        if (passwordHint instanceof HTMLElement) {
+            passwordHint.hidden = !passwordRequired;
+        }
         if (verifySummary instanceof HTMLElement) {
             verifySummary.textContent = passwordRequired
-                ? "账号「" + (account.label || "--") + "」需要输入二次密码。"
+                ? "账号「" + (account.label || "--") + "」需要输入 Telegram 两步验证密码（云密码），不是手机号登录密码。"
                 : "账号「" + (account.label || "--") + "」已发送验证码，请继续填写。";
         }
+        const lastError = String((account.meta && account.meta.last_auth_error) || "").trim();
+        setAccountVerifyFeedback(lastError, Boolean(lastError));
         accountVerifyForm.scrollIntoView({behavior: "smooth", block: "start"});
+        const focusTarget = passwordRequired ? accountVerifyForm.elements.password : accountVerifyForm.elements.code;
+        focusElement(focusTarget);
     }
 
     function visibleAccounts() {
@@ -2607,11 +2625,12 @@
 
     function pendingAccountForWizard() {
         const priorities = {
-            password_required: 0,
-            code_sent: 1,
-            pending_import: 2,
-            new: 3,
-            pending: 4,
+            login_expired: 0,
+            password_required: 1,
+            code_sent: 2,
+            pending_import: 3,
+            new: 4,
+            pending: 5,
         };
         return visibleAccounts().filter(function (item) {
             return !isAccountAuthorized(item);
@@ -5000,7 +5019,7 @@
                 actionText: pendingAccount
                     ? (accountAuthMode(pendingAccount) === "session_import"
                         ? "去导入 Session"
-                        : ((accountAuthState(pendingAccount) === "code_sent" || accountAuthState(pendingAccount) === "password_required") ? "继续完成授权" : "去补充授权"))
+                        : ((accountAuthState(pendingAccount) === "code_sent" || accountAuthState(pendingAccount) === "password_required") ? "继续完成授权" : (accountAuthState(pendingAccount) === "login_expired" ? "重新发送验证码" : "去补充授权")))
                     : "去创建托管账号",
             },
             {
@@ -5285,7 +5304,7 @@
             const linkedTargets = accountLinkedTargets(item);
             const authAction = authMode === "session_import"
                 ? '<button class="ghost-btn continue-account-auth-btn" type="button" data-account-id="' + item.id + '">' + (authState === "authorized" ? "重新导入" : "继续导入") + "</button>"
-                : '<button class="ghost-btn continue-account-auth-btn" type="button" data-account-id="' + item.id + '">' + (authState === "authorized" ? "重新登录" : "继续授权") + "</button>";
+                : '<button class="ghost-btn continue-account-auth-btn" type="button" data-account-id="' + item.id + '">' + (authState === "authorized" ? "重新登录" : (authState === "login_expired" ? "重新发送验证码" : "继续授权")) + "</button>";
             return renderConfigCardShell({
                 title: item.label || "--",
                 cardClassName: "account-card-item",
@@ -5749,7 +5768,9 @@
                 focusScopeSectionOnLoad();
                 state.scopeFocused = true;
             }
-            setStatus("自动投注配置已刷新。", false);
+            if (!normalized.keepStatus) {
+                setStatus("自动投注配置已刷新。", false);
+            }
             if (shouldLoadRecentPipelineData(scope)) {
                 loadRecentPipelineData().then(function (updated) {
                     if (!updated) {
@@ -5995,8 +6016,12 @@
                 return;
             }
             scrollToHashTarget("#accountsSection");
-            focusElement(accountForm.elements.phone || accountForm.elements.label);
-            setStatus("保存账号后，系统会重新发送验证码。", false);
+            setStatus("登录已过期，正在重新发送验证码。", false);
+            if (typeof accountForm.requestSubmit === "function") {
+                accountForm.requestSubmit();
+            } else {
+                accountForm.dispatchEvent(new Event("submit", {cancelable: true, bubbles: true}));
+            }
             return;
         }
         scrollToHashTarget("#accountsSection");
@@ -6085,6 +6110,7 @@
     accountForm.addEventListener("submit", async function (event) {
         event.preventDefault();
         const form = event.currentTarget;
+        let accountId = "";
         try {
             if (!state.currentUser) {
                 throw new Error("请先登录");
@@ -6100,8 +6126,8 @@
                 throw new Error("请先选择 Session 文件");
             }
             const submitButton = document.getElementById("createAccountBtn");
-            setButtonBusy(submitButton, true, editId ? "保存中..." : (authMode === "phone_login" ? "创建并发送验证码..." : "创建并导入中..."));
-            let accountId = editId;
+            setButtonBusy(submitButton, true, editId ? "正在重新发送验证码..." : (authMode === "phone_login" ? "创建并发送验证码..." : "创建并导入中..."));
+            accountId = editId;
             if (editId) {
                 const updated = await request("/api/platform/telegram-accounts/" + editId, {
                     method: "POST",
@@ -6162,17 +6188,28 @@
                 method: "POST",
                 body: {phone: phone},
             });
-            form.reset();
-            setFormEditingState(form, submitButton, cancelAccountEditBtn, false, "");
-            syncAccountModeUI("phone_login");
-            await refreshAll();
-            showAccountVerification(loginResult.item || accountById(accountId));
-            setStatus(editId ? "账号资料已更新，验证码已重新发送。" : "账号已创建，验证码已发送。", false);
+            await refreshAll({skipCurrentUserReload: true, keepStatus: true});
+            const latestAccount = loginResult.item || accountById(accountId);
+            loadAccountIntoForm(latestAccount, {scroll: false});
+            showAccountVerification(latestAccount);
+            setStatus(editId ? "验证码已重新发送。请填写新的验证码，不要继续用旧的二次密码。" : "账号已创建，验证码已发送。", false);
         } catch (error) {
+            try {
+                await refreshAll({skipCurrentUserReload: true, keepStatus: true});
+                const latestAccount = accountById(accountId);
+                if (latestAccount) {
+                    loadAccountIntoForm(latestAccount, {scroll: false});
+                    showAccountVerification(latestAccount);
+                }
+            } catch (_refreshError) {
+                // keep the original send-code error
+            }
             setStatus(error.message, true);
         } finally {
-            setButtonBusy(document.getElementById("createAccountBtn"), false, "新增托管账号");
-            syncAccountModeUI(String(accountForm.elements.auth_mode.value || "phone_login"));
+            const latestMode = String(accountForm.elements.auth_mode.value || "phone_login");
+            const stillEditing = Boolean(String(accountForm.elements.edit_id.value || "").trim());
+            setButtonBusy(document.getElementById("createAccountBtn"), false, stillEditing ? "重新发送验证码" : "新增托管账号");
+            syncAccountModeUI(latestMode);
         }
     });
 
@@ -6185,30 +6222,37 @@
     accountVerifyForm.addEventListener("submit", async function (event) {
         event.preventDefault();
         const form = event.currentTarget;
+        let accountId = "";
         try {
-            const accountId = String(form.elements.telegram_account_id.value || "").trim();
+            accountId = String(form.elements.telegram_account_id.value || "").trim();
             const account = accountById(accountId);
             if (!accountId || !account) {
                 throw new Error("请选择要继续验证的托管账号");
             }
             const authState = accountAuthState(account);
             if (authState === "password_required") {
+                const password = String(form.elements.password.value || "").trim();
+                if (!password) {
+                    throw new Error("二次密码不能为空。请输入 Telegram 两步验证密码（云密码）。");
+                }
                 setButtonBusy(document.getElementById("verifyAccountPasswordBtn"), true, "提交中...");
+                setAccountVerifyFeedback("正在校验二次密码...", false);
                 await request("/api/platform/telegram-accounts/" + accountId + "/auth/verify-password", {
                     method: "POST",
-                    body: {password: form.elements.password.value},
+                    body: {password: password},
                 });
                 resetAccountVerifyForm();
-                await refreshAll();
+                await refreshAll({skipCurrentUserReload: true, keepStatus: true});
                 setStatus("二次密码验证成功，账号已可用于发送。", false);
                 return;
             }
             setButtonBusy(document.getElementById("verifyAccountCodeBtn"), true, "验证中...");
+            setAccountVerifyFeedback("正在校验验证码...", false);
             const result = await request("/api/platform/telegram-accounts/" + accountId + "/auth/verify-code", {
                 method: "POST",
                 body: {code: form.elements.code.value},
             });
-            await refreshAll();
+            await refreshAll({skipCurrentUserReload: true, keepStatus: true});
             const latestAccount = result.item || accountById(accountId);
             if (accountAuthState(latestAccount) === "password_required") {
                 showAccountVerification(latestAccount);
@@ -6218,7 +6262,31 @@
             resetAccountVerifyForm();
             setStatus("验证码验证成功，账号已可用于发送。", false);
         } catch (error) {
+            const payload = error && error.payload ? error.payload : {};
+            const reasonCode = String(payload.reason_code || "").trim();
+            const localMessage = String(payload.error || error.message || "提交失败").trim();
+            try {
+                await refreshAll({skipCurrentUserReload: true, keepStatus: true});
+                const latestAccount = accountById(accountId);
+                if (latestAccount) {
+                    showAccountVerification(latestAccount);
+                }
+            } catch (_refreshError) {
+                // keep the original verify error
+            }
+            if (reasonCode === "password_invalid") {
+                setAccountVerifyFeedback("二次密码不正确。请输入 Telegram 设置里的两步验证密码（云密码），不是登录密码或验证码。", true);
+            } else if (reasonCode === "password_empty") {
+                setAccountVerifyFeedback("二次密码不能为空。", true);
+            } else if (reasonCode === "password_flood") {
+                setAccountVerifyFeedback(localMessage || "二次密码尝试过于频繁，请稍后再试。等待期间不要反复提交。", true);
+            } else if (reasonCode === "login_expired") {
+                setAccountVerifyFeedback("登录已过期，请重新发送验证码，不要继续提交二次密码。", true);
+            } else {
+                setAccountVerifyFeedback(localMessage, true);
+            }
             setStatus(error.message, true);
+            focusElement(form.elements.password || form.elements.code);
         } finally {
             setButtonBusy(document.getElementById("verifyAccountCodeBtn"), false, "提交验证码");
             setButtonBusy(document.getElementById("verifyAccountPasswordBtn"), false, "提交二次密码");
@@ -6255,8 +6323,17 @@
                 } else {
                     if (accountAuthState(account) === "code_sent" || accountAuthState(account) === "password_required") {
                         showAccountVerification(account);
+                    } else if (accountAuthState(account) === "login_expired") {
+                        resetAccountVerifyForm();
+                        setStatus("登录已过期，正在重新发送验证码。", false);
+                        accountForm.scrollIntoView({behavior: "smooth", block: "start"});
+                        if (typeof accountForm.requestSubmit === "function") {
+                            accountForm.requestSubmit();
+                        } else {
+                            accountForm.dispatchEvent(new Event("submit", {cancelable: true, bubbles: true}));
+                        }
                     } else {
-                        setStatus("请先点击保存，系统会重新发送验证码。", false);
+                        setStatus("请先点击“重新发送验证码”。", false);
                         accountForm.scrollIntoView({behavior: "smooth", block: "start"});
                     }
                 }

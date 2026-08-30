@@ -220,6 +220,9 @@
         if (authState === "password_required") {
             return "待二次密码";
         }
+        if (authState === "login_expired") {
+            return "登录已过期";
+        }
         if (authState === "pending_import") {
             return "待导入";
         }
