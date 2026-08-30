@@ -2375,6 +2375,66 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertTrue(deleted)
         self.assertIsNone(self.repo.get_telegram_account(deletable_account_id))
 
+    def test_redact_telegram_account_record_preserves_history_and_unbinds_targets(self):
+        user_id = self.repo.create_user("account-redact-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="account-redact-source",
+        )["id"]
+        signal_id = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260409003",
+            bet_type="combo",
+            bet_value="大单",
+            normalized_payload={"message_text": "大单20"},
+        )["id"]
+        account_id = self.repo.create_telegram_account_record(
+            user_id=user_id,
+            label="待清理账号",
+            phone="+12018880006",
+            session_path="/data/account-redact/main",
+            status="archived",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+        )["id"]
+        target_id = self.repo.create_delivery_target_record(
+            user_id=user_id,
+            telegram_account_id=account_id,
+            executor_type="telegram_group",
+            target_key="-100404",
+            target_name="旧群组",
+            status="archived",
+        )["id"]
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        job_id = self.repo.create_execution_job(
+            user_id=user_id,
+            signal_id=signal_id,
+            delivery_target_id=target_id,
+            telegram_account_id=account_id,
+            executor_type="telegram_group",
+            idempotency_key="account-redact-job",
+            planned_message_text="大单20",
+            stake_plan={"mode": "follow", "amount": 20},
+            execute_after=(now - timedelta(minutes=2)).isoformat().replace("+00:00", "Z"),
+            expire_at=(now + timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
+            status="delivered",
+        )
+
+        result = self.repo.redact_telegram_account_record(
+            telegram_account_id=account_id,
+            user_id=user_id,
+        )
+
+        self.assertEqual(result["detached_target_count"], 1)
+        self.assertEqual(result["item"]["label"], "已删除账号 #%s" % account_id)
+        self.assertEqual(result["item"]["phone"], "")
+        self.assertEqual(result["item"]["session_path"], "")
+        self.assertTrue(result["item"]["deleted_at"])
+        self.assertEqual(self.repo.get_delivery_target(target_id)["telegram_account_id"], None)
+        self.assertEqual(self.repo.get_execution_job(job_id)["telegram_account_label"], "已删除账号 #%s" % account_id)
+        self.assertEqual(self.repo.list_telegram_accounts(user_id), [])
+
     def test_list_delivery_target_summaries_includes_recent_execution_and_failure(self):
         user_id = self.repo.create_user("target-summary-user")
         source_id = self.repo.create_source_record(

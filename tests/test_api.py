@@ -363,6 +363,7 @@ class FakeRepository:
             "session_path": kwargs["session_path"],
             "status": kwargs.get("status", "active"),
             "meta": kwargs.get("meta") or {},
+            "deleted_at": kwargs.get("deleted_at"),
             "created_at": "2026-04-07T12:00:00Z",
             "updated_at": "2026-04-07T12:00:00Z",
         }
@@ -403,6 +404,47 @@ class FakeRepository:
             if item.get("telegram_account_id") == int(telegram_account_id)
             and (user_id is None or item["user_id"] == int(user_id))
         )
+
+    def get_telegram_account_dependency_summary(self, *, telegram_account_id, user_id):
+        targets = [
+            item
+            for item in self.targets
+            if item.get("telegram_account_id") == int(telegram_account_id)
+            and item["user_id"] == int(user_id)
+        ]
+        jobs = [
+            item
+            for item in self.jobs
+            if item.get("telegram_account_id") == int(telegram_account_id)
+            and item["user_id"] == int(user_id)
+        ]
+        return {
+            "target_count": len(targets),
+            "active_target_count": sum(1 for item in targets if item.get("status") == "active"),
+            "execution_job_count": len(jobs),
+            "pending_job_count": sum(1 for item in jobs if item.get("status", "pending") == "pending"),
+        }
+
+    def redact_telegram_account_record(self, *, telegram_account_id, user_id):
+        for item in self.telegram_accounts:
+            if item["id"] == int(telegram_account_id) and item["user_id"] == int(user_id):
+                detached_count = 0
+                for target in self.targets:
+                    if target.get("telegram_account_id") == int(telegram_account_id) and target["user_id"] == int(user_id):
+                        target["telegram_account_id"] = None
+                        detached_count += 1
+                item.update(
+                    {
+                        "label": "已删除账号 #%s" % int(telegram_account_id),
+                        "phone": "",
+                        "session_path": "",
+                        "status": "archived",
+                        "meta": {"auth_state": "deleted"},
+                        "deleted_at": "2026-04-07T12:00:00Z",
+                    }
+                )
+                return {"item": item, "detached_target_count": detached_count}
+        return {"item": None, "detached_target_count": 0}
 
     def delete_telegram_account_record(self, *, telegram_account_id, user_id):
         for index, item in enumerate(self.telegram_accounts):
@@ -2601,7 +2643,7 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(payload["reason_code"], "password_invalid")
         self.assertIn("二次密码不正确", payload["error"])
 
-    def test_delete_telegram_account_endpoint_requires_archived_and_no_dependencies(self):
+    def test_delete_telegram_account_endpoint_preserves_history_and_unbinds_targets(self):
         account = self.repository.create_telegram_account_record(
             user_id=1,
             label="待删账号",
@@ -2627,8 +2669,13 @@ class PlatformApiApplicationTests(unittest.TestCase):
                 headers=self.session_headers,
             ),
         )
-        self.assertEqual(status, "400 Bad Request")
-        self.assertIn("投递群组", payload["error"])
+        self.assertEqual(status, "200 OK")
+        self.assertTrue(payload["deleted"])
+        self.assertEqual(payload["mode"], "redacted")
+        self.assertTrue(payload["history_preserved"])
+        self.assertEqual(payload["detached_target_count"], 1)
+        self.assertIsNotNone(self.repository.get_telegram_account(account["id"]))
+        self.assertIsNone(self.repository.targets[0]["telegram_account_id"])
 
     def test_delete_telegram_account_endpoint(self):
         account = self.repository.create_telegram_account_record(
@@ -2651,6 +2698,35 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(status, "200 OK")
         self.assertTrue(payload["deleted"])
         self.assertIsNone(self.repository.get_telegram_account(account["id"]))
+
+    def test_delete_telegram_account_endpoint_blocks_active_target(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="启用账号",
+            phone="+12019362924",
+            session_path="/data/u2/delete-active",
+            status="archived",
+            meta={},
+        )
+        self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100910",
+            target_name="启用群",
+            status="active",
+        )
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/telegram-accounts/%s/delete" % account["id"],
+                method="POST",
+                body={},
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertIn("启用中的投递群组", payload["error"])
 
     def test_platform_route_requires_login(self):
         status, _, payload = invoke(

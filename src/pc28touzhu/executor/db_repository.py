@@ -345,6 +345,7 @@ class DatabaseRepository:
             session_path TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
             meta_json TEXT NOT NULL DEFAULT '{}',
+            deleted_at TEXT,
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
             FOREIGN KEY(user_id) REFERENCES users(id)
@@ -876,6 +877,7 @@ class DatabaseRepository:
                 cursor.execute(ddl)
             self._ensure_user_telegram_columns(conn)
             self._ensure_user_auth_columns(conn)
+            self._ensure_telegram_account_columns(conn)
             self._ensure_delivery_target_columns(conn)
             self._ensure_message_template_columns(conn)
             self._ensure_execution_job_columns(conn)
@@ -942,6 +944,12 @@ class DatabaseRepository:
         for column_name, ddl in column_definitions.items():
             if column_name not in existing_columns:
                 conn.execute(ddl)
+
+    def _ensure_telegram_account_columns(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(telegram_accounts)").fetchall()
+        existing_columns = {str(row["name"]) for row in rows}
+        if "deleted_at" not in existing_columns:
+            conn.execute("ALTER TABLE telegram_accounts ADD COLUMN deleted_at TEXT")
 
     def _ensure_message_template_columns(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute("PRAGMA table_info(message_templates)").fetchall()
@@ -1207,6 +1215,7 @@ class DatabaseRepository:
             "session_path": str(row["session_path"]),
             "status": str(row["status"]),
             "meta": _safe_json_loads(row.get("meta_json")),
+            "deleted_at": row.get("deleted_at"),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
         }
@@ -2022,7 +2031,7 @@ class DatabaseRepository:
 
     def list_telegram_accounts(self, user_id: int) -> list[Dict[str, Any]]:
         rows = self._fetch_all(
-            "SELECT * FROM telegram_accounts WHERE user_id = ? ORDER BY id ASC",
+            "SELECT * FROM telegram_accounts WHERE user_id = ? AND deleted_at IS NULL ORDER BY id ASC",
             (int(user_id),),
         )
         return [self._serialize_telegram_account_row(row) for row in rows]
@@ -2107,6 +2116,96 @@ class DatabaseRepository:
                 (int(telegram_account_id), int(user_id)),
             )
         return int((row or {}).get("total") or 0)
+
+    def count_pending_execution_jobs_by_telegram_account(self, telegram_account_id: int, *, user_id: Optional[int] = None) -> int:
+        self.expire_due_jobs()
+        if user_id is None:
+            row = self._fetch_one(
+                """
+                SELECT COUNT(1) AS total
+                FROM execution_jobs
+                WHERE telegram_account_id = ? AND status = 'pending'
+                """,
+                (int(telegram_account_id),),
+            )
+        else:
+            row = self._fetch_one(
+                """
+                SELECT COUNT(1) AS total
+                FROM execution_jobs
+                WHERE telegram_account_id = ? AND user_id = ? AND status = 'pending'
+                """,
+                (int(telegram_account_id), int(user_id)),
+            )
+        return int((row or {}).get("total") or 0)
+
+    def get_telegram_account_dependency_summary(self, *, telegram_account_id: int, user_id: int) -> Dict[str, int]:
+        self.expire_due_jobs()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    (SELECT COUNT(1) FROM delivery_targets
+                     WHERE telegram_account_id = ? AND user_id = ?) AS target_count,
+                    (SELECT COUNT(1) FROM delivery_targets
+                     WHERE telegram_account_id = ? AND user_id = ? AND status = 'active') AS active_target_count,
+                    (SELECT COUNT(1) FROM execution_jobs
+                     WHERE telegram_account_id = ? AND user_id = ?) AS execution_job_count,
+                    (SELECT COUNT(1) FROM execution_jobs
+                     WHERE telegram_account_id = ? AND user_id = ? AND status = 'pending') AS pending_job_count
+                """,
+                (
+                    int(telegram_account_id), int(user_id),
+                    int(telegram_account_id), int(user_id),
+                    int(telegram_account_id), int(user_id),
+                    int(telegram_account_id), int(user_id),
+                ),
+            ).fetchone()
+        return {
+            "target_count": int(row["target_count"] or 0),
+            "active_target_count": int(row["active_target_count"] or 0),
+            "execution_job_count": int(row["execution_job_count"] or 0),
+            "pending_job_count": int(row["pending_job_count"] or 0),
+        }
+
+    def redact_telegram_account_record(self, *, telegram_account_id: int, user_id: int) -> Dict[str, Any]:
+        """保留历史墓碑，同时清除账号凭据。"""
+        now = _utc_now_iso()
+        redacted_label = "已删除账号 #%s" % int(telegram_account_id)
+        redacted_meta = _safe_json_dumps({"auth_state": "deleted", "deleted_at": now})
+        with self._connect() as conn:
+            account_cursor = conn.execute(
+                """
+                UPDATE telegram_accounts
+                SET label = ?, phone = NULL, session_path = '', status = 'archived',
+                    meta_json = ?, deleted_at = ?, updated_at = ?
+                WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+                """,
+                (
+                    redacted_label,
+                    redacted_meta,
+                    now,
+                    now,
+                    int(telegram_account_id),
+                    int(user_id),
+                ),
+            )
+            if account_cursor.rowcount <= 0:
+                return {"item": None, "detached_target_count": 0}
+            target_cursor = conn.execute(
+                """
+                UPDATE delivery_targets
+                SET telegram_account_id = NULL, updated_at = ?
+                WHERE telegram_account_id = ? AND user_id = ?
+                """,
+                (now, int(telegram_account_id), int(user_id)),
+            )
+            row = conn.execute(
+                "SELECT * FROM telegram_accounts WHERE id = ?",
+                (int(telegram_account_id),),
+            ).fetchone()
+            item = self._serialize_telegram_account_row(dict(row))
+        return {"item": item, "detached_target_count": int(target_cursor.rowcount or 0)}
 
     def delete_telegram_account_record(self, *, telegram_account_id: int, user_id: int) -> bool:
         with self._connect() as conn:
@@ -6908,7 +7007,15 @@ class DatabaseRepository:
 
     def get_execution_job(self, job_id: int) -> Optional[Dict[str, Any]]:
         self.expire_due_jobs()
-        row = self._fetch_one("SELECT * FROM execution_jobs WHERE id = ?", (int(job_id),))
+        row = self._fetch_one(
+            """
+            SELECT j.*, a.label AS telegram_account_label
+            FROM execution_jobs j
+            LEFT JOIN telegram_accounts a ON a.id = j.telegram_account_id
+            WHERE j.id = ?
+            """,
+            (int(job_id),),
+        )
         return self._serialize_execution_job_row(row) if row else None
 
     def expire_due_jobs(self) -> int:

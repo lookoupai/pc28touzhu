@@ -998,6 +998,27 @@
         return "请先发送验证码并完成登录验证。";
     }
 
+    function accountDeletionSummary(item) {
+        const deletion = item && item.deletion && typeof item.deletion === "object" ? item.deletion : {};
+        return {
+            targetCount: Math.max(0, Number(deletion.target_count || 0)),
+            activeTargetCount: Math.max(0, Number(deletion.active_target_count || 0)),
+            executionJobCount: Math.max(0, Number(deletion.execution_job_count || 0)),
+            pendingJobCount: Math.max(0, Number(deletion.pending_job_count || 0)),
+        };
+    }
+
+    function accountDeletionDescription(item) {
+        const deletion = accountDeletionSummary(item);
+        if (deletion.activeTargetCount || deletion.pendingJobCount) {
+            return "请先停用关联群组并等待待执行任务完成后再删除。";
+        }
+        if (deletion.targetCount || deletion.executionJobCount) {
+            return "删除后会清除手机号和 Session，历史执行记录保留，关联的停用/归档群组会解除绑定。";
+        }
+        return "删除后会清除手机号和 Session，当前没有需要保留的关联记录。";
+    }
+
     function currentTelegramBinding() {
         if (!state.telegramBinding || typeof state.telegramBinding !== "object") {
             return null;
@@ -5301,7 +5322,10 @@
                 : '<button class="ghost-btn archive-account-btn" type="button" data-account-id="' + item.id + '">归档账号</button>';
             const authState = accountAuthState(item);
             const authMode = accountAuthMode(item);
-            const linkedTargets = accountLinkedTargets(item);
+            const deletion = accountDeletionSummary(item);
+            const allLinkedTargets = state.targets.filter(function (targetItem) {
+                return Number(targetItem.telegram_account_id) === Number(item && item.id);
+            });
             const authAction = authMode === "session_import"
                 ? '<button class="ghost-btn continue-account-auth-btn" type="button" data-account-id="' + item.id + '">' + (authState === "authorized" ? "重新导入" : "继续导入") + "</button>"
                 : '<button class="ghost-btn continue-account-auth-btn" type="button" data-account-id="' + item.id + '">' + (authState === "authorized" ? "重新登录" : (authState === "login_expired" ? "重新发送验证码" : "继续授权")) + "</button>";
@@ -5315,11 +5339,13 @@
                 summaryMarkup: renderConfigSummaryGrid([
                     renderConfigSummaryItem("授权状态", accountAuthLabel(item)),
                     renderConfigSummaryItem("接入方式", authMode === "session_import" ? "导入 Session" : "手机号登录"),
-                    renderConfigSummaryItem("承接群组", String(linkedTargets.length)),
+                    renderConfigSummaryItem("承接群组", String(allLinkedTargets.length)),
+                    renderConfigSummaryItem("历史执行", String(deletion.executionJobCount)),
                 ]),
                 detailMarkup: renderConfigDetailRows([
                     renderConfigDetailRow("手机号", item.phone || "--"),
-                    renderConfigDetailRow("承接群组", linkedTargets.length ? linkedTargets.map(function (targetItem) { return targetItem.target_name || targetItem.target_key || "--"; }).join("、") : "当前还没有群组绑定这个账号。"),
+                    renderConfigDetailRow("承接群组", allLinkedTargets.length ? allLinkedTargets.map(function (targetItem) { return targetItem.target_name || targetItem.target_key || "--"; }).join("、") : "当前还没有群组绑定这个账号。"),
+                    renderConfigDetailRow("删除影响", accountDeletionDescription(item)),
                     renderConfigDetailRow("授权说明", accountAuthDescription(item)),
                 ]),
                 footerMarkup: "<div class=\"config-list-actions\"><button class=\"ghost-btn edit-account-btn\" type=\"button\" data-account-id=\"" + item.id + "\">编辑</button>" + authAction + "<button class=\"ghost-btn toggle-account-btn\" type=\"button\" data-account-id=\"" + item.id + "\" data-next-status=\"" + statusAction.nextStatus + "\">" + statusAction.actionText + "</button>" + archiveAction + "</div>",
@@ -6353,11 +6379,22 @@
             }
             if (target.classList.contains("delete-account-btn")) {
                 const accountId = target.getAttribute("data-account-id");
-                if (!accountId || !confirmDangerousAction("删除后将无法恢复。只有无关联群组且无执行记录的已归档托管账号才能被删除。确认继续吗？")) {
+                const account = accountById(accountId);
+                const deletion = accountDeletionSummary(account);
+                const confirmation = "删除后将清除手机号和 Session，历史执行记录保留为“已删除账号”。" +
+                    (deletion.targetCount ? (" 将解除 " + String(deletion.targetCount) + " 个关联群组的账号绑定。") : "") +
+                    "确认继续吗？";
+                if (!accountId || !confirmDangerousAction(confirmation)) {
                     return;
                 }
                 try {
-                    await deleteEntity("/api/platform/telegram-accounts/", accountId, "托管账号已删除。");
+                    await deleteEntity(
+                        "/api/platform/telegram-accounts/",
+                        accountId,
+                        deletion.executionJobCount
+                            ? "托管账号已删除，历史执行记录已保留。"
+                            : "托管账号已删除。"
+                    );
                 } catch (error) {
                     setStatus(error.message, true);
                 }

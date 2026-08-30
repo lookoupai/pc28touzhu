@@ -26,6 +26,7 @@ from pc28touzhu.services.pc28_draw_service import fetch_pc28_recent_draws, fetch
 from pc28touzhu.services.source_fetch_service import fetch_source_to_raw_item
 from pc28touzhu.services.telegram_account_gateway import TelethonAccountGateway
 from pc28touzhu.services.telegram_target_key import normalize_telegram_target_key
+from pc28touzhu.runtime_environment import remove_telethon_session_file
 
 
 ALLOWED_EXECUTION_JOB_STATUSES = {"pending", "delivered", "failed", "expired", "skipped"}
@@ -515,6 +516,59 @@ def _session_file_path(session_path: str) -> Path:
     return Path("%s.session" % str(session_path or "").strip()).expanduser()
 
 
+def _telegram_account_dependency_summary(repository: Any, *, telegram_account_id: int, user_id: int) -> Dict[str, int]:
+    if hasattr(repository, "get_telegram_account_dependency_summary"):
+        summary = repository.get_telegram_account_dependency_summary(
+            telegram_account_id=int(telegram_account_id),
+            user_id=int(user_id),
+        )
+        return {
+            "target_count": int(summary.get("target_count") or 0),
+            "active_target_count": int(summary.get("active_target_count") or 0),
+            "execution_job_count": int(summary.get("execution_job_count") or 0),
+            "pending_job_count": int(summary.get("pending_job_count") or 0),
+        }
+
+    targets = []
+    if hasattr(repository, "list_delivery_targets"):
+        targets = [
+            item
+            for item in (repository.list_delivery_targets(user_id=int(user_id)) or [])
+            if int(item.get("telegram_account_id") or 0) == int(telegram_account_id)
+        ]
+    target_count = int(repository.count_delivery_targets_by_telegram_account(telegram_account_id, user_id=user_id) or 0)
+    active_target_count = sum(1 for item in targets if str(item.get("status") or "") == "active")
+    execution_job_count = int(repository.count_execution_jobs_by_telegram_account(telegram_account_id, user_id=user_id) or 0)
+    pending_job_count = int(
+        repository.count_pending_execution_jobs_by_telegram_account(telegram_account_id, user_id=user_id)
+        if hasattr(repository, "count_pending_execution_jobs_by_telegram_account")
+        else 0
+    )
+    return {
+        "target_count": target_count,
+        "active_target_count": active_target_count,
+        "execution_job_count": execution_job_count,
+        "pending_job_count": pending_job_count,
+    }
+
+
+def _cleanup_telegram_account_session(current: Dict[str, Any]) -> bool:
+    session_path = str(current.get("session_path") or "").strip()
+    if not session_path:
+        return False
+    account_meta = _normalize_account_meta(current.get("meta"))
+    if account_meta.get("managed_session") is False:
+        return False
+    session_file = _session_file_path(session_path)
+    managed_root = _managed_accounts_root().resolve()
+    try:
+        session_file.resolve().relative_to(managed_root)
+    except ValueError:
+        # 显式导入的 Session 属于用户管理文件，清理平台账号时不删除任意路径。
+        return False
+    return remove_telethon_session_file(session_path, allowed_root=managed_root)
+
+
 def _normalize_account_meta(meta: Any) -> Dict[str, Any]:
     return dict(meta) if isinstance(meta, dict) else {}
 
@@ -538,12 +592,16 @@ def _decorate_telegram_account(item: Dict[str, Any]) -> Dict[str, Any]:
     payload["auth_mode"] = auth_mode or ("phone_login" if str(payload.get("phone") or "").strip() else "session_import")
     payload["auth_state"] = auth_state
     payload["is_authorized"] = auth_state == AUTHORIZED_TELEGRAM_AUTH_STATE
+    payload["deleted_at"] = payload.get("deleted_at")
+    payload["is_deleted"] = bool(str(payload.get("deleted_at") or "").strip()) or auth_state == "deleted"
     return payload
 
 
 def _get_owned_telegram_account(repository: Any, *, telegram_account_id: int, user_id: int) -> Dict[str, Any]:
     current = repository.get_telegram_account(int(telegram_account_id))
     if not current or int(current.get("user_id") or 0) != int(user_id):
+        raise ValueError("telegram_account_id 对应的账号不存在")
+    if str(current.get("deleted_at") or "").strip():
         raise ValueError("telegram_account_id 对应的账号不存在")
     return current
 
@@ -799,7 +857,17 @@ def delete_source(repository: Any, *, source_id: Any, owner_user_id: Any) -> Dic
 def list_telegram_accounts(repository: Any, user_id: Any) -> Dict[str, Any]:
     normalized_user_id = _to_positive_int(user_id, "user_id")
     items = repository.list_telegram_accounts(user_id=normalized_user_id)
-    return {"items": [_decorate_telegram_account(item) for item in items]}
+    visible_items = [item for item in items if not str(item.get("deleted_at") or "").strip()]
+    decorated_items = []
+    for item in visible_items:
+        decorated = _decorate_telegram_account(item)
+        decorated["deletion"] = _telegram_account_dependency_summary(
+            repository,
+            telegram_account_id=int(item["id"]),
+            user_id=normalized_user_id,
+        )
+        decorated_items.append(decorated)
+    return {"items": decorated_items}
 
 
 def create_telegram_account(repository: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1169,19 +1237,56 @@ def verify_telegram_account_login_password(repository: Any, *, telegram_account_
 def delete_telegram_account(repository: Any, *, telegram_account_id: Any, user_id: Any) -> Dict[str, Any]:
     normalized_account_id = _to_positive_int(telegram_account_id, "telegram_account_id")
     normalized_user_id = _to_positive_int(user_id, "user_id")
-    current = repository.get_telegram_account(normalized_account_id)
-    if not current or int(current["user_id"]) != normalized_user_id:
-        raise ValueError("telegram_account_id 对应的账号不存在")
+    current = _get_owned_telegram_account(
+        repository,
+        telegram_account_id=normalized_account_id,
+        user_id=normalized_user_id,
+    )
     if str(current.get("status") or "") != "archived":
         raise ValueError("请先归档托管账号，再执行删除")
-    if int(repository.count_delivery_targets_by_telegram_account(normalized_account_id, user_id=normalized_user_id) or 0) > 0:
-        raise ValueError("该托管账号仍被投递群组引用，请先处理关联群组后再删除")
-    if int(repository.count_execution_jobs_by_telegram_account(normalized_account_id, user_id=normalized_user_id) or 0) > 0:
-        raise ValueError("该托管账号已有执行记录，暂不支持删除")
-    deleted = repository.delete_telegram_account_record(telegram_account_id=normalized_account_id, user_id=normalized_user_id)
+    summary = _telegram_account_dependency_summary(
+        repository,
+        telegram_account_id=normalized_account_id,
+        user_id=normalized_user_id,
+    )
+    if summary["active_target_count"] > 0:
+        raise ValueError("该托管账号仍绑定启用中的投递群组，请先停用或迁移后再删除")
+    if summary["pending_job_count"] > 0:
+        raise ValueError("该托管账号仍有待执行任务，请等待任务完成或过期后再删除")
+
+    session_removed = _cleanup_telegram_account_session(current)
+    if summary["target_count"] or summary["execution_job_count"]:
+        if not hasattr(repository, "redact_telegram_account_record"):
+            raise ValueError("当前数据库仓储不支持保留历史的账号删除")
+        redacted = repository.redact_telegram_account_record(
+            telegram_account_id=normalized_account_id,
+            user_id=normalized_user_id,
+        )
+        if not redacted.get("item"):
+            raise ValueError("telegram_account_id 对应的账号不存在")
+        return {
+            "deleted": True,
+            "id": normalized_account_id,
+            "mode": "redacted",
+            "history_preserved": True,
+            "detached_target_count": int(redacted.get("detached_target_count") or 0),
+            "session_removed": session_removed,
+        }
+
+    deleted = repository.delete_telegram_account_record(
+        telegram_account_id=normalized_account_id,
+        user_id=normalized_user_id,
+    )
     if not deleted:
         raise ValueError("telegram_account_id 对应的账号不存在")
-    return {"deleted": True, "id": normalized_account_id}
+    return {
+        "deleted": True,
+        "id": normalized_account_id,
+        "mode": "hard_deleted",
+        "history_preserved": False,
+        "detached_target_count": 0,
+        "session_removed": session_removed,
+    }
 
 
 def fetch_source(

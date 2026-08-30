@@ -101,3 +101,32 @@ def reset_telethon_session_file(session: str) -> Path:
         except FileNotFoundError:
             continue
     return ensure_telethon_session_writable(session)
+
+
+def remove_telethon_session_file(session: str, *, allowed_root: Path | None = None) -> bool:
+    """安全删除 Telethon Session 及其 SQLite journal 文件。"""
+    session_file = resolve_telethon_session_file(session)
+    root = Path(allowed_root).expanduser().resolve() if allowed_root is not None else None
+    if root is not None:
+        try:
+            session_file.resolve().relative_to(root)
+        except ValueError as exc:
+            raise ValueError("Telegram Session 路径不在受管目录内，已拒绝清理") from exc
+
+    removed = False
+    for candidate in (
+        session_file,
+        session_file.with_name(session_file.name + "-journal"),
+        session_file.with_suffix(session_file.suffix + "-journal"),
+    ):
+        if root is not None:
+            try:
+                candidate.resolve().relative_to(root)
+            except ValueError as exc:
+                raise ValueError("Telegram Session 附属文件不在受管目录内，已拒绝清理") from exc
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            continue
+        removed = True
+    return removed
