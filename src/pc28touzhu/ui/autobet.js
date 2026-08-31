@@ -5708,7 +5708,11 @@
                 });
             },
             subscriptions: function () {
-                return request("/api/platform/subscriptions/summary" + subscriptionStatDateQuery).then(function (payload) {
+                // 跟单工作区需要直接展示最近 7 天历史；摘要接口为其他工作区优化过，按约定不返回 daily_history。
+                const endpoint = scope === "subscriptions"
+                    ? "/api/platform/subscriptions"
+                    : "/api/platform/subscriptions/summary";
+                return request(endpoint + subscriptionStatDateQuery).then(function (payload) {
                     state.subscriptions = payload.items || [];
                     state.subscriptionStatDate = payload.stat_date || state.subscriptionStatDate || todayDateString();
                     state.subscriptionDailySummary = payload.daily_summary || null;
