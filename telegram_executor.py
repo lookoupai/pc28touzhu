@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import time
-import urllib.error
 
 from pc28touzhu.config import get_runtime_config
 from pc28touzhu.executor import (
     ExecutorApiClient,
     ExecutorStateStore,
     TelethonSenderPool,
-    run_executor_cycle,
+    run_executor_cycle_concurrent,
 )
 
 
@@ -21,7 +20,7 @@ def main() -> int:
         executor_id=executor.executor_id,
     )
     state_store = ExecutorStateStore()
-    sender = TelethonSenderPool(
+    sender_pool = TelethonSenderPool(
         api_id=executor.telegram_api_id,
         api_hash=executor.telegram_api_hash,
         default_phone=executor.telegram_phone,
@@ -31,14 +30,19 @@ def main() -> int:
     try:
         while True:
             try:
-                result = run_executor_cycle(
+                result = run_executor_cycle_concurrent(
                     api_client=api_client,
-                    message_sender=sender,
+                    message_sender=sender_pool,
                     state_store=state_store,
                     executor_id=executor.executor_id,
                     limit=executor.pull_limit,
-                    version="telegram-executor/0.1.0",
-                    capabilities={"send": True, "provider": "telethon"},
+                    max_concurrent=4,
+                    version="telegram-executor/0.3.0",
+                    capabilities={
+                        "send": True,
+                        "provider": "telethon",
+                        "account_scoped_concurrency": True,
+                    },
                 )
                 print(
                     "cycle pulled=%s delivered=%s failed=%s expired=%s skipped=%s replayed=%s"
@@ -51,9 +55,6 @@ def main() -> int:
                         result["replayed_count"],
                     )
                 )
-            except urllib.error.HTTPError as exc:
-                print("http error:", exc.code, exc.reason)
-                return 2
             except Exception as exc:
                 print("cycle error:", str(exc))
                 return 1
@@ -62,7 +63,7 @@ def main() -> int:
                 return 0
             time.sleep(2)
     finally:
-        sender.disconnect()
+        sender_pool.disconnect()
 
 
 if __name__ == "__main__":

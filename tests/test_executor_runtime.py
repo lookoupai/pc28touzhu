@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import threading
+import time
 import types
 import unittest
-from unittest.mock import patch
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -290,6 +293,81 @@ class ExecutorRuntimeTests(unittest.TestCase):
 
         self.assertEqual(len(FakeSingleSender.instances), 1)
         self.assertEqual(FakeSingleSender.instances[0].session, "/data/a/main")
+        self.assertFalse(FakeSingleSender.instances[0].connected)
+
+    def test_telethon_sender_pool_serializes_same_account_and_parallelizes_different_accounts(self):
+        class FakeSingleSender:
+            instances = []
+            state_lock = threading.Lock()
+            active_by_session = {}
+            max_by_session = {}
+            total_active = 0
+            max_total_active = 0
+
+            def __init__(self, *, api_id, api_hash, phone, session):
+                self.session = session
+                self.connected = False
+                self.__class__.instances.append(self)
+
+            def connect(self):
+                self.connected = True
+
+            def disconnect(self):
+                self.connected = False
+
+            def send_text(self, target_key, message_text):
+                cls = self.__class__
+                with cls.state_lock:
+                    active = cls.active_by_session.get(self.session, 0) + 1
+                    cls.active_by_session[self.session] = active
+                    cls.max_by_session[self.session] = max(cls.max_by_session.get(self.session, 0), active)
+                    cls.total_active += 1
+                    cls.max_total_active = max(cls.max_total_active, cls.total_active)
+                time.sleep(0.05)
+                with cls.state_lock:
+                    cls.active_by_session[self.session] -= 1
+                    cls.total_active -= 1
+                return {"message_id": target_key, "target_key": target_key, "text": message_text}
+
+        def build_job(job_id, account_id, session_path, target_key):
+            return ExecutorJob.from_payload(
+                {
+                    "job_id": job_id,
+                    "signal_id": "sig-%s" % job_id,
+                    "lottery_type": "pc28",
+                    "issue_no": "20260407001",
+                    "bet_type": "big_small",
+                    "bet_value": "大",
+                    "message_text": "大10",
+                    "stake_plan": {"mode": "flat", "amount": 10},
+                    "target": {"type": "telegram_group", "key": target_key},
+                    "telegram_account": {
+                        "id": account_id,
+                        "label": "账号%s" % account_id,
+                        "phone": "+12010000000",
+                        "session_path": session_path,
+                    },
+                    "idempotency_key": "idemp-%s" % job_id,
+                    "execute_after": "2026-04-07T15:00:00Z",
+                    "expire_at": "2099-04-07T15:01:00Z",
+                }
+            )
+
+        jobs = [
+            build_job("1", 7, "/data/a/main", "-1001"),
+            build_job("2", 7, "/data/a/main", "-1002"),
+            build_job("3", 8, "/data/b/main", "-1003"),
+        ]
+        with patch("pc28touzhu.executor.telethon_sender.TelethonMessageSender", FakeSingleSender):
+            pool = TelethonSenderPool(api_id=1, api_hash="hash")
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                results = list(executor.map(pool.send_text, jobs))
+            pool.disconnect()
+
+        self.assertEqual(len(results), 3)
+        self.assertEqual(FakeSingleSender.max_by_session["/data/a/main"], 1)
+        self.assertGreaterEqual(FakeSingleSender.max_total_active, 2)
+        self.assertTrue(all(not sender.connected for sender in FakeSingleSender.instances))
 
     def test_telethon_sender_resolves_channel_id_via_dialogs_cache(self):
         class FakeDialog:

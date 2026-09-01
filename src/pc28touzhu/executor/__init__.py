@@ -1,7 +1,7 @@
 from .api_client import ExecutorApiClient
 from .logic import now_utc, should_send_job
 from .models import DeliveryTarget, ExecutorJob, ExecutorResult, StakePlan, TelegramAccountInfo
-from .runtime import run_executor_cycle
+from .runtime import run_executor_cycle, run_executor_cycle_concurrent
 from .state import ExecutorStateStore
 from .telethon_sender import TelethonMessageSender, TelethonSenderPool
 
@@ -14,6 +14,7 @@ __all__ = [
     "ExecutorJob",
     "ExecutorResult",
     "run_executor_cycle",
+    "run_executor_cycle_concurrent",
     "ExecutorStateStore",
     "TelethonMessageSender",
     "TelethonSenderPool",

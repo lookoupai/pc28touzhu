@@ -4163,6 +4163,53 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(updated["last_test_status"], "failed")
         self.assertEqual(updated["last_test_error_code"], "session_readonly")
 
+    def test_delivery_target_test_send_reports_session_busy_hint(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1,
+            label="账号A",
+            phone="+12019360000",
+            session_path="/data/u7/account-a",
+            meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+        )
+        target = self.repository.create_delivery_target_record(
+            user_id=1,
+            telegram_account_id=account["id"],
+            executor_type="telegram_group",
+            target_key="-100999",
+            target_name="测试群",
+            status="inactive",
+        )
+
+        class FakeSender:
+            def __init__(self, *, api_id, api_hash, phone, session):
+                pass
+
+            def connect(self):
+                raise RuntimeError("database is locked")
+
+            def disconnect(self):
+                return None
+
+            def send_text(self, target_key, message_text):
+                raise AssertionError("connect 失败时不应继续发送")
+
+        with patch("pc28touzhu.services.platform_service.TelethonMessageSender", FakeSender):
+            status, _, payload = invoke(
+                self.app,
+                build_testing_environ(
+                    "/api/platform/delivery-targets/%s/test-send" % target["id"],
+                    method="POST",
+                    body={"message_text": "hello"},
+                    headers=self.session_headers,
+                ),
+            )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertEqual(payload["reason_code"], "session_busy")
+        self.assertIn("正在执行其他发送任务", payload["error"])
+        updated = self.repository.get_delivery_target(target["id"])
+        self.assertEqual(updated["last_test_status"], "failed")
+        self.assertEqual(updated["last_test_error_code"], "session_busy")
+
     def test_update_delivery_target_status_endpoint(self):
         account = self.repository.create_telegram_account_record(
             user_id=1,

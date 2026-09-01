@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+*.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -38,6 +39,7 @@ env/
 *.db.after-*
 *.session
 *.session-journal
+*.session.lock
 data/
 .autobet_payload.json
 .autobet_runtime_check.js

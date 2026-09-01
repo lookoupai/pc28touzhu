@@ -382,6 +382,13 @@ def _target_test_feedback_from_exception(error: Exception) -> Dict[str, str]:
             "why": message,
             "next_step": "如果依赖装在虚拟环境，请让 platform / executor / bot 服务切到同一个解释器后重启；否则请直接在当前 Python 解释器安装 `Telethon>=1.42,<2` 后重试。",
         }
+    if error_name == "TimeoutError" or "database is locked" in normalized or "session 正在被其他发送任务使用" in message:
+        return {
+            "error": "测试发送失败：托管账号正在执行其他发送任务。",
+            "reason_code": "session_busy",
+            "why": "同一个 Telegram 账号的 Session 同一时刻只能由一个发送任务写入。",
+            "next_step": "系统会按账号自动串行发送，请稍后重新测试；不同托管账号不受影响。",
+        }
     if "Telethon session 文件不可写" in message or "Telethon session 目录不可写" in message or "readonly database" in normalized:
         return {
             "error": "测试发送失败：托管账号 Session 文件不可写。",
