@@ -835,6 +835,9 @@ class DatabaseRepository:
         "CREATE INDEX IF NOT EXISTS idx_source_raw_items_source_status ON source_raw_items(source_id, parse_status)",
         "CREATE INDEX IF NOT EXISTS idx_normalized_signals_source_id_desc ON normalized_signals(source_id, id DESC)",
         "CREATE INDEX IF NOT EXISTS idx_normalized_signals_source_status ON normalized_signals(source_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_normalized_signals_raw_item ON normalized_signals(source_raw_item_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_source_raw_items_source_external ON source_raw_items(source_id, external_item_id)",
+        "CREATE INDEX IF NOT EXISTS idx_source_raw_items_source_issue_published ON source_raw_items(source_id, issue_no, published_at)",
         "CREATE INDEX IF NOT EXISTS idx_telegram_accounts_user ON telegram_accounts(user_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_delivery_targets_user ON delivery_targets(user_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_user_subscriptions_user ON user_subscriptions(user_id, status)",
@@ -2265,6 +2268,48 @@ class DatabaseRepository:
         )
         return row is not None
 
+    def find_raw_item_by_identity(
+        self,
+        *,
+        source_id: int,
+        external_item_id: Optional[str] = None,
+        issue_no: str = "",
+        published_at: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """按来源内的业务身份定位已存在的 raw_item，避免全表扫描。"""
+        normalized_external_item_id = str(external_item_id or "").strip()
+        if normalized_external_item_id:
+            row = self._fetch_one(
+                """
+                SELECT * FROM source_raw_items
+                WHERE source_id = ? AND TRIM(COALESCE(external_item_id, '')) = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (int(source_id), normalized_external_item_id),
+            )
+            if row:
+                return self._serialize_raw_item_row(row)
+
+        normalized_issue_no = str(issue_no or "").strip()
+        normalized_published_at = str(published_at or "").strip()
+        if normalized_issue_no and normalized_published_at:
+            row = self._fetch_one(
+                """
+                SELECT * FROM source_raw_items
+                WHERE source_id = ?
+                  AND TRIM(COALESCE(issue_no, '')) = ?
+                  AND TRIM(COALESCE(published_at, '')) = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (int(source_id), normalized_issue_no, normalized_published_at),
+            )
+            if row:
+                return self._serialize_raw_item_row(row)
+
+        return None
+
     def list_raw_items(
         self,
         source_id: Optional[int] = None,
@@ -2671,6 +2716,14 @@ class DatabaseRepository:
             (int(signal_id), int(user_id)),
         )
         return row is not None
+
+    def list_signals_by_raw_item(self, raw_item_id: int) -> list[Dict[str, Any]]:
+        """按 raw_item 直接取已标准化的信号，避免拉取来源全量信号后再过滤。"""
+        rows = self._fetch_all(
+            "SELECT * FROM normalized_signals WHERE source_raw_item_id = ? ORDER BY id ASC",
+            (int(raw_item_id),),
+        )
+        return [self._serialize_signal_row(row) for row in rows]
 
     def list_signals(
         self,

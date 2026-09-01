@@ -814,6 +814,12 @@ class FakeRepository:
                 return item
         return None
 
+    def list_signals_by_raw_item(self, raw_item_id):
+        return [
+            item for item in sorted(self.signals, key=lambda entry: int(entry["id"]))
+            if int(item.get("source_raw_item_id") or 0) == int(raw_item_id)
+        ]
+
     def list_signals(self, source_id=None, owner_user_id=None, limit=None, before_id=None):
         items = sorted(self.signals, key=lambda item: int(item["id"]), reverse=True)
         if source_id is not None:
@@ -874,6 +880,25 @@ class FakeRepository:
             return False
         source = self.get_source(item["source_id"]) or {}
         return source.get("owner_user_id") == int(user_id)
+
+    def find_raw_item_by_identity(self, *, source_id, external_item_id=None, issue_no="", published_at=""):
+        items = sorted(self.raw_items, key=lambda item: int(item["id"]), reverse=True)
+        items = [item for item in items if int(item["source_id"]) == int(source_id)]
+        normalized_external_item_id = str(external_item_id or "").strip()
+        if normalized_external_item_id:
+            for item in items:
+                if str(item.get("external_item_id") or "").strip() == normalized_external_item_id:
+                    return item
+        normalized_issue_no = str(issue_no or "").strip()
+        normalized_published_at = str(published_at or "").strip()
+        if normalized_issue_no and normalized_published_at:
+            for item in items:
+                if (
+                    str(item.get("issue_no") or "").strip() == normalized_issue_no
+                    and str(item.get("published_at") or "").strip() == normalized_published_at
+                ):
+                    return item
+        return None
 
     def list_raw_items(self, source_id=None, owner_user_id=None, limit=None, before_id=None):
         items = sorted(self.raw_items, key=lambda item: int(item["id"]), reverse=True)

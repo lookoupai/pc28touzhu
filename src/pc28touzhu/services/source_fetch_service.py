@@ -82,20 +82,12 @@ def _find_existing_raw_item(
     issue_no: str,
     published_at: str,
 ) -> Optional[Dict[str, Any]]:
-    normalized_external_item_id = str(external_item_id or "").strip()
-    normalized_issue_no = str(issue_no or "").strip()
-    normalized_published_at = str(published_at or "").strip()
-    for item in repository.list_raw_items(source_id=int(source_id)):
-        if normalized_external_item_id and str(item.get("external_item_id") or "").strip() == normalized_external_item_id:
-            return item
-        if (
-            normalized_issue_no
-            and str(item.get("issue_no") or "").strip() == normalized_issue_no
-            and normalized_published_at
-            and str(item.get("published_at") or "").strip() == normalized_published_at
-        ):
-            return item
-    return None
+    return repository.find_raw_item_by_identity(
+        source_id=int(source_id),
+        external_item_id=external_item_id,
+        issue_no=issue_no,
+        published_at=published_at,
+    )
 
 
 def _create_http_json_raw_item(repository: Any, source_id: int, fetch_config: Dict[str, Any], payload: Any) -> tuple[Dict[str, Any], bool]:
