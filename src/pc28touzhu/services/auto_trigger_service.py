@@ -10,6 +10,11 @@ from threading import Lock
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
+try:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+except ImportError:  # pragma: no cover - Python 3.8 compatibility
+    ZoneInfo = None
+    ZoneInfoNotFoundError = LookupError
 
 from pc28touzhu.domain.subscription_strategy import upgrade_subscription_strategy
 from pc28touzhu.domain.settlement_rules import normalize_settlement_rule_id
@@ -20,6 +25,9 @@ ALLOWED_METRICS = {"big_small", "odd_even", "combo"}
 ALLOWED_CONDITION_TYPES = {"hit_rate", "miss_streak"}
 ALLOWED_OPERATORS = {"lt", "lte", "gt", "gte"}
 ALLOWED_SCOPE_MODES = {"all_subscriptions", "selected_subscriptions"}
+ALLOWED_TRIGGER_MODES = {"condition", "schedule"}
+ALLOWED_WEEKDAYS = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+DEFAULT_SCHEDULE_WEEKDAYS = ["Mon", "Tue", "Thu", "Fri", "Sat", "Sun"]
 ALLOWED_PLAY_FILTER_ACTIONS = {"keep", "matched_metric", "fixed_metric"}
 ALLOWED_ROUTE_RISK_MODES = {"inherit_rule", "override", "disabled"}
 ALLOWED_ROUTE_SUBSCRIPTION_RISK_MODES = {"inherit_rule", "inherit_subscription", "override", "disabled"}
@@ -260,6 +268,75 @@ def _normalize_daily_risk_control(value: Any) -> dict:
     }
 
 
+def _schedule_timezone(name: Any) -> timezone:
+    timezone_name = str(name or "Asia/Shanghai").strip() or "Asia/Shanghai"
+    if timezone_name == "Asia/Shanghai":
+        return SHANGHAI_TZ
+    if ZoneInfo is None:
+        raise ValueError("schedule.timezone 当前运行环境不支持时区配置")
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        raise ValueError("schedule.timezone 不是有效的 IANA 时区")
+
+
+def _normalize_schedule(value: Any) -> dict:
+    payload = value if isinstance(value, dict) else {}
+    timezone_name = str(payload.get("timezone") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+    _schedule_timezone(timezone_name)
+    raw_weekdays = payload.get("weekdays")
+    if raw_weekdays is not None and not isinstance(raw_weekdays, list):
+        raise ValueError("schedule.weekdays 必须为数组")
+    weekdays = list(DEFAULT_SCHEDULE_WEEKDAYS if raw_weekdays is None else raw_weekdays)
+    normalized_weekdays = []
+    for item in weekdays:
+        day = str(item or "").strip().title()
+        if day not in ALLOWED_WEEKDAYS:
+            raise ValueError("schedule.weekdays 仅支持 Mon、Tue、Wed、Thu、Fri、Sat、Sun")
+        if day not in normalized_weekdays:
+            normalized_weekdays.append(day)
+
+    raw_windows = payload.get("windows")
+    if raw_windows is None:
+        raw_windows = [
+            {"id": "primary", "start": "18:00", "end": "18:30"},
+            {"id": "fallback", "start": "20:00", "end": "20:30"},
+        ]
+    if not isinstance(raw_windows, list) or not raw_windows:
+        raise ValueError("schedule.windows 至少需要一个时间窗口")
+    windows = []
+    seen_ids = set()
+    for index, item in enumerate(raw_windows, start=1):
+        if not isinstance(item, dict):
+            raise ValueError("schedule.windows[%s] 必须为对象" % index)
+        window_id = str(item.get("id") or ("primary" if index == 1 else "fallback")).strip()
+        if window_id not in {"primary", "fallback"} or window_id in seen_ids:
+            raise ValueError("schedule.windows 的 id 仅支持不重复的 primary 或 fallback")
+        start = str(item.get("start") or "").strip()
+        end = str(item.get("end") or "").strip()
+        for field, value_text in (("start", start), ("end", end)):
+            if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value_text):
+                raise ValueError("schedule.windows[%s].%s 必须为 HH:MM" % (index, field))
+        if start >= end:
+            raise ValueError("schedule.windows[%s] 必须满足 start 早于 end" % index)
+        seen_ids.add(window_id)
+        windows.append({"id": window_id, "start": start, "end": end})
+    max_starts = int(payload.get("max_starts_per_local_day") or 1)
+    if max_starts != 1:
+        raise ValueError("schedule.max_starts_per_local_day 第一版固定为 1")
+    signal_max_age = _to_positive_int(
+        payload.get("signal_max_age_seconds") if payload.get("signal_max_age_seconds") not in (None, "") else 300,
+        "schedule.signal_max_age_seconds",
+    )
+    return {
+        "timezone": timezone_name,
+        "weekdays": normalized_weekdays,
+        "windows": windows,
+        "max_starts_per_local_day": 1,
+        "signal_max_age_seconds": signal_max_age,
+    }
+
+
 def _normalize_route_settlement_policy(value: Any) -> dict:
     payload = value if isinstance(value, dict) else {}
     settlement_rule_id = normalize_settlement_rule_id(
@@ -423,14 +500,23 @@ def normalize_rule_payload(payload: Dict[str, Any], *, current: Optional[Dict[st
     cooldown_issues = int(cooldown_value if cooldown_value not in (None, "") else 10)
     if cooldown_issues < 0:
         raise ValueError("cooldown_issues 不能小于 0")
+    trigger_mode = str(payload.get("trigger_mode", source.get("trigger_mode") or "condition") or "condition").strip()
+    if trigger_mode not in ALLOWED_TRIGGER_MODES:
+        raise ValueError("trigger_mode 仅支持 condition 或 schedule")
+    schedule = _normalize_schedule(payload.get("schedule", source.get("schedule") or {})) if trigger_mode == "schedule" else {}
+    conditions_payload = payload.get("conditions", source.get("conditions") or [])
+    conditions = _normalize_conditions(conditions_payload) if trigger_mode == "condition" else []
+    guard_payload = payload.get("guard_groups", source.get("guard_groups") or [])
     return {
         "name": name,
         "status": status,
         "scope_mode": scope_mode,
         "subscription_ids": subscription_ids,
         "condition_mode": condition_mode,
-        "conditions": _normalize_conditions(payload.get("conditions", source.get("conditions") or [])),
-        "guard_groups": _normalize_guard_groups(payload.get("guard_groups", source.get("guard_groups") or [])),
+        "trigger_mode": trigger_mode,
+        "schedule": schedule,
+        "conditions": conditions,
+        "guard_groups": _normalize_guard_groups(guard_payload) if trigger_mode == "condition" else [],
         "action": _normalize_action(payload.get("action", source.get("action") or {})),
         "daily_risk_control": _normalize_daily_risk_control(
             payload.get("daily_risk_control", source.get("daily_risk_control") or {})
@@ -607,12 +693,65 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = N
                     ),
                 }
             )
+        schedule_status = ""
+        if str(rule.get("trigger_mode") or "condition") == "schedule":
+            schedule = _normalize_schedule(rule.get("schedule") or {})
+            local_now = _schedule_now(None, schedule["timezone"])
+            schedule_sub_ids = rule.get("subscription_ids") if rule.get("scope_mode") == "selected_subscriptions" else [item.get("id") for item in repository.list_auto_trigger_candidate_subscriptions(user_id=normalized_user_id)]
+            started = False
+            started_window_id = ""
+            no_fresh_signal = False
+            for sub_id in schedule_sub_ids or []:
+                day_run = repository.get_auto_trigger_rule_run_for_subscription_date(
+                    rule_id=int(rule["id"]), subscription_id=int(sub_id), stat_date=resolved_stat_date,
+                ) if hasattr(repository, "get_auto_trigger_rule_run_for_subscription_date") else None
+                if day_run:
+                    started = True
+                    if hasattr(repository, "get_latest_auto_trigger_event"):
+                        started_event = repository.get_latest_auto_trigger_event(
+                            rule_id=int(rule["id"]), subscription_id=int(sub_id), status="triggered",
+                        )
+                        started_snapshot = started_event.get("snapshot") if isinstance(started_event, dict) else {}
+                        if str(started_snapshot.get("stat_date") or "") == str(resolved_stat_date):
+                            started_window_id = str(started_snapshot.get("window_id") or "")
+                if hasattr(repository, "get_latest_auto_trigger_event"):
+                    skipped_event = repository.get_latest_auto_trigger_event(
+                        rule_id=int(rule["id"]), subscription_id=int(sub_id), status="skipped",
+                    )
+                    snapshot = skipped_event.get("snapshot") if isinstance(skipped_event, dict) else {}
+                    if (
+                        isinstance(skipped_event, dict)
+                        and str(snapshot.get("stat_date") or "") == str(resolved_stat_date)
+                        and str(skipped_event.get("reason") or "") in {"schedule_signal_not_found", "schedule_signal_stale"}
+                    ):
+                        no_fresh_signal = True
+            if str(daily_stat.get("status") or "") == "stopped":
+                schedule_status = "今日被风控停止"
+            elif started:
+                schedule_status = "主窗口已启动" if started_window_id == "primary" else "今日已启动"
+            elif no_fresh_signal:
+                schedule_status = "今日无新鲜信号"
+            else:
+                current_local_date = local_now.strftime("%Y-%m-%d")
+                current_hm = local_now.strftime("%H:%M")
+                fallback = next((item for item in schedule["windows"] if item.get("id") == "fallback"), None)
+                primary = next((item for item in schedule["windows"] if item.get("id") == "primary"), None)
+                if (
+                    resolved_stat_date == current_local_date
+                    and primary
+                    and fallback
+                    and str(primary.get("end") or "") <= current_hm < str(fallback.get("end") or "")
+                ):
+                    schedule_status = "主窗口未启动，等待备用窗口"
+                else:
+                    schedule_status = "未启动"
         items.append(
             {
                 **rule,
                 "stat_date": resolved_stat_date,
                 "daily_stat": daily_stat,
                 "routes": routes,
+                "schedule_status": schedule_status,
             }
         )
     return {"items": items}
@@ -1062,9 +1201,13 @@ def _record_event(
     restart_state: Optional[dict] = None,
     performance_fetch: Optional[dict] = None,
     stat_date: Optional[str] = None,
+    latest_issue_no: Optional[str] = None,
+    schedule_snapshot: Optional[dict] = None,
 ) -> Dict[str, Any]:
     source = subscription.get("source") if isinstance(subscription.get("source"), dict) else {}
-    latest_issue_no = str((performance or {}).get("latest_settled_issue") or "")
+    latest_issue_no = str(
+        latest_issue_no if latest_issue_no is not None else (performance or {}).get("latest_settled_issue") or ""
+    )
     predictor_id = None
     try:
         predictor_id = _predictor_id_from_url(_performance_url_from_source(source)) if source else None
@@ -1089,19 +1232,35 @@ def _record_event(
         snapshot["performance_fetch"] = performance_fetch
     if stat_date is not None:
         snapshot["stat_date"] = str(stat_date)
+    if isinstance(schedule_snapshot, dict):
+        snapshot.update(schedule_snapshot)
     if status in {"skipped", "failed"}:
         latest_event = repository.get_latest_auto_trigger_event(
             rule_id=int(rule["id"]),
             subscription_id=int(subscription["id"]),
             status=status,
         )
+        same_schedule_identity = False
+        if isinstance(schedule_snapshot, dict):
+            previous_snapshot = latest_event.get("snapshot") if isinstance(latest_event, dict) and isinstance(latest_event.get("snapshot"), dict) else {}
+            same_schedule_identity = (
+                str(previous_snapshot.get("stat_date") or "") == str(schedule_snapshot.get("stat_date") or "")
+                and str(previous_snapshot.get("window_id") or "") == str(schedule_snapshot.get("window_id") or "")
+            )
         if (
             latest_event
             and str(latest_event.get("reason") or "") == str(reason or "")
-            and str(latest_event.get("latest_issue_no") or "") == latest_issue_no
+            and (same_schedule_identity or str(latest_event.get("latest_issue_no") or "") == latest_issue_no)
             and str(latest_event.get("created_at") or "") >= _event_retention_cutoffs()[status]
         ):
-            return latest_event
+            previous_snapshot = latest_event.get("snapshot") if isinstance(latest_event.get("snapshot"), dict) else {}
+            dedupe_keys = {"stat_date", "window_id"}
+            if not isinstance(schedule_snapshot, dict) or all(
+                previous_snapshot.get(key) == schedule_snapshot.get(key)
+                for key in dedupe_keys
+                if key in schedule_snapshot
+            ):
+                return latest_event
     return repository.record_auto_trigger_event(
         rule_id=int(rule["id"]),
         user_id=int(rule["user_id"]),
@@ -1183,6 +1342,77 @@ def _is_rule_day_stopped(repository: Any, rule: Dict[str, Any], *, stat_date: st
         stat_date=stat_date,
     )
     return {"stopped": str(stat.get("status") or "") == "stopped", "stat": stat}
+
+
+def _schedule_now(now: Optional[datetime], timezone_name: str) -> datetime:
+    tz = _schedule_timezone(timezone_name)
+    reference = now or datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    return reference.astimezone(tz)
+
+
+def _schedule_window(schedule: Dict[str, Any], local_now: datetime) -> tuple[Optional[dict], str]:
+    weekdays = set(schedule.get("weekdays") or [])
+    day_name = local_now.strftime("%a")
+    if day_name not in weekdays:
+        return None, "schedule_weekday_blocked"
+    current_hm = local_now.strftime("%H:%M")
+    windows = schedule.get("windows") or []
+    for window in windows:
+        if str(window.get("start") or "") <= current_hm < str(window.get("end") or ""):
+            return window, ""
+    return None, "outside_schedule_window"
+
+
+def _schedule_signal_age_seconds(signal: Dict[str, Any], now: datetime) -> Optional[int]:
+    value = str(signal.get("published_at") or "").strip()
+    if not value:
+        return None
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    try:
+        published = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=timezone.utc)
+    age = int((now.astimezone(timezone.utc) - published.astimezone(timezone.utc)).total_seconds())
+    return max(0, age)
+
+
+def _schedule_cross_day_block(
+    repository: Any,
+    *,
+    rule: Dict[str, Any],
+    subscription: Dict[str, Any],
+    stat_date: str,
+    local_now: datetime,
+) -> Optional[dict]:
+    if hasattr(repository, "get_latest_auto_trigger_rule_run_for_rule_subscription"):
+        latest = repository.get_latest_auto_trigger_rule_run_for_rule_subscription(
+            rule_id=int(rule["id"]), subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]),
+        )
+    elif hasattr(repository, "get_latest_auto_trigger_rule_run_for_subscription"):
+        latest = repository.get_latest_auto_trigger_rule_run_for_subscription(
+            subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]),
+        )
+    else:
+        return None
+    if not latest or str(latest.get("stat_date") or "") == str(stat_date):
+        return None
+    started_local_date = _stat_date_from_iso(latest.get("started_at"), timezone_name=str((rule.get("schedule") or {}).get("timezone") or "Asia/Shanghai"))
+    stopped_local_date = _stat_date_from_iso(latest.get("stopped_at"), timezone_name=str((rule.get("schedule") or {}).get("timezone") or "Asia/Shanghai"))
+    spans_today = str(latest.get("status") or "") == "active" and started_local_date and started_local_date != stat_date
+    ended_today = str(latest.get("status") or "") in {"closed", "stopped"} and stopped_local_date == stat_date
+    if not (spans_today or ended_today):
+        return None
+    if hasattr(repository, "block_auto_trigger_daily_start"):
+        return repository.block_auto_trigger_daily_start(
+            rule_id=int(rule["id"]), user_id=int(rule["user_id"]),
+            subscription_id=int(subscription["id"]), stat_date=stat_date,
+        )
+    return None
 
 
 def _active_route_cycle_context(
@@ -1325,7 +1555,279 @@ def _can_restart_subscription_cycle(subscription: Dict[str, Any]) -> bool:
     return bool(_subscription_restart_state(subscription).get("can_restart"))
 
 
-def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher=None) -> Dict[str, Any]:
+def evaluate_scheduled_auto_trigger_rule(
+    repository: Any,
+    rule: Dict[str, Any],
+    *,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    schedule = _normalize_schedule(rule.get("schedule") or {})
+    local_now = _schedule_now(now, schedule["timezone"])
+    stat_date = local_now.strftime("%Y-%m-%d")
+    window, schedule_reason = _schedule_window(schedule, local_now)
+    window_id = str((window or {}).get("id") or "")
+    schedule_snapshot = {
+        "stat_date": stat_date,
+        "window_id": window_id,
+        "local_time": local_now.strftime("%H:%M:%S"),
+    }
+    subscription_ids = rule.get("subscription_ids") if rule.get("scope_mode") == "selected_subscriptions" else None
+    subscriptions = repository.list_auto_trigger_candidate_subscriptions(
+        user_id=int(rule["user_id"]),
+        subscription_ids=subscription_ids,
+    )
+    summary = {"checked_count": 0, "triggered_count": 0, "skipped_count": 0, "failed_count": 0}
+    events = []
+
+    for subscription in subscriptions:
+        summary["checked_count"] += 1
+        claimed = False
+        try:
+            if schedule_reason:
+                events.append(_record_event(
+                    repository, rule=rule, subscription=subscription, performance=None,
+                    status="skipped", reason=schedule_reason, stat_date=stat_date,
+                    schedule_snapshot=schedule_snapshot,
+                ))
+                summary["skipped_count"] += 1
+                continue
+            daily_risk = _is_rule_day_stopped(repository, rule, stat_date=stat_date)
+            if daily_risk.get("stopped"):
+                events.append(_record_event(
+                    repository, rule=rule, subscription=subscription, performance=None,
+                    status="skipped", reason="schedule_daily_risk_stopped", stat_date=stat_date,
+                    schedule_snapshot={**schedule_snapshot, "daily_risk": daily_risk.get("stat")},
+                ))
+                summary["skipped_count"] += 1
+                continue
+            subscription_status = str(subscription.get("status") or "")
+            if subscription_status not in {"active", "standby"}:
+                events.append(_record_event(
+                    repository, rule=rule, subscription=subscription, performance=None,
+                    status="skipped", reason="subscription_not_active", stat_date=stat_date,
+                    schedule_snapshot=schedule_snapshot,
+                ))
+                summary["skipped_count"] += 1
+                continue
+            source = subscription.get("source") if isinstance(subscription.get("source"), dict) else {}
+            if str(source.get("status") or "") != "active":
+                events.append(_record_event(
+                    repository, rule=rule, subscription=subscription, performance=None,
+                    status="skipped", reason="source_not_active", stat_date=stat_date,
+                    schedule_snapshot=schedule_snapshot,
+                ))
+                summary["skipped_count"] += 1
+                continue
+            has_routes = bool(rule.get("routes"))
+            active_routes = []
+            skipped_routes = []
+            cross_day_block = _schedule_cross_day_block(
+                repository, rule=rule, subscription=subscription,
+                stat_date=stat_date, local_now=local_now,
+            )
+            if cross_day_block:
+                events.append(_record_event(
+                    repository, rule=rule, subscription=subscription, performance=None,
+                    status="skipped", reason="schedule_day_already_started", stat_date=stat_date,
+                    schedule_snapshot={**schedule_snapshot, "cross_day_block": cross_day_block},
+                ))
+                summary["skipped_count"] += 1
+                continue
+            if hasattr(repository, "get_auto_trigger_rule_run_for_subscription_date"):
+                existing_day_run = repository.get_auto_trigger_rule_run_for_subscription_date(
+                    rule_id=int(rule["id"]), subscription_id=int(subscription["id"]), stat_date=stat_date,
+                )
+                if existing_day_run:
+                    events.append(_record_event(
+                        repository, rule=rule, subscription=subscription, performance=None,
+                        status="skipped", reason="schedule_day_already_started", stat_date=stat_date,
+                        schedule_snapshot={**schedule_snapshot, "existing_day_run": existing_day_run},
+                    ))
+                    summary["skipped_count"] += 1
+                    continue
+            global_open_state = repository.subscription_has_open_run(
+                subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]),
+            )
+            if global_open_state.get("has_open_run"):
+                events.append(_record_event(
+                    repository, rule=rule, subscription=subscription, performance=None,
+                    status="skipped", reason="schedule_subscription_open", stat_date=stat_date,
+                    schedule_snapshot={**schedule_snapshot, "open_state": global_open_state},
+                ))
+                summary["skipped_count"] += 1
+                continue
+            if has_routes:
+                active_routes, skipped_routes = _active_routes_for_subscription(
+                    repository, rule=rule, subscription=subscription, stat_date=stat_date,
+                )
+                if not active_routes:
+                    route_reason = "schedule_subscription_open" if any(
+                        item.get("reason") == "route_has_open_run" for item in skipped_routes
+                    ) else "no_active_route"
+                    events.append(_record_event(
+                        repository, rule=rule, subscription=subscription, performance=None,
+                        status="skipped", reason=route_reason, stat_date=stat_date,
+                        schedule_snapshot={**schedule_snapshot, "skipped_routes": skipped_routes},
+                    ))
+                    summary["skipped_count"] += 1
+                    continue
+
+            action = rule.get("action") if isinstance(rule.get("action"), dict) else {}
+            signal_bet_type = _signal_bet_type_for_auto_trigger_context({"rule_action": action})
+            signal = repository.get_latest_ready_signal_for_source(
+                source_id=int(subscription["source_id"]), bet_type=signal_bet_type,
+            )
+            if not signal:
+                events.append(_record_event(
+                    repository, rule=rule, subscription=subscription, performance=None,
+                    status="skipped", reason="schedule_signal_not_found", stat_date=stat_date,
+                    schedule_snapshot=schedule_snapshot,
+                ))
+                summary["skipped_count"] += 1
+                continue
+            signal_issue_no = str(signal.get("issue_no") or "")
+            signal_age = _schedule_signal_age_seconds(signal, local_now)
+            signal_snapshot = {**schedule_snapshot, "signal_issue_no": signal_issue_no, "signal_age_seconds": signal_age}
+            if signal_age is None or signal_age > int(schedule["signal_max_age_seconds"]):
+                events.append(_record_event(
+                    repository, rule=rule, subscription=subscription, performance=None,
+                    status="skipped", reason="schedule_signal_stale", stat_date=stat_date,
+                    latest_issue_no=signal_issue_no, schedule_snapshot=signal_snapshot,
+                ))
+                summary["skipped_count"] += 1
+                continue
+            if _is_in_cooldown(repository, rule, int(subscription["id"]), signal_issue_no):
+                events.append(_record_event(
+                    repository, rule=rule, subscription=subscription, performance=None,
+                    status="skipped", reason="cooldown", stat_date=stat_date,
+                    latest_issue_no=signal_issue_no, schedule_snapshot=signal_snapshot,
+                ))
+                summary["skipped_count"] += 1
+                continue
+
+            # Existing thresholded rounds may be restarted, but reset them before
+            # claiming today's slot so a failed dispatch can still release it.
+            financial = subscription.get("financial") if isinstance(subscription.get("financial"), dict) else {}
+            if str(financial.get("threshold_status") or "").strip() in {"profit_target_hit", "loss_limit_hit"} and not has_routes:
+                repository.reset_subscription_runtime(
+                    subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]),
+                    note="定时触发规则：%s" % str(rule.get("name") or ""), enforce_threshold=True,
+                )
+
+            if subscription_status == "standby":
+                activated = repository.update_subscription_status(
+                    subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]), status="active",
+                )
+                if not activated:
+                    raise ValueError("subscription_id 对应的订阅不存在")
+                subscription = activated
+                subscription["source"] = source
+
+            claim = repository.claim_auto_trigger_daily_start(
+                rule_id=int(rule["id"]), user_id=int(rule["user_id"]),
+                subscription_id=int(subscription["id"]), stat_date=stat_date,
+                started_issue_no=signal_issue_no,
+            )
+            if not claim.get("claimed"):
+                events.append(_record_event(
+                    repository, rule=rule, subscription=subscription, performance=None,
+                    status="skipped", reason="schedule_day_already_started", stat_date=stat_date,
+                    latest_issue_no=signal_issue_no, schedule_snapshot=signal_snapshot,
+                ))
+                summary["skipped_count"] += 1
+                continue
+            claimed = True
+            rule_run = claim.get("run") or {}
+
+            if has_routes:
+                prepared_routes = []
+                for route in active_routes:
+                    route_rule_run = repository.ensure_auto_trigger_rule_run(
+                        rule_id=int(rule["id"]), user_id=int(rule["user_id"]),
+                        subscription_id=int(subscription["id"]),
+                        stat_date=str(route.get("_auto_trigger_stat_date") or stat_date),
+                        started_issue_no=signal_issue_no,
+                    )
+                    prepared_route = {
+                        **route,
+                        "_auto_trigger_rule_run_id": int(route_rule_run["id"]) if route_rule_run.get("id") else None,
+                        "_auto_trigger_stat_date": str(route.get("_auto_trigger_stat_date") or stat_date),
+                    }
+                    if hasattr(repository, "reset_auto_trigger_route_subscription_runtime"):
+                        repository.reset_auto_trigger_route_subscription_runtime(
+                            route_id=int(route["id"]), rule_id=int(rule["id"]),
+                            subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]),
+                            note="定时触发规则：%s / 路由：%s" % (
+                                str(rule.get("name") or ""), str(route.get("name") or route.get("id") or ""),
+                            ),
+                        )
+                    prepared_routes.append(prepared_route)
+                active_routes = prepared_routes
+            # Scheduled mode has already verified that no open runtime exists;
+            # avoid resetting it here so a failed dispatch can release the daily claim.
+
+            dispatch_result = None
+            if bool(action.get("dispatch_latest_signal", True)):
+                dispatch_context = {
+                    "rule_id": int(rule["id"]), "rule_run_id": int(rule_run.get("id") or 0),
+                    "stat_date": stat_date,
+                }
+                if has_routes:
+                    dispatch_context.update({"routes": active_routes, "matched_conditions": [], "rule_action": action})
+                dispatch_result = dispatch_signal(
+                    repository, int(signal["id"]), subscription_id=int(subscription["id"]),
+                    auto_trigger_context=dispatch_context,
+                )
+                dispatched_count = int(dispatch_result.get("created_count") or 0) + int(dispatch_result.get("existing_count") or 0)
+                if dispatched_count <= 0:
+                    if hasattr(repository, "release_auto_trigger_daily_start"):
+                        repository.release_auto_trigger_daily_start(
+                            rule_id=int(rule["id"]), user_id=int(rule["user_id"]),
+                            subscription_id=int(subscription["id"]), stat_date=stat_date,
+                        )
+                    claimed = False
+                    events.append(_record_event(
+                        repository, rule=rule, subscription=subscription, performance=None,
+                        status="skipped", reason="schedule_signal_not_dispatched", stat_date=stat_date,
+                        latest_issue_no=signal_issue_no,
+                        dispatch_result=dispatch_result, schedule_snapshot=signal_snapshot,
+                    ))
+                    summary["skipped_count"] += 1
+                    continue
+
+            events.append(_record_event(
+                repository, rule=rule, subscription=subscription, performance=None,
+                status="triggered", reason="schedule_started", stat_date=stat_date,
+                latest_issue_no=signal_issue_no, dispatch_result=dispatch_result,
+                schedule_snapshot={**signal_snapshot, "claim_status": "started"},
+            ))
+            repository.mark_auto_trigger_rule_triggered(
+                rule_id=int(rule["id"]), user_id=int(rule["user_id"]), issue_no=signal_issue_no,
+            )
+            summary["triggered_count"] += 1
+        except Exception as exc:
+            if claimed and hasattr(repository, "release_auto_trigger_daily_start"):
+                try:
+                    repository.release_auto_trigger_daily_start(
+                        rule_id=int(rule["id"]), user_id=int(rule["user_id"]),
+                        subscription_id=int(subscription["id"]), stat_date=stat_date,
+                    )
+                except Exception:
+                    pass
+            events.append(_record_event(
+                repository, rule=rule, subscription=subscription, performance=None,
+                status="failed", reason=str(exc) or exc.__class__.__name__, stat_date=stat_date,
+                schedule_snapshot=schedule_snapshot,
+            ))
+            summary["failed_count"] += 1
+    return {"rule_id": int(rule["id"]), "summary": summary, "events": events}
+
+
+def evaluate_auto_trigger_rule(
+    repository: Any, rule: Dict[str, Any], *, fetcher=None, now: Optional[datetime] = None
+) -> Dict[str, Any]:
+    if str(rule.get("trigger_mode") or "condition") == "schedule":
+        return evaluate_scheduled_auto_trigger_rule(repository, rule, now=now)
     daily_risk_control = rule.get("daily_risk_control") if isinstance(rule.get("daily_risk_control"), dict) else {}
     stat_date = _today_stat_date(timezone_name=str(daily_risk_control.get("timezone") or "Asia/Shanghai"))
     day_state = _is_rule_day_stopped(repository, rule, stat_date=stat_date)
@@ -1607,7 +2109,14 @@ def evaluate_auto_trigger_rule(repository: Any, rule: Dict[str, Any], *, fetcher
     return {"rule_id": int(rule["id"]), "summary": summary, "events": events}
 
 
-def run_auto_trigger_cycle(repository: Any, *, user_id: Any = None, rule_id: Any = None, fetcher=None) -> Dict[str, Any]:
+def run_auto_trigger_cycle(
+    repository: Any,
+    *,
+    user_id: Any = None,
+    rule_id: Any = None,
+    fetcher=None,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
     normalized_user_id = _to_positive_int(user_id, "user_id", allow_none=True)
     normalized_rule_id = _to_positive_int(rule_id, "rule_id", allow_none=True)
     if normalized_rule_id is not None:
@@ -1623,7 +2132,7 @@ def run_auto_trigger_cycle(repository: Any, *, user_id: Any = None, rule_id: Any
         "rules": [],
     }
     for rule in rules:
-        item = evaluate_auto_trigger_rule(repository, rule, fetcher=fetcher)
+        item = evaluate_auto_trigger_rule(repository, rule, fetcher=fetcher, now=now)
         summary = item.get("summary") or {}
         for key in ["checked_count", "triggered_count", "skipped_count", "failed_count"]:
             result["summary"][key] += int(summary.get(key) or 0)

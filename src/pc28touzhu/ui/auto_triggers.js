@@ -46,11 +46,14 @@
     }
 
     function todayDateString() {
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, "0");
-        const day = String(now.getDate()).padStart(2, "0");
-        return year + "-" + month + "-" + day;
+        const parts = new Intl.DateTimeFormat("en-CA", {
+            timeZone: "Asia/Shanghai",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+        }).formatToParts(new Date());
+        const values = Object.fromEntries(parts.map(function (part) { return [part.type, part.value]; }));
+        return values.year + "-" + values.month + "-" + values.day;
     }
 
     function escapeHtml(value) {
@@ -201,6 +204,20 @@
 
     function eventReasonText(event) {
         const matchedText = (event.matched_conditions || []).map(conditionText).join("；");
+        const scheduleReasons = {
+            outside_schedule_window: "当前不在定时窗口内。",
+            schedule_weekday_blocked: "今天未启用定时触发。",
+            schedule_day_already_started: "今日已经启动过一轮。",
+            schedule_signal_not_found: "定时窗口内没有可用的新信号。",
+            schedule_signal_stale: "最新信号已超过允许延迟。",
+            schedule_subscription_open: "当前跟单方案仍有未结算轮次或待执行任务。",
+            schedule_daily_risk_stopped: "今日已被每日风控停止。",
+            schedule_signal_not_dispatched: "信号未成功派发，可在窗口内重试。",
+            schedule_started: "定时窗口已启动一轮。",
+        };
+        if (scheduleReasons[event.reason]) {
+            return scheduleReasons[event.reason];
+        }
         if (event.reason === "multiple_metrics_matched") {
             return "当前方案多指标同时命中，已仅跳过该方案" + (matchedText ? "：" + matchedText : "");
         }
@@ -313,7 +330,12 @@
         list.innerHTML = state.rules.map(function (rule) {
             const selected = String(rule.id) === String(state.editingRuleId) ? " is-active" : "";
             const scope = rule.scope_mode === "all_subscriptions" ? "全部跟单方案" : ("指定 " + String((rule.subscription_ids || []).length) + " 个方案");
+            const isSchedule = String(rule.trigger_mode || "condition") === "schedule";
             const conditions = (rule.conditions || []).map(conditionText).join("；") || "--";
+            const schedule = rule.schedule || {};
+            const scheduleText = isSchedule ? ("定时触发：" + ((schedule.windows || []).map(function (item) {
+                return String(item.id || "") + " " + String(item.start || "") + "-" + String(item.end || "");
+            }).join(" / ") || "未配置") + "，每天最多1轮") : "";
             const guardGroups = (rule.guard_groups || []).map(function (group, index) {
                 const groupConditions = (group.conditions || []).map(conditionText).join("；") || "--";
                 return "条件区" + String(index + 1) + "：" + groupConditions;
@@ -325,7 +347,8 @@
             return '' +
                 '<article class="rule-card' + selected + '">' +
                     '<div class="rule-card-head"><div><strong>' + escapeHtml(rule.name) + '</strong><p class="meta-line">' + escapeHtml(scope) + '</p></div>' + statusPill(rule.status) + '</div>' +
-                    '<p class="meta-line">开始条件：' + escapeHtml(conditions) + '</p>' +
+                    '<p class="meta-line">' + escapeHtml(isSchedule ? scheduleText : ("开始条件：" + conditions)) + '</p>' +
+                    (isSchedule && rule.schedule_status ? '<p class="meta-line">' + escapeHtml(rule.stat_date || "当前统计日") + ' 定时状态：' + escapeHtml(rule.schedule_status) + '</p>' : '') +
                     (guardGroups ? '<p class="meta-line">同时达成：' + escapeHtml(guardGroups) + '</p>' : '') +
                     '<p class="meta-line">' + escapeHtml(actionText(rule.action)) + '</p>' +
                     (routeCount ? '<p class="meta-line">投注路由：' + escapeHtml(routeCount) + ' 条' + (stoppedRouteCount ? '，今日已停 ' + escapeHtml(stoppedRouteCount) + ' 条' : '') + '</p>' : '') +
@@ -552,6 +575,21 @@
         form.elements.status.value = item.status || "active";
         form.elements.scope_mode.value = item.scope_mode || "selected_subscriptions";
         form.elements.cooldown_issues.value = String(item.cooldown_issues == null ? 10 : item.cooldown_issues);
+        form.elements.trigger_mode.value = item.trigger_mode || "condition";
+        const schedule = item.schedule || {};
+        form.elements.schedule_timezone.value = schedule.timezone || "Asia/Shanghai";
+        form.elements.schedule_signal_max_age_seconds.value = String(schedule.signal_max_age_seconds || 300);
+        const weekdays = new Set(schedule.weekdays || ["Mon", "Tue", "Thu", "Fri", "Sat", "Sun"]);
+        form.querySelectorAll('input[name="schedule_weekday"]').forEach(function (input) {
+            input.checked = weekdays.has(input.value);
+        });
+        const windows = schedule.windows || [];
+        const primary = windows.find(function (item) { return item.id === "primary"; }) || {};
+        const fallback = windows.find(function (item) { return item.id === "fallback"; }) || {};
+        form.elements.schedule_primary_start.value = primary.start || "18:00";
+        form.elements.schedule_primary_end.value = primary.end || "18:30";
+        form.elements.schedule_fallback_start.value = fallback.start || "20:00";
+        form.elements.schedule_fallback_end.value = fallback.end || "20:30";
         form.elements.dispatch_latest_signal.checked = item.action ? item.action.dispatch_latest_signal !== false : true;
         form.elements.skip_multiple_metrics_matched.checked = Boolean(item.action && item.action.skip_multiple_metrics_matched);
         form.elements.play_filter_action.value = item.action && item.action.play_filter_action ? item.action.play_filter_action : "keep";
@@ -568,10 +606,18 @@
         $("editorTitle").textContent = item.id ? "编辑触发规则" : "新建触发规则";
         $("cancelEditBtn").hidden = !item.id;
         updateScopeVisibility();
+        updateTriggerModeVisibility();
         updateActionVisibility();
         updateDailyRiskVisibility();
         renderRuleList();
         setStatus("", false);
+    }
+
+    function updateTriggerModeVisibility() {
+        const isSchedule = $("triggerModeSelect").value === "schedule";
+        $("scheduleFields").hidden = !isSchedule;
+        $("conditionPanel").hidden = isSchedule;
+        $("guardPanel").hidden = isSchedule;
     }
 
     function updateScopeVisibility() {
@@ -686,6 +732,17 @@
             scope_mode: form.elements.scope_mode.value,
             subscription_ids: Array.from($("subscriptionSelect").selectedOptions).map(function (option) { return Number(option.value); }),
             cooldown_issues: Number(form.elements.cooldown_issues.value || 0),
+            trigger_mode: form.elements.trigger_mode.value,
+            schedule: {
+                timezone: form.elements.schedule_timezone.value,
+                weekdays: Array.from(form.querySelectorAll('input[name="schedule_weekday"]:checked')).map(function (input) { return input.value; }),
+                windows: [
+                    {id: "primary", start: form.elements.schedule_primary_start.value, end: form.elements.schedule_primary_end.value},
+                    {id: "fallback", start: form.elements.schedule_fallback_start.value, end: form.elements.schedule_fallback_end.value},
+                ],
+                max_starts_per_local_day: 1,
+                signal_max_age_seconds: Number(form.elements.schedule_signal_max_age_seconds.value || 300),
+            },
             condition_mode: "any",
             conditions: collectConditions($("conditionRows")),
             guard_groups: collectGuardGroups(),
@@ -796,6 +853,7 @@
     function attachEvents() {
         $("ruleForm").addEventListener("submit", saveRule);
         $("scopeModeSelect").addEventListener("change", updateScopeVisibility);
+        $("triggerModeSelect").addEventListener("change", updateTriggerModeVisibility);
         $("playFilterActionSelect").addEventListener("change", updateActionVisibility);
         $("dailyRiskEnabledInput").addEventListener("change", updateDailyRiskVisibility);
         $("statDateInput").addEventListener("change", async function (event) {

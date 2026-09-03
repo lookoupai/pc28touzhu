@@ -703,6 +703,47 @@ select[multiple].text-input {
     color: var(--danger);
 }
 
+.schedule-panel {
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface-subtle);
+}
+
+.schedule-panel.wide {
+    grid-column: 1 / -1;
+}
+
+.schedule-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.weekday-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    padding-top: 8px;
+}
+
+.weekday-options label {
+    color: var(--text);
+    font-size: 13px;
+}
+
+.schedule-time-pair {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 8px;
+}
+
+.schedule-note {
+    grid-column: 1 / -1;
+    margin: 0;
+}
+
 @media (max-width: 1080px) {
     .page-head,
     .workspace {
@@ -734,6 +775,7 @@ select[multiple].text-input {
     .summary-grid,
     .form-grid,
     .daily-risk-grid,
+    .schedule-grid,
     .condition-row,
     .action-row {
         grid-template-columns: 1fr;

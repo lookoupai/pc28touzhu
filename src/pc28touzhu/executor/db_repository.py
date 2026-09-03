@@ -618,6 +618,8 @@ class DatabaseRepository:
             action_json TEXT NOT NULL DEFAULT '{}',
             daily_risk_control_json TEXT NOT NULL DEFAULT '{}',
             cooldown_issues INTEGER NOT NULL DEFAULT 10,
+            trigger_mode TEXT NOT NULL DEFAULT 'condition',
+            schedule_json TEXT NOT NULL DEFAULT '{}',
             last_triggered_issue_no TEXT NOT NULL DEFAULT '',
             last_triggered_at TEXT,
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
@@ -1095,6 +1097,8 @@ class DatabaseRepository:
         column_definitions = {
             "guard_groups_json": "ALTER TABLE auto_trigger_rules ADD COLUMN guard_groups_json TEXT NOT NULL DEFAULT '[]'",
             "daily_risk_control_json": "ALTER TABLE auto_trigger_rules ADD COLUMN daily_risk_control_json TEXT NOT NULL DEFAULT '{}'",
+            "trigger_mode": "ALTER TABLE auto_trigger_rules ADD COLUMN trigger_mode TEXT NOT NULL DEFAULT 'condition'",
+            "schedule_json": "ALTER TABLE auto_trigger_rules ADD COLUMN schedule_json TEXT NOT NULL DEFAULT '{}'",
         }
         for column_name, ddl in column_definitions.items():
             if column_name not in existing_columns:
@@ -1553,6 +1557,8 @@ class DatabaseRepository:
             "action": _safe_json_loads(row.get("action_json")),
             "daily_risk_control": _safe_json_loads(row.get("daily_risk_control_json")),
             "cooldown_issues": int(row.get("cooldown_issues") or 0),
+            "trigger_mode": str(row.get("trigger_mode") or "condition"),
+            "schedule": _safe_json_loads(row.get("schedule_json")),
             "last_triggered_issue_no": str(row.get("last_triggered_issue_no") or ""),
             "last_triggered_at": row.get("last_triggered_at"),
             "created_at": row.get("created_at"),
@@ -3393,6 +3399,8 @@ class DatabaseRepository:
         daily_risk_control: Optional[dict] = None,
         cooldown_issues: int = 10,
         routes: Optional[list[dict]] = None,
+        trigger_mode: str = "condition",
+        schedule: Optional[dict] = None,
     ) -> Dict[str, Any]:
         now = _utc_now_iso()
         with self._connect() as conn:
@@ -3401,8 +3409,8 @@ class DatabaseRepository:
                 INSERT INTO auto_trigger_rules(
                     user_id, name, status, scope_mode, subscription_ids_json, condition_mode,
                     conditions_json, guard_groups_json, action_json, daily_risk_control_json,
-                    cooldown_issues, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    cooldown_issues, trigger_mode, schedule_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(user_id),
@@ -3416,6 +3424,8 @@ class DatabaseRepository:
                     _safe_json_dumps(action or {}),
                     _safe_json_dumps(daily_risk_control or {}),
                     int(cooldown_issues),
+                    str(trigger_mode or "condition"),
+                    _safe_json_dumps(schedule or {}),
                     now,
                     now,
                 ),
@@ -3693,6 +3703,8 @@ class DatabaseRepository:
         daily_risk_control: Optional[dict],
         cooldown_issues: int,
         routes: Optional[list[dict]] = None,
+        trigger_mode: str = "condition",
+        schedule: Optional[dict] = None,
     ) -> Optional[Dict[str, Any]]:
         now = _utc_now_iso()
         with self._connect() as conn:
@@ -3709,6 +3721,8 @@ class DatabaseRepository:
                     action_json = ?,
                     daily_risk_control_json = ?,
                     cooldown_issues = ?,
+                    trigger_mode = ?,
+                    schedule_json = ?,
                     updated_at = ?
                 WHERE id = ? AND user_id = ?
                 """,
@@ -3723,6 +3737,8 @@ class DatabaseRepository:
                     _safe_json_dumps(action or {}),
                     _safe_json_dumps(daily_risk_control or {}),
                     int(cooldown_issues),
+                    str(trigger_mode or "condition"),
+                    _safe_json_dumps(schedule or {}),
                     now,
                     int(rule_id),
                     int(user_id),
@@ -4009,18 +4025,66 @@ class DatabaseRepository:
         )
         return self._serialize_auto_trigger_rule_run_row(row) if row else None
 
+    def get_auto_trigger_rule_run_for_subscription_date(
+        self, *, rule_id: int, subscription_id: int, stat_date: str
+    ) -> Optional[Dict[str, Any]]:
+        row = self._fetch_one(
+            """
+            SELECT * FROM auto_trigger_rule_runs
+            WHERE rule_id = ? AND subscription_id = ? AND stat_date = ?
+            LIMIT 1
+            """,
+            (int(rule_id), int(subscription_id), str(stat_date or "").strip()),
+        )
+        return self._serialize_auto_trigger_rule_run_row(row) if row else None
+
     def get_latest_auto_trigger_rule_run_for_subscription(self, *, subscription_id: int, user_id: int) -> Optional[Dict[str, Any]]:
         row = self._fetch_one(
             """
             SELECT *
             FROM auto_trigger_rule_runs
             WHERE subscription_id = ? AND user_id = ?
-            ORDER BY id DESC
+            ORDER BY CASE WHEN status = 'active' THEN 0 WHEN status = 'stopped' THEN 1 ELSE 2 END, id DESC
             LIMIT 1
             """,
             (int(subscription_id), int(user_id)),
         )
         return self._serialize_auto_trigger_rule_run_row(row) if row else None
+
+    def get_latest_auto_trigger_rule_run_for_rule_subscription(
+        self, *, rule_id: int, subscription_id: int, user_id: int
+    ) -> Optional[Dict[str, Any]]:
+        row = self._fetch_one(
+            """
+            SELECT * FROM auto_trigger_rule_runs
+            WHERE rule_id = ? AND subscription_id = ? AND user_id = ?
+            ORDER BY CASE WHEN status = 'active' THEN 0 WHEN status = 'stopped' THEN 1 ELSE 2 END, id DESC
+            LIMIT 1
+            """,
+            (int(rule_id), int(subscription_id), int(user_id)),
+        )
+        return self._serialize_auto_trigger_rule_run_row(row) if row else None
+
+    def block_auto_trigger_daily_start(
+        self, *, rule_id: int, user_id: int, subscription_id: int, stat_date: str
+    ) -> Dict[str, Any]:
+        """Persist a consumed local day when a prior-day round spans or ends today."""
+        now = _utc_now_iso()
+        normalized_date = str(stat_date or "").strip()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO auto_trigger_rule_runs(
+                    rule_id, user_id, subscription_id, stat_date, started_issue_no,
+                    status, started_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, '', 'blocked', ?, ?, ?)
+                ON CONFLICT(rule_id, subscription_id, stat_date) DO NOTHING
+                """,
+                (int(rule_id), int(user_id), int(subscription_id), normalized_date, now, now, now),
+            )
+        return self.get_auto_trigger_rule_run_for_subscription_date(
+            rule_id=int(rule_id), subscription_id=int(subscription_id), stat_date=normalized_date,
+        ) or {}
 
     def get_active_auto_trigger_route_subscription_runtime_run(
         self,
@@ -4098,6 +4162,73 @@ class DatabaseRepository:
             (int(rule_id), int(subscription_id), str(stat_date or "").strip()),
         )
         return self._serialize_auto_trigger_rule_run_row(row) if row else {}
+
+    def claim_auto_trigger_daily_start(
+        self,
+        *,
+        rule_id: int,
+        user_id: int,
+        subscription_id: int,
+        stat_date: str,
+        started_issue_no: str = "",
+    ) -> Dict[str, Any]:
+        """Atomically reserve the one-start-per-subscription local day slot."""
+        now = _utc_now_iso()
+        normalized_date = str(stat_date or "").strip()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO auto_trigger_rule_runs(
+                    rule_id, user_id, subscription_id, stat_date, started_issue_no,
+                    status, started_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                ON CONFLICT(rule_id, subscription_id, stat_date) DO NOTHING
+                """,
+                (
+                    int(rule_id), int(user_id), int(subscription_id), normalized_date,
+                    str(started_issue_no or ""), now, now, now,
+                ),
+            )
+            claimed = cursor.rowcount == 1
+        row = self._fetch_one(
+            """
+            SELECT * FROM auto_trigger_rule_runs
+            WHERE rule_id = ? AND subscription_id = ? AND stat_date = ?
+            LIMIT 1
+            """,
+            (int(rule_id), int(subscription_id), normalized_date),
+        )
+        return {
+            "claimed": bool(claimed),
+            "run": self._serialize_auto_trigger_rule_run_row(row) if row else {},
+        }
+
+    def release_auto_trigger_daily_start(
+        self,
+        *,
+        rule_id: int,
+        user_id: int,
+        subscription_id: int,
+        stat_date: str,
+    ) -> bool:
+        """Release a reservation when no dispatch was created, enabling same-window retry."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM auto_trigger_rule_runs
+                WHERE rule_id = ? AND user_id = ? AND subscription_id = ? AND stat_date = ?
+                  AND status = 'active'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM subscription_progression_events
+                      WHERE auto_trigger_rule_id = ? AND auto_trigger_rule_run_id = auto_trigger_rule_runs.id
+                  )
+                """,
+                (
+                    int(rule_id), int(user_id), int(subscription_id), str(stat_date or "").strip(),
+                    int(rule_id),
+                ),
+            )
+            return cursor.rowcount > 0
 
     def stop_auto_trigger_rule_day(
         self,

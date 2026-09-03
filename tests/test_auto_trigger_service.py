@@ -121,6 +121,102 @@ class AutoTriggerServiceTests(unittest.TestCase):
             },
         }
 
+    def _schedule_payload(self, *, weekdays=None):
+        return {
+            "name": "定时规则",
+            "scope_mode": "selected_subscriptions",
+            "subscription_ids": [self.subscription["id"]],
+            "trigger_mode": "schedule",
+            "schedule": {
+                "timezone": "Asia/Shanghai",
+                "weekdays": weekdays if weekdays is not None else ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+                "windows": [
+                    {"id": "primary", "start": "18:00", "end": "18:30"},
+                    {"id": "fallback", "start": "20:00", "end": "20:30"},
+                ],
+                "max_starts_per_local_day": 1,
+                "signal_max_age_seconds": 300,
+            },
+            "action": {"dispatch_latest_signal": True},
+        }
+
+    def test_schedule_primary_window_dispatches_without_performance_fetch(self):
+        fresh = self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260418002",
+            bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
+            published_at="2026-09-02T10:04:30Z",
+        )
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        with patch("pc28touzhu.services.auto_trigger_service._http_json_fetch") as fetch:
+            result = run_auto_trigger_cycle(
+                self.repo, user_id=self.user_id, rule_id=rule["id"],
+                now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc),
+            )
+        fetch.assert_not_called()
+        self.assertEqual(result["rules"][0]["summary"]["triggered_count"], 1)
+        event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(event["reason"], "schedule_started")
+        self.assertEqual(event["snapshot"]["window_id"], "primary")
+        self.assertEqual(event["snapshot"]["signal_issue_no"], "20260418002")
+
+    def test_schedule_primary_claim_prevents_fallback_duplicate(self):
+        self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260418002",
+            bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
+            published_at="2026-09-02T10:04:30Z",
+        )
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc))
+        second = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 12, 5, tzinfo=timezone.utc))
+        self.assertEqual(first["rules"][0]["summary"]["triggered_count"], 1)
+        self.assertEqual(second["rules"][0]["summary"]["skipped_count"], 1)
+        reasons = [item["reason"] for item in self.repo.list_auto_trigger_events(user_id=self.user_id, limit=10)]
+        self.assertIn("schedule_day_already_started", reasons)
+
+    def test_schedule_stale_primary_signal_can_be_replaced_in_fallback(self):
+        self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260418002",
+            bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
+            published_at="2026-09-02T09:55:00Z",
+        )
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        primary = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc))
+        self.assertEqual(primary["rules"][0]["summary"]["triggered_count"], 0)
+        self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260418003",
+            bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
+            published_at="2026-09-02T12:04:30Z",
+        )
+        fallback = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 12, 5, tzinfo=timezone.utc))
+        self.assertEqual(fallback["rules"][0]["summary"]["triggered_count"], 1)
+        event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=10)[0]
+        self.assertEqual(event["snapshot"]["window_id"], "fallback")
+
+    def test_schedule_weekday_and_cross_day_block(self):
+        weekday_rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload(weekdays=["Mon", "Tue", "Thu", "Fri", "Sat", "Sun"]))["item"]
+        blocked = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=weekday_rule["id"], now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc))
+        self.assertEqual(blocked["rules"][0]["summary"]["skipped_count"], 1)
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        self.repo.ensure_auto_trigger_rule_run(rule_id=rule["id"], user_id=self.user_id, subscription_id=self.subscription["id"], stat_date="2026-09-01", started_issue_no="old")
+        cross_day = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc))
+        self.assertEqual(cross_day["rules"][0]["summary"]["skipped_count"], 1)
+        event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(event["reason"], "schedule_day_already_started")
+
+    def test_schedule_dispatch_failure_releases_daily_claim_for_retry(self):
+        self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260902002",
+            bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
+            published_at="2026-09-02T10:04:30Z",
+        )
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        with patch("pc28touzhu.services.auto_trigger_service.dispatch_signal", return_value={"created_count": 0, "existing_count": 0, "jobs": []}):
+            failed_dispatch = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc))
+        self.assertEqual(failed_dispatch["rules"][0]["summary"]["skipped_count"], 1)
+        self.assertIsNone(self.repo.get_auto_trigger_rule_run_for_subscription_date(rule_id=rule["id"], subscription_id=self.subscription["id"], stat_date="2026-09-02"))
+        retry = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc))
+        self.assertEqual(retry["rules"][0]["summary"]["triggered_count"], 1)
+
     def test_default_performance_fetcher_reuses_successful_cache(self):
         for name in ["规则 A", "规则 B"]:
             create_auto_trigger_rule(

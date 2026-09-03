@@ -90,6 +90,48 @@
                                 <span>冷却期数</span>
                                 <input class="text-input" name="cooldown_issues" type="number" min="0" step="1" value="10">
                             </label>
+                            <label class="field wide">
+                                <span>触发方式</span>
+                                <select id="triggerModeSelect" class="text-input" name="trigger_mode">
+                                    <option value="condition">条件触发</option>
+                                    <option value="schedule">定时触发</option>
+                                </select>
+                            </label>
+                            <div id="scheduleFields" class="schedule-panel wide" hidden>
+                                <div class="schedule-grid">
+                                    <label class="field">
+                                        <span>时区</span>
+                                        <select class="text-input" name="schedule_timezone">
+                                            <option value="Asia/Shanghai">Asia/Shanghai（北京时间）</option>
+                                        </select>
+                                    </label>
+                                    <label class="field">
+                                        <span>最新信号最大延迟（秒）</span>
+                                        <input class="text-input" name="schedule_signal_max_age_seconds" type="number" min="1" step="1" value="300">
+                                    </label>
+                                    <div class="field">
+                                        <span>星期</span>
+                                        <div class="weekday-options">
+                                            <label><input type="checkbox" name="schedule_weekday" value="Mon" checked>周一</label>
+                                            <label><input type="checkbox" name="schedule_weekday" value="Tue" checked>周二</label>
+                                            <label><input type="checkbox" name="schedule_weekday" value="Wed">周三</label>
+                                            <label><input type="checkbox" name="schedule_weekday" value="Thu" checked>周四</label>
+                                            <label><input type="checkbox" name="schedule_weekday" value="Fri" checked>周五</label>
+                                            <label><input type="checkbox" name="schedule_weekday" value="Sat" checked>周六</label>
+                                            <label><input type="checkbox" name="schedule_weekday" value="Sun" checked>周日</label>
+                                        </div>
+                                    </div>
+                                    <div class="field schedule-window-field">
+                                        <span>主窗口</span>
+                                        <div class="schedule-time-pair"><input class="text-input" name="schedule_primary_start" type="time" value="18:00" aria-label="主窗口开始时间"><span>至</span><input class="text-input" name="schedule_primary_end" type="time" value="18:30" aria-label="主窗口结束时间"></div>
+                                    </div>
+                                    <div class="field schedule-window-field">
+                                        <span>备用窗口</span>
+                                        <div class="schedule-time-pair"><input class="text-input" name="schedule_fallback_start" type="time" value="20:00" aria-label="备用窗口开始时间"><span>至</span><input class="text-input" name="schedule_fallback_end" type="time" value="20:30" aria-label="备用窗口结束时间"></div>
+                                    </div>
+                                    <p class="meta-line schedule-note">每天最多启动一轮。主窗口未启动时，备用窗口才会补启动；窗口结束后不会补发旧信号。</p>
+                                </div>
+                            </div>
                             <label class="check-row wide">
                                 <input name="skip_multiple_metrics_matched" type="checkbox">
                                 <span>单个方案同次命中 2 个或更多不同玩法指标时，仅跳过该方案</span>
@@ -125,7 +167,7 @@
                             </label>
                         </div>
 
-                        <div class="condition-panel">
+                        <div id="conditionPanel" class="condition-panel">
                             <div class="section-head">
                                 <div>
                                     <p class="panel-kicker">开始条件</p>
@@ -136,7 +178,7 @@
                             <div id="conditionRows" class="condition-rows"></div>
                         </div>
 
-                        <div class="condition-panel">
+                        <div id="guardPanel" class="condition-panel">
                             <div class="section-head">
                                 <div>
                                     <p class="panel-kicker">同时达成条件区</p>
