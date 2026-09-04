@@ -44,3 +44,10 @@ env/
 data/
 .autobet_payload.json
 .autobet_runtime_check.js
+
+# 一次性分析/修正脚本（仅根目录，不影响 src 下的正式模块）
+/analysis_*.py
+/fix_*.py
+
+# spec-workflow 工具目录
+.spec-workflow/
