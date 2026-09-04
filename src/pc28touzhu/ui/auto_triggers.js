@@ -210,6 +210,7 @@
             schedule_day_already_started: "今日已经启动过一轮。",
             schedule_signal_not_found: "定时窗口内没有可用的新信号。",
             schedule_signal_stale: "最新信号已超过允许延迟。",
+            schedule_signal_before_window: "最新信号在窗口开始前就已发布，等窗口内新发布的信号。",
             schedule_subscription_open: "当前跟单方案仍有未结算轮次或待执行任务。",
             schedule_daily_risk_stopped: "今日已被每日风控停止。",
             schedule_signal_not_dispatched: "信号未成功派发，可在窗口内重试。",

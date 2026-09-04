@@ -28,6 +28,7 @@ from pc28touzhu.services.auto_trigger_service import (
     update_auto_trigger_rule,
     update_auto_trigger_rule_status,
 )
+from pc28touzhu.services.pc28_draw_service import get_pc28_draw_clock
 from pc28touzhu.services.platform_service import (
     begin_telegram_account_login,
     create_user,
@@ -903,6 +904,7 @@ class PlatformApiApplication:
                 self.repository,
                 user_id=current_user["id"],
                 rule_id=body.get("rule_id"),
+                draw_clock=get_pc28_draw_clock(),
             )
             return _json_response(start_response, 200, payload)
 

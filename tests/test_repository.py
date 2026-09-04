@@ -2943,6 +2943,90 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(settled["event"]["settlement_rule_id"], "pc28_high_regular")
         self.assertEqual(settled["financial"]["realized_profit"], 18.46)
 
+    def _prepare_issue_window_dispatch(self, label: str, *, issue_no: str) -> dict:
+        user_id = self.repo.create_user("dispatch-%s-user" % label)
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="dispatch-%s" % label,
+        )["id"]
+        account_id = self.repo.create_telegram_account_record(
+            user_id=user_id,
+            label="执行号",
+            phone="+1201777%s" % str(abs(hash(label)) % 10000).zfill(4),
+            session_path="/data/dispatch-%s/main" % label,
+            status="active",
+        )["id"]
+        self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={"mode": "follow", "stake_amount": 10},
+        )
+        self.repo.create_delivery_target_record(
+            user_id=user_id,
+            telegram_account_id=account_id,
+            executor_type="telegram_group",
+            target_key="-100%s" % str(abs(hash(label)) % 100000).zfill(5),
+            target_name="封盘闸测试群",
+            status="active",
+        )
+        return self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no=issue_no,
+            bet_type="big_small",
+            bet_value="大",
+            normalized_payload={},
+        )
+
+    @staticmethod
+    def _draw_clock(latest_issue_no: str, countdown_seconds: int) -> dict:
+        return {
+            "latest_issue_no": latest_issue_no,
+            "countdown_seconds": countdown_seconds,
+            "fetched_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "stale": False,
+        }
+
+    def test_dispatch_signal_blocks_issue_that_already_drew(self):
+        signal = self._prepare_issue_window_dispatch("issue-drawn", issue_no="3477884")
+
+        result = dispatch_signal(
+            self.repo, signal["id"], draw_clock=self._draw_clock("3477884", 180),
+        )
+
+        self.assertTrue(result["blocked"])
+        self.assertEqual(result["block_reason"], "issue_already_drawn")
+        self.assertEqual(result["created_count"], 0)
+        self.assertEqual(result["jobs"], [])
+        self.assertIsNone(
+            self.repo.get_progression_event_by_signal(
+                subscription_id=int(self.repo.list_dispatch_candidates(signal["id"])[0]["subscription_id"]),
+                signal_id=int(signal["id"]),
+            )
+        )
+
+    def test_dispatch_signal_blocks_when_betting_window_too_short(self):
+        signal = self._prepare_issue_window_dispatch("issue-short", issue_no="3477885")
+
+        result = dispatch_signal(
+            self.repo, signal["id"], draw_clock=self._draw_clock("3477884", 15),
+        )
+
+        self.assertTrue(result["blocked"])
+        self.assertEqual(result["block_reason"], "window_too_short")
+        self.assertEqual(result["created_count"], 0)
+
+    def test_dispatch_signal_allows_issue_with_enough_betting_window(self):
+        signal = self._prepare_issue_window_dispatch("issue-open", issue_no="3477885")
+
+        result = dispatch_signal(
+            self.repo, signal["id"], draw_clock=self._draw_clock("3477884", 180),
+        )
+
+        self.assertNotIn("blocked", result)
+        self.assertEqual(result["created_count"], 1)
+
     def test_dispatch_candidates_excludes_inactive_account(self):
         user_id = self.repo.create_user("dispatch-inactive-user")
         source_id = self.repo.create_source_record(

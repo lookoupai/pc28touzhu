@@ -27,7 +27,7 @@ def collect_active_source_ids(repository: Any) -> List[int]:
     return source_ids
 
 
-def run_source_sync_cycle(repository: Any, *, fetcher=None) -> Dict[str, Any]:
+def run_source_sync_cycle(repository: Any, *, fetcher=None, draw_clock: Dict[str, Any] | None = None) -> Dict[str, Any]:
     source_ids = collect_active_source_ids(repository)
     summary = {
         "source_count": len(source_ids),
@@ -86,7 +86,7 @@ def run_source_sync_cycle(repository: Any, *, fetcher=None) -> Dict[str, Any]:
 
             signals = normalized.get("items") or []
             for signal in signals:
-                dispatch_result = dispatch_signal(repository, signal_id=int(signal["id"]))
+                dispatch_result = dispatch_signal(repository, signal_id=int(signal["id"]), draw_clock=draw_clock)
                 result["dispatch_candidate_count"] += int(dispatch_result.get("candidate_count") or 0)
                 result["created_job_count"] += int(dispatch_result.get("created_count") or 0)
                 result["existing_job_count"] += int(dispatch_result.get("existing_count") or 0)

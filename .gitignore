@@ -37,6 +37,7 @@ env/
 *.db-*
 *.db.before-*
 *.db.after-*
+*.db.backup-*
 *.session
 *.session-journal
 *.session.lock

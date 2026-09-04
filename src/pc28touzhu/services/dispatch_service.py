@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 from pc28touzhu.domain.pc28_play_filter import strategy_matches_signal
+from pc28touzhu.domain.pc28_issue_window import evaluate_pc28_issue_dispatch_window
 from pc28touzhu.domain.settlement_rules import build_settlement_snapshot
 from pc28touzhu.domain.subscription_strategy import (
     resolve_dispatch_policy,
@@ -589,10 +590,33 @@ def dispatch_signal(
     *,
     subscription_id: int | None = None,
     auto_trigger_context: Dict[str, Any] | None = None,
+    draw_clock: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     signal = repository.get_signal(signal_id)
     if not signal:
         raise ValueError("signal 不存在")
+
+    # 封盘闸：目标期已开奖或余量不足时整单不派，避免被投注群顺延记账到下一期。
+    # draw_clock 由调用方注入，未注入即不启用。
+    issue_window = evaluate_pc28_issue_dispatch_window(
+        issue_no=signal.get("issue_no"),
+        draw_clock=draw_clock,
+        now=_utc_now(),
+    )
+    if not issue_window["allowed"]:
+        return {
+            "signal_id": int(signal["id"]),
+            "subscription_id": int(subscription_id) if subscription_id is not None else None,
+            "candidate_count": 0,
+            "created_count": 0,
+            "existing_count": 0,
+            "skipped_count": 0,
+            "jobs": [],
+            "blocked": True,
+            "block_reason": str(issue_window["reason"]),
+            "issue_window": issue_window,
+        }
+
     if (
         subscription_id is not None
         and isinstance(auto_trigger_context, dict)

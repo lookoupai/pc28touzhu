@@ -5,6 +5,7 @@ import time
 from pc28touzhu.config import get_runtime_config
 from pc28touzhu.main import build_repository
 from pc28touzhu.services.auto_trigger_service import run_auto_trigger_cycle
+from pc28touzhu.services.pc28_draw_service import get_pc28_draw_clock
 
 
 def main() -> int:
@@ -19,7 +20,7 @@ def main() -> int:
             time.sleep(max(5, int(config.auto_trigger.interval_seconds or 5)))
             continue
 
-        result = run_auto_trigger_cycle(repo)
+        result = run_auto_trigger_cycle(repo, draw_clock=get_pc28_draw_clock())
         summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
         print(
             "auto trigger cycle rules=%s checked=%s triggered=%s skipped=%s failed=%s"

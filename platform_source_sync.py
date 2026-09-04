@@ -4,6 +4,7 @@ import time
 
 from pc28touzhu.config import get_runtime_config
 from pc28touzhu.main import build_repository
+from pc28touzhu.services.pc28_draw_service import get_pc28_draw_clock
 from pc28touzhu.services.source_sync_service import run_source_sync_cycle
 
 
@@ -19,7 +20,7 @@ def main() -> int:
             time.sleep(max(5, int(config.source_sync.interval_seconds or 5)))
             continue
 
-        result = run_source_sync_cycle(repo)
+        result = run_source_sync_cycle(repo, draw_clock=get_pc28_draw_clock())
         summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
         print(
             "source sync cycle sources=%s processed=%s fetched=%s normalized=%s candidates=%s created_jobs=%s existing_jobs=%s skipped=%s failed=%s"

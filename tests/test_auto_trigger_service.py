@@ -177,11 +177,12 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.repo.create_signal_record(
             source_id=self.source["id"], lottery_type="pc28", issue_no="20260418002",
             bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
-            published_at="2026-09-02T09:55:00Z",
+            published_at="2026-09-02T10:00:30Z",
         )
         rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
-        primary = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc))
+        primary = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 10, 10, tzinfo=timezone.utc))
         self.assertEqual(primary["rules"][0]["summary"]["triggered_count"], 0)
+        self.assertEqual(self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]["reason"], "schedule_signal_stale")
         self.repo.create_signal_record(
             source_id=self.source["id"], lottery_type="pc28", issue_no="20260418003",
             bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
@@ -191,6 +192,36 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(fallback["rules"][0]["summary"]["triggered_count"], 1)
         event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=10)[0]
         self.assertEqual(event["snapshot"]["window_id"], "fallback")
+
+    def test_schedule_rejects_signal_published_before_window_start(self):
+        self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260902101",
+            bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
+            published_at="2026-09-02T09:58:00Z",
+        )
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        carried_over = run_auto_trigger_cycle(
+            self.repo, user_id=self.user_id, rule_id=rule["id"],
+            now=datetime(2026, 9, 2, 10, 0, 30, tzinfo=timezone.utc),
+        )
+        self.assertEqual(carried_over["rules"][0]["summary"]["triggered_count"], 0)
+        blocked = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(blocked["reason"], "schedule_signal_before_window")
+        self.assertEqual(blocked["snapshot"]["window_start_local"], "18:00:00")
+        self.assertEqual(blocked["snapshot"]["signal_published_local"], "17:58:00")
+        self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260902102",
+            bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
+            published_at="2026-09-02T10:01:30Z",
+        )
+        fresh = run_auto_trigger_cycle(
+            self.repo, user_id=self.user_id, rule_id=rule["id"],
+            now=datetime(2026, 9, 2, 10, 2, tzinfo=timezone.utc),
+        )
+        self.assertEqual(fresh["rules"][0]["summary"]["triggered_count"], 1)
+        started = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(started["reason"], "schedule_started")
+        self.assertEqual(started["snapshot"]["signal_issue_no"], "20260902102")
 
     def test_schedule_weekday_and_cross_day_block(self):
         weekday_rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload(weekdays=["Mon", "Tue", "Thu", "Fri", "Sat", "Sun"]))["item"]

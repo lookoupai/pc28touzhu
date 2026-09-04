@@ -161,10 +161,13 @@ def _is_pc28_pair(triplet: Optional[tuple[int, int, int]]) -> bool:
 
 
 def _is_pc28_straight(triplet: Optional[tuple[int, int, int]]) -> bool:
+    # 三球在 0~9 的环上首尾相接也算顺子：890（8,9,0）与 190（9,0,1）。
     if not triplet or len(set(triplet)) != 3:
         return False
     ordered = sorted(triplet)
-    return ordered[0] + 1 == ordered[1] and ordered[1] + 1 == ordered[2]
+    if ordered[0] + 1 == ordered[1] and ordered[1] + 1 == ordered[2]:
+        return True
+    return set(ordered) in ({0, 8, 9}, {0, 1, 9})
 
 
 def _resolve_metric_from_signal(signal: Dict[str, Any]) -> Optional[str]:
@@ -207,6 +210,8 @@ def derive_pc28_draw_snapshot(draw_context: Any) -> Dict[str, Any]:
     is_baozi = bool(payload.get("is_baozi")) if "is_baozi" in payload else _is_pc28_baozi(triplet)
     is_straight = bool(payload.get("is_straight")) if "is_straight" in payload else _is_pc28_straight(triplet)
     is_pair = bool(payload.get("is_pair")) if "is_pair" in payload else _is_pc28_pair(triplet)
+    # 真实开奖时刻（UTC ISO Z），由开奖抓取侧透传，用于事后核算「派发 → 目标期开奖」的余量。
+    open_time = str(payload.get("open_time") or "").strip() or None
     return {
         "sum_value": int(sum_value) if sum_value is not None else None,
         "result_number": int(sum_value) if sum_value is not None else None,
@@ -214,6 +219,7 @@ def derive_pc28_draw_snapshot(draw_context: Any) -> Dict[str, Any]:
         "big_small": big_small or None,
         "odd_even": odd_even or None,
         "combo": combo or None,
+        "open_time": open_time,
         "special_flags": {
             "is_special_sum": bool(is_special_sum),
             "is_baozi": bool(is_baozi),

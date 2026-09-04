@@ -1281,6 +1281,7 @@ def _dispatch_latest_signal_if_available(
     subscription: Dict[str, Any],
     latest_settled_issue_no: str,
     auto_trigger_context: Optional[Dict[str, Any]] = None,
+    draw_clock: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     signal_bet_type = _signal_bet_type_for_auto_trigger_context(auto_trigger_context)
     signal = repository.get_latest_ready_signal_for_source(
@@ -1313,6 +1314,7 @@ def _dispatch_latest_signal_if_available(
         int(signal["id"]),
         subscription_id=int(subscription["id"]),
         auto_trigger_context=auto_trigger_context,
+        draw_clock=draw_clock,
     )
 
 
@@ -1365,8 +1367,8 @@ def _schedule_window(schedule: Dict[str, Any], local_now: datetime) -> tuple[Opt
     return None, "outside_schedule_window"
 
 
-def _schedule_signal_age_seconds(signal: Dict[str, Any], now: datetime) -> Optional[int]:
-    value = str(signal.get("published_at") or "").strip()
+def _parse_signal_published_at(signal: Dict[str, Any]) -> Optional[datetime]:
+    value = str((signal or {}).get("published_at") or "").strip()
     if not value:
         return None
     if value.endswith("Z"):
@@ -1377,7 +1379,22 @@ def _schedule_signal_age_seconds(signal: Dict[str, Any], now: datetime) -> Optio
         return None
     if published.tzinfo is None:
         published = published.replace(tzinfo=timezone.utc)
-    age = int((now.astimezone(timezone.utc) - published.astimezone(timezone.utc)).total_seconds())
+    return published.astimezone(timezone.utc)
+
+
+def _schedule_window_start_at(window: Optional[Dict[str, Any]], local_now: datetime) -> Optional[datetime]:
+    start_text = str((window or {}).get("start") or "").strip()
+    if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", start_text):
+        return None
+    hour, minute = (int(part) for part in start_text.split(":"))
+    return local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def _schedule_signal_age_seconds(signal: Dict[str, Any], now: datetime) -> Optional[int]:
+    published = _parse_signal_published_at(signal)
+    if published is None:
+        return None
+    age = int((now.astimezone(timezone.utc) - published).total_seconds())
     return max(0, age)
 
 
@@ -1560,6 +1577,7 @@ def evaluate_scheduled_auto_trigger_rule(
     rule: Dict[str, Any],
     *,
     now: Optional[datetime] = None,
+    draw_clock: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     schedule = _normalize_schedule(rule.get("schedule") or {})
     local_now = _schedule_now(now, schedule["timezone"])
@@ -1687,7 +1705,28 @@ def evaluate_scheduled_auto_trigger_rule(
                 continue
             signal_issue_no = str(signal.get("issue_no") or "")
             signal_age = _schedule_signal_age_seconds(signal, local_now)
-            signal_snapshot = {**schedule_snapshot, "signal_issue_no": signal_issue_no, "signal_age_seconds": signal_age}
+            signal_published_at = _parse_signal_published_at(signal)
+            window_start_at = _schedule_window_start_at(window, local_now)
+            signal_snapshot = {
+                **schedule_snapshot,
+                "signal_issue_no": signal_issue_no,
+                "signal_age_seconds": signal_age,
+                "window_start_local": window_start_at.strftime("%H:%M:%S") if window_start_at else "",
+                "signal_published_local": (
+                    signal_published_at.astimezone(local_now.tzinfo).strftime("%H:%M:%S")
+                    if signal_published_at else ""
+                ),
+            }
+            # 只接受窗口开始之后新发布的信号：窗口开始前就已存在的信号送达时，
+            # 目标期号往往已经封盘，投注会被顺延记到下一期，导致结算期号整体错位。
+            if signal_published_at is None or window_start_at is None or signal_published_at < window_start_at:
+                events.append(_record_event(
+                    repository, rule=rule, subscription=subscription, performance=None,
+                    status="skipped", reason="schedule_signal_before_window", stat_date=stat_date,
+                    latest_issue_no=signal_issue_no, schedule_snapshot=signal_snapshot,
+                ))
+                summary["skipped_count"] += 1
+                continue
             if signal_age is None or signal_age > int(schedule["signal_max_age_seconds"]):
                 events.append(_record_event(
                     repository, rule=rule, subscription=subscription, performance=None,
@@ -1776,7 +1815,7 @@ def evaluate_scheduled_auto_trigger_rule(
                     dispatch_context.update({"routes": active_routes, "matched_conditions": [], "rule_action": action})
                 dispatch_result = dispatch_signal(
                     repository, int(signal["id"]), subscription_id=int(subscription["id"]),
-                    auto_trigger_context=dispatch_context,
+                    auto_trigger_context=dispatch_context, draw_clock=draw_clock,
                 )
                 dispatched_count = int(dispatch_result.get("created_count") or 0) + int(dispatch_result.get("existing_count") or 0)
                 if dispatched_count <= 0:
@@ -1824,10 +1863,11 @@ def evaluate_scheduled_auto_trigger_rule(
 
 
 def evaluate_auto_trigger_rule(
-    repository: Any, rule: Dict[str, Any], *, fetcher=None, now: Optional[datetime] = None
+    repository: Any, rule: Dict[str, Any], *, fetcher=None, now: Optional[datetime] = None,
+    draw_clock: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     if str(rule.get("trigger_mode") or "condition") == "schedule":
-        return evaluate_scheduled_auto_trigger_rule(repository, rule, now=now)
+        return evaluate_scheduled_auto_trigger_rule(repository, rule, now=now, draw_clock=draw_clock)
     daily_risk_control = rule.get("daily_risk_control") if isinstance(rule.get("daily_risk_control"), dict) else {}
     stat_date = _today_stat_date(timezone_name=str(daily_risk_control.get("timezone") or "Asia/Shanghai"))
     day_state = _is_rule_day_stopped(repository, rule, stat_date=stat_date)
@@ -2068,6 +2108,7 @@ def evaluate_auto_trigger_rule(
                     subscription=subscription,
                     latest_settled_issue_no=latest_issue_no,
                     auto_trigger_context=dispatch_context,
+                    draw_clock=draw_clock,
                 )
             event = _record_event(
                 repository,
@@ -2116,6 +2157,7 @@ def run_auto_trigger_cycle(
     rule_id: Any = None,
     fetcher=None,
     now: Optional[datetime] = None,
+    draw_clock: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     normalized_user_id = _to_positive_int(user_id, "user_id", allow_none=True)
     normalized_rule_id = _to_positive_int(rule_id, "rule_id", allow_none=True)
@@ -2132,7 +2174,7 @@ def run_auto_trigger_cycle(
         "rules": [],
     }
     for rule in rules:
-        item = evaluate_auto_trigger_rule(repository, rule, fetcher=fetcher, now=now)
+        item = evaluate_auto_trigger_rule(repository, rule, fetcher=fetcher, now=now, draw_clock=draw_clock)
         summary = item.get("summary") or {}
         for key in ["checked_count", "triggered_count", "skipped_count", "failed_count"]:
             result["summary"][key] += int(summary.get(key) or 0)
