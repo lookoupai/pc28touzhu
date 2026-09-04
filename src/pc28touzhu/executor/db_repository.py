@@ -7705,24 +7705,6 @@ class DatabaseRepository:
               AND COALESCE(sfs.threshold_status, '') = ''
               AND dt.status = 'active'
               AND (dt.telegram_account_id IS NULL OR ta.status = 'active')
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM auto_trigger_rules ar
-                  WHERE ar.user_id = us.user_id
-                    AND ar.status = 'active'
-                    AND (
-                          ar.scope_mode <> 'selected_subscriptions'
-                          OR EXISTS (
-                              SELECT 1 FROM json_each(ar.subscription_ids_json) je
-                              WHERE CAST(je.value AS INTEGER) = us.id
-                          )
-                        )
-                    -- 已配置 route 的规则托管该订阅时，订阅直派必须让位，
-                    -- 否则同一信号会经两条路径对同一投注群双发双注
-                    AND EXISTS (
-                          SELECT 1 FROM auto_trigger_rule_routes arr WHERE arr.rule_id = ar.id
-                        )
-              )
             ORDER BY us.user_id ASC, dt.id ASC
         """
         rows = self._fetch_all(query, (int(signal_id),))
@@ -7861,24 +7843,6 @@ class DatabaseRepository:
               AND COALESCE(sfs.threshold_status, '') = ''
               AND dt.status = 'active'
               AND (dt.telegram_account_id IS NULL OR ta.status = 'active')
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM auto_trigger_rules ar
-                  WHERE ar.user_id = us.user_id
-                    AND ar.status = 'active'
-                    AND (
-                          ar.scope_mode <> 'selected_subscriptions'
-                          OR EXISTS (
-                              SELECT 1 FROM json_each(ar.subscription_ids_json) je
-                              WHERE CAST(je.value AS INTEGER) = us.id
-                          )
-                        )
-                    -- 已配置 route 的规则托管该订阅时，订阅直派必须让位；
-                    -- 注意无 route 的规则仍依赖直派路径派单，故只按"配置了 route"判断
-                    AND EXISTS (
-                          SELECT 1 FROM auto_trigger_rule_routes arr WHERE arr.rule_id = ar.id
-                        )
-              )
             ORDER BY dt.id ASC
         """
         rows = self._fetch_all(query, (int(signal_id), int(subscription_id)))
@@ -7888,6 +7852,29 @@ class DatabaseRepository:
             row["strategy_json"] = _safe_json_loads(row.get("strategy_json"))
             items.append(row)
         return items
+
+    def execution_job_exists_for_target(
+        self,
+        *,
+        signal_id: int,
+        subscription_id: int,
+        delivery_target_id: int,
+        from_route: bool,
+    ) -> bool:
+        # route 与直派对同一（期号, 投注群）只允许先到者占位：
+        # from_route=True 查 route 派发是否已存在（供直派让位），反之供 route 让位。
+        route_op = "IS NOT NULL" if from_route else "IS NULL"
+        row = self._fetch_one(
+            """
+            SELECT 1 FROM execution_jobs
+            WHERE signal_id = ? AND subscription_id = ? AND delivery_target_id = ?
+              AND auto_trigger_route_id %s
+            LIMIT 1
+            """
+            % route_op,
+            (int(signal_id), int(subscription_id), int(delivery_target_id)),
+        )
+        return row is not None
 
     def get_latest_ready_signal_for_source(
         self,

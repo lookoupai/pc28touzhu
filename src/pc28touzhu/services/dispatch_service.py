@@ -381,6 +381,15 @@ def _dispatch_signal_for_auto_trigger_routes(
         if not strategy_matches_signal(strategy, signal):
             skipped_count += 1
             continue
+        if hasattr(repository, "execution_job_exists_for_target") and repository.execution_job_exists_for_target(
+            signal_id=int(signal["id"]),
+            subscription_id=int(subscription_id),
+            delivery_target_id=delivery_target_id,
+            from_route=False,
+        ):
+            # 该期该群已被订阅直派占位：route 让位，避免同一期同一群双注
+            skipped_count += 1
+            continue
 
         progression_event = repository.get_progression_event_by_signal(
             subscription_id=int(subscription_id),
@@ -659,6 +668,16 @@ def dispatch_signal(
         subscription_id = int(candidate["subscription_id"])
         resolved_auto_trigger_context = _resolve_auto_trigger_context(repository, candidate, auto_trigger_context)
         if resolved_auto_trigger_context and resolved_auto_trigger_context.get("stopped"):
+            skipped_count += 1
+            continue
+        if hasattr(repository, "execution_job_exists_for_target") and repository.execution_job_exists_for_target(
+            signal_id=int(signal_id),
+            subscription_id=subscription_id,
+            delivery_target_id=int(candidate["delivery_target_id"]),
+            from_route=True,
+        ):
+            # 该期该群已被 route 跟单占位：直派让位，避免同一期同一群双注。
+            # 手动开单与自动触发规则因此可以并存——规则没派的期由直派补上。
             skipped_count += 1
             continue
         progression_event = progression_events.get(subscription_id)

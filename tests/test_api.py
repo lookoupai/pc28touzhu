@@ -1134,6 +1134,17 @@ class FakeRepository:
         self.subscription_financial_states[int(subscription_id)] = financial
         return {"event": event, "state": state, "financial": financial, "subscription": self.get_subscription(subscription_id)}
 
+    def execution_job_exists_for_target(self, *, signal_id, subscription_id, delivery_target_id, from_route):
+        for job in self.jobs:
+            if (
+                job.get("signal_id") == int(signal_id)
+                and job.get("subscription_id") == int(subscription_id)
+                and job.get("delivery_target_id") == int(delivery_target_id)
+            ):
+                is_route = job.get("auto_trigger_route_id") is not None
+                return is_route if from_route else not is_route
+        return False
+
     def reset_subscription_runtime(self, *, subscription_id, user_id, note="", enforce_threshold=False, close_rule_runs=True):
         current = self.get_subscription(subscription_id)
         if not current or int(current["user_id"]) != int(user_id):

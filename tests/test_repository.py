@@ -1963,81 +1963,148 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(loss_limit_run["settled_event_count"], 1)
         self.assertEqual(loss_limit_run["net_profit"], -10)
 
-    def test_list_dispatch_candidates_skips_rule_managed_subscription(self):
-        user_id = self.repo.create_user("dispatch-route-managed-user")
-        managed_source_id = self.repo.create_source_record(
+    def test_direct_dispatch_yields_to_route_claimed_target(self):
+        user_id = self.repo.create_user("dedup-direct-user")
+        source_id = self.repo.create_source_record(
             owner_user_id=user_id,
             source_type="internal_ai",
-            name="model-managed",
+            name="model-dedup-direct",
         )["id"]
-        plain_source_id = self.repo.create_source_record(
-            owner_user_id=user_id,
-            source_type="internal_ai",
-            name="model-plain",
-        )["id"]
-        managed_subscription = self.repo.create_subscription_record(
+        subscription = self.repo.create_subscription_record(
             user_id=user_id,
-            source_id=managed_source_id,
-            strategy={"mode": "follow", "stake_amount": 10},
-        )
-        plain_subscription = self.repo.create_subscription_record(
-            user_id=user_id,
-            source_id=plain_source_id,
+            source_id=source_id,
             strategy={"mode": "follow", "stake_amount": 10},
         )
         target_id = self.repo.create_delivery_target_record(
             user_id=user_id,
             executor_type="telegram_group",
-            target_key="-100990",
+            target_key="-100992",
             status="active",
         )["id"]
-        managed_signal_id = self.repo.create_signal_record(
-            source_id=managed_source_id,
-            lottery_type="pc28",
-            issue_no="20260905001",
-            bet_type="big_small",
-            bet_value="大",
-        )["id"]
-        plain_signal_id = self.repo.create_signal_record(
-            source_id=plain_source_id,
-            lottery_type="pc28",
-            issue_no="20260905002",
-            bet_type="big_small",
-            bet_value="大",
-        )["id"]
-        self.repo.create_auto_trigger_rule_record(
+        rule = self.repo.create_auto_trigger_rule_record(
             user_id=user_id,
-            name="托管规则",
+            name="去重规则",
             scope_mode="selected_subscriptions",
-            subscription_ids=[managed_subscription["id"]],
+            subscription_ids=[subscription["id"]],
             routes=[{"delivery_target_id": target_id}],
         )
-
-        # 被"配置了 route 的 active 规则"托管的订阅，直派候选必须排除（防双发）
-        self.assertEqual(self.repo.list_dispatch_candidates(managed_signal_id), [])
-        self.assertEqual(
-            self.repo.list_dispatch_candidates_for_subscription(
-                managed_signal_id, subscription_id=managed_subscription["id"]
-            ),
-            [],
+        route_id = int(rule["routes"][0]["id"])
+        signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260905005",
+            bet_type="big_small",
+            bet_value="大",
         )
-        # 未被托管的订阅直派照常可用
-        plain_candidates = self.repo.list_dispatch_candidates(plain_signal_id)
-        self.assertEqual(
-            [item["subscription_id"] for item in plain_candidates],
-            [plain_subscription["id"]],
-        )
-        self.assertEqual(
-            [
-                item["subscription_id"]
-                for item in self.repo.list_dispatch_candidates_for_subscription(
-                    plain_signal_id, subscription_id=plain_subscription["id"]
-                )
-            ],
-            [plain_subscription["id"]],
+        # 模拟 route 跟单已对（期号, 目标群）占位
+        self.repo.create_execution_job(
+            user_id=user_id,
+            signal_id=signal["id"],
+            subscription_id=subscription["id"],
+            auto_trigger_route_id=route_id,
+            delivery_target_id=target_id,
+            executor_type="telegram_group",
+            idempotency_key="dedup-route-job",
+            planned_message_text="大10",
+            stake_plan={"mode": "follow", "amount": 10},
+            execute_after="2026-09-05T10:02:00Z",
+            expire_at="2026-09-05T10:03:00Z",
         )
 
-    def test_reset_subscription_runtime_preserves_route_state(self):
+        result = dispatch_signal(self.repo, signal["id"])
+
+        # 直派让位：不再创建直派事件与任务
+        self.assertEqual(result.get("created_count"), 0)
+        direct_jobs = [
+            job for job in self.repo.list_execution_jobs(user_id=user_id)
+            if job["signal_id"] == signal["id"] and job["auto_trigger_route_id"] is None
+        ]
+        self.assertEqual(direct_jobs, [])
+        existing_event = self.repo.get_progression_event_by_signal(
+            subscription_id=subscription["id"],
+            signal_id=signal["id"],
+        )
+        self.assertIsNone(existing_event)
+
+    def test_route_dispatch_yields_to_direct_claimed_target(self):
+        user_id = self.repo.create_user("dedup-route-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-dedup-route",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={"mode": "follow", "stake_amount": 10},
+        )
+        target_id = self.repo.create_delivery_target_record(
+            user_id=user_id,
+            executor_type="telegram_group",
+            target_key="-100993",
+            status="active",
+        )["id"]
+        rule = self.repo.create_auto_trigger_rule_record(
+            user_id=user_id,
+            name="去重规则",
+            scope_mode="selected_subscriptions",
+            subscription_ids=[subscription["id"]],
+            routes=[{"delivery_target_id": target_id}],
+        )
+        route_id = int(rule["routes"][0]["id"])
+        rule_run = self.repo.ensure_auto_trigger_rule_run(
+            rule_id=int(rule["id"]),
+            user_id=user_id,
+            subscription_id=subscription["id"],
+            stat_date="2026-09-05",
+        )
+        signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260905006",
+            bet_type="big_small",
+            bet_value="大",
+        )
+
+        # 先由直派占位（此时 route 路径无 active rule_run 关联候选，处于让位状态）
+        direct_result = dispatch_signal(self.repo, signal["id"])
+        self.assertEqual(direct_result.get("created_count"), 1)
+
+        # 再以 route 显式上下文派同一信号：route 让位，不得重复建单
+        route = {
+            "id": route_id,
+            "delivery_target_id": target_id,
+            "status": "active",
+            "_auto_trigger_rule_run_id": int(rule_run["id"]),
+            "_auto_trigger_stat_date": "2026-09-05",
+        }
+        route_result = dispatch_signal(
+            self.repo,
+            signal["id"],
+            subscription_id=subscription["id"],
+            auto_trigger_context={
+                "rule_id": int(rule["id"]),
+                "rule_run_id": int(rule_run["id"]),
+                "stat_date": "2026-09-05",
+                "routes": [route],
+            },
+        )
+        self.assertEqual(route_result.get("created_count"), 0)
+        self.assertEqual(route_result.get("skipped_count"), 1)
+        route_event = self.repo.get_progression_event_by_signal(
+            subscription_id=subscription["id"],
+            signal_id=signal["id"],
+            auto_trigger_route_id=route_id,
+        )
+        self.assertIsNone(route_event)
+        all_jobs = [
+            job for job in self.repo.list_execution_jobs(user_id=user_id)
+            if job["signal_id"] == signal["id"]
+        ]
+        self.assertEqual(len(all_jobs), 1)
+        self.assertIsNone(all_jobs[0]["auto_trigger_route_id"])
+
+    def test_list_subscription_runtime_runs_reconciles_threshold_closed_runs(self):
         user_id = self.repo.create_user("sub-reset-route-user")
         source_id = self.repo.create_source_record(
             owner_user_id=user_id,
