@@ -1134,7 +1134,7 @@ class FakeRepository:
         self.subscription_financial_states[int(subscription_id)] = financial
         return {"event": event, "state": state, "financial": financial, "subscription": self.get_subscription(subscription_id)}
 
-    def reset_subscription_runtime(self, *, subscription_id, user_id, note="", enforce_threshold=False):
+    def reset_subscription_runtime(self, *, subscription_id, user_id, note="", enforce_threshold=False, close_rule_runs=True):
         current = self.get_subscription(subscription_id)
         if not current or int(current["user_id"]) != int(user_id):
             raise ValueError("subscription_id 对应的订阅不存在")
@@ -1151,12 +1151,20 @@ class FakeRepository:
                 )
         voided_event_ids = []
         for event in self.progression_events:
-            if event["subscription_id"] == int(subscription_id) and event.get("status") in {"pending", "placed"}:
+            if (
+                event["subscription_id"] == int(subscription_id)
+                and event.get("status") in {"pending", "placed"}
+                and event.get("auto_trigger_route_id") is None
+            ):
                 event["status"] = "reset"
                 event["resolved_result_type"] = "reset"
                 voided_event_ids.append(event["id"])
         for job in self.jobs:
-            if job.get("subscription_id") == int(subscription_id) and job.get("status") == "pending":
+            if (
+                job.get("subscription_id") == int(subscription_id)
+                and job.get("status") == "pending"
+                and job.get("auto_trigger_route_id") is None
+            ):
                 job["status"] = "skipped"
                 job["error_message"] = "策略已重置，旧轮次未执行任务已跳过"
         self.subscription_progression_states[int(subscription_id)] = {

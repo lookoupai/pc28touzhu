@@ -1870,10 +1870,12 @@ def resolve_pending_subscription_progressions(repository: Any, *, user_id: Any, 
 def reset_subscription_runtime(repository: Any, *, subscription_id: Any, user_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     normalized_subscription_id = _to_positive_int(subscription_id, "subscription_id")
     normalized_user_id = _to_positive_int(user_id, "user_id")
+    # 手动重置只清订阅直派轮次；route 跟单的 rule_run 与在途单归规则体系管，不得波及
     result = repository.reset_subscription_runtime(
         subscription_id=normalized_subscription_id,
         user_id=normalized_user_id,
         note=str(payload.get("note") or "").strip(),
+        close_rule_runs=False,
     )
     if isinstance(result.get("item"), dict):
         result["item"] = present_subscription_item(result.get("item"))
@@ -1889,10 +1891,12 @@ def restart_subscription_cycle(repository: Any, *, subscription_id: Any, user_id
     if str(current.get("status") or "") == "archived":
         raise ValueError("已归档的跟单策略不能直接开始新一轮，请先恢复后再试")
 
+    # 手动开始新一轮只重置订阅直派轮次；route 跟单的 rule_run 与在途单归规则体系管，不得波及
     result = repository.reset_subscription_runtime(
         subscription_id=normalized_subscription_id,
         user_id=normalized_user_id,
         note=str(payload.get("note") or "").strip(),
+        close_rule_runs=False,
     )
     item = repository.update_subscription_status(
         subscription_id=normalized_subscription_id,

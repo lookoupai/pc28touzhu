@@ -1963,6 +1963,225 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(loss_limit_run["settled_event_count"], 1)
         self.assertEqual(loss_limit_run["net_profit"], -10)
 
+    def test_list_dispatch_candidates_skips_rule_managed_subscription(self):
+        user_id = self.repo.create_user("dispatch-route-managed-user")
+        managed_source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-managed",
+        )["id"]
+        plain_source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-plain",
+        )["id"]
+        managed_subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=managed_source_id,
+            strategy={"mode": "follow", "stake_amount": 10},
+        )
+        plain_subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=plain_source_id,
+            strategy={"mode": "follow", "stake_amount": 10},
+        )
+        target_id = self.repo.create_delivery_target_record(
+            user_id=user_id,
+            executor_type="telegram_group",
+            target_key="-100990",
+            status="active",
+        )["id"]
+        managed_signal_id = self.repo.create_signal_record(
+            source_id=managed_source_id,
+            lottery_type="pc28",
+            issue_no="20260905001",
+            bet_type="big_small",
+            bet_value="大",
+        )["id"]
+        plain_signal_id = self.repo.create_signal_record(
+            source_id=plain_source_id,
+            lottery_type="pc28",
+            issue_no="20260905002",
+            bet_type="big_small",
+            bet_value="大",
+        )["id"]
+        self.repo.create_auto_trigger_rule_record(
+            user_id=user_id,
+            name="托管规则",
+            scope_mode="selected_subscriptions",
+            subscription_ids=[managed_subscription["id"]],
+            routes=[{"delivery_target_id": target_id}],
+        )
+
+        # 被"配置了 route 的 active 规则"托管的订阅，直派候选必须排除（防双发）
+        self.assertEqual(self.repo.list_dispatch_candidates(managed_signal_id), [])
+        self.assertEqual(
+            self.repo.list_dispatch_candidates_for_subscription(
+                managed_signal_id, subscription_id=managed_subscription["id"]
+            ),
+            [],
+        )
+        # 未被托管的订阅直派照常可用
+        plain_candidates = self.repo.list_dispatch_candidates(plain_signal_id)
+        self.assertEqual(
+            [item["subscription_id"] for item in plain_candidates],
+            [plain_subscription["id"]],
+        )
+        self.assertEqual(
+            [
+                item["subscription_id"]
+                for item in self.repo.list_dispatch_candidates_for_subscription(
+                    plain_signal_id, subscription_id=plain_subscription["id"]
+                )
+            ],
+            [plain_subscription["id"]],
+        )
+
+    def test_reset_subscription_runtime_preserves_route_state(self):
+        user_id = self.repo.create_user("sub-reset-route-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-reset-route",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={"mode": "follow", "stake_amount": 10},
+        )
+        target_id = self.repo.create_delivery_target_record(
+            user_id=user_id,
+            executor_type="telegram_group",
+            target_key="-100991",
+            status="active",
+        )["id"]
+        rule = self.repo.create_auto_trigger_rule_record(
+            user_id=user_id,
+            name="托管规则",
+            scope_mode="selected_subscriptions",
+            subscription_ids=[subscription["id"]],
+            routes=[{"delivery_target_id": target_id}],
+        )
+        route_id = int(rule["routes"][0]["id"])
+        rule_run = self.repo.ensure_auto_trigger_rule_run(
+            rule_id=int(rule["id"]),
+            user_id=user_id,
+            subscription_id=subscription["id"],
+            stat_date="2026-09-05",
+        )
+        direct_signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260905003",
+            bet_type="big_small",
+            bet_value="大",
+        )
+        route_signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260905004",
+            bet_type="big_small",
+            bet_value="小",
+        )
+        direct_event = self.repo.create_progression_event_record(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            signal_id=direct_signal["id"],
+            issue_no="20260905003",
+            progression_step=1,
+            stake_amount=10,
+            base_stake=10,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            status="placed",
+        )
+        route_event = self.repo.create_progression_event_record(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            signal_id=route_signal["id"],
+            issue_no="20260905004",
+            progression_step=1,
+            stake_amount=10,
+            base_stake=10,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            auto_trigger_route_id=route_id,
+            status="placed",
+        )
+        direct_job_id = self.repo.create_execution_job(
+            user_id=user_id,
+            signal_id=direct_signal["id"],
+            subscription_id=subscription["id"],
+            progression_event_id=direct_event["id"],
+            delivery_target_id=target_id,
+            executor_type="telegram_group",
+            idempotency_key="reset-route-direct-job",
+            planned_message_text="大10",
+            stake_plan={"mode": "follow", "amount": 10},
+            execute_after="2026-09-05T10:02:00Z",
+            expire_at="2026-09-05T10:03:00Z",
+        )
+        route_job_id = self.repo.create_execution_job(
+            user_id=user_id,
+            signal_id=route_signal["id"],
+            subscription_id=subscription["id"],
+            progression_event_id=route_event["id"],
+            auto_trigger_route_id=route_id,
+            delivery_target_id=target_id,
+            executor_type="telegram_group",
+            idempotency_key="reset-route-route-job",
+            planned_message_text="小10",
+            stake_plan={"mode": "follow", "amount": 10},
+            execute_after="2026-09-05T10:02:00Z",
+            expire_at="2026-09-05T10:03:00Z",
+        )
+
+        def _open_runtime_run() -> None:
+            with self.repo._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO subscription_runtime_runs(
+                        subscription_id, user_id, status, started_issue_no, started_at, start_reason,
+                        created_at, updated_at
+                    ) VALUES (?, ?, 'active', '20260905003', '2026-09-05T10:01:00Z', 'auto_started',
+                              '2026-09-05T10:01:00Z', '2026-09-05T10:01:00Z')
+                    """,
+                    (int(subscription["id"]), int(user_id)),
+                )
+
+        # 手动重置语义（close_rule_runs=False）：只清直派在途与订阅轮次，route 在途与规则轮次原样保留
+        _open_runtime_run()
+        self.repo.reset_subscription_runtime(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            note="手动重置",
+            close_rule_runs=False,
+        )
+        self.assertEqual(self.repo.get_progression_event(direct_event["id"])["status"], "reset")
+        self.assertEqual(self.repo.get_execution_job(direct_job_id)["status"], "skipped")
+        self.assertEqual(self.repo.get_progression_event(route_event["id"])["status"], "placed")
+        self.assertEqual(self.repo.get_execution_job(route_job_id)["status"], "pending")
+        self.assertEqual(
+            self.repo.get_auto_trigger_rule_run(int(rule_run["id"]))["status"],
+            "active",
+        )
+
+        # 默认语义（自动轮换/阈值触发）：订阅轮次收尾时 rule_run 一并关闭
+        _open_runtime_run()
+        self.repo.reset_subscription_runtime(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            note="自动轮换",
+        )
+        self.assertEqual(
+            self.repo.get_auto_trigger_rule_run(int(rule_run["id"]))["status"],
+            "closed",
+        )
+
     def test_list_subscription_runtime_runs_reconciles_threshold_closed_runs(self):
         user_id = self.repo.create_user("sub-runtime-reconcile-user")
         source_id = self.repo.create_source_record(

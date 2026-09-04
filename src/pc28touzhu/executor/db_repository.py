@@ -6996,6 +6996,7 @@ class DatabaseRepository:
         user_id: int,
         note: str = "",
         enforce_threshold: bool = False,
+        close_rule_runs: bool = True,
     ) -> Dict[str, Any]:
         current = self.get_subscription(int(subscription_id))
         if not current or int(current["user_id"]) != int(user_id):
@@ -7053,17 +7054,21 @@ class DatabaseRepository:
                         int(active_run["id"]),
                     ),
                 )
-                self._close_active_auto_trigger_rule_runs(
-                    conn,
-                    subscription_id=int(subscription_id),
-                    user_id=int(user_id),
-                    now=now,
-                    reason=end_reason,
-                )
+                # route 跟单的被动派单依赖 active 的 rule_run；手动重置（close_rule_runs=False）
+                # 不得关闭它，否则规则在途轮次会被意外暂停
+                if close_rule_runs:
+                    self._close_active_auto_trigger_rule_runs(
+                        conn,
+                        subscription_id=int(subscription_id),
+                        user_id=int(user_id),
+                        now=now,
+                        reason=end_reason,
+                    )
             open_events = conn.execute(
                 """
                 SELECT id FROM subscription_progression_events
                 WHERE subscription_id = ? AND user_id = ? AND status IN ('pending', 'placed')
+                  AND auto_trigger_route_id IS NULL
                 ORDER BY id ASC
                 """,
                 (int(subscription_id), int(user_id)),
@@ -7093,6 +7098,7 @@ class DatabaseRepository:
                 WHERE subscription_id = ?
                   AND user_id = ?
                   AND status = 'pending'
+                  AND auto_trigger_route_id IS NULL
                 """,
                 ("策略已重置，旧轮次未执行任务已跳过", now, int(subscription_id), int(user_id)),
             )
@@ -7699,6 +7705,24 @@ class DatabaseRepository:
               AND COALESCE(sfs.threshold_status, '') = ''
               AND dt.status = 'active'
               AND (dt.telegram_account_id IS NULL OR ta.status = 'active')
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM auto_trigger_rules ar
+                  WHERE ar.user_id = us.user_id
+                    AND ar.status = 'active'
+                    AND (
+                          ar.scope_mode <> 'selected_subscriptions'
+                          OR EXISTS (
+                              SELECT 1 FROM json_each(ar.subscription_ids_json) je
+                              WHERE CAST(je.value AS INTEGER) = us.id
+                          )
+                        )
+                    -- 已配置 route 的规则托管该订阅时，订阅直派必须让位，
+                    -- 否则同一信号会经两条路径对同一投注群双发双注
+                    AND EXISTS (
+                          SELECT 1 FROM auto_trigger_rule_routes arr WHERE arr.rule_id = ar.id
+                        )
+              )
             ORDER BY us.user_id ASC, dt.id ASC
         """
         rows = self._fetch_all(query, (int(signal_id),))
@@ -7837,6 +7861,24 @@ class DatabaseRepository:
               AND COALESCE(sfs.threshold_status, '') = ''
               AND dt.status = 'active'
               AND (dt.telegram_account_id IS NULL OR ta.status = 'active')
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM auto_trigger_rules ar
+                  WHERE ar.user_id = us.user_id
+                    AND ar.status = 'active'
+                    AND (
+                          ar.scope_mode <> 'selected_subscriptions'
+                          OR EXISTS (
+                              SELECT 1 FROM json_each(ar.subscription_ids_json) je
+                              WHERE CAST(je.value AS INTEGER) = us.id
+                          )
+                        )
+                    -- 已配置 route 的规则托管该订阅时，订阅直派必须让位；
+                    -- 注意无 route 的规则仍依赖直派路径派单，故只按"配置了 route"判断
+                    AND EXISTS (
+                          SELECT 1 FROM auto_trigger_rule_routes arr WHERE arr.rule_id = ar.id
+                        )
+              )
             ORDER BY dt.id ASC
         """
         rows = self._fetch_all(query, (int(signal_id), int(subscription_id)))
