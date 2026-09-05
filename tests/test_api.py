@@ -729,6 +729,7 @@ class FakeRepository:
             "executor_type": kwargs["executor_type"],
             "target_key": kwargs["target_key"],
             "target_name": kwargs.get("target_name", ""),
+            "dispatch_mode": kwargs.get("dispatch_mode", "shared"),
             "template_id": kwargs.get("template_id"),
             "status": kwargs.get("status", "inactive"),
             "last_test_status": kwargs.get("last_test_status", ""),
@@ -775,7 +776,7 @@ class FakeRepository:
                 return item
         return None
 
-    def update_delivery_target_record(self, *, delivery_target_id, user_id, telegram_account_id, executor_type, target_key, target_name="", template_id=None):
+    def update_delivery_target_record(self, *, delivery_target_id, user_id, telegram_account_id, executor_type, target_key, target_name="", template_id=None, dispatch_mode=None):
         for item in self.targets:
             if item["id"] == int(delivery_target_id) and item["user_id"] == int(user_id):
                 item["telegram_account_id"] = telegram_account_id
@@ -783,6 +784,7 @@ class FakeRepository:
                 item["target_key"] = target_key
                 item["target_name"] = target_name
                 item["template_id"] = template_id
+                item["dispatch_mode"] = dispatch_mode or item.get("dispatch_mode", "shared")
                 item["updated_at"] = "2026-04-07T12:00:00Z"
                 return item
         return None
@@ -802,7 +804,7 @@ class FakeRepository:
                 return True
         return False
 
-    def update_delivery_target_record(self, *, delivery_target_id, user_id, telegram_account_id, executor_type, target_key, target_name="", template_id=None):
+    def update_delivery_target_record(self, *, delivery_target_id, user_id, telegram_account_id, executor_type, target_key, target_name="", template_id=None, dispatch_mode=None):
         for item in self.targets:
             if item["id"] == int(delivery_target_id) and item["user_id"] == int(user_id):
                 item["telegram_account_id"] = telegram_account_id
@@ -810,6 +812,7 @@ class FakeRepository:
                 item["target_key"] = target_key
                 item["target_name"] = target_name
                 item["template_id"] = template_id
+                item["dispatch_mode"] = dispatch_mode or item.get("dispatch_mode", "shared")
                 item["updated_at"] = "2026-04-07T12:00:00Z"
                 return item
         return None
@@ -3612,6 +3615,7 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(create_payload["item"]["telegram_account_id"], account["id"])
         self.assertEqual(create_payload["item"]["status"], "inactive")
         self.assertEqual(create_payload["item"]["last_test_status"], "")
+        self.assertEqual(create_payload["item"]["dispatch_mode"], "shared")
 
         list_status, _, list_payload = invoke(
             self.app,
@@ -3622,6 +3626,49 @@ class PlatformApiApplicationTests(unittest.TestCase):
         )
         self.assertEqual(list_status, "200 OK")
         self.assertEqual(len(list_payload["items"]), 1)
+
+    def test_delivery_target_dispatch_mode_create_update_and_omitted_field(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1, label="派单模式测试", phone="+12019360000",
+            session_path="/data/mode-test", meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+        )
+        body = {
+            "telegram_account_id": account["id"], "executor_type": "telegram_group",
+            "target_key": "-100111", "dispatch_mode": "rule_only",
+        }
+        status, _, payload = invoke(self.app, build_testing_environ(
+            "/api/platform/delivery-targets", method="POST", body=body, headers=self.session_headers,
+        ))
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["dispatch_mode"], "rule_only")
+        target_path = "/api/platform/delivery-targets/%s" % payload["item"]["id"]
+        body["dispatch_mode"] = "direct_only"
+        status, _, payload = invoke(self.app, build_testing_environ(
+            target_path, method="POST", body=body, headers=self.session_headers,
+        ))
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["dispatch_mode"], "direct_only")
+        del body["dispatch_mode"]
+        status, _, payload = invoke(self.app, build_testing_environ(
+            target_path, method="POST", body=body, headers=self.session_headers,
+        ))
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(payload["item"]["dispatch_mode"], "direct_only")
+
+    def test_delivery_target_rejects_unknown_dispatch_mode(self):
+        account = self.repository.create_telegram_account_record(
+            user_id=1, label="派单模式测试", phone="+12019360000",
+            session_path="/data/mode-test", meta={"auth_mode": "phone_login", "auth_state": "authorized"},
+        )
+        body = {
+            "telegram_account_id": account["id"], "executor_type": "telegram_group",
+            "target_key": "-100111", "dispatch_mode": "unknown",
+        }
+        status, _, _ = invoke(self.app, build_testing_environ(
+            "/api/platform/delivery-targets", method="POST", body=body, headers=self.session_headers,
+        ))
+        self.assertEqual(status, "400 Bad Request")
+        self.assertEqual(self.repository.list_delivery_targets(1), [])
 
     def test_delivery_target_summary_includes_subscription_refs(self):
         target = self.repository.create_delivery_target_record(

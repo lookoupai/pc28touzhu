@@ -322,22 +322,25 @@ def _normalize_entity_status(value: Any, field_name: str = "status") -> str:
 
 
 def _subscription_runtime_history(repository: Any, *, subscription_id: int, user_id: int, limit: int = 5) -> list[Dict[str, Any]]:
-    # 跟单方案挂了自动触发路由时，轮次以「路由级」runtime_run 为准（每条路由独立记轮）；
-    # 没有路由级记录的老方案回退到订阅级 runtime_run，保持旧行为不变。
+    # 路由轮次和订阅直派可并存，展示时保留各自归属，不能相互遮蔽。
     normalized_limit = max(1, min(int(limit or 5), 50))
+    runs = [
+        {**run, "scope": "subscription"}
+        for run in repository.list_subscription_runtime_runs(
+            subscription_id=int(subscription_id), user_id=int(user_id), limit=normalized_limit,
+        )
+    ]
     if hasattr(repository, "list_auto_trigger_route_subscription_runtime_runs"):
-        route_runs = repository.list_auto_trigger_route_subscription_runtime_runs(
+        runs.extend(repository.list_auto_trigger_route_subscription_runtime_runs(
             subscription_id=int(subscription_id),
             user_id=int(user_id),
             limit=normalized_limit,
-        )
-        if route_runs:
-            return route_runs
-    return repository.list_subscription_runtime_runs(
-        subscription_id=int(subscription_id),
-        user_id=int(user_id),
-        limit=normalized_limit,
+        ))
+    runs.sort(
+        key=lambda run: (run.get("status") == "active", str(run.get("started_at") or ""), int(run.get("id") or 0)),
+        reverse=True,
     )
+    return runs[:normalized_limit]
 
 
 def _normalize_subscription_status(value: Any, field_name: str = "status") -> str:
@@ -2119,6 +2122,13 @@ def list_delivery_target_summaries(repository: Any, user_id: Any) -> Dict[str, A
     return {"items": targets}
 
 
+def _target_dispatch_mode(value: Any) -> str:
+    mode = str(value or "shared").strip()
+    if mode not in {"shared", "rule_only", "direct_only"}:
+        raise ValueError("dispatch_mode 仅支持 shared、rule_only 或 direct_only")
+    return mode
+
+
 def create_delivery_target(repository: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     user_id = _to_positive_int(payload.get("user_id"), "user_id")
     telegram_account_id = _to_positive_int(
@@ -2140,6 +2150,7 @@ def create_delivery_target(repository: Any, payload: Dict[str, Any]) -> Dict[str
         target_name=str(payload.get("target_name") or "").strip(),
         template_id=template_id,
         status="inactive",
+        dispatch_mode=_target_dispatch_mode(payload.get("dispatch_mode")),
     )
     return {"item": item}
 
@@ -2164,6 +2175,7 @@ def update_delivery_target(repository: Any, *, delivery_target_id: Any, user_id:
         target_key=normalize_telegram_target_key(_to_non_empty_str(payload.get("target_key"), "target_key")),
         target_name=str(payload.get("target_name") or "").strip(),
         template_id=template_id,
+        dispatch_mode=_target_dispatch_mode(payload.get("dispatch_mode", current.get("dispatch_mode"))),
     )
     if not item:
         raise ValueError("delivery_target_id 对应的投递目标不存在")

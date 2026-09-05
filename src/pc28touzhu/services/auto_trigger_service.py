@@ -5,6 +5,7 @@ import copy
 import json
 import re
 import time
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Any, Dict, Optional
@@ -1444,6 +1445,12 @@ def _schedule_cross_day_block(
     stat_date: str,
     local_now: datetime,
 ) -> Optional[dict]:
+    if hasattr(repository, "reconcile_auto_trigger_rule_subscription_runs"):
+        repository.reconcile_auto_trigger_rule_subscription_runs(
+            rule_id=int(rule["id"]),
+            user_id=int(rule["user_id"]),
+            subscription_id=int(subscription["id"]),
+        )
     if hasattr(repository, "get_latest_auto_trigger_rule_run_for_rule_subscription"):
         latest = repository.get_latest_auto_trigger_rule_run_for_rule_subscription(
             rule_id=int(rule["id"]), subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]),
@@ -1623,6 +1630,15 @@ def evaluate_scheduled_auto_trigger_rule(
     now: Optional[datetime] = None,
     draw_clock: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    transaction = repository.transaction() if hasattr(repository, "transaction") else nullcontext(repository)
+    with transaction as unit:
+        return _evaluate_scheduled_auto_trigger_rule(unit, rule, now=now, draw_clock=draw_clock)
+
+
+def _evaluate_scheduled_auto_trigger_rule(
+    repository: Any, rule: Dict[str, Any], *,
+    now: Optional[datetime] = None, draw_clock: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     schedule = _normalize_schedule(rule.get("schedule") or {})
     local_now = _schedule_now(now, schedule["timezone"])
     stat_date = local_now.strftime("%Y-%m-%d")
@@ -1707,17 +1723,20 @@ def evaluate_scheduled_auto_trigger_rule(
                     ))
                     summary["skipped_count"] += 1
                     continue
-            global_open_state = repository.subscription_has_open_run(
-                subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]),
-            )
-            if global_open_state.get("has_open_run"):
-                events.append(_record_event(
-                    repository, rule=rule, subscription=subscription, performance=None,
-                    status="skipped", reason="schedule_subscription_open", stat_date=stat_date,
-                    schedule_snapshot={**schedule_snapshot, "open_state": global_open_state},
-                ))
-                summary["skipped_count"] += 1
-                continue
+            # route 规则只检查自己的 route runtime；订阅直派的在途单不应阻止规则开轮。
+            # 无 route 的兼容模式仍使用订阅 runtime，因为它本身没有独立的 route 账本。
+            if not has_routes:
+                global_open_state = repository.subscription_has_open_run(
+                    subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]),
+                )
+                if global_open_state.get("has_open_run"):
+                    events.append(_record_event(
+                        repository, rule=rule, subscription=subscription, performance=None,
+                        status="skipped", reason="schedule_subscription_open", stat_date=stat_date,
+                        schedule_snapshot={**schedule_snapshot, "open_state": global_open_state},
+                    ))
+                    summary["skipped_count"] += 1
+                    continue
             if has_routes:
                 active_routes, skipped_routes = _active_routes_for_subscription(
                     repository, rule=rule, subscription=subscription, stat_date=stat_date,
@@ -1788,106 +1807,108 @@ def evaluate_scheduled_auto_trigger_rule(
                 summary["skipped_count"] += 1
                 continue
 
-            # Existing thresholded rounds may be restarted, but reset them before
-            # claiming today's slot so a failed dispatch can still release it.
-            financial = subscription.get("financial") if isinstance(subscription.get("financial"), dict) else {}
-            if str(financial.get("threshold_status") or "").strip() in {"profit_target_hit", "loss_limit_hit"} and not has_routes:
-                repository.reset_subscription_runtime(
-                    subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]),
-                    note="定时触发规则：%s" % str(rule.get("name") or ""), enforce_threshold=True,
-                )
-
-            if subscription_status == "standby":
-                activated = repository.update_subscription_status(
-                    subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]), status="active",
-                )
-                if not activated:
-                    raise ValueError("subscription_id 对应的订阅不存在")
-                subscription = activated
-                subscription["source"] = source
-
-            claim = repository.claim_auto_trigger_daily_start(
-                rule_id=int(rule["id"]), user_id=int(rule["user_id"]),
-                subscription_id=int(subscription["id"]), stat_date=stat_date,
-                started_issue_no=signal_issue_no,
-            )
-            if not claim.get("claimed"):
-                events.append(_record_event(
-                    repository, rule=rule, subscription=subscription, performance=None,
-                    status="skipped", reason="schedule_day_already_started", stat_date=stat_date,
-                    latest_issue_no=signal_issue_no, schedule_snapshot=signal_snapshot,
-                ))
-                summary["skipped_count"] += 1
-                continue
-            claimed = True
-            rule_run = claim.get("run") or {}
-
-            if has_routes:
-                prepared_routes = []
-                for route in active_routes:
-                    route_rule_run = repository.ensure_auto_trigger_rule_run(
-                        rule_id=int(rule["id"]), user_id=int(rule["user_id"]),
-                        subscription_id=int(subscription["id"]),
-                        stat_date=str(route.get("_auto_trigger_stat_date") or stat_date),
-                        started_issue_no=signal_issue_no,
+            transaction = repository.transaction() if hasattr(repository, "transaction") else nullcontext(repository)
+            with transaction:
+                # Existing thresholded rounds may be restarted, but reset them before
+                # claiming today's slot so a failed dispatch can still release it.
+                financial = subscription.get("financial") if isinstance(subscription.get("financial"), dict) else {}
+                if str(financial.get("threshold_status") or "").strip() in {"profit_target_hit", "loss_limit_hit"} and not has_routes:
+                    repository.reset_subscription_runtime(
+                        subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]),
+                        note="定时触发规则：%s" % str(rule.get("name") or ""), enforce_threshold=True,
                     )
-                    prepared_route = {
-                        **route,
-                        "_auto_trigger_rule_run_id": int(route_rule_run["id"]) if route_rule_run.get("id") else None,
-                        "_auto_trigger_stat_date": str(route.get("_auto_trigger_stat_date") or stat_date),
-                    }
-                    if hasattr(repository, "reset_auto_trigger_route_subscription_runtime"):
-                        repository.reset_auto_trigger_route_subscription_runtime(
-                            route_id=int(route["id"]), rule_id=int(rule["id"]),
-                            subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]),
-                            note="定时触发规则：%s / 路由：%s" % (
-                                str(rule.get("name") or ""), str(route.get("name") or route.get("id") or ""),
-                            ),
-                        )
-                    prepared_routes.append(prepared_route)
-                active_routes = prepared_routes
-            # Scheduled mode has already verified that no open runtime exists;
-            # avoid resetting it here so a failed dispatch can release the daily claim.
 
-            dispatch_result = None
-            if bool(action.get("dispatch_latest_signal", True)):
-                dispatch_context = {
-                    "rule_id": int(rule["id"]), "rule_run_id": int(rule_run.get("id") or 0),
-                    "stat_date": stat_date,
-                }
-                if has_routes:
-                    dispatch_context.update({"routes": active_routes, "matched_conditions": [], "rule_action": action})
-                dispatch_result = dispatch_signal(
-                    repository, int(signal["id"]), subscription_id=int(subscription["id"]),
-                    auto_trigger_context=dispatch_context, draw_clock=draw_clock,
+                if subscription_status == "standby":
+                    activated = repository.update_subscription_status(
+                        subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]), status="active",
+                    )
+                    if not activated:
+                        raise ValueError("subscription_id 对应的订阅不存在")
+                    subscription = activated
+                    subscription["source"] = source
+
+                claim = repository.claim_auto_trigger_daily_start(
+                    rule_id=int(rule["id"]), user_id=int(rule["user_id"]),
+                    subscription_id=int(subscription["id"]), stat_date=stat_date,
+                    started_issue_no=signal_issue_no,
                 )
-                dispatched_count = int(dispatch_result.get("created_count") or 0) + int(dispatch_result.get("existing_count") or 0)
-                if dispatched_count <= 0:
-                    if hasattr(repository, "release_auto_trigger_daily_start"):
-                        repository.release_auto_trigger_daily_start(
-                            rule_id=int(rule["id"]), user_id=int(rule["user_id"]),
-                            subscription_id=int(subscription["id"]), stat_date=stat_date,
-                        )
-                    claimed = False
+                if not claim.get("claimed"):
                     events.append(_record_event(
                         repository, rule=rule, subscription=subscription, performance=None,
-                        status="skipped", reason="schedule_signal_not_dispatched", stat_date=stat_date,
-                        latest_issue_no=signal_issue_no,
-                        dispatch_result=dispatch_result, schedule_snapshot=signal_snapshot,
+                        status="skipped", reason="schedule_day_already_started", stat_date=stat_date,
+                        latest_issue_no=signal_issue_no, schedule_snapshot=signal_snapshot,
                     ))
                     summary["skipped_count"] += 1
                     continue
+                claimed = True
+                rule_run = claim.get("run") or {}
 
-            events.append(_record_event(
-                repository, rule=rule, subscription=subscription, performance=None,
-                status="triggered", reason="schedule_started", stat_date=stat_date,
-                latest_issue_no=signal_issue_no, dispatch_result=dispatch_result,
-                schedule_snapshot={**signal_snapshot, "claim_status": "started"},
-            ))
-            repository.mark_auto_trigger_rule_triggered(
-                rule_id=int(rule["id"]), user_id=int(rule["user_id"]), issue_no=signal_issue_no,
-            )
-            summary["triggered_count"] += 1
+                if has_routes:
+                    prepared_routes = []
+                    for route in active_routes:
+                        route_rule_run = repository.ensure_auto_trigger_rule_run(
+                            rule_id=int(rule["id"]), user_id=int(rule["user_id"]),
+                            subscription_id=int(subscription["id"]),
+                            stat_date=str(route.get("_auto_trigger_stat_date") or stat_date),
+                            started_issue_no=signal_issue_no,
+                        )
+                        prepared_route = {
+                            **route,
+                            "_auto_trigger_rule_run_id": int(route_rule_run["id"]) if route_rule_run.get("id") else None,
+                            "_auto_trigger_stat_date": str(route.get("_auto_trigger_stat_date") or stat_date),
+                        }
+                        if hasattr(repository, "reset_auto_trigger_route_subscription_runtime"):
+                            repository.reset_auto_trigger_route_subscription_runtime(
+                                route_id=int(route["id"]), rule_id=int(rule["id"]),
+                                subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]),
+                                note="定时触发规则：%s / 路由：%s" % (
+                                    str(rule.get("name") or ""), str(route.get("name") or route.get("id") or ""),
+                                ),
+                            )
+                        prepared_routes.append(prepared_route)
+                    active_routes = prepared_routes
+                # Scheduled mode has already verified that no open runtime exists;
+                # avoid resetting it here so a failed dispatch can release the daily claim.
+
+                dispatch_result = None
+                if bool(action.get("dispatch_latest_signal", True)):
+                    dispatch_context = {
+                        "rule_id": int(rule["id"]), "rule_run_id": int(rule_run.get("id") or 0),
+                        "stat_date": stat_date,
+                    }
+                    if has_routes:
+                        dispatch_context.update({"routes": active_routes, "matched_conditions": [], "rule_action": action})
+                    dispatch_result = dispatch_signal(
+                        repository, int(signal["id"]), subscription_id=int(subscription["id"]),
+                        auto_trigger_context=dispatch_context, draw_clock=draw_clock,
+                    )
+                    dispatched_count = int(dispatch_result.get("created_count") or 0) + int(dispatch_result.get("existing_count") or 0)
+                    if dispatched_count <= 0:
+                        if hasattr(repository, "release_auto_trigger_daily_start"):
+                            repository.release_auto_trigger_daily_start(
+                                rule_id=int(rule["id"]), user_id=int(rule["user_id"]),
+                                subscription_id=int(subscription["id"]), stat_date=stat_date,
+                            )
+                        claimed = False
+                        events.append(_record_event(
+                            repository, rule=rule, subscription=subscription, performance=None,
+                            status="skipped", reason="schedule_signal_not_dispatched", stat_date=stat_date,
+                            latest_issue_no=signal_issue_no,
+                            dispatch_result=dispatch_result, schedule_snapshot=signal_snapshot,
+                        ))
+                        summary["skipped_count"] += 1
+                        continue
+
+                events.append(_record_event(
+                    repository, rule=rule, subscription=subscription, performance=None,
+                    status="triggered", reason="schedule_started", stat_date=stat_date,
+                    latest_issue_no=signal_issue_no, dispatch_result=dispatch_result,
+                    schedule_snapshot={**signal_snapshot, "claim_status": "started"},
+                ))
+                repository.mark_auto_trigger_rule_triggered(
+                    rule_id=int(rule["id"]), user_id=int(rule["user_id"]), issue_no=signal_issue_no,
+                )
+                summary["triggered_count"] += 1
         except Exception as exc:
             if claimed and hasattr(repository, "release_auto_trigger_daily_start"):
                 try:
@@ -2061,119 +2082,141 @@ def evaluate_auto_trigger_rule(
                 summary["skipped_count"] += 1
                 continue
 
-            if subscription_status == "standby":
-                activated = repository.update_subscription_status(
-                    subscription_id=int(subscription["id"]),
-                    user_id=int(rule["user_id"]),
-                    status="active",
+            transaction = repository.transaction() if hasattr(repository, "transaction") else nullcontext(repository)
+            with transaction as unit:
+                # 条件查询可能耗时；写入前重新检查停用、停轮与日风控，避免重置用户刚结束的轮次。
+                current_rule = unit.get_auto_trigger_rule(int(rule["id"]))
+                current_run = unit.get_auto_trigger_rule_run_for_subscription_date(
+                    rule_id=int(rule["id"]), subscription_id=int(subscription["id"]), stat_date=stat_date,
                 )
-                if not activated:
-                    raise ValueError("subscription_id 对应的订阅不存在")
-                subscription = activated
-                subscription["source"] = source
+                current_day = _is_rule_day_stopped(unit, rule, stat_date=stat_date)
+                stop_reason = ""
+                if not current_rule or current_rule.get("status") != "active":
+                    stop_reason = "rule_not_active"
+                elif current_day.get("stopped"):
+                    stop_reason = "daily_risk_stopped"
+                elif current_run and current_run.get("status") == "stopped":
+                    stop_reason = str(current_run.get("stop_reason") or "rule_run_stopped")
+                if stop_reason:
+                    events.append(_record_event(
+                        unit, rule=rule, subscription=subscription, performance=performance,
+                        status="skipped", reason=stop_reason, stat_date=stat_date,
+                    ))
+                    summary["skipped_count"] += 1
+                    continue
+                if subscription_status == "standby":
+                    activated = unit.update_subscription_status(
+                        subscription_id=int(subscription["id"]),
+                        user_id=int(rule["user_id"]),
+                        status="active",
+                    )
+                    if not activated:
+                        raise ValueError("subscription_id 对应的订阅不存在")
+                    subscription = activated
+                    subscription["source"] = source
 
-            play_filter_result = None
-            if has_routes:
-                play_filter_result = {
-                    "mode": "route_scoped",
-                    "matched_conditions": matched,
-                    "active_route_count": len(active_routes),
-                    "skipped_routes": skipped_routes,
-                }
-            else:
-                play_filter_result = _apply_subscription_play_filter(
-                    repository,
-                    rule=rule,
-                    subscription=subscription,
-                    matched_conditions=matched,
-                )
-            if not has_routes:
-                rule_run = repository.ensure_auto_trigger_rule_run(
-                    rule_id=int(rule["id"]),
-                    user_id=int(rule["user_id"]),
-                    subscription_id=int(subscription["id"]),
-                    stat_date=stat_date,
-                    started_issue_no=latest_issue_no,
-                )
-                repository.reset_subscription_runtime(
-                    subscription_id=int(subscription["id"]),
-                    user_id=int(rule["user_id"]),
-                    note="自动触发规则：%s" % str(rule.get("name") or ""),
-                    enforce_threshold=True,
-                )
-            else:
-                prepared_routes = []
-                for route in active_routes:
-                    route_stat_date = str(route.get("_auto_trigger_stat_date") or stat_date)
-                    route_rule_run = repository.ensure_auto_trigger_rule_run(
+                play_filter_result = None
+                if has_routes:
+                    play_filter_result = {
+                        "mode": "route_scoped",
+                        "matched_conditions": matched,
+                        "active_route_count": len(active_routes),
+                        "skipped_routes": skipped_routes,
+                    }
+                else:
+                    play_filter_result = _apply_subscription_play_filter(
+                        unit,
+                        rule=rule,
+                        subscription=subscription,
+                        matched_conditions=matched,
+                    )
+                if not has_routes:
+                    rule_run = unit.ensure_auto_trigger_rule_run(
                         rule_id=int(rule["id"]),
                         user_id=int(rule["user_id"]),
                         subscription_id=int(subscription["id"]),
-                        stat_date=route_stat_date,
+                        stat_date=stat_date,
                         started_issue_no=latest_issue_no,
                     )
-                    prepared_route = {
-                        **route,
-                        "_auto_trigger_rule_run_id": int(route_rule_run["id"]) if route_rule_run.get("id") else None,
-                        "_auto_trigger_stat_date": route_stat_date,
-                    }
-                    if hasattr(repository, "reset_auto_trigger_route_subscription_runtime"):
-                        repository.reset_auto_trigger_route_subscription_runtime(
-                            route_id=int(route["id"]),
-                            rule_id=int(rule["id"]),
-                            subscription_id=int(subscription["id"]),
-                            user_id=int(rule["user_id"]),
-                            note="自动触发规则：%s / 路由：%s" % (
-                                str(rule.get("name") or ""),
-                                str(route.get("name") or route.get("target_name") or route.get("id") or ""),
-                            ),
-                        )
-                    prepared_routes.append(prepared_route)
-                active_routes = prepared_routes
-                rule_run = None
-            dispatch_result = None
-            if bool((rule.get("action") or {}).get("dispatch_latest_signal", True)):
-                dispatch_context = {
-                    "rule_id": int(rule["id"]),
-                    "stat_date": stat_date,
-                }
-                if rule_run:
-                    dispatch_context["rule_run_id"] = int(rule_run["id"])
-                if has_routes:
-                    dispatch_context.update(
-                        {
-                            "routes": active_routes,
-                            "matched_conditions": matched,
-                            "rule_action": rule.get("action") if isinstance(rule.get("action"), dict) else {},
-                        }
+                    unit.reset_subscription_runtime(
+                        subscription_id=int(subscription["id"]),
+                        user_id=int(rule["user_id"]),
+                        note="自动触发规则：%s" % str(rule.get("name") or ""),
+                        enforce_threshold=True,
                     )
-                dispatch_result = _dispatch_latest_signal_if_available(
-                    repository,
+                else:
+                    prepared_routes = []
+                    for route in active_routes:
+                        route_stat_date = str(route.get("_auto_trigger_stat_date") or stat_date)
+                        route_rule_run = unit.ensure_auto_trigger_rule_run(
+                            rule_id=int(rule["id"]),
+                            user_id=int(rule["user_id"]),
+                            subscription_id=int(subscription["id"]),
+                            stat_date=route_stat_date,
+                            started_issue_no=latest_issue_no,
+                        )
+                        prepared_route = {
+                            **route,
+                            "_auto_trigger_rule_run_id": int(route_rule_run["id"]) if route_rule_run.get("id") else None,
+                            "_auto_trigger_stat_date": route_stat_date,
+                        }
+                        if hasattr(unit, "reset_auto_trigger_route_subscription_runtime"):
+                            unit.reset_auto_trigger_route_subscription_runtime(
+                                route_id=int(route["id"]),
+                                rule_id=int(rule["id"]),
+                                subscription_id=int(subscription["id"]),
+                                user_id=int(rule["user_id"]),
+                                note="自动触发规则：%s / 路由：%s" % (
+                                    str(rule.get("name") or ""),
+                                    str(route.get("name") or route.get("target_name") or route.get("id") or ""),
+                                ),
+                            )
+                        prepared_routes.append(prepared_route)
+                    active_routes = prepared_routes
+                    rule_run = None
+                dispatch_result = None
+                if bool((rule.get("action") or {}).get("dispatch_latest_signal", True)):
+                    dispatch_context = {
+                        "rule_id": int(rule["id"]),
+                        "stat_date": stat_date,
+                    }
+                    if rule_run:
+                        dispatch_context["rule_run_id"] = int(rule_run["id"])
+                    if has_routes:
+                        dispatch_context.update(
+                            {
+                                "routes": active_routes,
+                                "matched_conditions": matched,
+                                "rule_action": rule.get("action") if isinstance(rule.get("action"), dict) else {},
+                            }
+                        )
+                    dispatch_result = _dispatch_latest_signal_if_available(
+                        unit,
+                        subscription=subscription,
+                        latest_settled_issue_no=latest_issue_no,
+                        auto_trigger_context=dispatch_context,
+                        draw_clock=draw_clock,
+                    )
+                event = _record_event(
+                    unit,
+                    rule=rule,
                     subscription=subscription,
-                    latest_settled_issue_no=latest_issue_no,
-                    auto_trigger_context=dispatch_context,
-                    draw_clock=draw_clock,
+                    performance=performance,
+                    status="triggered",
+                    reason="conditions_matched",
+                    matched_conditions=matched,
+                    trigger_match=trigger_match,
+                    dispatch_result=dispatch_result,
+                    play_filter_result=play_filter_result,
+                    performance_fetch=performance_fetch,
                 )
-            event = _record_event(
-                repository,
-                rule=rule,
-                subscription=subscription,
-                performance=performance,
-                status="triggered",
-                reason="conditions_matched",
-                matched_conditions=matched,
-                trigger_match=trigger_match,
-                dispatch_result=dispatch_result,
-                play_filter_result=play_filter_result,
-                performance_fetch=performance_fetch,
-            )
-            repository.mark_auto_trigger_rule_triggered(
-                rule_id=int(rule["id"]),
-                user_id=int(rule["user_id"]),
-                issue_no=latest_issue_no,
-            )
-            events.append(event)
-            summary["triggered_count"] += 1
+                unit.mark_auto_trigger_rule_triggered(
+                    rule_id=int(rule["id"]),
+                    user_id=int(rule["user_id"]),
+                    issue_no=latest_issue_no,
+                )
+                events.append(event)
+                summary["triggered_count"] += 1
         except Exception as exc:
             try:
                 performance_fetch = exc.metadata if isinstance(exc, PerformanceFetchError) else None

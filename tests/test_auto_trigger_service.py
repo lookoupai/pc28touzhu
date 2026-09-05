@@ -320,7 +320,10 @@ class AutoTriggerServiceTests(unittest.TestCase):
             bet_type="big_small", bet_value="小", normalized_payload={"message_text": "小1"},
             published_at="2026-09-02T10:08:00Z",
         )
-        self.assertEqual(dispatch_signal(self.repo, follow_up["id"])["created_count"], 0)
+        direct_result = dispatch_signal(self.repo, follow_up["id"])
+        self.assertEqual(direct_result["created_count"], 1)
+        self.assertIsNone(direct_result["jobs"][0]["auto_trigger_route_id"])
+        self.assertIsNone(self.repo.get_progression_event(direct_result["jobs"][0]["progression_event_id"])["auto_trigger_rule_id"])
 
     def test_manual_stop_without_active_run_is_noop(self):
         rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
@@ -448,8 +451,8 @@ class AutoTriggerServiceTests(unittest.TestCase):
             bet_type="big_small", bet_value="小", normalized_payload={"message_text": "小1"},
             published_at="2026-09-02T10:08:00Z",
         )
-        # 规则还启用时，停掉的轮次继续压着直派
-        self.assertEqual(dispatch_signal(self.repo, follow_up["id"])["created_count"], 0)
+        # 规则仍启用或已停用，都不能让它的历史轮次接管独立直派。
+        self.assertEqual(dispatch_signal(self.repo, follow_up["id"])["created_count"], 1)
 
         update_auto_trigger_rule(
             self.repo, rule_id=rule["id"], user_id=self.user_id, payload={"status": "inactive"},
@@ -770,6 +773,44 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(result["summary"]["triggered_count"], 0)
         self.assertEqual(result["rules"][0]["events"], [])
 
+    def test_manual_stop_during_condition_fetch_does_not_reset_route_financials(self):
+        target = self.repo.list_delivery_targets(self.user_id)[0]
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload={
+            "name": "条件查询期间停轮", "scope_mode": "selected_subscriptions",
+            "subscription_ids": [self.subscription["id"]], "cooldown_issues": 0,
+            "conditions": [{"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}],
+            "daily_risk_control": {"enabled": False},
+            "routes": [{"delivery_target_id": target["id"], "route_risk_mode": "disabled", "subscription_risk_mode": "disabled"}],
+        })["item"]
+        stat_date = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+        run = self.repo.ensure_auto_trigger_rule_run(
+            rule_id=rule["id"], user_id=self.user_id, subscription_id=self.subscription["id"], stat_date=stat_date,
+        )
+        job = dispatch_signal(self.repo, self.signal["id"], subscription_id=self.subscription["id"], auto_trigger_context={
+            "rule_id": rule["id"], "rule_run_id": run["id"], "stat_date": stat_date, "routes": rule["routes"],
+        })["jobs"][0]
+        with self.repo._connect() as conn:
+            conn.execute("UPDATE execution_jobs SET status='delivered' WHERE id=?", (job["id"],))
+        self.repo.settle_progression_event(
+            subscription_id=self.subscription["id"], user_id=self.user_id,
+            progression_event_id=job["progression_event_id"], result_type="miss",
+        )
+        before = self.repo.get_auto_trigger_route_subscription_financial_state(
+            route_id=rule["routes"][0]["id"], subscription_id=self.subscription["id"], user_id=self.user_id,
+        )
+
+        def stop_while_fetching(_):
+            stop_auto_trigger_rule_current_run(self.repo, rule_id=rule["id"], user_id=self.user_id)
+            return self._performance_payload()
+
+        result = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], fetcher=stop_while_fetching)
+        self.assertEqual(result["summary"]["triggered_count"], 0)
+        self.assertEqual(result["summary"]["skipped_count"], 1)
+        self.assertEqual(result["rules"][0]["events"][0]["reason"], "manual_stop")
+        self.assertEqual(self.repo.get_auto_trigger_route_subscription_financial_state(
+            route_id=rule["routes"][0]["id"], subscription_id=self.subscription["id"], user_id=self.user_id,
+        ), before)
+
     def test_route_trigger_dispatches_signal_for_matched_metric(self):
         self.repo.update_subscription_status(
             subscription_id=self.subscription["id"],
@@ -894,8 +935,8 @@ class AutoTriggerServiceTests(unittest.TestCase):
             published_at="2026-04-18T09:35:00Z",
         )
         dispatch_result = dispatch_signal(self.repo, next_signal["id"])
-        self.assertEqual(dispatch_result["created_count"], 0)
-        self.assertEqual(dispatch_result["jobs"], [])
+        self.assertEqual(dispatch_result["created_count"], 1)
+        self.assertIsNone(dispatch_result["jobs"][0]["auto_trigger_route_id"])
         next_event = self.repo.get_progression_event_by_signal(
             subscription_id=self.subscription["id"],
             signal_id=next_signal["id"],

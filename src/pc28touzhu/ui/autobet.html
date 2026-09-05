@@ -477,6 +477,14 @@
                                     <input class="text-input" name="target_name" type="text" placeholder="例如：主投注群">
                                 </label>
                                 <label>
+                                    <span>派单模式</span>
+                                    <select class="text-input" name="dispatch_mode">
+                                        <option value="shared">互斥并存</option>
+                                        <option value="rule_only">仅自动规则</option>
+                                        <option value="direct_only">仅手动跟单</option>
+                                    </select>
+                                </label>
+                                <label>
                                     <span>下注格式模板</span>
                                     <select class="text-input" name="template_id">
                                         <option value="">默认格式（未绑定模板）</option>

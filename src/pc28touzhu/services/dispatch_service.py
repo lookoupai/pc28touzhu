@@ -1,6 +1,7 @@
 """Dispatch planning from signals to execution jobs."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
@@ -89,72 +90,35 @@ def _message_text_from_template(signal: Dict[str, Any], amount: float, template:
     return rendered or _default_message_text(signal, amount)
 
 
-def _auto_trigger_rule_governs_dispatch(repository: Any, rule_id: Any) -> bool:
-    """规则仍然启用时，它的轮次才对订阅直派有发言权。"""
-    try:
-        resolved_rule_id = int(rule_id or 0)
-    except (TypeError, ValueError):
-        return False
-    if resolved_rule_id <= 0 or not hasattr(repository, "get_auto_trigger_rule"):
-        return False
-    rule = repository.get_auto_trigger_rule(resolved_rule_id)
-    return bool(rule) and str(rule.get("status") or "") == "active"
-
-
 def _resolve_auto_trigger_context(repository: Any, candidate: Dict[str, Any], explicit_context: Dict[str, Any] | None) -> Dict[str, Any] | None:
     context = explicit_context if isinstance(explicit_context, dict) else None
-    if context and int(context.get("rule_id") or 0) > 0 and str(context.get("stat_date") or "").strip():
-        stat = repository.get_auto_trigger_rule_daily_stat(
-            rule_id=int(context["rule_id"]),
-            user_id=int(candidate["user_id"]),
-            stat_date=str(context["stat_date"]),
+    # 无 route 的兼容模式延续当前 runtime 的明确归属，手动轮次不反查历史规则。
+    if not context and hasattr(repository, "get_subscription_runtime_rule_run"):
+        run = repository.get_subscription_runtime_rule_run(
+            subscription_id=int(candidate["subscription_id"]), user_id=int(candidate["user_id"]),
         )
-        if str(stat.get("status") or "") == "stopped":
-            return {**context, "stopped": True, "stopped_reason": str(stat.get("stopped_reason") or "daily_risk_stopped")}
-        return {**context, "stopped": False}
-
-    if not hasattr(repository, "get_latest_auto_trigger_rule_run_for_subscription"):
+        if run:
+            context = {"rule_id": run["rule_id"], "rule_run_id": run["id"], "stat_date": run["stat_date"]}
+            if run.get("status") != "active":
+                return {**context, "stopped": True, "stopped_reason": run.get("stop_reason") or "rule_run_stopped"}
+    if not context or int(context.get("rule_id") or 0) <= 0 or not str(context.get("stat_date") or "").strip():
         return None
-    run = repository.get_latest_auto_trigger_rule_run_for_subscription(
-        subscription_id=int(candidate["subscription_id"]),
-        user_id=int(candidate["user_id"]),
-    )
-    if not run:
-        return None
-    if not _auto_trigger_rule_governs_dispatch(repository, run.get("rule_id")):
-        # 规则已停用：它的历史轮次（含很早以前的止盈止损）不该继续卡住这个订阅的直派。
-        return None
-    if str(run.get("status") or "") == "stopped":
-        return {
-            "rule_id": int(run["rule_id"]),
-            "rule_run_id": int(run["id"]),
-            "stat_date": str(run.get("stat_date") or ""),
-            "stopped": True,
-            "stopped_reason": str(run.get("stop_reason") or "daily_risk_stopped"),
-        }
-    if str(run.get("status") or "") != "active":
-        return None
-    stat_date = str(run.get("stat_date") or "").strip()
-    rule_id = int(run["rule_id"])
     stat = repository.get_auto_trigger_rule_daily_stat(
-        rule_id=rule_id,
+        rule_id=int(context["rule_id"]),
         user_id=int(candidate["user_id"]),
-        stat_date=stat_date,
+        stat_date=str(context["stat_date"]),
     )
     if str(stat.get("status") or "") == "stopped":
-        return {
-            "rule_id": rule_id,
-            "rule_run_id": int(run["id"]),
-            "stat_date": stat_date,
-            "stopped": True,
-            "stopped_reason": str(stat.get("stopped_reason") or "daily_risk_stopped"),
-        }
-    return {
-        "rule_id": rule_id,
-        "rule_run_id": int(run["id"]),
-        "stat_date": stat_date,
-        "stopped": False,
-    }
+        return {**context, "stopped": True, "stopped_reason": str(stat.get("stopped_reason") or "daily_risk_stopped")}
+    return {**context, "stopped": False}
+
+
+def _target_allows_dispatch(repository: Any, target_id: int, *, from_rule: bool) -> bool:
+    target = repository.get_delivery_target(target_id)
+    if not target or target.get("status") != "active":
+        return False
+    mode = str(target.get("dispatch_mode") or "shared")
+    return mode == "shared" or mode == ("rule_only" if from_rule else "direct_only")
 
 
 def _build_stake_plan(strategy: Dict[str, Any], signal: Dict[str, Any], current_step: int = 1) -> Dict[str, Any]:
@@ -342,9 +306,31 @@ def _dispatch_signal_for_auto_trigger_routes(
 
     for route in routes:
         route_id = int(route["id"])
+        if hasattr(repository, "get_auto_trigger_rule_route"):
+            current_route = repository.get_auto_trigger_rule_route(route_id)
+            if not current_route or current_route.get("status") != "active":
+                skipped_count += 1
+                continue
+            route = {**route, **current_route}
         route_stat_date = str(route.get("_auto_trigger_stat_date") or stat_date).strip()
         route_rule_run_id = route.get("_auto_trigger_rule_run_id") or auto_trigger_context.get("rule_run_id")
         delivery_target_id = int(route["delivery_target_id"])
+        if not _target_allows_dispatch(repository, delivery_target_id, from_rule=True):
+            skipped_count += 1
+            continue
+        # 候选可能是在用户停轮之前读取的，事务内必须重新核对所属规则轮。
+        if route_rule_run_id and hasattr(repository, "get_auto_trigger_rule_run"):
+            owning_run = repository.get_auto_trigger_rule_run(int(route_rule_run_id))
+            owning_rule = repository.get_auto_trigger_rule(int(auto_trigger_context["rule_id"]))
+            if (
+                not owning_run or owning_run.get("status") != "active"
+                or int(owning_run.get("subscription_id") or 0) != int(subscription_id)
+                or int(owning_run.get("user_id") or 0) != user_id
+                or int(owning_run.get("rule_id") or 0) != int(auto_trigger_context.get("rule_id") or 0)
+                or not owning_rule or owning_rule.get("status") != "active"
+            ):
+                skipped_count += 1
+                continue
         if auto_trigger_context.get("rule_id") and _auto_trigger_rule_day_is_stopped(
             repository,
             rule_id=int(auto_trigger_context["rule_id"]),
@@ -402,7 +388,7 @@ def _dispatch_signal_for_auto_trigger_routes(
             delivery_target_id=delivery_target_id,
             from_route=False,
         ):
-            # 该期该群已被订阅直派占位：route 让位，避免同一期同一群双注
+            # 同一信号已由其他 route 或直派占用该目标。
             skipped_count += 1
             continue
 
@@ -616,6 +602,22 @@ def dispatch_signal(
     auto_trigger_context: Dict[str, Any] | None = None,
     draw_clock: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
+    transaction = repository.transaction() if hasattr(repository, "transaction") else nullcontext(repository)
+    with transaction as unit:
+        return _dispatch_signal(
+            unit, signal_id, subscription_id=subscription_id,
+            auto_trigger_context=auto_trigger_context, draw_clock=draw_clock,
+        )
+
+
+def _dispatch_signal(
+    repository: Any,
+    signal_id: int,
+    *,
+    subscription_id: int | None = None,
+    auto_trigger_context: Dict[str, Any] | None = None,
+    draw_clock: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     signal = repository.get_signal(signal_id)
     if not signal:
         raise ValueError("signal 不存在")
@@ -692,6 +694,11 @@ def dispatch_signal(
         strategy = strategy or {}
         subscription_id = int(candidate["subscription_id"])
         resolved_auto_trigger_context = _resolve_auto_trigger_context(repository, candidate, auto_trigger_context)
+        if not _target_allows_dispatch(
+            repository, int(candidate["delivery_target_id"]), from_rule=bool(resolved_auto_trigger_context),
+        ):
+            skipped_count += 1
+            continue
         if resolved_auto_trigger_context and resolved_auto_trigger_context.get("stopped"):
             skipped_count += 1
             continue

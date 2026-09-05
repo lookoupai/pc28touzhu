@@ -3142,6 +3142,9 @@
             const routeName = String(item.route_name || "").trim();
             return routeName ? (" · 路由 " + routeName) : " · 路由";
         }
+        if (String(item.scope || "") === "subscription") {
+            return item.auto_trigger_rule_run_id ? " · 规则跟单" : " · 订阅直派";
+        }
         return "";
     }
 
@@ -3156,12 +3159,7 @@
                 '</section>',
             ].join("");
         }
-        const hasRouteScope = items.some(function (item) {
-            return String(item && item.scope || "") === "route";
-        });
-        const copyText = hasRouteScope
-            ? "这个跟单方案挂了自动触发路由，按每条路由独立记轮：玩法、净盈亏、单数和结束原因。"
-            : "这里按轮次记录每一轮的玩法、净盈亏、单数和结束原因，便于复盘策略表现。";
+        const copyText = "当前显示 " + items.length + " 轮";
         return [
             '<section class="subscription-history-panel">',
             '<strong class="subscription-section-title">轮次历史</strong>',
@@ -5425,6 +5423,7 @@
                 detailMarkup: [
                     renderConfigDetailRows([
                         renderConfigDetailRow("群组标识", item.target_key || "--", "mono-text"),
+                        renderConfigDetailRow("派单模式", ({shared: "互斥并存", rule_only: "仅自动规则", direct_only: "仅手动跟单"})[item.dispatch_mode || "shared"] || "--"),
                         renderConfigDetailRow("命中策略", subscriptionText),
                         renderConfigDetailRow("测试说明", targetTestSummary(item)),
                         renderConfigDetailRow("最近执行", recentExecutionText),
@@ -6658,6 +6657,7 @@
                         target_key: targetKey,
                         target_name: form.target_name.value,
                         template_id: templateId ? Number(templateId) : null,
+                        dispatch_mode: form.dispatch_mode.value,
                     },
                 });
             } else {
@@ -6669,6 +6669,7 @@
                         target_key: targetKey,
                         target_name: form.target_name.value,
                         template_id: templateId ? Number(templateId) : null,
+                        dispatch_mode: form.dispatch_mode.value,
                     },
                 });
             }
@@ -6700,6 +6701,7 @@
                 refreshTemplateSelects();
                 targetForm.elements.template_id.value = item.template_id == null ? "" : String(item.template_id);
                 targetForm.elements.target_name.value = item.target_name || "";
+                targetForm.elements.dispatch_mode.value = item.dispatch_mode || "shared";
                 targetForm.elements.target_key.value = item.target_key || "";
                 syncTargetKeyPreview();
                 setFormEditingState(targetForm, document.getElementById("createTargetBtn"), cancelTargetEditBtn, true, "保存群组");
