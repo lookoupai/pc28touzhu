@@ -20,6 +20,9 @@ from pc28touzhu.domain.subscription_strategy import (
 
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 DEFAULT_SQLITE_BUSY_TIMEOUT_SECONDS = 30.0
+# 手动结束轮次的统一标记：与自动风控的 profit_target_hit / loss_limit_hit 区分开，
+# 让定时触发的跨日闸知道这轮是被主动让位的，不该占用当天的开轮额度。
+MANUAL_STOP_REASON = "manual_stop"
 
 
 def _utc_now_iso() -> str:
@@ -4262,6 +4265,147 @@ class DatabaseRepository:
             )
             return cursor.rowcount > 0
 
+    def list_active_auto_trigger_rule_runs(
+        self,
+        *,
+        rule_id: int,
+        user_id: int,
+        subscription_id: Optional[int] = None,
+    ) -> list[Dict[str, Any]]:
+        """列出规则当前在跑的轮次（含跨日延续到今天的那一轮）。"""
+        sql = """
+            SELECT *
+            FROM auto_trigger_rule_runs
+            WHERE rule_id = ? AND user_id = ? AND status = 'active'
+        """
+        params: list[Any] = [int(rule_id), int(user_id)]
+        if subscription_id is not None:
+            sql += " AND subscription_id = ?"
+            params.append(int(subscription_id))
+        sql += " ORDER BY stat_date ASC, id ASC"
+        with self._connect() as conn:
+            rows = conn.execute(sql, tuple(params)).fetchall()
+        return [self._serialize_auto_trigger_rule_run_row(dict(row)) for row in rows]
+
+    def stop_auto_trigger_rule_current_run(
+        self,
+        *,
+        rule_id: int,
+        user_id: int,
+        subscription_id: Optional[int] = None,
+        note: str = "",
+    ) -> Dict[str, Any]:
+        """手动结束规则在跑的轮次，但不改规则本身的启用状态。
+
+        与自动风控停轮的区别：stop_reason 记为 manual_stop，定时触发的跨日闸会放行，
+        因此下一个时间窗口可以正常开新一轮。已下单待结算（placed）的单不动，留给结算流程自然收口。
+        """
+        rule = self.get_auto_trigger_rule(int(rule_id))
+        if not rule or int(rule.get("user_id") or 0) != int(user_id):
+            raise ValueError("rule_id 对应的自动触发规则不存在")
+        runs = self.list_active_auto_trigger_rule_runs(
+            rule_id=int(rule_id), user_id=int(user_id), subscription_id=subscription_id,
+        )
+        if not runs:
+            return {"stopped": False, "runs": [], "cancelled_event_count": 0,
+                    "expired_job_count": 0, "closed_route_run_count": 0,
+                    "released_blocked_day_count": 0, "pending_settlement_count": 0}
+
+        now = _utc_now_iso()
+        stop_note = str(note or "").strip()
+        route_ids = [
+            int(route["id"]) for route in (rule.get("routes") or [])
+            if route.get("id") and str(route.get("status") or "active") != "archived"
+        ]
+        cancelled_event_count = 0
+        expired_job_count = 0
+        closed_route_run_count = 0
+
+        for run in runs:
+            run_subscription_id = int(run["subscription_id"])
+            for route_id in route_ids:
+                had_active_run = self.get_active_auto_trigger_route_subscription_runtime_run(
+                    route_id=route_id,
+                    subscription_id=run_subscription_id,
+                    user_id=int(user_id),
+                ) is not None
+                self.reset_auto_trigger_route_subscription_runtime(
+                    route_id=route_id,
+                    rule_id=int(rule_id),
+                    subscription_id=run_subscription_id,
+                    user_id=int(user_id),
+                    note=stop_note or "手动结束当前轮次",
+                    force=True,
+                )
+                if had_active_run:
+                    closed_route_run_count += 1
+            cancelled = self.cancel_pending_auto_trigger_rule_jobs(
+                rule_id=int(rule_id),
+                user_id=int(user_id),
+                stat_date=str(run.get("stat_date") or ""),
+                reason=MANUAL_STOP_REASON,
+            )
+            cancelled_event_count += int(cancelled.get("cancelled_event_count") or 0)
+            expired_job_count += int(cancelled.get("expired_job_count") or 0)
+
+        run_ids = [int(run["id"]) for run in runs]
+        placeholders = ",".join(["?"] * len(run_ids))
+        released_blocked_day_count = 0
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE auto_trigger_rule_runs
+                SET status = 'stopped',
+                    stop_reason = ?,
+                    stopped_at = COALESCE(stopped_at, ?),
+                    updated_at = ?
+                WHERE id IN (""" + placeholders + """)
+                """,
+                (MANUAL_STOP_REASON, now, now, *run_ids),
+            )
+            for run in runs:
+                # 跨日闸把这轮延续到的每一天都占了个 blocked 占位行，占位行会顶掉当天的开轮额度。
+                # 这轮被主动结束后占位理由不成立，删掉 stat_date 晚于本轮的占位行，让后续窗口能重新开轮。
+                cursor = conn.execute(
+                    """
+                    DELETE FROM auto_trigger_rule_runs
+                    WHERE rule_id = ? AND user_id = ? AND subscription_id = ?
+                      AND status = 'blocked'
+                      AND stat_date > ?
+                      AND NOT EXISTS (
+                          SELECT 1 FROM subscription_progression_events
+                          WHERE auto_trigger_rule_run_id = auto_trigger_rule_runs.id
+                      )
+                    """,
+                    (
+                        int(rule_id), int(user_id), int(run["subscription_id"]),
+                        str(run.get("stat_date") or ""),
+                    ),
+                )
+                released_blocked_day_count += max(0, cursor.rowcount)
+            pending_row = conn.execute(
+                """
+                SELECT COUNT(1) AS pending_settlement_count
+                FROM subscription_progression_events
+                WHERE auto_trigger_rule_id = ?
+                  AND user_id = ?
+                  AND status IN ('pending', 'placed')
+                """,
+                (int(rule_id), int(user_id)),
+            ).fetchone()
+        return {
+            "stopped": True,
+            "runs": self.list_active_auto_trigger_rule_runs(
+                rule_id=int(rule_id), user_id=int(user_id), subscription_id=subscription_id,
+            ),
+            "stopped_runs": [{**run, "status": "stopped", "stop_reason": MANUAL_STOP_REASON} for run in runs],
+            "cancelled_event_count": cancelled_event_count,
+            "expired_job_count": expired_job_count,
+            "closed_route_run_count": closed_route_run_count,
+            "released_blocked_day_count": released_blocked_day_count,
+            "pending_settlement_count": int(pending_row["pending_settlement_count"] or 0) if pending_row else 0,
+        }
+
     def stop_auto_trigger_rule_day(
         self,
         *,
@@ -5449,6 +5593,7 @@ class DatabaseRepository:
         subscription_id: int,
         user_id: int,
         note: str = "",
+        force: bool = False,
     ) -> Dict[str, Any]:
         now = _utc_now_iso()
         reset_note = str(note or "").strip()
@@ -5472,7 +5617,8 @@ class DatabaseRepository:
             # 跨天延续保护：只有旧轮确实达到止盈/止损阈值才允许自动重置开新轮；
             # 旧轮仍 active 但未达阈值（典型如 0 点前触发、0 点后仍在跑的轮次）时不许提前打断。
             # 但若该路由有 pending 的倍投事件/任务在排队（说明旧轮仍未结算完、本轮还没真正"开完"），允许重置以接管下一轮派单。
-            if active_run and threshold_status not in {"profit_target_hit", "loss_limit_hit"}:
+            # force=True 用于用户手动结束当前轮次，此时由人接管判断，跳过阈值保护。
+            if active_run and not force and threshold_status not in {"profit_target_hit", "loss_limit_hit"}:
                 return self.get_auto_trigger_route_subscription_financial_state(
                     route_id=int(route_id),
                     subscription_id=int(subscription_id),
@@ -5495,7 +5641,11 @@ class DatabaseRepository:
                     """,
                     (
                         now,
-                        str(financial.get("threshold_status") or "auto_trigger_restart"),
+                        str(
+                            MANUAL_STOP_REASON
+                            if force
+                            else (financial.get("threshold_status") or "auto_trigger_restart")
+                        ),
                         _round_money(financial.get("realized_profit")),
                         _round_money(financial.get("realized_loss")),
                         _round_money(financial.get("net_profit")),

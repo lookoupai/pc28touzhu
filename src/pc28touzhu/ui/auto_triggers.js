@@ -322,6 +322,45 @@
         return Boolean(stat && stat.status === "stopped");
     }
 
+    function ruleActiveRuns(rule) {
+        return rule && Array.isArray(rule.active_runs) ? rule.active_runs : [];
+    }
+
+    function activeRunText(rule) {
+        const runs = ruleActiveRuns(rule);
+        if (!runs.length) {
+            return "";
+        }
+        const dates = runs.map(function (run) { return String(run.stat_date || "--"); }).join("、");
+        const crossDay = runs.some(function (run) {
+            return String(run.stat_date || "") !== String(rule.stat_date || "");
+        });
+        return "在跑轮次：" + dates + (crossDay ? "（已跨日延续到今天，会占用今天的开轮额度）" : "");
+    }
+
+    function stopCurrentRunText(result) {
+        if (!result || !result.stopped) {
+            return "这条规则当前没有在跑的轮次。";
+        }
+        const runCount = Array.isArray(result.stopped_runs) ? result.stopped_runs.length : 0;
+        const parts = ["已结束 " + String(runCount) + " 个在跑轮次"];
+        if (result.cancelled_event_count) {
+            parts.push("取消排队 " + String(result.cancelled_event_count) + " 单");
+        }
+        if (result.expired_job_count) {
+            parts.push("跳过未执行任务 " + String(result.expired_job_count) + " 个");
+        }
+        if (result.released_blocked_day_count) {
+            parts.push("释放被占用的开轮额度 " + String(result.released_blocked_day_count) + " 天");
+        }
+        const summary = parts.join("，") + "。";
+        if (result.pending_settlement_count) {
+            return summary + "仍有 " + String(result.pending_settlement_count) +
+                " 单已下注待结算，结算完成后下一个时间窗口才会开新一轮。";
+        }
+        return summary + "规则保持启用，下一个时间窗口会开新一轮。";
+    }
+
     function renderRuleList() {
         const list = $("ruleList");
         if (!state.rules.length) {
@@ -357,11 +396,13 @@
                     '<p class="meta-line">' + escapeHtml(dailyProfitText(rule)) + '</p>' +
                     '<p class="meta-line">' + escapeHtml(dailySettlementText(rule)) + '</p>' +
                     (dailyStatusText(rule) ? '<p class="meta-line">' + escapeHtml(dailyStatusText(rule)) + '</p>' : '') +
+                    (activeRunText(rule) ? '<p class="meta-line">' + escapeHtml(activeRunText(rule)) + '</p>' : '') +
                     '<p class="meta-line">冷却 <span class="mono">' + escapeHtml(rule.cooldown_issues) + '</span> 期，上次触发 <span class="mono">' + escapeHtml(rule.last_triggered_issue_no || "--") + '</span></p>' +
                     '<div class="rule-actions">' +
                         '<button class="tiny-btn edit-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">编辑</button>' +
                         '<button class="tiny-btn run-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">检查</button>' +
                         (isDailyRiskStopped(rule) ? '<button class="tiny-btn resume-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">继续今日触发</button>' : '') +
+                        (ruleActiveRuns(rule).length ? '<button class="tiny-btn stop-run-btn" type="button" data-id="' + escapeHtml(rule.id) + '">结束当前轮次</button>' : '') +
                         '<button class="tiny-btn status-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '" data-status="' + (rule.status === "active" ? "inactive" : "active") + '">' + (rule.status === "active" ? "停用" : "启用") + '</button>' +
                         '<button class="tiny-btn status-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '" data-status="archived">归档</button>' +
                     '</div>' +
@@ -1002,6 +1043,25 @@
                     });
                     await loadData();
                     setStatus("已恢复今日自动触发。", false);
+                } catch (error) {
+                    setStatus(error.message, true);
+                } finally {
+                    target.removeAttribute("disabled");
+                }
+                return;
+            }
+            if (target.classList.contains("stop-run-btn")) {
+                if (!window.confirm("结束当前在跑的轮次？规则保持启用，下一个时间窗口会开新一轮。已下注待结算的单不会撤销。")) {
+                    return;
+                }
+                try {
+                    target.setAttribute("disabled", "disabled");
+                    const result = await request("/api/platform/auto-trigger-rules/" + target.dataset.id + "/stop-current-run", {
+                        method: "POST",
+                        body: {note: "前端手动结束当前轮次"},
+                    });
+                    await loadData();
+                    setStatus(stopCurrentRunText(result), false);
                 } catch (error) {
                     setStatus(error.message, true);
                 } finally {

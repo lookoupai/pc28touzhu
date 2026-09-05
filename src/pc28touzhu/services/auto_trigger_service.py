@@ -61,6 +61,8 @@ RUNTIME_RETENTION_DAYS = {
     "stats": 365,
 }
 SHANGHAI_TZ = timezone(timedelta(hours=8))
+# 与 executor/db_repository.MANUAL_STOP_REASON 必须同值：手动结束的轮次不占用当天开轮额度。
+MANUAL_STOP_REASON = "manual_stop"
 _PERFORMANCE_CACHE_LOCK = Lock()
 _PERFORMANCE_CACHE: Dict[str, Dict[str, Any]] = {}
 
@@ -639,6 +641,34 @@ def resume_auto_trigger_rule_day(repository: Any, *, rule_id: Any, user_id: Any,
     return {"resumed": True, "stat": resumed_stat}
 
 
+def stop_auto_trigger_rule_current_run(
+    repository: Any, *, rule_id: Any, user_id: Any, payload: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """结束规则当前在跑的轮次，规则本身保持启用。
+
+    定位在"只停这一轮"与"停整条规则"之间：轮次被标记为 manual_stop，跨日闸随后放行，
+    下一个时间窗口可以照常开新一轮。已下单待结算的单不撤，交给结算流程收口。
+    """
+    normalized_rule_id = _to_positive_int(rule_id, "rule_id")
+    normalized_user_id = _to_positive_int(user_id, "user_id")
+    body = payload if isinstance(payload, dict) else {}
+    rule = repository.get_auto_trigger_rule(normalized_rule_id)
+    if not rule or int(rule.get("user_id") or 0) != normalized_user_id:
+        raise ValueError("rule_id 对应的自动触发规则不存在")
+    subscription_id = _to_positive_int(body.get("subscription_id"), "subscription_id", allow_none=True)
+    if subscription_id is not None:
+        subscription = repository.get_subscription(subscription_id)
+        if not subscription or int(subscription.get("user_id") or 0) != normalized_user_id:
+            raise ValueError("subscription_id 对应的订阅不存在")
+    result = repository.stop_auto_trigger_rule_current_run(
+        rule_id=normalized_rule_id,
+        user_id=normalized_user_id,
+        subscription_id=subscription_id,
+        note=str(body.get("note") or "").strip(),
+    )
+    return {"item": rule, **result}
+
+
 def update_auto_trigger_rule_status(repository: Any, *, rule_id: Any, user_id: Any, status: Any) -> Dict[str, Any]:
     normalized_rule_id = _to_positive_int(rule_id, "rule_id")
     normalized_user_id = _to_positive_int(user_id, "user_id")
@@ -680,6 +710,13 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = N
             rule_id=int(rule["id"]),
             user_id=int(rule["user_id"]),
             stat_date=resolved_stat_date,
+        )
+        active_runs = (
+            repository.list_active_auto_trigger_rule_runs(
+                rule_id=int(rule["id"]), user_id=int(rule["user_id"]),
+            )
+            if hasattr(repository, "list_active_auto_trigger_rule_runs")
+            else []
         )
         routes = []
         for route in rule.get("routes") or []:
@@ -750,6 +787,7 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = N
                 **rule,
                 "stat_date": resolved_stat_date,
                 "daily_stat": daily_stat,
+                "active_runs": active_runs,
                 "routes": routes,
                 "schedule_status": schedule_status,
             }
@@ -1421,7 +1459,13 @@ def _schedule_cross_day_block(
     started_local_date = _stat_date_from_iso(latest.get("started_at"), timezone_name=str((rule.get("schedule") or {}).get("timezone") or "Asia/Shanghai"))
     stopped_local_date = _stat_date_from_iso(latest.get("stopped_at"), timezone_name=str((rule.get("schedule") or {}).get("timezone") or "Asia/Shanghai"))
     spans_today = str(latest.get("status") or "") == "active" and started_local_date and started_local_date != stat_date
-    ended_today = str(latest.get("status") or "") in {"closed", "stopped"} and stopped_local_date == stat_date
+    # 手动结束的轮次视为主动让位：用户就是为了在今天的窗口重开一轮，不再消耗今天的额度。
+    manual_stopped = str(latest.get("stop_reason") or "").strip() == MANUAL_STOP_REASON
+    ended_today = (
+        not manual_stopped
+        and str(latest.get("status") or "") in {"closed", "stopped"}
+        and stopped_local_date == stat_date
+    )
     if not (spans_today or ended_today):
         return None
     if hasattr(repository, "block_auto_trigger_daily_start"):

@@ -15,6 +15,7 @@ from pc28touzhu.services.auto_trigger_service import (
     list_auto_trigger_rules,
     resume_auto_trigger_rule_day,
     run_auto_trigger_cycle,
+    stop_auto_trigger_rule_current_run,
     update_auto_trigger_rule,
 )
 
@@ -233,6 +234,121 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(cross_day["rules"][0]["summary"]["skipped_count"], 1)
         event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
         self.assertEqual(event["reason"], "schedule_day_already_started")
+
+    def test_manual_stop_current_run_reopens_today_window(self):
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        self.repo.ensure_auto_trigger_rule_run(
+            rule_id=rule["id"], user_id=self.user_id,
+            subscription_id=self.subscription["id"], stat_date="2026-09-01", started_issue_no="old",
+        )
+        blocked = run_auto_trigger_cycle(
+            self.repo, user_id=self.user_id, rule_id=rule["id"],
+            now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc),
+        )
+        self.assertEqual(blocked["rules"][0]["summary"]["skipped_count"], 1)
+        blocked_run = self.repo.get_auto_trigger_rule_run_for_subscription_date(
+            rule_id=rule["id"], subscription_id=self.subscription["id"], stat_date="2026-09-02",
+        )
+        self.assertEqual(blocked_run["status"], "blocked")
+
+        result = stop_auto_trigger_rule_current_run(
+            self.repo, rule_id=rule["id"], user_id=self.user_id, payload={"note": "测试手动结束"},
+        )
+        self.assertTrue(result["stopped"])
+        self.assertEqual(len(result["stopped_runs"]), 1)
+        self.assertEqual(result["released_blocked_day_count"], 1)
+        self.assertEqual(result["runs"], [])
+        stopped_run = self.repo.get_auto_trigger_rule_run_for_subscription_date(
+            rule_id=rule["id"], subscription_id=self.subscription["id"], stat_date="2026-09-01",
+        )
+        self.assertEqual(stopped_run["status"], "stopped")
+        self.assertEqual(stopped_run["stop_reason"], "manual_stop")
+        self.assertIsNone(self.repo.get_auto_trigger_rule_run_for_subscription_date(
+            rule_id=rule["id"], subscription_id=self.subscription["id"], stat_date="2026-09-02",
+        ))
+        self.assertEqual(self.repo.get_auto_trigger_rule(rule["id"])["status"], "active")
+
+        self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260902301",
+            bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
+            published_at="2026-09-02T10:04:30Z",
+        )
+        reopened = run_auto_trigger_cycle(
+            self.repo, user_id=self.user_id, rule_id=rule["id"],
+            now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc),
+        )
+        self.assertEqual(reopened["rules"][0]["summary"]["triggered_count"], 1)
+        started = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(started["reason"], "schedule_started")
+        new_run = self.repo.get_auto_trigger_rule_run_for_subscription_date(
+            rule_id=rule["id"], subscription_id=self.subscription["id"], stat_date="2026-09-02",
+        )
+        self.assertEqual(new_run["status"], "active")
+
+    def test_manual_stop_closes_route_run_and_stops_passive_dispatch(self):
+        target = self.repo.list_delivery_targets(self.user_id)[0]
+        payload = self._schedule_payload()
+        payload["routes"] = [{"delivery_target_id": target["id"], "name": "定时路由"}]
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=payload)["item"]
+        route_id = rule["routes"][0]["id"]
+        self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260902401",
+            bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
+            published_at="2026-09-02T10:04:30Z",
+        )
+        started = run_auto_trigger_cycle(
+            self.repo, user_id=self.user_id, rule_id=rule["id"],
+            now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc),
+        )
+        self.assertEqual(started["rules"][0]["summary"]["triggered_count"], 1)
+        self.assertIsNotNone(self.repo.get_active_auto_trigger_route_subscription_runtime_run(
+            route_id=route_id, subscription_id=self.subscription["id"], user_id=self.user_id,
+        ))
+
+        result = stop_auto_trigger_rule_current_run(
+            self.repo, rule_id=rule["id"], user_id=self.user_id,
+            payload={"subscription_id": self.subscription["id"], "note": "测试结束路由轮次"},
+        )
+        self.assertTrue(result["stopped"])
+        self.assertEqual(result["closed_route_run_count"], 1)
+        self.assertIsNone(self.repo.get_active_auto_trigger_route_subscription_runtime_run(
+            route_id=route_id, subscription_id=self.subscription["id"], user_id=self.user_id,
+        ))
+
+        follow_up = self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260902402",
+            bet_type="big_small", bet_value="小", normalized_payload={"message_text": "小1"},
+            published_at="2026-09-02T10:08:00Z",
+        )
+        self.assertEqual(dispatch_signal(self.repo, follow_up["id"])["created_count"], 0)
+
+    def test_manual_stop_without_active_run_is_noop(self):
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        result = stop_auto_trigger_rule_current_run(self.repo, rule_id=rule["id"], user_id=self.user_id)
+        self.assertFalse(result["stopped"])
+        self.assertEqual(result["runs"], [])
+        self.assertEqual(result["released_blocked_day_count"], 0)
+        self.assertEqual(self.repo.get_auto_trigger_rule(rule["id"])["status"], "active")
+
+    def test_manual_stop_rejects_foreign_rule(self):
+        other_user_id = self.repo.create_user("auto-trigger-other")
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        with self.assertRaises(ValueError):
+            stop_auto_trigger_rule_current_run(self.repo, rule_id=rule["id"], user_id=other_user_id)
+
+    def test_list_auto_trigger_rules_exposes_active_runs(self):
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        self.repo.ensure_auto_trigger_rule_run(
+            rule_id=rule["id"], user_id=self.user_id,
+            subscription_id=self.subscription["id"], stat_date="2026-09-01", started_issue_no="old",
+        )
+        listed = list_auto_trigger_rules(self.repo, user_id=self.user_id, stat_date="2026-09-02")["items"]
+        target = next(item for item in listed if int(item["id"]) == int(rule["id"]))
+        self.assertEqual([run["stat_date"] for run in target["active_runs"]], ["2026-09-01"])
+        stop_auto_trigger_rule_current_run(self.repo, rule_id=rule["id"], user_id=self.user_id)
+        after = list_auto_trigger_rules(self.repo, user_id=self.user_id, stat_date="2026-09-02")["items"]
+        target_after = next(item for item in after if int(item["id"]) == int(rule["id"]))
+        self.assertEqual(target_after["active_runs"], [])
 
     def test_schedule_dispatch_failure_releases_daily_claim_for_retry(self):
         self.repo.create_signal_record(
