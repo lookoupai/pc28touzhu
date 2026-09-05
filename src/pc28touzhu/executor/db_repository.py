@@ -23,6 +23,8 @@ DEFAULT_SQLITE_BUSY_TIMEOUT_SECONDS = 30.0
 # 手动结束轮次的统一标记：与自动风控的 profit_target_hit / loss_limit_hit 区分开，
 # 让定时触发的跨日闸知道这轮是被主动让位的，不该占用当天的开轮额度。
 MANUAL_STOP_REASON = "manual_stop"
+# route 轮次收口带动规则轮收口的标记，与规则级日风控停轮区分开。
+ROUTE_RUN_CLOSED_REASON = "route_run_closed"
 
 
 def _utc_now_iso() -> str:
@@ -4284,6 +4286,13 @@ class DatabaseRepository:
             params.append(int(subscription_id))
         sql += " ORDER BY stat_date ASC, id ASC"
         with self._connect() as conn:
+            # 读之前先收口"route 轮已结束、规则轮还挂着 active"的脏轮次，避免展示与开轮额度被它们占着。
+            self._close_orphaned_auto_trigger_rule_runs(
+                conn,
+                rule_id=int(rule_id),
+                user_id=int(user_id),
+                subscription_id=subscription_id,
+            )
             rows = conn.execute(sql, tuple(params)).fetchall()
         return [self._serialize_auto_trigger_rule_run_row(dict(row)) for row in rows]
 
@@ -5708,6 +5717,103 @@ class DatabaseRepository:
         return [self._serialize_subscription_runtime_run_row(dict(row)) for row in rows]
 
     def _reconcile_route_subscription_runtime_run_closure(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        route_id: int,
+        subscription_id: int,
+        user_id: int,
+    ) -> None:
+        self._close_finished_route_subscription_runtime_run(
+            conn,
+            route_id=int(route_id),
+            subscription_id=int(subscription_id),
+            user_id=int(user_id),
+        )
+        rule_row = conn.execute(
+            "SELECT rule_id FROM auto_trigger_rule_routes WHERE id = ? LIMIT 1",
+            (int(route_id),),
+        ).fetchone()
+        if not rule_row:
+            return
+        # route 轮次收口后，规则轮不能继续挂着 active，否则会一直算"在跑"。
+        self._close_orphaned_auto_trigger_rule_runs(
+            conn,
+            rule_id=int(rule_row["rule_id"]),
+            user_id=int(user_id),
+            subscription_id=int(subscription_id),
+        )
+
+    def _close_orphaned_auto_trigger_rule_runs(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        rule_id: int,
+        user_id: int,
+        subscription_id: Optional[int] = None,
+    ) -> int:
+        """把 route 轮次已收口、规则轮却还挂着 active 的轮次收口，返回收口条数。
+
+        规则轮由 route 轮次驱动开轮，此前只有规则级日风控会去关它，没开日风控的规则
+        会从开轮那天一直 active 下去：既污染"在跑轮次"展示，也让定时触发的跨日闸误判额度被占。
+        判定按 (规则, 订阅) 成对：该订阅在这条规则下已没有 active 的 route 轮，
+        且存在一个开始时间不早于本轮的 closed route 轮时才收口。用 started_at 而不是 ended_at
+        对齐，是因为 route 轮总是比规则轮晚 1~3 秒建出来：这样"规则轮刚建好、route 轮还没起来"
+        的瞬间不会被历史上早已收口的 route 轮误判成脏轮次。
+        """
+        now = _utc_now_iso()
+        sql = """
+            UPDATE auto_trigger_rule_runs
+            SET status = 'closed',
+                stop_reason = CASE WHEN stop_reason = '' THEN ? ELSE stop_reason END,
+                stopped_at = COALESCE(
+                    stopped_at,
+                    (
+                        SELECT MAX(rr.ended_at)
+                        FROM auto_trigger_route_subscription_runtime_runs rr
+                        JOIN auto_trigger_rule_routes rt ON rt.id = rr.route_id
+                        WHERE rt.rule_id = auto_trigger_rule_runs.rule_id
+                          AND rr.subscription_id = auto_trigger_rule_runs.subscription_id
+                          AND rr.user_id = auto_trigger_rule_runs.user_id
+                          AND rr.status = 'closed'
+                          AND rr.started_at >= auto_trigger_rule_runs.started_at
+                    ),
+                    ?
+                ),
+                updated_at = ?
+            WHERE rule_id = ?
+              AND user_id = ?
+              AND status = 'active'
+        """
+        params: list[Any] = [ROUTE_RUN_CLOSED_REASON, now, now, int(rule_id), int(user_id)]
+        if subscription_id is not None:
+            sql += " AND subscription_id = ?"
+            params.append(int(subscription_id))
+        sql += """
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM auto_trigger_route_subscription_runtime_runs rr
+                  JOIN auto_trigger_rule_routes rt ON rt.id = rr.route_id
+                  WHERE rt.rule_id = auto_trigger_rule_runs.rule_id
+                    AND rr.subscription_id = auto_trigger_rule_runs.subscription_id
+                    AND rr.user_id = auto_trigger_rule_runs.user_id
+                    AND rr.status = 'active'
+              )
+              AND EXISTS (
+                  SELECT 1
+                  FROM auto_trigger_route_subscription_runtime_runs rr
+                  JOIN auto_trigger_rule_routes rt ON rt.id = rr.route_id
+                  WHERE rt.rule_id = auto_trigger_rule_runs.rule_id
+                    AND rr.subscription_id = auto_trigger_rule_runs.subscription_id
+                    AND rr.user_id = auto_trigger_rule_runs.user_id
+                    AND rr.status = 'closed'
+                    AND rr.started_at >= auto_trigger_rule_runs.started_at
+              )
+        """
+        cursor = conn.execute(sql, tuple(params))
+        return max(0, cursor.rowcount)
+
+    def _close_finished_route_subscription_runtime_run(
         self,
         conn: sqlite3.Connection,
         *,

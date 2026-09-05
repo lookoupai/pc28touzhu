@@ -89,6 +89,18 @@ def _message_text_from_template(signal: Dict[str, Any], amount: float, template:
     return rendered or _default_message_text(signal, amount)
 
 
+def _auto_trigger_rule_governs_dispatch(repository: Any, rule_id: Any) -> bool:
+    """规则仍然启用时，它的轮次才对订阅直派有发言权。"""
+    try:
+        resolved_rule_id = int(rule_id or 0)
+    except (TypeError, ValueError):
+        return False
+    if resolved_rule_id <= 0 or not hasattr(repository, "get_auto_trigger_rule"):
+        return False
+    rule = repository.get_auto_trigger_rule(resolved_rule_id)
+    return bool(rule) and str(rule.get("status") or "") == "active"
+
+
 def _resolve_auto_trigger_context(repository: Any, candidate: Dict[str, Any], explicit_context: Dict[str, Any] | None) -> Dict[str, Any] | None:
     context = explicit_context if isinstance(explicit_context, dict) else None
     if context and int(context.get("rule_id") or 0) > 0 and str(context.get("stat_date") or "").strip():
@@ -108,6 +120,9 @@ def _resolve_auto_trigger_context(repository: Any, candidate: Dict[str, Any], ex
         user_id=int(candidate["user_id"]),
     )
     if not run:
+        return None
+    if not _auto_trigger_rule_governs_dispatch(repository, run.get("rule_id")):
+        # 规则已停用：它的历史轮次（含很早以前的止盈止损）不该继续卡住这个订阅的直派。
         return None
     if str(run.get("status") or "") == "stopped":
         return {

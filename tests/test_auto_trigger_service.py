@@ -350,6 +350,167 @@ class AutoTriggerServiceTests(unittest.TestCase):
         target_after = next(item for item in after if int(item["id"]) == int(rule["id"]))
         self.assertEqual(target_after["active_runs"], [])
 
+    def test_route_run_closure_closes_orphaned_rule_run(self):
+        rule, route_id = self._start_schedule_route_round()
+        self.assertEqual(
+            [run["stat_date"] for run in self.repo.list_active_auto_trigger_rule_runs(
+                rule_id=rule["id"], user_id=self.user_id)],
+            ["2026-09-02"],
+        )
+
+        self._mark_route_financial_threshold(route_id, "loss_limit_hit")
+        # route 侧惰性收口：这一步既关 route 轮，也要连带把规则轮收口
+        self.assertIsNone(self.repo.get_active_auto_trigger_route_subscription_runtime_run(
+            route_id=route_id, subscription_id=self.subscription["id"], user_id=self.user_id,
+        ))
+        run = self.repo.get_auto_trigger_rule_run_for_subscription_date(
+            rule_id=rule["id"], subscription_id=self.subscription["id"], stat_date="2026-09-02",
+        )
+        self.assertEqual(run["status"], "closed")
+        self.assertEqual(run["stop_reason"], "route_run_closed")
+        self.assertEqual(self.repo.get_auto_trigger_rule(rule["id"])["status"], "active")
+
+    def test_stale_rule_run_closed_lazily_when_listing_active_runs(self):
+        rule, route_id = self._start_schedule_route_round()
+        # 模拟历史脏数据：route 轮已经收口，规则轮却还挂着 active。时间戳钉死，避免依赖系统时钟。
+        with self.repo._connect() as conn:
+            conn.execute(
+                "UPDATE auto_trigger_rule_runs SET started_at = ? WHERE rule_id = ? AND stat_date = ?",
+                ("2026-09-02T10:05:00Z", rule["id"], "2026-09-02"),
+            )
+            conn.execute(
+                """
+                UPDATE auto_trigger_route_subscription_runtime_runs
+                SET status = 'closed', started_at = ?, ended_at = ?, end_reason = 'loss_limit_hit'
+                WHERE route_id = ? AND subscription_id = ? AND status = 'active'
+                """,
+                ("2026-09-02T10:05:02Z", "2026-09-02T12:00:00Z", route_id, self.subscription["id"]),
+            )
+        self.assertEqual(
+            self.repo.list_active_auto_trigger_rule_runs(rule_id=rule["id"], user_id=self.user_id),
+            [],
+        )
+        run = self.repo.get_auto_trigger_rule_run_for_subscription_date(
+            rule_id=rule["id"], subscription_id=self.subscription["id"], stat_date="2026-09-02",
+        )
+        self.assertEqual(run["status"], "closed")
+        self.assertEqual(run["stop_reason"], "route_run_closed")
+        # 收口时间取 route 轮的结束时间，别落在"今天"，否则跨日闸会误判今天的额度被占
+        self.assertEqual(run["stopped_at"], "2026-09-02T12:00:00Z")
+
+        # 新一轮刚建好、自己的 route 轮还没起来时，不能被历史 route 轮误判成脏数据
+        self.repo.ensure_auto_trigger_rule_run(
+            rule_id=rule["id"], user_id=self.user_id,
+            subscription_id=self.subscription["id"], stat_date="2026-09-03", started_issue_no="new",
+        )
+        with self.repo._connect() as conn:
+            conn.execute(
+                "UPDATE auto_trigger_rule_runs SET started_at = ? WHERE rule_id = ? AND stat_date = ?",
+                ("2026-09-03T10:05:00Z", rule["id"], "2026-09-03"),
+            )
+        self.assertEqual(
+            [item["stat_date"] for item in self.repo.list_active_auto_trigger_rule_runs(
+                rule_id=rule["id"], user_id=self.user_id)],
+            ["2026-09-03"],
+        )
+
+    def test_rule_run_survives_while_another_route_run_active(self):
+        second_target = self.repo.create_delivery_target_record(
+            user_id=self.user_id, executor_type="telegram_group",
+            target_key="-100654399", target_name="定时群 B", status="active",
+        )
+        rule, route_id = self._start_schedule_route_round(extra_targets=[second_target["id"]])
+        other_route_id = rule["routes"][1]["id"]
+
+        self._mark_route_financial_threshold(route_id, "loss_limit_hit")
+        self.assertIsNone(self.repo.get_active_auto_trigger_route_subscription_runtime_run(
+            route_id=route_id, subscription_id=self.subscription["id"], user_id=self.user_id,
+        ))
+        self.assertIsNotNone(self.repo.get_active_auto_trigger_route_subscription_runtime_run(
+            route_id=other_route_id, subscription_id=self.subscription["id"], user_id=self.user_id,
+        ))
+        # 只要还有一条 route 轮在跑，规则轮就得继续算在跑
+        self.assertEqual(
+            [run["stat_date"] for run in self.repo.list_active_auto_trigger_rule_runs(
+                rule_id=rule["id"], user_id=self.user_id)],
+            ["2026-09-02"],
+        )
+
+    def test_disabled_rule_stale_run_does_not_block_direct_dispatch(self):
+        rule, route_id = self._start_schedule_route_round()
+        stopped = stop_auto_trigger_rule_current_run(
+            self.repo, rule_id=rule["id"], user_id=self.user_id,
+            payload={"subscription_id": self.subscription["id"]},
+        )
+        self.assertTrue(stopped["stopped"])
+        follow_up = self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260902421",
+            bet_type="big_small", bet_value="小", normalized_payload={"message_text": "小1"},
+            published_at="2026-09-02T10:08:00Z",
+        )
+        # 规则还启用时，停掉的轮次继续压着直派
+        self.assertEqual(dispatch_signal(self.repo, follow_up["id"])["created_count"], 0)
+
+        update_auto_trigger_rule(
+            self.repo, rule_id=rule["id"], user_id=self.user_id, payload={"status": "inactive"},
+        )
+        later = self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260902422",
+            bet_type="big_small", bet_value="小", normalized_payload={"message_text": "小1"},
+            published_at="2026-09-02T10:12:00Z",
+        )
+        # 规则停用后，它的历史轮次不该继续卡住订阅直派
+        result = dispatch_signal(self.repo, later["id"])
+        self.assertEqual(result["created_count"], 1)
+        event = self.repo.get_progression_event(result["jobs"][0]["progression_event_id"])
+        self.assertIsNone(event["auto_trigger_rule_id"])
+
+    def _start_schedule_route_round(self, extra_targets=None):
+        """建一条带 route 的定时规则并跑出 2026-09-02 这一轮，返回 (规则, 首个 route_id)。"""
+        target = self.repo.list_delivery_targets(self.user_id)[0]
+        payload = self._schedule_payload()
+        payload["routes"] = [{"delivery_target_id": target["id"], "name": "定时路由"}] + [
+            {"delivery_target_id": item, "name": "定时路由 %s" % index}
+            for index, item in enumerate(extra_targets or [], start=2)
+        ]
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=payload)["item"]
+        self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260902401",
+            bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
+            published_at="2026-09-02T10:04:30Z",
+        )
+        started = run_auto_trigger_cycle(
+            self.repo, user_id=self.user_id, rule_id=rule["id"],
+            now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc),
+        )
+        self.assertEqual(started["rules"][0]["summary"]["triggered_count"], 1)
+        return rule, rule["routes"][0]["id"]
+
+    def _mark_route_financial_threshold(self, route_id, threshold_status):
+        with self.repo._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO auto_trigger_route_subscription_financial_state(
+                    route_id, rule_id, subscription_id, user_id,
+                    realized_profit, realized_loss, net_profit,
+                    threshold_status, stopped_reason, baseline_reset_at, baseline_reset_note,
+                    last_settled_event_id, last_settled_at, updated_at
+                ) VALUES (
+                    ?, (SELECT rule_id FROM auto_trigger_rule_routes WHERE id = ?), ?, ?,
+                    0, 10, -10, ?, '测试阈值', NULL, '', NULL, ?, ?
+                )
+                ON CONFLICT(route_id, subscription_id) DO UPDATE SET
+                    threshold_status = excluded.threshold_status,
+                    stopped_reason = excluded.stopped_reason,
+                    last_settled_at = excluded.last_settled_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    route_id, route_id, self.subscription["id"], self.user_id,
+                    threshold_status, "2026-09-02T11:00:00Z", "2026-09-02T11:00:00Z",
+                ),
+            )
+
     def test_schedule_dispatch_failure_releases_daily_claim_for_retry(self):
         self.repo.create_signal_record(
             source_id=self.source["id"], lottery_type="pc28", issue_no="20260902002",

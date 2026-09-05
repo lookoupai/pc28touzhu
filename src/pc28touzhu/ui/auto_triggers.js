@@ -331,11 +331,20 @@
         if (!runs.length) {
             return "";
         }
-        const dates = runs.map(function (run) { return String(run.stat_date || "--"); }).join("、");
-        const crossDay = runs.some(function (run) {
-            return String(run.stat_date || "") !== String(rule.stat_date || "");
-        });
-        return "在跑轮次：" + dates + (crossDay ? "（已跨日延续到今天，会占用今天的开轮额度）" : "");
+        const today = String(rule.stat_date || "");
+        const dates = runs.map(function (run) { return String(run.stat_date || "--"); });
+        // 轮次多时只留首尾，避免一行铺满几十个日期
+        const shown = dates.length > 5 ? dates.slice(0, 2).concat(["…"], dates.slice(-2)) : dates;
+        const head = "在跑轮次 " + String(dates.length) + " 个：" + shown.join("、");
+        const staleCount = dates.filter(function (date) { return date < today; }).length;
+        // 每日开轮额度只对定时触发生效，条件触发不受跨日闸约束，别在那边报警
+        if (String(rule.trigger_mode || "condition") === "schedule" && staleCount) {
+            return head + "（已跨日延续到今天，会占用今天的开轮额度）";
+        }
+        if (staleCount) {
+            return head + "（其中 " + String(staleCount) + " 个是往日未收口的轮次）";
+        }
+        return head;
     }
 
     function stopCurrentRunText(result) {
