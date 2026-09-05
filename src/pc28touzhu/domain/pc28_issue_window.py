@@ -83,19 +83,29 @@ def evaluate_pc28_issue_dispatch_window(
         verdict["reason"] = "issue_already_drawn"
         return verdict
 
-    countdown_seconds = clock.get("countdown_seconds")
-    fetched_at = _parse_iso_z(clock.get("fetched_at"))
-    if not isinstance(countdown_seconds, (int, float)) or fetched_at is None:
-        verdict["reason"] = "countdown_unavailable"
-        return verdict
-
-    # countdown 是抓取瞬间距下一期开奖的秒数，必须扣掉已流逝时间才是当前余量；
-    # 这一步同时抵消了 latest_issue_no 的陈旧误差（每晚一期就补 210 秒）。
     reference = now if isinstance(now, datetime) else datetime.now(timezone.utc)
-    elapsed = max(0.0, (reference - fetched_at).total_seconds())
-    remaining = int(
-        float(countdown_seconds) - elapsed + PC28_ISSUE_INTERVAL_SECONDS * (offset - 1)
-    )
+
+    # 余量优先用 data[0] 的开奖时刻直接外推：开奖时刻随开奖结果一起发布，可靠且与时钟陈旧度无关；
+    # countdown 是服务器侧计时器，接口异常时会停留在开奖前的旧值（实测曾把 177 秒余量算成 0 误拦派单）。
+    # 期距 210 秒外推在停机断档时恒为下界，保守方向不变。
+    remaining: Optional[int] = None
+    latest_open_time = _parse_iso_z(clock.get("latest_open_time"))
+    if latest_open_time is not None:
+        remaining = int(latest_open_time.timestamp() + PC28_ISSUE_INTERVAL_SECONDS * offset - reference.timestamp())
+        verdict["remaining_source"] = "open_time"
+    else:
+        countdown_seconds = clock.get("countdown_seconds")
+        fetched_at = _parse_iso_z(clock.get("fetched_at"))
+        if not isinstance(countdown_seconds, (int, float)) or fetched_at is None:
+            verdict["reason"] = "countdown_unavailable"
+            return verdict
+        # countdown 是抓取瞬间距下一期开奖的秒数，必须扣掉已流逝时间才是当前余量；
+        # 这一步同时抵消了 latest_issue_no 的陈旧误差（每晚一期就补 210 秒）。
+        elapsed = max(0.0, (reference - fetched_at).total_seconds())
+        remaining = int(
+            float(countdown_seconds) - elapsed + PC28_ISSUE_INTERVAL_SECONDS * (offset - 1)
+        )
+        verdict["remaining_source"] = "countdown"
     verdict["remaining_seconds"] = remaining
 
     if remaining <= 0:

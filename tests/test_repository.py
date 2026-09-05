@@ -2104,6 +2104,78 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(len(all_jobs), 1)
         self.assertIsNone(all_jobs[0]["auto_trigger_route_id"])
 
+    def test_list_blocked_dispatch_signals_filters(self):
+        user_id = self.repo.create_user("blocked-list-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-blocked-list",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={"mode": "follow", "stake_amount": 10},
+        )
+        target_id = self.repo.create_delivery_target_record(
+            user_id=user_id,
+            executor_type="telegram_group",
+            target_key="-100994",
+            status="active",
+        )["id"]
+        fresh_jobless = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260905007",
+            bet_type="odd_even",
+            bet_value="双",
+            published_at="2026-09-05T10:05:00Z",
+        )
+        fresh_with_job = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260905008",
+            bet_type="odd_even",
+            bet_value="双",
+            published_at="2026-09-05T10:05:01Z",
+        )
+        stale = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260905009",
+            bet_type="odd_even",
+            bet_value="双",
+            published_at="2026-09-05T09:00:00Z",
+        )
+        for signal in (fresh_jobless, fresh_with_job, stale):
+            self.repo.mark_signal_dispatch_blocked(
+                signal["id"], reason="window_too_short", verdict={"remaining_seconds": 10}
+            )
+        self.repo.create_execution_job(
+            user_id=user_id,
+            signal_id=fresh_with_job["id"],
+            subscription_id=subscription["id"],
+            delivery_target_id=target_id,
+            executor_type="telegram_group",
+            idempotency_key="blocked-list-job",
+            planned_message_text="双10",
+            stake_plan={"mode": "follow", "amount": 10},
+            execute_after="2026-09-05T10:05:01Z",
+            expire_at="2026-09-05T10:06:01Z",
+        )
+
+        self.assertEqual(
+            self.repo.list_blocked_dispatch_signals(published_after="2026-09-05T10:00:00Z"),
+            [fresh_jobless["id"]],
+        )
+        # 超过补派窗口的信号不再返回，但标记保留作核查凭据
+        self.assertEqual(
+            self.repo.list_blocked_dispatch_signals(published_after="2026-09-05T08:00:00Z"),
+            [fresh_jobless["id"], stale["id"]],
+        )
+        blocked_row = self.repo.get_signal(stale["id"])
+        self.assertEqual(blocked_row["dispatch_block_reason"], "window_too_short")
+        self.assertIn("remaining_seconds", blocked_row["dispatch_block_verdict_json"])
+
     def test_list_subscription_runtime_runs_reconciles_threshold_closed_runs(self):
         user_id = self.repo.create_user("sub-reset-route-user")
         source_id = self.repo.create_source_record(

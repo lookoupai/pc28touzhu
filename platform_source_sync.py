@@ -23,7 +23,7 @@ def main() -> int:
         result = run_source_sync_cycle(repo, draw_clock=get_pc28_draw_clock())
         summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
         print(
-            "source sync cycle sources=%s processed=%s fetched=%s normalized=%s candidates=%s created_jobs=%s existing_jobs=%s skipped=%s failed=%s"
+            "source sync cycle sources=%s processed=%s fetched=%s normalized=%s candidates=%s created_jobs=%s existing_jobs=%s skipped=%s failed=%s retry_checked=%s retry_created=%s"
             % (
                 int(summary.get("source_count") or 0),
                 int(summary.get("processed_count") or 0),
@@ -34,6 +34,8 @@ def main() -> int:
                 int(summary.get("existing_job_count") or 0),
                 int(summary.get("skipped_duplicate_count") or 0),
                 int(summary.get("failed_count") or 0),
+                int(summary.get("blocked_retry_checked_count") or 0),
+                int(summary.get("blocked_retry_created_job_count") or 0),
             )
         )
         if config.source_sync.once:

@@ -1,11 +1,19 @@
 """Automatic source fetch -> normalize -> dispatch service."""
 from __future__ import annotations
 
+import os
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from pc28touzhu.services.dispatch_service import dispatch_signal
 from pc28touzhu.services.normalize_service import normalize_raw_item
 from pc28touzhu.services.source_fetch_service import fetch_source_to_raw_item
+
+# 被闸拦截信号的补派窗口：信号发布后在该时限内仍会随同步周期重试；
+# 超时后目标期必然已开奖（期距 210 秒），继续重试无意义，标记留作核查凭据。
+PC28_BLOCKED_SIGNAL_RETRY_MAX_AGE_SECONDS = max(
+    0, int(os.getenv("PC28_BLOCKED_SIGNAL_RETRY_MAX_AGE_SECONDS", "900"))
+)
 
 
 def collect_active_source_ids(repository: Any) -> List[int]:
@@ -27,6 +35,40 @@ def collect_active_source_ids(repository: Any) -> List[int]:
     return source_ids
 
 
+def redispatch_gate_blocked_signals(
+    repository: Any,
+    *,
+    draw_clock: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """补派曾被封盘闸拦截、至今未产生任何任务的信号。
+
+    典型场景：开奖接口 countdown 字段在开奖后短暂未跳新值，余量被低估而误拦。
+    信号仍在投注窗口内时随同步周期重派即可补上；目标期已真正开奖的重派会被闸
+    再次拦下并刷新标记（连同 verdict 快照留作核查凭据），超过补派窗口后不再重试。
+    """
+    summary = {
+        "checked_count": 0,
+        "blocked_count": 0,
+        "created_job_count": 0,
+        "existing_job_count": 0,
+    }
+    if not hasattr(repository, "list_blocked_dispatch_signals"):
+        return summary
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(seconds=PC28_BLOCKED_SIGNAL_RETRY_MAX_AGE_SECONDS)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    signal_ids = repository.list_blocked_dispatch_signals(published_after=cutoff, limit=50)
+    for signal_id in signal_ids:
+        summary["checked_count"] += 1
+        result = dispatch_signal(repository, signal_id=int(signal_id), draw_clock=draw_clock)
+        if result.get("blocked"):
+            summary["blocked_count"] += 1
+        else:
+            summary["created_job_count"] += int(result.get("created_count") or 0)
+            summary["existing_job_count"] += int(result.get("existing_count") or 0)
+    return summary
+
+
 def run_source_sync_cycle(repository: Any, *, fetcher=None, draw_clock: Dict[str, Any] | None = None) -> Dict[str, Any]:
     source_ids = collect_active_source_ids(repository)
     summary = {
@@ -40,8 +82,14 @@ def run_source_sync_cycle(repository: Any, *, fetcher=None, draw_clock: Dict[str
         "created_job_count": 0,
         "existing_job_count": 0,
         "failed_count": 0,
+        "blocked_retry_checked_count": 0,
+        "blocked_retry_created_job_count": 0,
     }
     source_results: List[Dict[str, Any]] = []
+
+    retry_result = redispatch_gate_blocked_signals(repository, draw_clock=draw_clock)
+    summary["blocked_retry_checked_count"] = int(retry_result.get("checked_count") or 0)
+    summary["blocked_retry_created_job_count"] = int(retry_result.get("created_job_count") or 0)
 
     for source_id in source_ids:
         source = repository.get_source(source_id)

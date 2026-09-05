@@ -613,6 +613,14 @@ def dispatch_signal(
         now=_utc_now(),
     )
     if not issue_window["allowed"]:
+        # 拦截落标记供重试扫描补派（典型场景：开奖接口 countdown 字段在开奖后短暂未跳新值，
+        # 余量被低估）；verdict 快照一并落库留作核查凭据
+        if hasattr(repository, "mark_signal_dispatch_blocked"):
+            repository.mark_signal_dispatch_blocked(
+                int(signal["id"]),
+                reason=str(issue_window.get("reason") or ""),
+                verdict=issue_window,
+            )
         return {
             "signal_id": int(signal["id"]),
             "subscription_id": int(subscription_id) if subscription_id is not None else None,
@@ -625,6 +633,8 @@ def dispatch_signal(
             "block_reason": str(issue_window["reason"]),
             "issue_window": issue_window,
         }
+    if hasattr(repository, "clear_signal_dispatch_blocked"):
+        repository.clear_signal_dispatch_blocked(int(signal["id"]))
 
     if (
         subscription_id is not None

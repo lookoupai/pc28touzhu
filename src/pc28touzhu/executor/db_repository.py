@@ -312,6 +312,9 @@ class DatabaseRepository:
             status TEXT NOT NULL DEFAULT 'ready',
             published_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            dispatch_blocked_at TEXT,
+            dispatch_block_reason TEXT,
+            dispatch_block_verdict_json TEXT,
             FOREIGN KEY(source_id) REFERENCES signal_sources(id),
             FOREIGN KEY(source_raw_item_id) REFERENCES source_raw_items(id)
         )
@@ -891,8 +894,34 @@ class DatabaseRepository:
             self._ensure_subscription_runtime_run_columns(conn)
             self._ensure_auto_trigger_rule_columns(conn)
             self._ensure_auto_trigger_rule_route_columns(conn)
+            self._ensure_normalized_signal_columns(conn)
+            self._ensure_dispatch_lookup_indexes(conn)
             self._ensure_user_telegram_indexes(conn)
             conn.commit()
+
+    def _ensure_normalized_signal_columns(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(normalized_signals)").fetchall()
+        existing_columns = {str(row["name"]) for row in rows}
+        column_definitions = {
+            "dispatch_blocked_at": "ALTER TABLE normalized_signals ADD COLUMN dispatch_blocked_at TEXT",
+            "dispatch_block_reason": "ALTER TABLE normalized_signals ADD COLUMN dispatch_block_reason TEXT",
+            "dispatch_block_verdict_json": "ALTER TABLE normalized_signals ADD COLUMN dispatch_block_verdict_json TEXT",
+        }
+        for column_name, ddl in column_definitions.items():
+            if column_name not in existing_columns:
+                conn.execute(ddl)
+
+    def _ensure_dispatch_lookup_indexes(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_normalized_signals_dispatch_blocked
+            ON normalized_signals(status, published_at, id)
+            WHERE dispatch_blocked_at IS NOT NULL
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_execution_jobs_signal ON execution_jobs(signal_id)"
+        )
 
     def _ensure_user_telegram_columns(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute("PRAGMA table_info(users)").fetchall()
@@ -1598,6 +1627,9 @@ class DatabaseRepository:
             "status": str(row["status"]),
             "published_at": row.get("published_at"),
             "created_at": row.get("created_at"),
+            "dispatch_blocked_at": row.get("dispatch_blocked_at"),
+            "dispatch_block_reason": row.get("dispatch_block_reason"),
+            "dispatch_block_verdict_json": row.get("dispatch_block_verdict_json"),
         }
 
     def _serialize_raw_item_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
@@ -7875,6 +7907,68 @@ class DatabaseRepository:
             (int(signal_id), int(subscription_id), int(delivery_target_id)),
         )
         return row is not None
+
+    def mark_signal_dispatch_blocked(
+        self,
+        signal_id: int,
+        *,
+        reason: str,
+        verdict: Optional[dict] = None,
+    ) -> None:
+        # 被封盘闸拦截的信号留标记：重试扫描据此补派，verdict 快照留作核查凭据
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE normalized_signals
+                SET dispatch_blocked_at = ?,
+                    dispatch_block_reason = ?,
+                    dispatch_block_verdict_json = ?
+                WHERE id = ?
+                """,
+                (
+                    now,
+                    str(reason or ""),
+                    _safe_json_dumps(verdict if isinstance(verdict, dict) else {}),
+                    int(signal_id),
+                ),
+            )
+
+    def clear_signal_dispatch_blocked(self, signal_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE normalized_signals
+                SET dispatch_blocked_at = NULL,
+                    dispatch_block_reason = NULL,
+                    dispatch_block_verdict_json = NULL
+                WHERE id = ? AND dispatch_blocked_at IS NOT NULL
+                """,
+                (int(signal_id),),
+            )
+
+    def list_blocked_dispatch_signals(
+        self,
+        *,
+        published_after: str,
+        limit: int = 50,
+    ) -> list[int]:
+        rows = self._fetch_all(
+            """
+            SELECT ns.id
+            FROM normalized_signals ns
+            WHERE ns.status = 'ready'
+              AND ns.dispatch_blocked_at IS NOT NULL
+              AND ns.published_at >= ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM execution_jobs j WHERE j.signal_id = ns.id
+              )
+            ORDER BY ns.id ASC
+            LIMIT ?
+            """,
+            (str(published_after or ""), max(1, int(limit))),
+        )
+        return [int(row["id"]) for row in rows]
 
     def get_latest_ready_signal_for_source(
         self,
