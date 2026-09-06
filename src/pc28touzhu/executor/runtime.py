@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Dict, Protocol
 
-from .models import ExecutorJob, ExecutorResult
+from .models import ExecutorJob, ExecutorResult, JobSendBlocked, JobSendUnconfirmed
 from .state import ExecutorStateStore
 
 
@@ -66,6 +66,11 @@ def _process_job(
     message_sender: TextMessageSender,
 ) -> str:
     job = ExecutorJob.from_payload(raw)
+    # 已确认发送成功的本地记录优先回报，不能因新的截止时间将其改记为过期。
+    if state_store.has_delivered(job.idempotency_key):
+        if _replay_delivered_attempt(api_client=api_client, state_store=state_store, job=job):
+            return "replayed"
+        return "skipped"
     now = datetime.now(timezone.utc)
     if now < job.execute_after:
         return "skipped"
@@ -90,11 +95,6 @@ def _process_job(
         )
         return "expired"
 
-    if state_store.has_delivered(job.idempotency_key):
-        if _replay_delivered_attempt(api_client=api_client, state_store=state_store, job=job):
-            return "replayed"
-        return "skipped"
-
     try:
         send_result = message_sender.send_text(job)
         result = ExecutorResult(
@@ -104,10 +104,18 @@ def _process_job(
             delivery_status="delivered",
             executed_at=datetime.now(timezone.utc),
             remote_message_id=str(send_result.get("message_id") or ""),
-            raw_result=dict(send_result),
+            raw_result={"job_received_at": now.isoformat(), **dict(send_result)},
             error_message=None,
         )
         status = "delivered"
+    except (JobSendBlocked, JobSendUnconfirmed) as exc:
+        status = "expired" if isinstance(exc, JobSendBlocked) else "skipped"
+        result = ExecutorResult(
+            job_id=job.job_id, executor_id=executor_id, attempt_no=attempt_no,
+            delivery_status=status, executed_at=datetime.now(timezone.utc),
+            raw_result={"exception_type": exc.__class__.__name__, **exc.details},
+            error_message=str(exc),
+        )
     except Exception as exc:
         result = ExecutorResult(
             job_id=job.job_id,

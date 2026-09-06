@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 
 from pc28touzhu.config import get_runtime_config
+from pc28touzhu.services.pc28_draw_service import get_pc28_draw_clock
 from pc28touzhu.executor import (
     ExecutorApiClient,
     ExecutorStateStore,
@@ -25,6 +26,7 @@ def main() -> int:
         api_hash=executor.telegram_api_hash,
         default_phone=executor.telegram_phone,
         default_session=executor.telegram_session,
+        draw_clock_provider=get_pc28_draw_clock,
     )
 
     try:
@@ -37,11 +39,12 @@ def main() -> int:
                     executor_id=executor.executor_id,
                     limit=executor.pull_limit,
                     max_concurrent=4,
-                    version="telegram-executor/0.3.0",
+                    version="telegram-executor/0.4.0",
                     capabilities={
                         "send": True,
                         "provider": "telethon",
                         "account_scoped_concurrency": True,
+                        "send_window_guard": True,
                     },
                 )
                 print(
@@ -53,10 +56,11 @@ def main() -> int:
                         result["expired_count"],
                         result["skipped_count"],
                         result["replayed_count"],
-                    )
+                    ),
+                    flush=True,
                 )
             except Exception as exc:
-                print("cycle error:", str(exc))
+                print("cycle error:", str(exc), flush=True)
                 return 1
 
             if executor.once:

@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from pc28touzhu.executor.db_repository import DatabaseRepository
 from pc28touzhu.services.dispatch_service import dispatch_signal
@@ -3384,6 +3385,20 @@ class DatabaseRepositoryTests(unittest.TestCase):
 
         self.assertNotIn("blocked", result)
         self.assertEqual(result["created_count"], 1)
+
+    def test_dispatch_job_expires_at_issue_guard_deadline(self):
+        signal = self._prepare_issue_window_dispatch("issue-deadline", issue_no="3478696")
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        clock = {
+            "latest_issue_no": "3478695",
+            "latest_open_time": (now - timedelta(seconds=117)).isoformat(),
+            "fetched_at": now.isoformat(),
+        }
+        with patch("pc28touzhu.services.dispatch_service._utc_now", return_value=now):
+            result = dispatch_signal(self.repo, signal["id"], draw_clock=clock)
+        expected = (now + timedelta(seconds=53)).isoformat().replace("+00:00", "Z")
+        self.assertEqual(result["jobs"][0]["expire_at"], expected)
+        self.assertEqual(result["jobs"][0]["stake_plan"]["meta"]["issue_window"]["send_before"], expected)
 
     def test_dispatch_candidates_excludes_inactive_account(self):
         user_id = self.repo.create_user("dispatch-inactive-user")

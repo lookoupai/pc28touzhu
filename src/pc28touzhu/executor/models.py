@@ -5,6 +5,18 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 
+class JobSendBlocked(RuntimeError):
+    def __init__(self, message: str, *, details: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.details = dict(details or {})
+
+
+class JobSendUnconfirmed(RuntimeError):
+    def __init__(self, message: str, *, details: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.details = dict(details or {})
+
+
 def _parse_iso8601(value: str | datetime) -> datetime:
     if isinstance(value, datetime):
         if value.tzinfo is None:

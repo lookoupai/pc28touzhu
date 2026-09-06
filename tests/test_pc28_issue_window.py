@@ -22,6 +22,14 @@ NOW = datetime(2026, 9, 4, 10, 0, 30, tzinfo=timezone.utc)
 
 
 class Pc28IssueWindowTests(unittest.TestCase):
+    def test_send_deadline_is_fixed_to_target_draw_minus_guard(self):
+        clock = _clock(latest_issue_no="3478695", latest_open_time="2026-09-06T10:25:00Z")
+        for now in (datetime(2026, 9, 6, 10, 26, 57, tzinfo=timezone.utc),
+                    datetime(2026, 9, 6, 10, 27, 49, tzinfo=timezone.utc)):
+            verdict = evaluate_pc28_issue_dispatch_window(issue_no="3478696", draw_clock=clock, now=now)
+            self.assertTrue(verdict["allowed"])
+            self.assertEqual(verdict["send_before"], "2026-09-06T10:27:50Z")
+
     def test_allows_next_issue_with_enough_room(self):
         verdict = evaluate_pc28_issue_dispatch_window(
             issue_no="3477885", draw_clock=_clock(), now=NOW,

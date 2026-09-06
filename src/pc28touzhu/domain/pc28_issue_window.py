@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 
@@ -107,6 +107,10 @@ def evaluate_pc28_issue_dispatch_window(
         )
         verdict["remaining_source"] = "countdown"
     verdict["remaining_seconds"] = remaining
+    verdict["checked_at"] = reference.astimezone(timezone.utc).isoformat()
+    verdict["send_before"] = (
+        reference + timedelta(seconds=remaining - threshold)
+    ).astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     if remaining <= 0:
         verdict["allowed"] = False

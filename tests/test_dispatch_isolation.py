@@ -100,6 +100,22 @@ class DispatchIsolationTests(unittest.TestCase):
             progression_event_id=job["progression_event_id"], result_type=result,
         )
 
+    def test_route_dispatch_preserves_issue_send_deadline(self):
+        rule = self._rule()
+        signal = self._signal(issue_no="3478696")
+        clock = {
+            "latest_issue_no": "3478695",
+            "latest_open_time": (self.now - timedelta(seconds=117)).isoformat(),
+            "fetched_at": self.now.isoformat(),
+        }
+        result = dispatch_signal(
+            self.repo, signal["id"], subscription_id=self.subscription["id"],
+            auto_trigger_context=self._context(rule), draw_clock=clock,
+        )
+        expected = (self.now + timedelta(seconds=53)).isoformat().replace("+00:00", "Z")
+        self.assertEqual(result["jobs"][0]["expire_at"], expected)
+        self.assertEqual(result["jobs"][0]["stake_plan"]["meta"]["issue_window"]["send_before"], expected)
+
     def _rows(self, sql, params=()):
         with self.repo._connect() as conn:
             return [dict(row) for row in conn.execute(sql, params)]

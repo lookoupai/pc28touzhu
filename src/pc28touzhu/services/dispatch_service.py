@@ -40,6 +40,22 @@ def _iso_z(value: datetime) -> str:
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _job_expire_at(
+    execute_after: datetime,
+    strategy: Dict[str, Any],
+    stake_plan: Dict[str, Any],
+    issue_window: Dict[str, Any] | None,
+) -> datetime:
+    seconds = int(resolve_dispatch_policy(strategy).get("expire_after_seconds") or 120)
+    expire_at = execute_after + timedelta(seconds=max(30, seconds))
+    if issue_window:
+        # 任务必须携带固定的投注截止时间，不能因排队或网络阻塞一直有效到开奖后。
+        stake_plan.setdefault("meta", {})["issue_window"] = dict(issue_window)
+        if issue_window.get("send_before"):
+            expire_at = min(expire_at, _parse_iso_z(issue_window["send_before"]))
+    return expire_at
+
+
 def _default_message_text(signal: Dict[str, Any], amount: float) -> str:
     payload = signal.get("normalized_payload") or {}
     custom = str(payload.get("message_text") or "").strip()
@@ -286,6 +302,7 @@ def _dispatch_signal_for_auto_trigger_routes(
     *,
     subscription_id: int,
     auto_trigger_context: Dict[str, Any],
+    issue_window: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     subscription = repository.get_subscription(int(subscription_id))
     if not subscription:
@@ -456,8 +473,7 @@ def _dispatch_signal_for_auto_trigger_routes(
             template = repository.get_message_template(template_id)
         planned_message_text = _message_text_from_template(signal, float(stake_plan["amount"]), template)
         execute_after = base_execute_after
-        expire_after_seconds = int(resolve_dispatch_policy(strategy).get("expire_after_seconds") or 120)
-        expire_at = execute_after + timedelta(seconds=max(30, expire_after_seconds))
+        expire_at = _job_expire_at(execute_after, strategy, stake_plan, issue_window)
         idempotency_key = "signal:%s:rule:%s:route:%s:target:%s" % (
             signal["id"],
             auto_trigger_context.get("rule_id") or "",
@@ -499,7 +515,9 @@ def _dispatch_signal_for_auto_trigger_routes(
     }
 
 
-def _dispatch_signal_for_active_auto_trigger_routes(repository: Any, signal: Dict[str, Any]) -> Dict[str, Any]:
+def _dispatch_signal_for_active_auto_trigger_routes(
+    repository: Any, signal: Dict[str, Any], *, issue_window: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     if not hasattr(repository, "list_active_auto_trigger_route_dispatch_candidates"):
         return {
             "signal_id": int(signal["id"]),
@@ -557,6 +575,7 @@ def _dispatch_signal_for_active_auto_trigger_routes(repository: Any, signal: Dic
             signal,
             subscription_id=int(candidate["subscription_id"]),
             auto_trigger_context=context,
+            issue_window=issue_window,
         )
         created_count += int(result.get("created_count") or 0)
         existing_count += int(result.get("existing_count") or 0)
@@ -663,9 +682,10 @@ def _dispatch_signal(
             signal,
             subscription_id=int(subscription_id),
             auto_trigger_context=auto_trigger_context,
+            issue_window=issue_window,
         )
 
-    active_route_result = _dispatch_signal_for_active_auto_trigger_routes(repository, signal)
+    active_route_result = _dispatch_signal_for_active_auto_trigger_routes(repository, signal, issue_window=issue_window)
     raw_candidates = (
         repository.list_dispatch_candidates_for_subscription(signal_id, subscription_id=subscription_id)
         if subscription_id is not None and hasattr(repository, "list_dispatch_candidates_for_subscription")
@@ -775,8 +795,7 @@ def _dispatch_signal(
             template = repository.get_message_template(int(candidate["template_id"]))
         planned_message_text = _message_text_from_template(signal, float(stake_plan["amount"]), template)
         execute_after = base_execute_after
-        expire_after_seconds = int(resolve_dispatch_policy(strategy).get("expire_after_seconds") or 120)
-        expire_at = execute_after + timedelta(seconds=max(30, expire_after_seconds))
+        expire_at = _job_expire_at(execute_after, strategy, stake_plan, issue_window)
         idempotency_key = "signal:%s:target:%s" % (signal_id, candidate["delivery_target_id"])
 
         created = repository.create_execution_job_record(

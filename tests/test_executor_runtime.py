@@ -146,8 +146,9 @@ class ExecutorRuntimeTests(unittest.TestCase):
         calls = []
 
         class FakeTelegramClient:
-            def __init__(self, session, api_id, api_hash):
+            def __init__(self, session, api_id, api_hash, **options):
                 calls.append(("init", session, api_id, api_hash))
+                calls.append(("options", options))
 
             def connect(self):
                 calls.append(("connect",))
@@ -176,12 +177,17 @@ class ExecutorRuntimeTests(unittest.TestCase):
         self.assertIn(("connect",), calls)
         self.assertIn(("is_user_authorized",), calls)
         self.assertNotIn(("start",), calls)
+        options = next(call[1] for call in calls if call[0] == "options")
+        self.assertEqual(options["request_retries"], 0)
+        self.assertEqual(options["connection_retries"], 0)
+        self.assertFalse(options["auto_reconnect"])
+        self.assertEqual(options["flood_sleep_threshold"], 0)
 
     def test_telethon_sender_rejects_unauthorized_session(self):
         calls = []
 
         class FakeTelegramClient:
-            def __init__(self, session, api_id, api_hash):
+            def __init__(self, session, api_id, api_hash, **options):
                 calls.append(("init", session, api_id, api_hash))
 
             def connect(self):
@@ -210,7 +216,7 @@ class ExecutorRuntimeTests(unittest.TestCase):
         calls = []
 
         class FakeTelegramClient:
-            def __init__(self, session, api_id, api_hash):
+            def __init__(self, session, api_id, api_hash, **options):
                 calls.append(("init", session, api_id, api_hash))
 
             def connect(self):
@@ -384,7 +390,7 @@ class ExecutorRuntimeTests(unittest.TestCase):
             chat_id = -1005041409209
 
         class FakeTelegramClient:
-            def __init__(self, session, api_id, api_hash):
+            def __init__(self, session, api_id, api_hash, **options):
                 self.entity = FakeEntity(5041409209)
 
             def connect(self):
@@ -429,7 +435,7 @@ class ExecutorRuntimeTests(unittest.TestCase):
 
     def test_telethon_sender_raises_clear_error_when_entity_missing(self):
         class FakeTelegramClient:
-            def __init__(self, session, api_id, api_hash):
+            def __init__(self, session, api_id, api_hash, **options):
                 pass
 
             def connect(self):
