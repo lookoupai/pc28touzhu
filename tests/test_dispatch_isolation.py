@@ -183,6 +183,42 @@ class DispatchIsolationTests(unittest.TestCase):
                 self.assertIsNone(event["auto_trigger_rule_run_id"])
                 self.assertEqual(event["auto_trigger_stat_date"], "")
 
+    def test_auto_trigger_threshold_scope_does_not_block_direct_dispatch(self):
+        with self.repo._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO subscription_financial_state(
+                    subscription_id, user_id, threshold_status, threshold_scope, stopped_reason
+                ) VALUES (?, ?, 'loss_limit_hit', 'auto_trigger_rule', '自动规则已停止')
+                ON CONFLICT(subscription_id) DO UPDATE SET
+                    threshold_status=excluded.threshold_status,
+                    threshold_scope=excluded.threshold_scope,
+                    stopped_reason=excluded.stopped_reason
+                """,
+                (self.subscription["id"], self.user_id),
+            )
+        result = dispatch_signal(self.repo, self._signal()["id"])
+        self.assertEqual(result["created_count"], 1)
+        event = self.repo.get_progression_event(result["jobs"][0]["progression_event_id"])
+        self.assertIsNone(event["auto_trigger_rule_id"])
+
+    def test_subscription_threshold_scope_still_blocks_direct_dispatch(self):
+        with self.repo._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO subscription_financial_state(
+                    subscription_id, user_id, threshold_status, threshold_scope, stopped_reason
+                ) VALUES (?, ?, 'loss_limit_hit', 'subscription', '订阅已停止')
+                ON CONFLICT(subscription_id) DO UPDATE SET
+                    threshold_status=excluded.threshold_status,
+                    threshold_scope=excluded.threshold_scope,
+                    stopped_reason=excluded.stopped_reason
+                """,
+                (self.subscription["id"], self.user_id),
+            )
+        result = dispatch_signal(self.repo, self._signal()["id"])
+        self.assertEqual(result["created_count"], 0)
+
     def test_rule_stop_does_not_set_direct_subscription_threshold(self):
         rule = self._rule(risk={"enabled": True, "loss_limit": 5})
         job = self._route_dispatch(rule, self._signal())["jobs"][0]

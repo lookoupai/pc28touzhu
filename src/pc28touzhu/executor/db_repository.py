@@ -399,6 +399,7 @@ class DatabaseRepository:
             realized_loss REAL NOT NULL DEFAULT 0,
             net_profit REAL NOT NULL DEFAULT 0,
             threshold_status TEXT NOT NULL DEFAULT '',
+            threshold_scope TEXT NOT NULL DEFAULT 'subscription',
             stopped_reason TEXT NOT NULL DEFAULT '',
             baseline_reset_at TEXT,
             baseline_reset_note TEXT NOT NULL DEFAULT '',
@@ -934,6 +935,7 @@ class DatabaseRepository:
             self._ensure_execution_job_columns(conn)
             self._ensure_progression_event_columns(conn)
             self._ensure_progression_event_route_indexes(conn)
+            self._ensure_subscription_financial_state_columns(conn)
             self._ensure_subscription_runtime_run_columns(conn)
             self._ensure_auto_trigger_rule_columns(conn)
             self._ensure_auto_trigger_rule_route_columns(conn)
@@ -981,6 +983,16 @@ class DatabaseRepository:
         if "auto_trigger_rule_run_id" not in columns:
             conn.execute(
                 "ALTER TABLE auto_trigger_route_subscription_runtime_runs ADD COLUMN auto_trigger_rule_run_id INTEGER"
+            )
+
+    def _ensure_subscription_financial_state_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(subscription_financial_state)").fetchall()
+        }
+        if "threshold_scope" not in columns:
+            conn.execute(
+                "ALTER TABLE subscription_financial_state ADD COLUMN threshold_scope TEXT NOT NULL DEFAULT 'subscription'"
             )
 
     def _ensure_user_telegram_columns(self, conn: sqlite3.Connection) -> None:
@@ -1351,6 +1363,7 @@ class DatabaseRepository:
                 "realized_loss": _round_money(row.get("financial_realized_loss")),
                 "net_profit": _round_money(row.get("financial_net_profit")),
                 "threshold_status": str(row.get("financial_threshold_status") or ""),
+                "threshold_scope": str(row.get("financial_threshold_scope") or "subscription"),
                 "stopped_reason": str(row.get("financial_stopped_reason") or ""),
                 "baseline_reset_at": row.get("financial_baseline_reset_at"),
                 "baseline_reset_note": str(row.get("financial_baseline_reset_note") or ""),
@@ -1372,6 +1385,7 @@ class DatabaseRepository:
             "realized_loss": 0.0,
             "net_profit": 0.0,
             "threshold_status": "",
+            "threshold_scope": "subscription",
             "stopped_reason": "",
             "baseline_reset_at": None,
             "baseline_reset_note": "",
@@ -1407,6 +1421,7 @@ class DatabaseRepository:
             "realized_loss": _round_money(row.get("realized_loss")),
             "net_profit": _round_money(row.get("net_profit")),
             "threshold_status": str(row.get("threshold_status") or ""),
+            "threshold_scope": str(row.get("threshold_scope") or "subscription"),
             "stopped_reason": str(row.get("stopped_reason") or ""),
             "baseline_reset_at": row.get("baseline_reset_at"),
             "baseline_reset_note": str(row.get("baseline_reset_note") or ""),
@@ -3320,6 +3335,7 @@ class DatabaseRepository:
                 sfs.realized_loss AS financial_realized_loss,
                 sfs.net_profit AS financial_net_profit,
                 sfs.threshold_status AS financial_threshold_status,
+                sfs.threshold_scope AS financial_threshold_scope,
                 sfs.stopped_reason AS financial_stopped_reason,
                 sfs.baseline_reset_at AS financial_baseline_reset_at,
                 sfs.baseline_reset_note AS financial_baseline_reset_note,
@@ -3361,6 +3377,7 @@ class DatabaseRepository:
                 sfs.realized_loss AS financial_realized_loss,
                 sfs.net_profit AS financial_net_profit,
                 sfs.threshold_status AS financial_threshold_status,
+                sfs.threshold_scope AS financial_threshold_scope,
                 sfs.stopped_reason AS financial_stopped_reason,
                 sfs.baseline_reset_at AS financial_baseline_reset_at,
                 sfs.baseline_reset_note AS financial_baseline_reset_note,
@@ -3417,6 +3434,7 @@ class DatabaseRepository:
                 sfs.realized_loss AS financial_realized_loss,
                 sfs.net_profit AS financial_net_profit,
                 sfs.threshold_status AS financial_threshold_status,
+                sfs.threshold_scope AS financial_threshold_scope,
                 sfs.stopped_reason AS financial_stopped_reason,
                 sfs.baseline_reset_at AS financial_baseline_reset_at,
                 sfs.baseline_reset_note AS financial_baseline_reset_note,
@@ -8196,7 +8214,10 @@ class DatabaseRepository:
             WHERE s.id = ?
               AND s.status = 'ready'
               AND us.status = 'active'
-              AND COALESCE(sfs.threshold_status, '') = ''
+              AND (
+                  COALESCE(sfs.threshold_status, '') = ''
+                  OR COALESCE(sfs.threshold_scope, 'subscription') <> 'subscription'
+              )
               AND dt.status = 'active'
               AND (dt.telegram_account_id IS NULL OR ta.status = 'active')
             ORDER BY us.user_id ASC, dt.id ASC
@@ -8336,7 +8357,10 @@ class DatabaseRepository:
               AND us.id = ?
               AND s.status = 'ready'
               AND us.status = 'active'
-              AND COALESCE(sfs.threshold_status, '') = ''
+              AND (
+                  COALESCE(sfs.threshold_status, '') = ''
+                  OR COALESCE(sfs.threshold_scope, 'subscription') <> 'subscription'
+              )
               AND dt.status = 'active'
               AND (dt.telegram_account_id IS NULL OR ta.status = 'active')
             ORDER BY dt.id ASC
