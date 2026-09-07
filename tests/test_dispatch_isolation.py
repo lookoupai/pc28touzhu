@@ -116,6 +116,100 @@ class DispatchIsolationTests(unittest.TestCase):
         self.assertEqual(result["jobs"][0]["expire_at"], expected)
         self.assertEqual(result["jobs"][0]["stake_plan"]["meta"]["issue_window"]["send_before"], expected)
 
+    def test_expired_route_job_releases_next_signal_without_resetting_run(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"], user_id=self.user_id, status="standby",
+        )
+        rule = self._rule()
+        first = self._route_dispatch(rule, self._signal())["jobs"][0]
+        self.repo.report_job_result(
+            str(first["id"]), "test-executor", 1, "delivered", "message-1", self._iso_now(), {}, None,
+        )
+        self._settle(first)
+        job = self._route_dispatch(rule, self._signal())["jobs"][0]
+        event = self.repo.get_progression_event(job["progression_event_id"])
+        financial = self._rows("SELECT * FROM auto_trigger_route_subscription_financial_state")
+        runs = self._rows("SELECT * FROM auto_trigger_route_subscription_runtime_runs")
+        self.now += timedelta(minutes=4)
+
+        self.assertEqual(self.repo.pull_ready_jobs(executor_id="test-executor"), [])
+        self.assertEqual(self.repo.get_execution_job(job["id"])["status"], "expired")
+        self.assertEqual(self.repo.get_progression_event(event["id"])["status"], "void")
+        self.assertEqual(self._rows("SELECT * FROM auto_trigger_route_subscription_financial_state"), financial)
+        self.assertEqual(self._rows("SELECT * FROM auto_trigger_route_subscription_runtime_runs"), runs)
+        self.assertEqual(self.repo.expire_due_jobs(), 0)
+
+        next_result = dispatch_signal(self.repo, self._signal()["id"])
+        self.assertEqual(next_result["created_count"], 1)
+        next_event = self.repo.get_progression_event(next_result["jobs"][0]["progression_event_id"])
+        self.assertEqual(next_event["auto_trigger_rule_run_id"], event["auto_trigger_rule_run_id"])
+        self.assertEqual(next_event["auto_trigger_runtime_run_id"], event["auto_trigger_runtime_run_id"])
+
+    def test_expiry_keeps_event_pending_while_another_target_can_send(self):
+        jobs = dispatch_signal(self.repo, self._signal()["id"])["jobs"]
+        jobs.append(self._additional_target_job(jobs[0]))
+        with self.repo._connect() as conn:
+            conn.execute("UPDATE execution_jobs SET expire_at=? WHERE id=?", (
+                (self.now + timedelta(minutes=10)).isoformat().replace("+00:00", "Z"), jobs[1]["id"],
+            ))
+        self.now += timedelta(minutes=4)
+
+        self.assertEqual(self.repo.expire_due_jobs(), 1)
+        self.assertEqual(self.repo.get_progression_event(jobs[0]["progression_event_id"])["status"], "pending")
+        self.assertEqual(self.repo.get_execution_job(jobs[1]["id"])["status"], "pending")
+
+    def test_expiry_keeps_delivered_event_for_settlement(self):
+        jobs = dispatch_signal(self.repo, self._signal()["id"])["jobs"]
+        jobs.append(self._additional_target_job(jobs[0]))
+        self.repo.report_job_result(
+            str(jobs[0]["id"]), "test-executor", 1, "delivered", "message-1", self._iso_now(), {}, None,
+        )
+        self.now += timedelta(minutes=4)
+
+        self.assertEqual(self.repo.expire_due_jobs(), 1)
+        self.assertEqual(self.repo.get_progression_event(jobs[0]["progression_event_id"])["status"], "placed")
+        self.assertEqual(self.repo.get_execution_job(jobs[0]["id"])["status"], "delivered")
+
+    def test_expiry_voids_event_when_other_target_has_failed(self):
+        jobs = dispatch_signal(self.repo, self._signal()["id"])["jobs"]
+        jobs.append(self._additional_target_job(jobs[0]))
+        self.repo.report_job_result(
+            str(jobs[0]["id"]), "test-executor", 1, "failed", None, self._iso_now(), {}, "连接失败",
+        )
+        self.assertEqual(self.repo.get_progression_event(jobs[0]["progression_event_id"])["status"], "pending")
+        self.now += timedelta(minutes=4)
+
+        self.assertEqual(self.repo.expire_due_jobs(), 1)
+        self.assertEqual(self.repo.get_progression_event(jobs[0]["progression_event_id"])["status"], "void")
+
+    def test_late_delivery_report_restores_auto_expired_event_for_settlement(self):
+        job = self._route_dispatch(self._rule(), self._signal())["jobs"][0]
+        sent_at = self._iso_now()
+        self.now += timedelta(minutes=4)
+        self.repo.expire_due_jobs()
+        self.assertEqual(self.repo.get_progression_event(job["progression_event_id"])["status"], "void")
+
+        self.repo.report_job_result(
+            str(job["id"]), "test-executor", 1, "delivered", "message-1", sent_at, {}, None,
+        )
+        self.assertEqual(self.repo.get_progression_event(job["progression_event_id"])["status"], "placed")
+        self._settle(job)
+        before = self._rows("SELECT * FROM auto_trigger_route_subscription_financial_state")
+        self.repo.report_job_result(
+            str(job["id"]), "test-executor", 1, "delivered", "message-1", sent_at, {}, None,
+        )
+        self.assertEqual(self.repo.get_progression_event(job["progression_event_id"])["status"], "settled")
+        self.assertEqual(self._rows("SELECT * FROM auto_trigger_route_subscription_financial_state"), before)
+
+    def test_expiry_and_event_update_roll_back_together(self):
+        job = self._route_dispatch(self._rule(), self._signal())["jobs"][0]
+        self.now += timedelta(minutes=4)
+        with patch.object(self.repo, "_sync_progression_event_delivery_status", side_effect=RuntimeError("写入失败")):
+            with self.assertRaisesRegex(RuntimeError, "写入失败"):
+                self.repo.expire_due_jobs()
+        self.assertEqual(self._rows("SELECT status FROM execution_jobs WHERE id=?", (job["id"],)), [{"status": "pending"}])
+        self.assertEqual(self.repo.get_progression_event(job["progression_event_id"])["status"], "pending")
+
     def test_scheduled_route_preserves_standby_and_stops_without_direct_fallback(self):
         self.repo.update_subscription_status(
             subscription_id=self.subscription["id"], user_id=self.user_id, status="standby",
@@ -165,6 +259,19 @@ class DispatchIsolationTests(unittest.TestCase):
     def _rows(self, sql, params=()):
         with self.repo._connect() as conn:
             return [dict(row) for row in conn.execute(sql, params)]
+
+    def _additional_target_job(self, job):
+        target = self.repo.create_delivery_target_record(
+            user_id=self.user_id, executor_type="telegram_group", target_key="-100600002",
+        )
+        job_id = self.repo.create_execution_job(
+            user_id=self.user_id, signal_id=job["signal_id"],
+            subscription_id=job["subscription_id"], progression_event_id=job["progression_event_id"],
+            delivery_target_id=target["id"], executor_type="telegram_group",
+            planned_message_text="大10", stake_plan={"amount": 10},
+            idempotency_key="second-target", execute_after=job["execute_after"], expire_at=job["expire_at"],
+        )
+        return self.repo.get_execution_job(job_id)
 
     def test_concurrent_direct_and_two_routes_create_one_job_and_event(self):
         signal = self._signal()

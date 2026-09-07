@@ -787,7 +787,8 @@ class DatabaseRepositoryTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(active_rule_runs, 0)
 
-    def test_paused_subscription_closes_runs_after_failed_job_voids_event(self):
+    @patch("pc28touzhu.executor.db_repository._utc_now_iso", return_value="2026-06-08T01:01:00Z")
+    def test_paused_subscription_closes_runs_after_failed_job_voids_event(self, _clock):
         user_id = self.repo.create_user("sub-standby-closes-after-void-user")
         source_id = self.repo.create_source_record(
             owner_user_id=user_id,

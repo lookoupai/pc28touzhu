@@ -40,7 +40,7 @@ def main() -> int:
         )
         if config.source_sync.once:
             return 1 if int(summary.get("failed_count") or 0) > 0 else 0
-        time.sleep(max(5, int(config.source_sync.interval_seconds or 30)))
+        time.sleep(max(5, int(config.source_sync.interval_seconds or 5)))
 
 
 if __name__ == "__main__":

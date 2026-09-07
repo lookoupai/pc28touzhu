@@ -271,7 +271,7 @@ def get_pc28_auto_settlement_config() -> PC28AutoSettlementConfig:
 def get_source_sync_config() -> SourceSyncConfig:
     return SourceSyncConfig(
         enabled=_get_bool("SOURCE_SYNC_ENABLED", True),
-        interval_seconds=max(5, _get_int("SOURCE_SYNC_INTERVAL_SECONDS", 30)),
+        interval_seconds=max(5, _get_int("SOURCE_SYNC_INTERVAL_SECONDS", 5)),
         once=_get_bool("SOURCE_SYNC_ONCE", True),
     )
 

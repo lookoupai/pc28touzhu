@@ -7723,6 +7723,15 @@ class DatabaseRepository:
     def expire_due_jobs(self) -> int:
         now = _utc_now_iso()
         with self._connect() as conn:
+            events = conn.execute(
+                """
+                SELECT DISTINCT progression_event_id
+                FROM execution_jobs
+                WHERE status = 'pending' AND expire_at <= ?
+                  AND progression_event_id IS NOT NULL
+                """,
+                (now,),
+            ).fetchall()
             cursor = conn.execute(
                 """
                 UPDATE execution_jobs
@@ -7737,7 +7746,74 @@ class DatabaseRepository:
                 """,
                 (now, now),
             )
-        return int(cursor.rowcount or 0)
+            expired_count = int(cursor.rowcount or 0)
+            for event in events:
+                self._sync_progression_event_delivery_status(
+                    conn, progression_event_id=int(event["progression_event_id"]),
+                    now=now, void_reason="jobs_expired",
+                )
+        return expired_count
+
+    def _sync_progression_event_delivery_status(
+        self, conn: sqlite3.Connection, *, progression_event_id: int,
+        now: str, void_reason: str = "jobs_not_delivered",
+    ) -> None:
+        event = conn.execute(
+            "SELECT * FROM subscription_progression_events WHERE id = ?",
+            (int(progression_event_id),),
+        ).fetchone()
+        if not event:
+            return
+        aggregate = conn.execute(
+            """
+            SELECT
+                SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS delivered_count,
+                SUM(CASE WHEN status IN ('failed', 'expired', 'skipped') THEN 1 ELSE 0 END) AS terminal_count,
+                COUNT(*) AS total_count
+            FROM execution_jobs WHERE progression_event_id = ?
+            """,
+            (int(progression_event_id),),
+        ).fetchone()
+        delivered = int(aggregate["delivered_count"] or 0) > 0
+        if not delivered:
+            delivered = conn.execute(
+                """
+                SELECT 1 FROM execution_attempts a
+                JOIN execution_jobs j ON j.id = a.job_id
+                WHERE j.progression_event_id = ? AND a.delivery_status = 'delivered'
+                LIMIT 1
+                """,
+                (int(progression_event_id),),
+            ).fetchone() is not None
+        context = _safe_json_loads(event["result_context_json"])
+        if delivered:
+            # 成功回执可能晚于自动过期；已发送流水仍需结算，人工取消的流水不在此恢复。
+            if event["status"] == "pending" or (
+                event["status"] == "void" and context.get("void_reason") == "jobs_expired"
+            ):
+                conn.execute(
+                    "UPDATE subscription_progression_events SET status = 'placed', updated_at = ? WHERE id = ?",
+                    (now, int(progression_event_id)),
+                )
+        elif (
+            event["status"] == "pending"
+            and int(aggregate["total_count"] or 0) > 0
+            and int(aggregate["terminal_count"] or 0) == int(aggregate["total_count"])
+        ):
+            conn.execute(
+                """
+                UPDATE subscription_progression_events
+                SET status = 'void', result_context_json = ?, updated_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (_safe_json_dumps({**context, "void_reason": void_reason}), now, int(progression_event_id)),
+            )
+            if event["auto_trigger_route_id"] is None:
+                self._close_paused_subscription_runs_if_idle(
+                    conn, subscription_id=int(event["subscription_id"]),
+                    user_id=int(event["user_id"]), now=now,
+                    reason="subscription_paused_after_void_event",
+                )
 
     def list_execution_jobs(
         self,
@@ -8713,51 +8789,9 @@ class DatabaseRepository:
                 (int(normalized_job_id),),
             ).fetchone()
             if job_row and job_row["progression_event_id"] is not None:
-                aggregate = conn.execute(
-                    """
-                    SELECT
-                        SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS delivered_count,
-                        SUM(CASE WHEN status IN ('failed', 'expired', 'skipped') THEN 1 ELSE 0 END) AS terminal_count,
-                        COUNT(*) AS total_count
-                    FROM execution_jobs
-                    WHERE progression_event_id = ?
-                    """,
-                    (int(job_row["progression_event_id"]),),
-                ).fetchone()
-                delivered_count = int(aggregate["delivered_count"] or 0) if aggregate else 0
-                terminal_count = int(aggregate["terminal_count"] or 0) if aggregate else 0
-                total_count = int(aggregate["total_count"] or 0) if aggregate else 0
-                if delivered_count > 0:
-                    conn.execute(
-                        """
-                        UPDATE subscription_progression_events
-                        SET status = 'placed', updated_at = ?
-                        WHERE id = ? AND status = 'pending'
-                        """,
-                        (now, int(job_row["progression_event_id"])),
-                    )
-                elif total_count > 0 and terminal_count >= total_count:
-                    event_cursor = conn.execute(
-                        """
-                        UPDATE subscription_progression_events
-                        SET status = 'void', updated_at = ?
-                        WHERE id = ? AND status = 'pending'
-                        """,
-                        (now, int(job_row["progression_event_id"])),
-                    )
-                    if event_cursor.rowcount > 0:
-                        event_row = conn.execute(
-                            "SELECT auto_trigger_route_id FROM subscription_progression_events WHERE id = ? LIMIT 1",
-                            (int(job_row["progression_event_id"]),),
-                        ).fetchone()
-                        if not event_row or event_row["auto_trigger_route_id"] is None:
-                            self._close_paused_subscription_runs_if_idle(
-                                conn,
-                                subscription_id=int(job_row["subscription_id"]),
-                                user_id=int(job_row["user_id"]),
-                                now=now,
-                                reason="subscription_paused_after_void_event",
-                            )
+                self._sync_progression_event_delivery_status(
+                    conn, progression_event_id=int(job_row["progression_event_id"]), now=now,
+                )
 
         return {
             "job_id": normalized_job_id,
