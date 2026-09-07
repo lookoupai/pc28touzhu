@@ -520,6 +520,7 @@ def _dispatch_signal_for_auto_trigger_routes(
 
 def _dispatch_signal_for_active_auto_trigger_routes(
     repository: Any, signal: Dict[str, Any], *, issue_window: Dict[str, Any] | None = None,
+    retry_only: bool = False,
 ) -> Dict[str, Any]:
     if not hasattr(repository, "list_active_auto_trigger_route_dispatch_candidates"):
         return {
@@ -538,6 +539,13 @@ def _dispatch_signal_for_active_auto_trigger_routes(
     jobs = []
 
     for candidate in candidates:
+        if retry_only and (
+            not candidate.get("runtime_started_signal_id")
+            or int(signal["id"]) < int(candidate["runtime_started_signal_id"])
+        ):
+            # 重试时重新核对轮次，不能把旧轮次的信号补进新开轮次。
+            skipped_count += 1
+            continue
         route = candidate.get("route") if isinstance(candidate.get("route"), dict) else {}
         if not route:
             skipped_count += 1
@@ -623,12 +631,14 @@ def dispatch_signal(
     subscription_id: int | None = None,
     auto_trigger_context: Dict[str, Any] | None = None,
     draw_clock: Dict[str, Any] | None = None,
+    retry_active_routes_only: bool = False,
 ) -> Dict[str, Any]:
     transaction = repository.transaction() if hasattr(repository, "transaction") else nullcontext(repository)
     with transaction as unit:
         return _dispatch_signal(
             unit, signal_id, subscription_id=subscription_id,
             auto_trigger_context=auto_trigger_context, draw_clock=draw_clock,
+            retry_active_routes_only=retry_active_routes_only,
         )
 
 
@@ -639,6 +649,7 @@ def _dispatch_signal(
     subscription_id: int | None = None,
     auto_trigger_context: Dict[str, Any] | None = None,
     draw_clock: Dict[str, Any] | None = None,
+    retry_active_routes_only: bool = False,
 ) -> Dict[str, Any]:
     signal = repository.get_signal(signal_id)
     if not signal:
@@ -651,10 +662,10 @@ def _dispatch_signal(
         draw_clock=draw_clock,
         now=_utc_now(),
     )
-    if not issue_window["allowed"]:
+    if not issue_window["allowed"] or (retry_active_routes_only and issue_window["reason"] != "ok"):
         # 拦截落标记供重试扫描补派（典型场景：开奖接口 countdown 字段在开奖后短暂未跳新值，
         # 余量被低估）；verdict 快照一并落库留作核查凭据
-        if hasattr(repository, "mark_signal_dispatch_blocked"):
+        if not retry_active_routes_only and hasattr(repository, "mark_signal_dispatch_blocked"):
             repository.mark_signal_dispatch_blocked(
                 int(signal["id"]),
                 reason=str(issue_window.get("reason") or ""),
@@ -672,6 +683,17 @@ def _dispatch_signal(
             "block_reason": str(issue_window["reason"]),
             "issue_window": issue_window,
         }
+    if retry_active_routes_only:
+        source = repository.get_source(int(signal["source_id"]))
+        if not source or source.get("status") != "active" or signal.get("status") != "ready":
+            return {"signal_id": int(signal_id), "created_count": 0, "existing_count": 0, "skipped_count": 1, "jobs": []}
+        # 重试限定在当前自动规则路由，避免停轮后回退到订阅直派。
+        result = _dispatch_signal_for_active_auto_trigger_routes(
+            repository, signal, issue_window=issue_window, retry_only=True,
+        )
+        if result["created_count"] and hasattr(repository, "clear_signal_dispatch_blocked"):
+            repository.clear_signal_dispatch_blocked(int(signal_id))
+        return result
     if hasattr(repository, "clear_signal_dispatch_blocked"):
         repository.clear_signal_dispatch_blocked(int(signal["id"]))
 

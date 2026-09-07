@@ -85,12 +85,25 @@ def run_source_sync_cycle(repository: Any, *, fetcher=None, draw_clock: Dict[str
         "failed_count": 0,
         "blocked_retry_checked_count": 0,
         "blocked_retry_created_job_count": 0,
+        "route_retry_checked_count": 0,
+        "route_retry_created_job_count": 0,
     }
     source_results: List[Dict[str, Any]] = []
 
     retry_result = redispatch_gate_blocked_signals(repository, draw_clock=draw_clock)
     summary["blocked_retry_checked_count"] = int(retry_result.get("checked_count") or 0)
     summary["blocked_retry_created_job_count"] = int(retry_result.get("created_job_count") or 0)
+
+    if hasattr(repository, "list_pending_auto_trigger_route_signals"):
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(seconds=PC28_BLOCKED_SIGNAL_RETRY_MAX_AGE_SECONDS)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for signal_id in repository.list_pending_auto_trigger_route_signals(created_after=cutoff):
+            summary["route_retry_checked_count"] += 1
+            result = dispatch_signal(
+                repository, signal_id=signal_id, draw_clock=draw_clock, retry_active_routes_only=True,
+            )
+            summary["route_retry_created_job_count"] += int(result.get("created_count") or 0)
 
     for source_id in source_ids:
         source = repository.get_source(source_id)

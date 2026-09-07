@@ -8329,6 +8329,7 @@ class DatabaseRepository:
                 us.id AS subscription_id,
                 us.strategy_json,
                 run.id AS runtime_run_id,
+                run.started_signal_id AS runtime_started_signal_id,
                 run.play_filter_json AS runtime_play_filter_json,
                 started_signal.bet_type AS started_signal_bet_type,
                 rr.id AS rule_run_id,
@@ -8395,6 +8396,7 @@ class DatabaseRepository:
                     "strategy_json": _safe_json_loads(row.get("strategy_json")),
                     "route": route,
                     "runtime_run_id": int(row["runtime_run_id"]),
+                    "runtime_started_signal_id": row["runtime_started_signal_id"],
                     "runtime_play_filter": _safe_json_loads(row.get("runtime_play_filter_json")),
                     "started_signal_bet_type": str(row.get("started_signal_bet_type") or ""),
                     "rule_run_id": int(row["rule_run_id"]) if row.get("rule_run_id") is not None else None,
@@ -8403,6 +8405,37 @@ class DatabaseRepository:
                 }
             )
         return items
+
+    def list_pending_auto_trigger_route_signals(self, *, created_after: str, limit: int = 50) -> list[int]:
+        # 只扫描已启动路由的最新信号；一个目标已发送，不妨碍另一个目标等待结算后补派。
+        rows = self._fetch_all(
+            """
+            SELECT DISTINCT s.id
+            FROM auto_trigger_route_subscription_runtime_runs run
+            JOIN user_subscriptions us ON us.id = run.subscription_id AND us.user_id = run.user_id
+            JOIN signal_sources src ON src.id = us.source_id AND src.status = 'active'
+            JOIN auto_trigger_rule_routes r ON r.id = run.route_id AND r.rule_id = run.rule_id
+            JOIN auto_trigger_rules rule ON rule.id = run.rule_id AND rule.status = 'active'
+            JOIN normalized_signals s ON s.source_id = us.source_id
+            WHERE run.status = 'active'
+              AND us.status IN ('active', 'standby') AND r.status = 'active'
+              AND s.status = 'ready' AND s.lottery_type = 'pc28'
+              AND s.created_at >= ? AND s.id >= run.started_signal_id
+              AND NOT EXISTS (
+                  SELECT 1 FROM normalized_signals newer
+                  WHERE newer.source_id = s.source_id AND newer.bet_type = s.bet_type
+                    AND newer.status = 'ready' AND newer.id > s.id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM execution_jobs j
+                  WHERE j.signal_id = s.id AND j.subscription_id = us.id
+                    AND j.delivery_target_id = r.delivery_target_id
+              )
+            ORDER BY s.id DESC LIMIT ?
+            """,
+            (str(created_after), max(1, min(int(limit), 500))),
+        )
+        return [int(row["id"]) for row in rows]
 
     def list_dispatch_candidates_for_subscription(self, signal_id: int, *, subscription_id: int) -> list[Dict[str, Any]]:
         query = """
