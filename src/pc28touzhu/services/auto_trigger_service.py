@@ -1818,7 +1818,7 @@ def _evaluate_scheduled_auto_trigger_rule(
                         note="定时触发规则：%s" % str(rule.get("name") or ""), enforce_threshold=True,
                     )
 
-                if subscription_status == "standby":
+                if subscription_status == "standby" and not has_routes:
                     activated = repository.update_subscription_status(
                         subscription_id=int(subscription["id"]), user_id=int(rule["user_id"]), status="active",
                     )
@@ -2104,7 +2104,7 @@ def evaluate_auto_trigger_rule(
                     ))
                     summary["skipped_count"] += 1
                     continue
-                if subscription_status == "standby":
+                if subscription_status == "standby" and not has_routes:
                     activated = unit.update_subscription_status(
                         subscription_id=int(subscription["id"]),
                         user_id=int(rule["user_id"]),

@@ -116,6 +116,52 @@ class DispatchIsolationTests(unittest.TestCase):
         self.assertEqual(result["jobs"][0]["expire_at"], expected)
         self.assertEqual(result["jobs"][0]["stake_plan"]["meta"]["issue_window"]["send_before"], expected)
 
+    def test_scheduled_route_preserves_standby_and_stops_without_direct_fallback(self):
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"], user_id=self.user_id, status="standby",
+        )
+        other_target = self.repo.create_delivery_target_record(
+            user_id=self.user_id, executor_type="telegram_group", target_key="-100600002", status="active",
+        )
+        rule = self._rule()
+        self._signal()
+
+        result = run_auto_trigger_cycle(self.repo, rule_id=rule["id"], user_id=self.user_id, now=self.now)
+
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        self.assertEqual(self.repo.get_subscription(self.subscription["id"])["status"], "standby")
+        first = self.repo.list_execution_jobs(user_id=self.user_id)[0]
+        self.assertEqual(first["auto_trigger_route_id"], rule["routes"][0]["id"])
+        self.assertEqual(first["delivery_target_id"], self.target["id"])
+        with self.repo._connect() as conn:
+            conn.execute("UPDATE execution_jobs SET status='delivered' WHERE id=?", (first["id"],))
+        self._settle(first)
+
+        self.now += timedelta(minutes=4)
+        second = dispatch_signal(self.repo, self._signal()["id"])
+        self.assertEqual(second["created_count"], 1)
+        self.assertEqual(second["jobs"][0]["auto_trigger_route_id"], rule["routes"][0]["id"])
+        self.assertNotEqual(second["jobs"][0]["delivery_target_id"], other_target["id"])
+
+        self.repo.update_auto_trigger_rule_status(rule_id=rule["id"], user_id=self.user_id, status="inactive")
+        self.now += timedelta(minutes=4)
+        stopped = dispatch_signal(self.repo, self._signal()["id"])
+        self.assertEqual(stopped["created_count"], 0)
+        self.assertEqual(len(self.repo.list_execution_jobs(user_id=self.user_id)), 2)
+
+    def test_explicit_route_cannot_send_after_subscription_is_disabled(self):
+        rule = self._rule()
+        signal = self._signal()
+        context = self._context(rule)
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"], user_id=self.user_id, status="inactive",
+        )
+
+        result = self._route_dispatch(rule, signal, context=context)
+
+        self.assertEqual(result["created_count"], 0)
+        self.assertEqual(self.repo.list_execution_jobs(user_id=self.user_id), [])
+
     def _rows(self, sql, params=()):
         with self.repo._connect() as conn:
             return [dict(row) for row in conn.execute(sql, params)]

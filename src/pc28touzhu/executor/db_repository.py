@@ -8291,7 +8291,7 @@ class DatabaseRepository:
               ))
             WHERE s.id = ?
               AND s.status = 'ready'
-              AND us.status = 'active'
+              AND us.status IN ('active', 'standby')
               AND rule.status = 'active'
               AND rr.status = 'active'
               AND r.status = 'active'

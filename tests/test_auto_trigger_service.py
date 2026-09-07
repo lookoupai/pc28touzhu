@@ -866,6 +866,8 @@ class AutoTriggerServiceTests(unittest.TestCase):
         signal = self.repo.get_signal(jobs[0]["signal_id"])
         self.assertEqual(signal["bet_type"], "big_small")
         self.assertEqual(jobs[0]["planned_message_text"], "小10")
+        self.assertEqual(self.repo.get_subscription(self.subscription["id"])["status"], "standby")
+        self.assertEqual(self.repo.list_dispatch_candidates(jobs[0]["signal_id"]), [])
 
     def test_route_rule_daily_risk_blocks_restart_and_active_continuation(self):
         first_target = self.repo.list_delivery_targets(self.user_id)[0]

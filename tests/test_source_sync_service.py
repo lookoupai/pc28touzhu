@@ -49,6 +49,34 @@ class SourceSyncServiceTests(unittest.TestCase):
     def test_collect_active_source_ids_returns_active_subscription_sources(self):
         self.assertEqual(collect_active_source_ids(self.repo), [self.source["id"]])
 
+    def test_standby_subscription_receives_signals_without_direct_jobs(self):
+        subscription = self.repo.list_subscriptions(self.user_id)[0]
+        self.repo.update_subscription_status(
+            subscription_id=subscription["id"], user_id=self.user_id, status="standby",
+        )
+        payload = {"items": [{
+            "signal_id": "standby-source-signal", "issue_no": "20260418001",
+            "published_at": "2026-04-18T09:30:00Z",
+            "signals": [{"bet_type": "big_small", "bet_value": "大"}],
+        }]}
+
+        result = run_source_sync_cycle(self.repo, fetcher=lambda *args, **kwargs: payload)
+
+        self.assertEqual(result["summary"]["source_count"], 1)
+        self.assertEqual(result["summary"]["normalized_signal_count"], 1)
+        self.assertEqual(result["summary"]["created_job_count"], 0)
+        self.assertEqual(self.repo.list_execution_jobs(user_id=self.user_id), [])
+        self.assertEqual(self.repo.get_subscription(subscription["id"])["status"], "standby")
+
+    def test_inactive_and_archived_subscriptions_do_not_sync(self):
+        subscription = self.repo.list_subscriptions(self.user_id)[0]
+        for status in ("inactive", "archived"):
+            with self.subTest(status=status):
+                self.repo.update_subscription_status(
+                    subscription_id=subscription["id"], user_id=self.user_id, status=status,
+                )
+                self.assertEqual(collect_active_source_ids(self.repo), [])
+
     def test_run_source_sync_cycle_creates_jobs_once(self):
         payload = {
             "items": [

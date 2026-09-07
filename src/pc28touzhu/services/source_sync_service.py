@@ -22,7 +22,8 @@ def collect_active_source_ids(repository: Any) -> List[int]:
     for user in repository.list_users():
         subscriptions = repository.list_subscriptions(user_id=int(user["id"]))
         for item in subscriptions:
-            if str(item.get("status") or "").strip() != "active":
+            # 待命方案也需要新信号；是否创建任务由直派状态和已启动路由分别决定。
+            if str(item.get("status") or "").strip() not in {"active", "standby"}:
                 continue
             source_id = int(item.get("source_id") or 0)
             if source_id <= 0 or source_id in seen:

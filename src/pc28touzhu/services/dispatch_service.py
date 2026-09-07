@@ -322,6 +322,9 @@ def _dispatch_signal_for_auto_trigger_routes(
     jobs = []
 
     for route in routes:
+        if str(subscription.get("status") or "") not in {"active", "standby"}:
+            skipped_count += 1
+            continue
         route_id = int(route["id"])
         if hasattr(repository, "get_auto_trigger_rule_route"):
             current_route = repository.get_auto_trigger_rule_route(route_id)

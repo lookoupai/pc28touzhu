@@ -205,6 +205,8 @@
     function eventReasonText(event) {
         const matchedText = (event.matched_conditions || []).map(conditionText).join("；");
         const scheduleReasons = {
+            subscription_not_active: "跟单方案已停用，规则未触发。",
+            source_not_active: "信号来源已停用，规则未触发。",
             outside_schedule_window: "当前不在定时窗口内。",
             schedule_weekday_blocked: "今天未启用定时触发。",
             schedule_day_already_started: "今日已经启动过一轮。",
@@ -393,10 +395,18 @@
             const stoppedRouteCount = (rule.routes || []).filter(function (route) {
                 return route.daily_stat && route.daily_stat.status === "stopped";
             }).length;
+            const blockedSubscriptions = state.subscriptions.filter(function (item) {
+                return (rule.subscription_ids || []).some(function (id) { return Number(id) === Number(item.id); }) &&
+                    (!isTriggerableSubscription(item) || !sourceById(item.source_id) || sourceById(item.source_id).status !== "active");
+            }).map(function (item) {
+                const source = sourceById(item.source_id);
+                return subscriptionLabel(item) + (source && source.status !== "active" ? " / 来源" + subscriptionStatusText(source.status) : "");
+            });
             return '' +
                 '<article class="rule-card' + selected + '">' +
                     '<div class="rule-card-head"><div><strong>' + escapeHtml(rule.name) + '</strong><p class="meta-line">' + escapeHtml(scope) + '</p></div>' + statusPill(rule.status) + '</div>' +
                     '<p class="meta-line">' + escapeHtml(isSchedule ? scheduleText : ("开始条件：" + conditions)) + '</p>' +
+                    (blockedSubscriptions.length ? '<p class="meta-line">未就绪：' + escapeHtml(blockedSubscriptions.join("；")) + '</p>' : '') +
                     (isSchedule && rule.schedule_status ? '<p class="meta-line">' + escapeHtml(rule.stat_date || "当前统计日") + ' 定时状态：' + escapeHtml(rule.schedule_status) + '</p>' : '') +
                     (guardGroups ? '<p class="meta-line">同时达成：' + escapeHtml(guardGroups) + '</p>' : '') +
                     '<p class="meta-line">' + escapeHtml(actionText(rule.action)) + '</p>' +
@@ -453,7 +463,7 @@
     function renderSubscriptionOptions(selectedIds) {
         const selected = new Set((selectedIds || []).map(function (item) { return String(item); }));
         $("subscriptionSelect").innerHTML = state.subscriptions.filter(function (item) {
-            return isTriggerableSubscription(item) || selected.has(String(item.id));
+            return item.status !== "archived" || selected.has(String(item.id));
         }).map(function (item) {
             return '<option value="' + escapeHtml(item.id) + '"' + (selected.has(String(item.id)) ? " selected" : "") + '>' + escapeHtml(subscriptionLabel(item)) + '</option>';
         }).join("");
