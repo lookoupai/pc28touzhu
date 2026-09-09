@@ -1,0 +1,745 @@
+{
+  "generated_at": "2026-09-07T16:05:16.611106+00:00",
+  "as_of": "2026-09-07T15:57:44+00:00",
+  "audit": {
+    "draw_missing_valid_triplet": 56,
+    "draw_rows": 18473,
+    "usable_draws": 18417,
+    "settled_predictions": 116735,
+    "settled_events": 36583,
+    "usable_predictions": 116292,
+    "prediction_bad_chronology": 67,
+    "prediction_missing_draw": 376,
+    "event_missing_triplet": 258,
+    "event_month_uses_settlement_time": 20108,
+    "event_stored_profit_differs_from_current_rules": 172,
+    "event_duplicate_issue_candidate_skips": 8460,
+    "event_created_after_draw": 98
+  },
+  "draw_coverage": [
+    {
+      "month": "2026-07",
+      "draws": 9246,
+      "first": "2026-07-09T00:02:30+08:00",
+      "last": "2026-07-31T23:59:00+08:00",
+      "missing_internal_issues": 0,
+      "gaps": []
+    },
+    {
+      "month": "2026-08",
+      "draws": 6358,
+      "first": "2026-08-01T00:02:30+08:00",
+      "last": "2026-08-31T23:59:00+08:00",
+      "missing_internal_issues": 6104,
+      "gaps": [
+        {
+          "after": "3465597",
+          "before": "3465643",
+          "missing_issues": 45
+        },
+        {
+          "after": "3467443",
+          "before": "3467446",
+          "missing_issues": 2
+        },
+        {
+          "after": "3467450",
+          "before": "3467452",
+          "missing_issues": 1
+        },
+        {
+          "after": "3468255",
+          "before": "3468257",
+          "missing_issues": 1
+        },
+        {
+          "after": "3468402",
+          "before": "3468404",
+          "missing_issues": 1
+        },
+        {
+          "after": "3468409",
+          "before": "3468411",
+          "missing_issues": 1
+        },
+        {
+          "after": "3468412",
+          "before": "3468414",
+          "missing_issues": 1
+        },
+        {
+          "after": "3468418",
+          "before": "3468420",
+          "missing_issues": 1
+        },
+        {
+          "after": "3468423",
+          "before": "3468426",
+          "missing_issues": 2
+        },
+        {
+          "after": "3468961",
+          "before": "3468963",
+          "missing_issues": 1
+        },
+        {
+          "after": "3469335",
+          "before": "3475384",
+          "missing_issues": 6048
+        }
+      ]
+    },
+    {
+      "month": "2026-09",
+      "draws": 2813,
+      "first": "2026-09-01T00:02:30+08:00",
+      "last": "2026-09-07T23:55:30+08:00",
+      "missing_internal_issues": 0,
+      "gaps": []
+    }
+  ],
+  "archived_draw_summaries": [
+    {
+      "summary_date": "2026-04-03",
+      "draw_count": 90
+    },
+    {
+      "summary_date": "2026-04-04",
+      "draw_count": 298
+    },
+    {
+      "summary_date": "2026-04-05",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-06",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-07",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-08",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-09",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-10",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-11",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-12",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-13",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-14",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-15",
+      "draw_count": 330
+    },
+    {
+      "summary_date": "2026-04-16",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-17",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-18",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-19",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-20",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-21",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-22",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-23",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-24",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-25",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-26",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-27",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-28",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-29",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-04-30",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-01",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-02",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-03",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-04",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-05",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-06",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-07",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-08",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-09",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-10",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-11",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-12",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-13",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-14",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-15",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-16",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-17",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-18",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-19",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-20",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-21",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-22",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-23",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-24",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-25",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-26",
+      "draw_count": 388
+    },
+    {
+      "summary_date": "2026-05-27",
+      "draw_count": 363
+    },
+    {
+      "summary_date": "2026-05-28",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-29",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-30",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-05-31",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-01",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-02",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-03",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-04",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-05",
+      "draw_count": 328
+    },
+    {
+      "summary_date": "2026-06-06",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-07",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-08",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-09",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-10",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-11",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-12",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-13",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-14",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-15",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-16",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-17",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-18",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-19",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-20",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-21",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-22",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-23",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-24",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-25",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-26",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-27",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-28",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-29",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-06-30",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-07-01",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-07-02",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-07-03",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-07-04",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-07-05",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-07-06",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-07-07",
+      "draw_count": 402
+    },
+    {
+      "summary_date": "2026-07-08",
+      "draw_count": 402
+    }
+  ],
+  "prediction_candidate_count": 270,
+  "observed_candidate_count": 69,
+  "past_only_selections": [
+    {
+      "family": "predictions",
+      "candidate_count": 222,
+      "selected": "fixed:number:15:pc28_high_regular",
+      "train_months": [
+        "2026-07"
+      ],
+      "test_months": [
+        "2026-08",
+        "2026-09"
+      ],
+      "rows": [
+        {
+          "family": "predictions",
+          "strategy": "fixed:number:15:pc28_high_regular",
+          "policy": "target1_limit20",
+          "month": "2026-07",
+          "available_bets": 9246,
+          "bets": 1,
+          "net": 11.0,
+          "ending_bankroll": 111.0,
+          "min_bankroll": 100.0,
+          "max_principal_loss": 0.0,
+          "max_drawdown": 0.0,
+          "wins": 1,
+          "refunds": 0,
+          "losses": 0,
+          "stop_reason": "profit_target",
+          "last_issue": "3454662"
+        },
+        {
+          "family": "predictions",
+          "strategy": "fixed:number:15:pc28_high_regular",
+          "policy": "target1_limit20",
+          "month": "2026-08",
+          "available_bets": 6358,
+          "bets": 8,
+          "net": 4.0,
+          "ending_bankroll": 104.0,
+          "min_bankroll": 93.0,
+          "max_principal_loss": 7.0,
+          "max_drawdown": 7.0,
+          "wins": 1,
+          "refunds": 0,
+          "losses": 7,
+          "stop_reason": "profit_target",
+          "last_issue": "3463915"
+        },
+        {
+          "family": "predictions",
+          "strategy": "fixed:number:15:pc28_high_regular",
+          "policy": "target1_limit20",
+          "month": "2026-09",
+          "available_bets": 2813,
+          "bets": 20,
+          "net": -20.0,
+          "ending_bankroll": 80.0,
+          "min_bankroll": 80.0,
+          "max_principal_loss": 20.0,
+          "max_drawdown": 20.0,
+          "wins": 0,
+          "refunds": 0,
+          "losses": 20,
+          "stop_reason": "loss_limit",
+          "last_issue": "3476389"
+        }
+      ]
+    },
+    {
+      "family": "observed",
+      "candidate_count": 34,
+      "selected": "observed_rule1:sub6:big_small",
+      "train_months": [
+        "2026-05",
+        "2026-06"
+      ],
+      "test_months": [
+        "2026-07",
+        "2026-08",
+        "2026-09"
+      ],
+      "rows": [
+        {
+          "family": "observed",
+          "strategy": "observed_rule1:sub6:big_small",
+          "policy": "target1_limit20",
+          "month": "2026-05",
+          "available_bets": 117,
+          "bets": 1,
+          "net": 1.85,
+          "ending_bankroll": 101.85,
+          "min_bankroll": 100.0,
+          "max_principal_loss": 0.0,
+          "max_drawdown": 0.0,
+          "wins": 1,
+          "refunds": 0,
+          "losses": 0,
+          "stop_reason": "profit_target",
+          "last_issue": "3428372"
+        },
+        {
+          "family": "observed",
+          "strategy": "observed_rule1:sub6:big_small",
+          "policy": "target1_limit20",
+          "month": "2026-06",
+          "available_bets": 517,
+          "bets": 1,
+          "net": 1.85,
+          "ending_bankroll": 101.85,
+          "min_bankroll": 100.0,
+          "max_principal_loss": 0.0,
+          "max_drawdown": 0.0,
+          "wins": 1,
+          "refunds": 0,
+          "losses": 0,
+          "stop_reason": "profit_target",
+          "last_issue": "3445930"
+        },
+        {
+          "family": "observed",
+          "strategy": "observed_rule1:sub6:big_small",
+          "policy": "target1_limit20",
+          "month": "2026-07",
+          "available_bets": 0,
+          "bets": 0,
+          "net": 0.0,
+          "ending_bankroll": 100.0,
+          "min_bankroll": 100.0,
+          "max_principal_loss": 0.0,
+          "max_drawdown": 0.0,
+          "wins": 0,
+          "refunds": 0,
+          "losses": 0,
+          "stop_reason": "no_signal",
+          "last_issue": ""
+        },
+        {
+          "family": "observed",
+          "strategy": "observed_rule1:sub6:big_small",
+          "policy": "target1_limit20",
+          "month": "2026-08",
+          "available_bets": 0,
+          "bets": 0,
+          "net": 0.0,
+          "ending_bankroll": 100.0,
+          "min_bankroll": 100.0,
+          "max_principal_loss": 0.0,
+          "max_drawdown": 0.0,
+          "wins": 0,
+          "refunds": 0,
+          "losses": 0,
+          "stop_reason": "no_signal",
+          "last_issue": ""
+        },
+        {
+          "family": "observed",
+          "strategy": "observed_rule1:sub6:big_small",
+          "policy": "target1_limit20",
+          "month": "2026-09",
+          "available_bets": 0,
+          "bets": 0,
+          "net": 0.0,
+          "ending_bankroll": 100.0,
+          "min_bankroll": 100.0,
+          "max_principal_loss": 0.0,
+          "max_drawdown": 0.0,
+          "wins": 0,
+          "refunds": 0,
+          "losses": 0,
+          "stop_reason": "no_signal",
+          "last_issue": ""
+        }
+      ]
+    }
+  ],
+  "model": [
+    {
+      "policy": "first_profit_limit20",
+      "trials": 20000,
+      "positive_month_rate": 0.938,
+      "rate_95pct_margin": 0.003342,
+      "all_12_months_positive_probability": 0.46391,
+      "mean_month_net": -0.04287,
+      "mean_month_net_95pct_margin": 0.069721,
+      "expected_net_from_expected_turnover": -0.008591,
+      "mean_bets": 17.181,
+      "loss_stop_rate": 0.062
+    },
+    {
+      "policy": "first_profit_limit99",
+      "trials": 20000,
+      "positive_month_rate": 0.985,
+      "rate_95pct_margin": 0.001685,
+      "all_12_months_positive_probability": 0.834132,
+      "mean_month_net": -0.26512,
+      "mean_month_net_95pct_margin": 0.167988,
+      "expected_net_from_expected_turnover": -0.046274,
+      "mean_bets": 92.547,
+      "loss_stop_rate": 0.0149
+    },
+    {
+      "policy": "target1_limit20",
+      "trials": 20000,
+      "positive_month_rate": 0.9123,
+      "rate_95pct_margin": 0.00392,
+      "all_12_months_positive_probability": 0.332393,
+      "mean_month_net": 0.008655,
+      "mean_month_net_95pct_margin": 0.08394,
+      "expected_net_from_expected_turnover": -0.012968,
+      "mean_bets": 25.936,
+      "loss_stop_rate": 0.0877
+    },
+    {
+      "policy": "target5_limit20",
+      "trials": 20000,
+      "positive_month_rate": 0.77195,
+      "rate_95pct_margin": 0.005815,
+      "all_12_months_positive_probability": 0.044779,
+      "mean_month_net": -0.029728,
+      "mean_month_net_95pct_margin": 0.146675,
+      "expected_net_from_expected_turnover": -0.039343,
+      "mean_bets": 78.685,
+      "loss_stop_rate": 0.22805
+    },
+    {
+      "policy": "target10_limit20",
+      "trials": 20000,
+      "positive_month_rate": 0.6454,
+      "rate_95pct_margin": 0.00663,
+      "all_12_months_positive_probability": 0.005223,
+      "mean_month_net": 0.019048,
+      "mean_month_net_95pct_margin": 0.200463,
+      "expected_net_from_expected_turnover": -0.073631,
+      "mean_bets": 147.263,
+      "loss_stop_rate": 0.3546
+    },
+    {
+      "policy": "target1_limit80",
+      "trials": 20000,
+      "positive_month_rate": 0.97645,
+      "rate_95pct_margin": 0.002102,
+      "all_12_months_positive_probability": 0.751277,
+      "mean_month_net": -0.042115,
+      "mean_month_net_95pct_margin": 0.171119,
+      "expected_net_from_expected_turnover": -0.05203,
+      "mean_bets": 104.06,
+      "loss_stop_rate": 0.02355
+    }
+  ],
+  "rounding": "沿用本仓每注净利保留两位小数；2.846 含本赔率命中净利 1.85",
+  "input_databases_read_only": true
+}

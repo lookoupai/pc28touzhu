@@ -1,0 +1,679 @@
+family,strategy,policy,sample_months,months_with_bets,target_reached_months,all_sample_months_reached,funding_failure_months,lowest_month_net,total_net,max_principal_loss,max_drawdown
+observed,observed_rule0,target100_bankroll,6,5,1,False,1,-99.69,104.37,99.69,130.66
+observed,observed_rule0,target100_limit99,6,5,1,False,0,-98.69,105.37,98.69,129.66
+observed,observed_rule1,target100_bankroll,6,6,0,False,1,-99.57,-88.44,99.57,185.49
+observed,observed_rule1,target100_limit99,6,6,0,False,0,-98.57,-87.44,98.57,184.49
+observed,observed_rule1:sub2:big_small,target100_bankroll,5,3,0,False,0,-10.3,-18.15,10.3,17.25
+observed,observed_rule1:sub2:big_small,target100_limit99,5,3,0,False,0,-10.3,-18.15,10.3,17.25
+observed,observed_rule1:sub2:combo,target100_bankroll,6,5,0,False,0,-8.67,38.19,16.56,41.45
+observed,observed_rule1:sub2:combo,target100_limit99,6,5,0,False,0,-8.67,38.19,16.56,41.45
+observed,observed_rule1:sub2:odd_even,target100_bankroll,6,5,0,False,0,-20.15,32.7,20.15,20.3
+observed,observed_rule1:sub2:odd_even,target100_limit99,6,5,0,False,0,-20.15,32.7,20.15,20.3
+observed,observed_rule1:sub3:big_small,target100_bankroll,6,6,0,False,0,-19.95,14.9,19.95,20.8
+observed,observed_rule1:sub3:big_small,target100_limit99,6,6,0,False,0,-19.95,14.9,19.95,20.8
+observed,observed_rule1:sub3:combo,target100_bankroll,6,5,0,False,0,-33.11,-16.81,49.11,82.0
+observed,observed_rule1:sub3:combo,target100_limit99,6,5,0,False,0,-33.11,-16.81,49.11,82.0
+observed,observed_rule1:sub3:odd_even,target100_bankroll,5,3,0,False,0,-9.6,23.9,9.6,12.95
+observed,observed_rule1:sub3:odd_even,target100_limit99,5,3,0,False,0,-9.6,23.9,9.6,12.95
+observed,observed_rule1:sub4:big_small,target100_bankroll,5,2,0,False,0,-35.75,-43.85,42.0,42.0
+observed,observed_rule1:sub4:big_small,target100_limit99,5,2,0,False,0,-35.75,-43.85,42.0,42.0
+observed,observed_rule1:sub4:combo,target100_bankroll,6,4,0,False,0,-45.49,-15.48,58.38,71.01
+observed,observed_rule1:sub4:combo,target100_limit99,6,4,0,False,0,-45.49,-15.48,58.38,71.01
+observed,observed_rule1:sub4:odd_even,target100_bankroll,4,1,0,False,0,0.0,10.1,0.0,1.0
+observed,observed_rule1:sub4:odd_even,target100_limit99,4,1,0,False,0,0.0,10.1,0.0,1.0
+observed,observed_rule1:sub5:big_small,target100_bankroll,5,3,0,False,0,-2.35,27.2,19.2,19.45
+observed,observed_rule1:sub5:big_small,target100_limit99,5,3,0,False,0,-2.35,27.2,19.2,19.45
+observed,observed_rule1:sub5:combo,target100_bankroll,5,3,0,False,0,-20.99,-18.82,20.99,61.8
+observed,observed_rule1:sub5:combo,target100_limit99,5,3,0,False,0,-20.99,-18.82,20.99,61.8
+observed,observed_rule1:sub5:odd_even,target100_bankroll,5,2,0,False,0,0.0,60.2,1.15,8.3
+observed,observed_rule1:sub5:odd_even,target100_limit99,5,2,0,False,0,0.0,60.2,1.15,8.3
+observed,observed_rule1:sub6:big_small,target100_bankroll,6,3,0,False,0,-22.0,-3.55,22.0,23.7
+observed,observed_rule1:sub6:big_small,target100_limit99,6,3,0,False,0,-22.0,-3.55,22.0,23.7
+observed,observed_rule1:sub6:combo,target100_bankroll,6,4,0,False,0,-54.53,-106.17,75.21,94.11
+observed,observed_rule1:sub6:combo,target100_limit99,6,4,0,False,0,-54.53,-106.17,75.21,94.11
+observed,observed_rule1:sub6:odd_even,target100_bankroll,5,3,0,False,0,0.0,52.95,11.55,24.05
+observed,observed_rule1:sub6:odd_even,target100_limit99,5,3,0,False,0,0.0,52.95,11.55,24.05
+observed,observed_rule1:sub7:big_small,target100_bankroll,4,2,0,False,0,-9.45,-10.2,9.45,10.3
+observed,observed_rule1:sub7:big_small,target100_limit99,4,2,0,False,0,-9.45,-10.2,9.45,10.3
+observed,observed_rule1:sub7:combo,target100_bankroll,4,2,0,False,0,-19.0,-25.07,40.83,46.81
+observed,observed_rule1:sub7:combo,target100_limit99,4,2,0,False,0,-19.0,-25.07,40.83,46.81
+observed,observed_rule1:sub7:odd_even,target100_bankroll,4,1,0,False,0,0.0,2.45,8.15,11.15
+observed,observed_rule1:sub7:odd_even,target100_limit99,4,1,0,False,0,0.0,2.45,8.15,11.15
+observed,observed_rule2,target100_bankroll,5,5,0,False,0,-45.15,43.31,78.55,85.24
+observed,observed_rule2,target100_limit99,5,5,0,False,0,-45.15,43.31,78.55,85.24
+observed,observed_rule2:sub2:big_small,target100_bankroll,5,2,0,False,0,-7.9,-7.05,13.8,17.35
+observed,observed_rule2:sub2:big_small,target100_limit99,5,2,0,False,0,-7.9,-7.05,13.8,17.35
+observed,observed_rule2:sub2:combo,target100_bankroll,5,2,0,False,0,-20.07,-12.52,23.99,23.99
+observed,observed_rule2:sub2:combo,target100_limit99,5,2,0,False,0,-20.07,-12.52,23.99,23.99
+observed,observed_rule2:sub2:odd_even,target100_bankroll,5,2,0,False,0,-12.1,1.45,12.1,21.85
+observed,observed_rule2:sub2:odd_even,target100_limit99,5,2,0,False,0,-12.1,1.45,12.1,21.85
+observed,observed_rule2:sub3:big_small,target100_bankroll,5,2,0,False,0,-16.7,-17.65,19.65,27.35
+observed,observed_rule2:sub3:big_small,target100_limit99,5,2,0,False,0,-16.7,-17.65,19.65,27.35
+observed,observed_rule2:sub3:combo,target100_bankroll,5,2,0,False,0,-30.89,-41.11,30.89,30.89
+observed,observed_rule2:sub3:combo,target100_limit99,5,2,0,False,0,-30.89,-41.11,30.89,30.89
+observed,observed_rule2:sub3:odd_even,target100_bankroll,5,3,0,False,0,-51.55,-46.6,51.55,54.65
+observed,observed_rule2:sub3:odd_even,target100_limit99,5,3,0,False,0,-51.55,-46.6,51.55,54.65
+observed,observed_rule2:sub4:big_small,target100_bankroll,5,3,0,False,0,-21.3,26.15,21.3,40.4
+observed,observed_rule2:sub4:big_small,target100_limit99,5,3,0,False,0,-21.3,26.15,21.3,40.4
+observed,observed_rule2:sub4:combo,target100_bankroll,5,3,0,False,0,-22.22,-2.47,40.23,40.23
+observed,observed_rule2:sub4:combo,target100_limit99,5,3,0,False,0,-22.22,-2.47,40.23,40.23
+observed,observed_rule2:sub4:odd_even,target100_bankroll,5,3,0,False,0,-20.05,-4.9,27.9,36.25
+observed,observed_rule2:sub4:odd_even,target100_limit99,5,3,0,False,0,-20.05,-4.9,27.9,36.25
+observed,observed_rule2:sub5:big_small,target100_bankroll,5,5,0,False,0,-24.1,17.95,24.1,28.6
+observed,observed_rule2:sub5:big_small,target100_limit99,5,5,0,False,0,-24.1,17.95,24.1,28.6
+observed,observed_rule2:sub5:combo,target100_bankroll,5,2,0,False,0,0.0,54.02,7.0,17.22
+observed,observed_rule2:sub5:combo,target100_limit99,5,2,0,False,0,0.0,54.02,7.0,17.22
+observed,observed_rule2:sub5:odd_even,target100_bankroll,5,2,0,False,0,0.0,65.6,20.65,25.45
+observed,observed_rule2:sub5:odd_even,target100_limit99,5,2,0,False,0,0.0,65.6,20.65,25.45
+observed,observed_rule2:sub6:big_small,target100_bankroll,5,3,0,False,0,-21.45,-28.8,23.65,32.45
+observed,observed_rule2:sub6:big_small,target100_limit99,5,3,0,False,0,-21.45,-28.8,23.65,32.45
+observed,observed_rule2:sub6:combo,target100_bankroll,5,3,0,False,0,0.0,56.26,9.0,28.33
+observed,observed_rule2:sub6:combo,target100_limit99,5,3,0,False,0,0.0,56.26,9.0,28.33
+observed,observed_rule2:sub6:odd_even,target100_bankroll,5,3,0,False,0,-18.75,15.05,21.1,26.35
+observed,observed_rule2:sub6:odd_even,target100_limit99,5,3,0,False,0,-18.75,15.05,21.1,26.35
+observed,observed_rule2:sub7:big_small,target100_bankroll,4,2,0,False,0,0.0,5.55,16.75,20.1
+observed,observed_rule2:sub7:big_small,target100_limit99,4,2,0,False,0,0.0,5.55,16.75,20.1
+observed,observed_rule2:sub7:combo,target100_bankroll,4,2,0,False,0,0.0,31.11,3.0,20.0
+observed,observed_rule2:sub7:combo,target100_limit99,4,2,0,False,0,0.0,31.11,3.0,20.0
+observed,observed_rule2:sub7:odd_even,target100_bankroll,4,2,0,False,0,-19.7,-30.45,24.9,24.9
+observed,observed_rule2:sub7:odd_even,target100_limit99,4,2,0,False,0,-19.7,-30.45,24.9,24.9
+observed,observed_rule3,target100_bankroll,3,3,0,False,0,-23.1,-43.7,36.15,53.9
+observed,observed_rule3,target100_limit99,3,3,0,False,0,-23.1,-43.7,36.15,53.9
+observed,observed_rule3:sub6:odd_even,target100_bankroll,3,1,0,False,0,-37.45,-37.45,42.0,50.35
+observed,observed_rule3:sub6:odd_even,target100_limit99,3,1,0,False,0,-37.45,-37.45,42.0,50.35
+observed,observed_rule3:sub7:odd_even,target100_bankroll,3,3,0,False,0,-23.1,-10.8,26.9,53.9
+observed,observed_rule3:sub7:odd_even,target100_limit99,3,3,0,False,0,-23.1,-10.8,26.9,53.9
+observed,observed_rule4,target100_bankroll,1,1,0,False,0,11.55,11.55,5.9,15.75
+observed,observed_rule4,target100_limit99,1,1,0,False,0,11.55,11.55,5.9,15.75
+observed,observed_rule4:sub8:odd_even,target100_bankroll,1,1,0,False,0,11.55,11.55,5.9,15.75
+observed,observed_rule4:sub8:odd_even,target100_limit99,1,1,0,False,0,11.55,11.55,5.9,15.75
+observed,observed_rule5,target100_bankroll,1,1,0,False,0,4.35,4.35,5.0,5.0
+observed,observed_rule5,target100_limit99,1,1,0,False,0,4.35,4.35,5.0,5.0
+observed,observed_rule5:sub14:odd_even,target100_bankroll,1,1,0,False,0,4.35,4.35,5.0,5.0
+observed,observed_rule5:sub14:odd_even,target100_limit99,1,1,0,False,0,4.35,4.35,5.0,5.0
+observed,observed_sub10:PC28方案组合共识优选（28%）:combo,target100_bankroll,3,2,0,False,0,-27.68,-19.12,32.79,32.79
+observed,observed_sub10:PC28方案组合共识优选（28%）:combo,target100_limit99,3,2,0,False,0,-27.68,-19.12,32.79,32.79
+observed,observed_sub13:PC28高赔组合期望值 V1（影子）:combo,target100_bankroll,2,1,0,False,1,-99.54,-99.54,99.54,119.43
+observed,observed_sub13:PC28高赔组合期望值 V1（影子）:combo,target100_limit99,2,1,0,False,0,-98.54,-98.54,98.54,118.43
+observed,observed_sub14:PC28方案7+8+9单双多数票（测试）:odd_even,target100_bankroll,1,1,0,False,0,4.35,4.35,5.0,5.0
+observed,observed_sub14:PC28方案7+8+9单双多数票（测试）:odd_even,target100_limit99,1,1,0,False,0,4.35,4.35,5.0,5.0
+observed,observed_sub2:找平衡:big_small,target100_bankroll,6,4,0,False,0,-15.85,-30.35,15.85,25.15
+observed,observed_sub2:找平衡:big_small,target100_limit99,6,4,0,False,0,-15.85,-30.35,15.85,25.15
+observed,observed_sub2:找平衡:combo,target100_bankroll,6,5,0,False,0,-5.2,18.25,24.13,43.45
+observed,observed_sub2:找平衡:combo,target100_limit99,6,5,0,False,0,-5.2,18.25,24.13,43.45
+observed,observed_sub2:找平衡:odd_even,target100_bankroll,6,5,0,False,0,-20.15,51.15,20.15,22.2
+observed,observed_sub2:找平衡:odd_even,target100_limit99,6,5,0,False,0,-20.15,51.15,20.15,22.2
+observed,observed_sub3:追长龙:big_small,target100_bankroll,6,6,0,False,0,-36.65,-14.25,36.65,46.35
+observed,observed_sub3:追长龙:big_small,target100_limit99,6,6,0,False,0,-36.65,-14.25,36.65,46.35
+observed,observed_sub3:追长龙:combo,target100_bankroll,6,6,0,False,0,-64.0,-49.14,69.78,82.0
+observed,observed_sub3:追长龙:combo,target100_limit99,6,6,0,False,0,-64.0,-49.14,69.78,82.0
+observed,observed_sub3:追长龙:odd_even,target100_bankroll,6,5,0,False,0,-39.85,-23.25,49.2,55.65
+observed,observed_sub3:追长龙:odd_even,target100_limit99,6,5,0,False,0,-39.85,-23.25,49.2,55.65
+observed,observed_sub4:小六壬预测:big_small,target100_bankroll,6,5,0,False,0,-57.05,3.2,57.05,57.05
+observed,observed_sub4:小六壬预测:big_small,target100_limit99,6,5,0,False,0,-57.05,3.2,57.05,57.05
+observed,observed_sub4:小六壬预测:combo,target100_bankroll,6,4,0,False,0,-66.84,18.71,85.72,85.72
+observed,observed_sub4:小六壬预测:combo,target100_limit99,6,4,0,False,0,-66.84,18.71,85.72,85.72
+observed,observed_sub4:小六壬预测:odd_even,target100_bankroll,6,4,0,False,0,-20.05,6.5,27.9,36.25
+observed,observed_sub4:小六壬预测:odd_even,target100_limit99,6,4,0,False,0,-20.05,6.5,27.9,36.25
+observed,observed_sub5:频次趋势 V1:big_small,target100_bankroll,6,6,0,False,0,-24.1,43.15,24.1,28.6
+observed,observed_sub5:频次趋势 V1:big_small,target100_limit99,6,6,0,False,0,-24.1,43.15,24.1,28.6
+observed,observed_sub5:频次趋势 V1:combo,target100_bankroll,6,5,0,False,0,-20.99,70.99,20.99,57.9
+observed,observed_sub5:频次趋势 V1:combo,target100_limit99,6,5,0,False,0,-20.99,70.99,20.99,57.9
+observed,observed_sub5:频次趋势 V1:odd_even,target100_bankroll,6,3,0,False,0,-5.1,120.7,15.6,19.8
+observed,observed_sub5:频次趋势 V1:odd_even,target100_limit99,6,3,0,False,0,-5.1,120.7,15.6,19.8
+observed,observed_sub6:组合马尔可夫 V1:big_small,target100_bankroll,6,4,0,False,0,-22.0,-32.35,22.0,33.25
+observed,observed_sub6:组合马尔可夫 V1:big_small,target100_limit99,6,4,0,False,0,-22.0,-32.35,22.0,33.25
+observed,observed_sub6:组合马尔可夫 V1:combo,target100_bankroll,6,4,0,False,0,-32.3,-50.37,57.98,76.88
+observed,observed_sub6:组合马尔可夫 V1:combo,target100_limit99,6,4,0,False,0,-32.3,-50.37,57.98,76.88
+observed,observed_sub6:组合马尔可夫 V1:odd_even,target100_bankroll,5,4,0,False,0,-56.1,26.55,60.65,62.5
+observed,observed_sub6:组合马尔可夫 V1:odd_even,target100_limit99,5,4,0,False,0,-56.1,26.55,60.65,62.5
+observed,observed_sub7:遗漏回补 V1:big_small,target100_bankroll,4,2,0,False,0,-8.9,-4.65,26.2,29.55
+observed,observed_sub7:遗漏回补 V1:big_small,target100_limit99,4,2,0,False,0,-8.9,-4.65,26.2,29.55
+observed,observed_sub7:遗漏回补 V1:combo,target100_bankroll,5,4,0,False,0,-8.44,14.15,37.36,43.34
+observed,observed_sub7:遗漏回补 V1:combo,target100_limit99,5,4,0,False,0,-8.44,14.15,37.36,43.34
+observed,observed_sub7:遗漏回补 V1:odd_even,target100_bankroll,4,4,0,False,0,-23.1,-38.8,32.2,53.9
+observed,observed_sub7:遗漏回补 V1:odd_even,target100_limit99,4,4,0,False,0,-23.1,-38.8,32.2,53.9
+observed,observed_sub8:PC28方案单双共识:odd_even,target100_bankroll,3,3,0,False,0,22.65,177.95,33.1,59.35
+observed,observed_sub8:PC28方案单双共识:odd_even,target100_limit99,3,3,0,False,0,22.65,177.95,33.1,59.35
+observed,observed_sub9:PC28方案组合高命共识（28%）:combo,target100_bankroll,3,1,0,False,0,-19.4,-19.4,24.18,41.66
+observed,observed_sub9:PC28方案组合高命共识（28%）:combo,target100_limit99,3,1,0,False,0,-19.4,-19.4,24.18,41.66
+predictions,consensus789:big_small:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.7,-145.75,99.7,182.8
+predictions,consensus789:big_small:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.7,-144.75,98.7,181.8
+predictions,consensus789:big_small:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.48,-202.2,99.48,133.56
+predictions,consensus789:big_small:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.42,-201.14,98.42,132.5
+predictions,consensus789:combo:pc28_high_regular,target100_bankroll,3,3,1,False,1,-99.2,-39.17,99.2,160.84
+predictions,consensus789:combo:pc28_high_regular,target100_limit99,3,3,1,False,0,-98.2,-38.17,98.2,159.84
+predictions,consensus789:combo:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-99.2,-297.6,99.2,142.6
+predictions,consensus789:combo:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.4,-294.8,98.4,141.6
+predictions,consensus789:odd_even:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.6,-43.05,99.6,99.6
+predictions,consensus789:odd_even:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.6,-42.05,98.6,98.6
+predictions,consensus789:odd_even:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.62,-131.06,99.62,101.56
+predictions,consensus789:odd_even:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.38,-129.82,98.38,100.32
+predictions,fixed:big_small:大:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.3,-32.8,99.3,146.2
+predictions,fixed:big_small:大:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.3,-31.8,98.3,145.2
+predictions,fixed:big_small:大:pc28_netdisk_regular,target100_bankroll,3,3,0,False,2,-99.82,-202.32,99.82,137.44
+predictions,fixed:big_small:大:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.82,-200.28,98.82,136.4
+predictions,fixed:big_small:小:pc28_high_regular,target100_bankroll,3,3,1,False,1,-99.05,-21.45,99.05,151.65
+predictions,fixed:big_small:小:pc28_high_regular,target100_limit99,3,3,1,False,0,-98.05,-20.45,98.05,150.65
+predictions,fixed:big_small:小:pc28_netdisk_regular,target100_bankroll,3,3,0,False,2,-99.62,-251.8,99.62,128.98
+predictions,fixed:big_small:小:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.62,-249.8,98.62,127.98
+predictions,fixed:combo:大单:pc28_high_regular,target100_bankroll,3,3,1,False,2,-99.67,-95.58,99.67,169.84
+predictions,fixed:combo:大单:pc28_high_regular,target100_limit99,3,3,1,False,0,-98.67,-93.58,98.67,168.84
+predictions,fixed:combo:大单:pc28_netdisk_regular,target100_bankroll,3,3,0,False,2,-99.4,-193.4,99.4,135.6
+predictions,fixed:combo:大单:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.6,-191.6,98.6,134.8
+predictions,fixed:combo:大双:pc28_high_regular,target100_bankroll,3,3,1,False,1,-99.14,-5.12,99.14,171.98
+predictions,fixed:combo:大双:pc28_high_regular,target100_limit99,3,3,1,False,0,-98.14,-4.12,98.14,170.98
+predictions,fixed:combo:大双:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-299.2,100.0,154.6
+predictions,fixed:combo:大双:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-295.8,99.0,153.6
+predictions,fixed:combo:小单:pc28_high_regular,target100_bankroll,3,3,0,False,3,-99.6,-298.2,99.6,154.1
+predictions,fixed:combo:小单:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.9,-295.78,98.9,153.1
+predictions,fixed:combo:小单:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-99.6,-298.4,99.6,115.6
+predictions,fixed:combo:小单:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.6,-295.4,98.6,114.6
+predictions,fixed:combo:小双:pc28_high_regular,target100_bankroll,3,3,2,False,1,-99.8,103.57,99.8,104.8
+predictions,fixed:combo:小双:pc28_high_regular,target100_limit99,3,3,2,False,0,-98.8,104.57,98.8,103.8
+predictions,fixed:combo:小双:pc28_netdisk_regular,target100_bankroll,3,3,1,False,1,-99.8,44.0,99.8,155.4
+predictions,fixed:combo:小双:pc28_netdisk_regular,target100_limit99,3,3,1,False,0,-98.8,45.0,98.8,154.4
+predictions,fixed:number:0:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,100.0
+predictions,fixed:number:0:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,99.0
+predictions,fixed:number:0:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,100.0
+predictions,fixed:number:0:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,99.0
+predictions,fixed:number:10:pc28_high_regular,target100_bankroll,3,3,1,False,2,-100.0,-97.0,100.0,189.0
+predictions,fixed:number:10:pc28_high_regular,target100_limit99,3,3,1,False,0,-99.0,-95.0,99.0,188.0
+predictions,fixed:number:10:pc28_netdisk_regular,target100_bankroll,3,3,1,False,2,-100.0,-97.0,100.0,189.0
+predictions,fixed:number:10:pc28_netdisk_regular,target100_limit99,3,3,1,False,0,-99.0,-95.0,99.0,188.0
+predictions,fixed:number:11:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,116.0
+predictions,fixed:number:11:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,115.0
+predictions,fixed:number:11:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,116.0
+predictions,fixed:number:11:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,115.0
+predictions,fixed:number:12:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,119.0
+predictions,fixed:number:12:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,118.0
+predictions,fixed:number:12:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,119.0
+predictions,fixed:number:12:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,118.0
+predictions,fixed:number:13:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,136.0
+predictions,fixed:number:13:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,135.0
+predictions,fixed:number:13:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,136.0
+predictions,fixed:number:13:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,135.0
+predictions,fixed:number:14:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,194.0
+predictions,fixed:number:14:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,193.0
+predictions,fixed:number:14:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,194.0
+predictions,fixed:number:14:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,193.0
+predictions,fixed:number:15:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,135.0
+predictions,fixed:number:15:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,134.0
+predictions,fixed:number:15:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,135.0
+predictions,fixed:number:15:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,134.0
+predictions,fixed:number:16:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,159.0
+predictions,fixed:number:16:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,158.0
+predictions,fixed:number:16:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,159.0
+predictions,fixed:number:16:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,158.0
+predictions,fixed:number:17:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,142.0
+predictions,fixed:number:17:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,141.0
+predictions,fixed:number:17:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,142.0
+predictions,fixed:number:17:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,141.0
+predictions,fixed:number:18:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,183.0
+predictions,fixed:number:18:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,182.0
+predictions,fixed:number:18:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,183.0
+predictions,fixed:number:18:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,182.0
+predictions,fixed:number:19:pc28_high_regular,target100_bankroll,3,3,1,False,2,-100.0,-87.0,100.0,157.0
+predictions,fixed:number:19:pc28_high_regular,target100_limit99,3,3,1,False,0,-99.0,-85.0,99.0,156.0
+predictions,fixed:number:19:pc28_netdisk_regular,target100_bankroll,3,3,1,False,2,-100.0,-96.0,100.0,151.0
+predictions,fixed:number:19:pc28_netdisk_regular,target100_limit99,3,3,1,False,0,-99.0,-94.0,99.0,150.0
+predictions,fixed:number:1:pc28_high_regular,target100_bankroll,3,3,1,False,2,-100.0,3.0,100.0,100.0
+predictions,fixed:number:1:pc28_high_regular,target100_limit99,3,3,1,False,0,-99.0,5.0,99.0,99.0
+predictions,fixed:number:1:pc28_netdisk_regular,target100_bankroll,3,3,1,False,2,-100.0,-17.0,100.0,100.0
+predictions,fixed:number:1:pc28_netdisk_regular,target100_limit99,3,3,1,False,0,-99.0,-15.0,99.0,99.0
+predictions,fixed:number:20:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,150.0
+predictions,fixed:number:20:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,149.0
+predictions,fixed:number:20:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,144.0
+predictions,fixed:number:20:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,143.0
+predictions,fixed:number:21:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,185.0
+predictions,fixed:number:21:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,184.0
+predictions,fixed:number:21:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,149.0
+predictions,fixed:number:21:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,148.0
+predictions,fixed:number:22:pc28_high_regular,target100_bankroll,3,3,1,False,2,-100.0,-75.0,100.0,100.0
+predictions,fixed:number:22:pc28_high_regular,target100_limit99,3,3,1,False,0,-99.0,-73.0,99.0,99.0
+predictions,fixed:number:22:pc28_netdisk_regular,target100_bankroll,3,3,1,False,2,-100.0,-97.0,100.0,100.0
+predictions,fixed:number:22:pc28_netdisk_regular,target100_limit99,3,3,1,False,0,-99.0,-95.0,99.0,99.0
+predictions,fixed:number:23:pc28_high_regular,target100_bankroll,3,3,3,True,0,102.0,342.0,56.0,56.0
+predictions,fixed:number:23:pc28_high_regular,target100_limit99,3,3,3,True,0,102.0,342.0,56.0,56.0
+predictions,fixed:number:23:pc28_netdisk_regular,target100_bankroll,3,3,2,False,1,-100.0,147.0,100.0,191.0
+predictions,fixed:number:23:pc28_netdisk_regular,target100_limit99,3,3,2,False,0,-99.0,148.0,99.0,190.0
+predictions,fixed:number:24:pc28_high_regular,target100_bankroll,3,3,2,False,1,-100.0,168.0,100.0,172.0
+predictions,fixed:number:24:pc28_high_regular,target100_limit99,3,3,2,False,0,-99.0,169.0,99.0,171.0
+predictions,fixed:number:24:pc28_netdisk_regular,target100_bankroll,3,3,2,False,1,-100.0,112.0,100.0,144.0
+predictions,fixed:number:24:pc28_netdisk_regular,target100_limit99,3,3,2,False,0,-99.0,113.0,99.0,143.0
+predictions,fixed:number:25:pc28_high_regular,target100_bankroll,3,3,1,False,2,-100.0,-60.0,100.0,100.0
+predictions,fixed:number:25:pc28_high_regular,target100_limit99,3,3,1,False,0,-99.0,-58.0,99.0,99.0
+predictions,fixed:number:25:pc28_netdisk_regular,target100_bankroll,3,3,1,False,2,-100.0,-66.0,100.0,100.0
+predictions,fixed:number:25:pc28_netdisk_regular,target100_limit99,3,3,1,False,0,-99.0,-64.0,99.0,99.0
+predictions,fixed:number:26:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,100.0
+predictions,fixed:number:26:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,99.0
+predictions,fixed:number:26:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,100.0
+predictions,fixed:number:26:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,99.0
+predictions,fixed:number:27:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,100.0
+predictions,fixed:number:27:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,99.0
+predictions,fixed:number:27:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,100.0
+predictions,fixed:number:27:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,99.0
+predictions,fixed:number:2:pc28_high_regular,target100_bankroll,3,3,2,False,1,-100.0,185.0,100.0,198.0
+predictions,fixed:number:2:pc28_high_regular,target100_limit99,3,3,2,False,0,-99.0,186.0,99.0,197.0
+predictions,fixed:number:2:pc28_netdisk_regular,target100_bankroll,3,3,2,False,1,-100.0,176.0,100.0,192.0
+predictions,fixed:number:2:pc28_netdisk_regular,target100_limit99,3,3,2,False,0,-99.0,177.0,99.0,191.0
+predictions,fixed:number:3:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,166.0
+predictions,fixed:number:3:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,165.0
+predictions,fixed:number:3:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,152.0
+predictions,fixed:number:3:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,151.0
+predictions,fixed:number:4:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,153.0
+predictions,fixed:number:4:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,152.0
+predictions,fixed:number:4:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,146.0
+predictions,fixed:number:4:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,145.0
+predictions,fixed:number:5:pc28_high_regular,target100_bankroll,3,3,1,False,2,-100.0,-88.0,100.0,190.0
+predictions,fixed:number:5:pc28_high_regular,target100_limit99,3,3,1,False,0,-99.0,-86.0,99.0,189.0
+predictions,fixed:number:5:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,160.0
+predictions,fixed:number:5:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,159.0
+predictions,fixed:number:6:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,173.0
+predictions,fixed:number:6:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,172.0
+predictions,fixed:number:6:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,158.0
+predictions,fixed:number:6:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,157.0
+predictions,fixed:number:7:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,156.0
+predictions,fixed:number:7:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,155.0
+predictions,fixed:number:7:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,118.0
+predictions,fixed:number:7:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,117.0
+predictions,fixed:number:8:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,144.0
+predictions,fixed:number:8:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,143.0
+predictions,fixed:number:8:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,135.0
+predictions,fixed:number:8:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,134.0
+predictions,fixed:number:9:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,131.0
+predictions,fixed:number:9:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,130.0
+predictions,fixed:number:9:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,131.0
+predictions,fixed:number:9:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,130.0
+predictions,fixed:odd_even:单:pc28_high_regular,target100_bankroll,3,3,1,False,1,-99.55,6.7,99.55,110.0
+predictions,fixed:odd_even:单:pc28_high_regular,target100_limit99,3,3,1,False,0,-98.25,8.0,98.25,108.7
+predictions,fixed:odd_even:单:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.9,-150.2,99.9,101.76
+predictions,fixed:odd_even:单:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.9,-149.2,98.9,100.76
+predictions,fixed:odd_even:双:pc28_high_regular,target100_bankroll,3,3,1,False,1,-99.6,29.6,99.6,133.95
+predictions,fixed:odd_even:双:pc28_high_regular,target100_limit99,3,3,1,False,0,-98.6,30.6,98.6,132.95
+predictions,fixed:odd_even:双:pc28_netdisk_regular,target100_bankroll,3,3,1,False,1,-99.42,15.14,99.42,125.42
+predictions,fixed:odd_even:双:pc28_netdisk_regular,target100_limit99,3,3,1,False,0,-98.4,16.16,98.4,124.4
+predictions,predictor14:高赔组合期望值 V1:big_small:direct:pc28_high_regular,target100_bankroll,2,1,0,False,1,-99.35,-99.35,99.35,99.9
+predictions,predictor14:高赔组合期望值 V1:big_small:direct:pc28_high_regular,target100_limit99,2,1,0,False,0,-98.35,-98.35,98.35,98.9
+predictions,predictor14:高赔组合期望值 V1:big_small:direct:pc28_netdisk_regular,target100_bankroll,2,1,0,False,0,-44.8,-44.8,45.78,69.52
+predictions,predictor14:高赔组合期望值 V1:big_small:direct:pc28_netdisk_regular,target100_limit99,2,1,0,False,0,-44.8,-44.8,45.78,69.52
+predictions,predictor14:高赔组合期望值 V1:big_small:high100:pc28_high_regular,target100_bankroll,2,1,0,False,0,-4.25,-4.25,8.15,15.15
+predictions,predictor14:高赔组合期望值 V1:big_small:high100:pc28_high_regular,target100_limit99,2,1,0,False,0,-4.25,-4.25,8.15,15.15
+predictions,predictor14:高赔组合期望值 V1:big_small:high100:pc28_netdisk_regular,target100_bankroll,2,1,0,False,0,-7.26,-7.26,9.06,10.96
+predictions,predictor14:高赔组合期望值 V1:big_small:high100:pc28_netdisk_regular,target100_limit99,2,1,0,False,0,-7.26,-7.26,9.06,10.96
+predictions,predictor14:高赔组合期望值 V1:big_small:inverse:pc28_high_regular,target100_bankroll,2,1,0,False,0,0.0,33.6,44.5,82.95
+predictions,predictor14:高赔组合期望值 V1:big_small:inverse:pc28_high_regular,target100_limit99,2,1,0,False,0,0.0,33.6,44.5,82.95
+predictions,predictor14:高赔组合期望值 V1:big_small:inverse:pc28_netdisk_regular,target100_bankroll,2,1,0,False,0,-46.78,-46.78,75.1,94.38
+predictions,predictor14:高赔组合期望值 V1:big_small:inverse:pc28_netdisk_regular,target100_limit99,2,1,0,False,0,-46.78,-46.78,75.1,94.38
+predictions,predictor14:高赔组合期望值 V1:big_small:low100:pc28_high_regular,target100_bankroll,2,1,0,False,0,0.0,1.85,0.0,0.0
+predictions,predictor14:高赔组合期望值 V1:big_small:low100:pc28_high_regular,target100_limit99,2,1,0,False,0,0.0,1.85,0.0,0.0
+predictions,predictor14:高赔组合期望值 V1:big_small:low100:pc28_netdisk_regular,target100_bankroll,2,1,0,False,0,0.0,1.96,0.0,0.0
+predictions,predictor14:高赔组合期望值 V1:big_small:low100:pc28_netdisk_regular,target100_limit99,2,1,0,False,0,0.0,1.96,0.0,0.0
+predictions,predictor14:高赔组合期望值 V1:combo:direct:pc28_high_regular,target100_bankroll,2,1,0,False,1,-99.54,-99.54,99.54,119.43
+predictions,predictor14:高赔组合期望值 V1:combo:direct:pc28_high_regular,target100_limit99,2,1,0,False,0,-98.54,-98.54,98.54,118.43
+predictions,predictor14:高赔组合期望值 V1:combo:direct:pc28_netdisk_regular,target100_bankroll,2,1,0,False,1,-99.8,-99.8,99.8,144.8
+predictions,predictor14:高赔组合期望值 V1:combo:direct:pc28_netdisk_regular,target100_limit99,2,1,0,False,0,-98.8,-98.8,98.8,143.8
+predictions,predictor14:高赔组合期望值 V1:combo:high100:pc28_high_regular,target100_bankroll,2,1,0,False,0,-33.36,-33.36,33.36,36.02
+predictions,predictor14:高赔组合期望值 V1:combo:high100:pc28_high_regular,target100_limit99,2,1,0,False,0,-33.36,-33.36,33.36,36.02
+predictions,predictor14:高赔组合期望值 V1:combo:high100:pc28_netdisk_regular,target100_bankroll,2,1,0,False,0,-15.2,-15.2,15.4,20.2
+predictions,predictor14:高赔组合期望值 V1:combo:high100:pc28_netdisk_regular,target100_limit99,2,1,0,False,0,-15.2,-15.2,15.4,20.2
+predictions,predictor14:高赔组合期望值 V1:combo:low100:pc28_high_regular,target100_bankroll,2,1,0,False,0,-4.4,-4.4,39.37,39.37
+predictions,predictor14:高赔组合期望值 V1:combo:low100:pc28_high_regular,target100_limit99,2,1,0,False,0,-4.4,-4.4,39.37,39.37
+predictions,predictor14:高赔组合期望值 V1:combo:low100:pc28_netdisk_regular,target100_bankroll,2,1,0,False,0,0.0,7.4,19.2,19.2
+predictions,predictor14:高赔组合期望值 V1:combo:low100:pc28_netdisk_regular,target100_limit99,2,1,0,False,0,0.0,7.4,19.2,19.2
+predictions,predictor14:高赔组合期望值 V1:number:direct:pc28_high_regular,target100_bankroll,2,1,0,False,1,-100.0,-100.0,100.0,122.0
+predictions,predictor14:高赔组合期望值 V1:number:direct:pc28_high_regular,target100_limit99,2,1,0,False,0,-99.0,-99.0,99.0,121.0
+predictions,predictor14:高赔组合期望值 V1:number:direct:pc28_netdisk_regular,target100_bankroll,2,1,0,False,1,-100.0,-100.0,100.0,122.0
+predictions,predictor14:高赔组合期望值 V1:number:direct:pc28_netdisk_regular,target100_limit99,2,1,0,False,0,-99.0,-99.0,99.0,121.0
+predictions,predictor14:高赔组合期望值 V1:odd_even:direct:pc28_high_regular,target100_bankroll,2,1,0,False,1,-99.15,-99.15,99.15,113.25
+predictions,predictor14:高赔组合期望值 V1:odd_even:direct:pc28_high_regular,target100_limit99,2,1,0,False,0,-98.15,-98.15,98.15,112.25
+predictions,predictor14:高赔组合期望值 V1:odd_even:direct:pc28_netdisk_regular,target100_bankroll,2,1,0,False,1,-99.76,-99.76,99.76,123.54
+predictions,predictor14:高赔组合期望值 V1:odd_even:direct:pc28_netdisk_regular,target100_limit99,2,1,0,False,0,-98.76,-98.76,98.76,122.54
+predictions,predictor14:高赔组合期望值 V1:odd_even:high100:pc28_high_regular,target100_bankroll,2,1,0,False,0,-2.6,-2.6,3.45,6.15
+predictions,predictor14:高赔组合期望值 V1:odd_even:high100:pc28_high_regular,target100_limit99,2,1,0,False,0,-2.6,-2.6,3.45,6.15
+predictions,predictor14:高赔组合期望值 V1:odd_even:high100:pc28_netdisk_regular,target100_bankroll,2,1,0,False,0,-3.14,-3.14,3.14,4.1
+predictions,predictor14:高赔组合期望值 V1:odd_even:high100:pc28_netdisk_regular,target100_limit99,2,1,0,False,0,-3.14,-3.14,3.14,4.1
+predictions,predictor14:高赔组合期望值 V1:odd_even:inverse:pc28_high_regular,target100_bankroll,2,1,1,False,0,0.0,100.05,34.0,44.35
+predictions,predictor14:高赔组合期望值 V1:odd_even:inverse:pc28_high_regular,target100_limit99,2,1,1,False,0,0.0,100.05,34.0,44.35
+predictions,predictor14:高赔组合期望值 V1:odd_even:inverse:pc28_netdisk_regular,target100_bankroll,2,1,0,False,0,0.0,79.94,28.16,48.14
+predictions,predictor14:高赔组合期望值 V1:odd_even:inverse:pc28_netdisk_regular,target100_limit99,2,1,0,False,0,0.0,79.94,28.16,48.14
+predictions,predictor14:高赔组合期望值 V1:odd_even:low100:pc28_high_regular,target100_bankroll,2,1,0,False,0,0.0,6.95,2.15,7.75
+predictions,predictor14:高赔组合期望值 V1:odd_even:low100:pc28_high_regular,target100_limit99,2,1,0,False,0,0.0,6.95,2.15,7.75
+predictions,predictor14:高赔组合期望值 V1:odd_even:low100:pc28_netdisk_regular,target100_bankroll,2,1,0,False,0,0.0,0.12,5.56,9.28
+predictions,predictor14:高赔组合期望值 V1:odd_even:low100:pc28_netdisk_regular,target100_limit99,2,1,0,False,0,0.0,0.12,5.56,9.28
+predictions,predictor1:小六壬预测:big_small:direct:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.7,-100.45,99.7,120.45
+predictions,predictor1:小六壬预测:big_small:direct:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.7,-99.45,98.7,120.45
+predictions,predictor1:小六壬预测:big_small:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-74.92,-135.3,94.96,143.04
+predictions,predictor1:小六壬预测:big_small:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-74.92,-135.3,94.96,143.04
+predictions,predictor1:小六壬预测:big_small:high100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-23.0,-43.35,24.1,29.6
+predictions,predictor1:小六壬预测:big_small:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-23.0,-43.35,24.1,29.6
+predictions,predictor1:小六壬预测:big_small:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-23.5,-43.6,23.5,36.14
+predictions,predictor1:小六壬预测:big_small:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-23.5,-43.6,23.5,36.14
+predictions,predictor1:小六壬预测:big_small:inverse:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.1,-142.05,99.1,123.95
+predictions,predictor1:小六壬预测:big_small:inverse:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.45,-141.4,98.45,123.3
+predictions,predictor1:小六壬预测:big_small:inverse:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.7,-183.84,99.7,120.2
+predictions,predictor1:小六壬预测:big_small:inverse:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.7,-182.84,98.7,119.2
+predictions,predictor1:小六壬预测:big_small:low100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-5.0,9.45,8.55,18.5
+predictions,predictor1:小六壬预测:big_small:low100:pc28_high_regular,target100_limit99,3,3,0,False,0,-5.0,9.45,8.55,18.5
+predictions,predictor1:小六壬预测:big_small:low100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-4.76,3.96,9.6,18.36
+predictions,predictor1:小六壬预测:big_small:low100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-4.76,3.96,9.6,18.36
+predictions,predictor1:小六壬预测:combo:direct:pc28_high_regular,target100_bankroll,3,3,1,False,2,-99.55,-98.4,99.55,167.69
+predictions,predictor1:小六壬预测:combo:direct:pc28_high_regular,target100_limit99,3,3,1,False,0,-98.55,-96.4,98.55,166.69
+predictions,predictor1:小六壬预测:combo:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-99.8,-298.8,99.8,120.8
+predictions,predictor1:小六壬预测:combo:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.8,-295.8,98.8,119.8
+predictions,predictor1:小六壬预测:combo:high100:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.36,-39.74,99.36,99.36
+predictions,predictor1:小六壬预测:combo:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.36,-38.74,98.36,98.36
+predictions,predictor1:小六壬预测:combo:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.4,-103.2,99.4,102.6
+predictions,predictor1:小六壬预测:combo:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.4,-102.2,98.4,101.6
+predictions,predictor1:小六壬预测:combo:low100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-46.56,-9.92,46.56,46.56
+predictions,predictor1:小六壬预测:combo:low100:pc28_high_regular,target100_limit99,3,3,0,False,0,-46.56,-9.92,46.56,46.56
+predictions,predictor1:小六壬预测:combo:low100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-41.4,-30.2,44.0,44.0
+predictions,predictor1:小六壬预测:combo:low100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-41.4,-30.2,44.0,44.0
+predictions,predictor1:小六壬预测:number:direct:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,126.0
+predictions,predictor1:小六壬预测:number:direct:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,125.0
+predictions,predictor1:小六壬预测:number:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,121.0
+predictions,predictor1:小六壬预测:number:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,120.0
+predictions,predictor1:小六壬预测:odd_even:direct:pc28_high_regular,target100_bankroll,3,3,1,False,2,-99.75,-98.35,99.75,126.45
+predictions,predictor1:小六壬预测:odd_even:direct:pc28_high_regular,target100_limit99,3,3,1,False,0,-98.75,-96.2,98.75,125.45
+predictions,predictor1:小六壬预测:odd_even:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.66,-96.68,99.66,114.34
+predictions,predictor1:小六壬预测:odd_even:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.48,-95.5,98.48,114.34
+predictions,predictor1:小六壬预测:odd_even:high100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-12.1,1.65,12.1,17.05
+predictions,predictor1:小六壬预测:odd_even:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-12.1,1.65,12.1,17.05
+predictions,predictor1:小六壬预测:odd_even:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-6.64,-6.7,9.26,12.8
+predictions,predictor1:小六壬预测:odd_even:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-6.64,-6.7,9.26,12.8
+predictions,predictor1:小六壬预测:odd_even:inverse:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.7,-81.35,99.7,158.05
+predictions,predictor1:小六壬预测:odd_even:inverse:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.7,-80.35,98.7,158.05
+predictions,predictor1:小六壬预测:odd_even:inverse:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.04,-140.62,99.04,148.68
+predictions,predictor1:小六壬预测:odd_even:inverse:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.9,-140.48,98.9,148.68
+predictions,predictor1:小六壬预测:odd_even:low100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-1.8,10.9,5.6,8.0
+predictions,predictor1:小六壬预测:odd_even:low100:pc28_high_regular,target100_limit99,3,3,0,False,0,-1.8,10.9,5.6,8.0
+predictions,predictor1:小六壬预测:odd_even:low100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,0.64,12.68,4.18,7.04
+predictions,predictor1:小六壬预测:odd_even:low100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,0.64,12.68,4.18,7.04
+predictions,predictor2:贝叶斯推理引擎:big_small:direct:pc28_high_regular,target100_bankroll,3,3,1,False,1,-99.8,5.05,99.8,136.35
+predictions,predictor2:贝叶斯推理引擎:big_small:direct:pc28_high_regular,target100_limit99,3,3,1,False,0,-98.35,6.5,98.35,134.9
+predictions,predictor2:贝叶斯推理引擎:big_small:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.64,-148.96,99.64,120.2
+predictions,predictor2:贝叶斯推理引擎:big_small:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.64,-147.96,98.64,120.2
+predictions,predictor2:贝叶斯推理引擎:big_small:high100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-20.15,-14.05,21.0,21.0
+predictions,predictor2:贝叶斯推理引擎:big_small:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-20.15,-14.05,21.0,21.0
+predictions,predictor2:贝叶斯推理引擎:big_small:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-13.92,1.64,13.92,16.82
+predictions,predictor2:贝叶斯推理引擎:big_small:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-13.92,1.64,13.92,16.82
+predictions,predictor2:贝叶斯推理引擎:big_small:inverse:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.95,-56.05,99.95,121.45
+predictions,predictor2:贝叶斯推理引擎:big_small:inverse:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.1,-54.2,98.1,119.6
+predictions,predictor2:贝叶斯推理引擎:big_small:inverse:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.98,-134.42,99.98,119.04
+predictions,predictor2:贝叶斯推理引擎:big_small:inverse:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.98,-133.42,98.98,118.04
+predictions,predictor2:贝叶斯推理引擎:big_small:low100:pc28_high_regular,target100_bankroll,3,2,0,False,0,-0.5,2.75,4.3,7.15
+predictions,predictor2:贝叶斯推理引擎:big_small:low100:pc28_high_regular,target100_limit99,3,2,0,False,0,-0.5,2.75,4.3,7.15
+predictions,predictor2:贝叶斯推理引擎:big_small:low100:pc28_netdisk_regular,target100_bankroll,3,2,0,False,0,0.0,5.38,4.22,6.02
+predictions,predictor2:贝叶斯推理引擎:big_small:low100:pc28_netdisk_regular,target100_limit99,3,2,0,False,0,0.0,5.38,4.22,6.02
+predictions,predictor2:贝叶斯推理引擎:combo:direct:pc28_high_regular,target100_bankroll,3,3,1,False,1,-99.13,37.41,99.13,115.25
+predictions,predictor2:贝叶斯推理引擎:combo:direct:pc28_high_regular,target100_limit99,3,3,1,False,0,-98.13,38.41,98.13,114.25
+predictions,predictor2:贝叶斯推理引擎:combo:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-99.6,-298.4,99.6,176.6
+predictions,predictor2:贝叶斯推理引擎:combo:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.6,-295.0,98.6,175.2
+predictions,predictor2:贝叶斯推理引擎:combo:high100:pc28_high_regular,target100_bankroll,3,3,1,False,0,-37.47,68.32,82.68,116.45
+predictions,predictor2:贝叶斯推理引擎:combo:high100:pc28_high_regular,target100_limit99,3,3,1,False,0,-37.47,68.32,82.68,116.45
+predictions,predictor2:贝叶斯推理引擎:combo:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-57.4,-5.8,81.2,95.2
+predictions,predictor2:贝叶斯推理引擎:combo:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-57.4,-5.8,81.2,95.2
+predictions,predictor2:贝叶斯推理引擎:combo:low100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-1.56,27.71,19.23,46.7
+predictions,predictor2:贝叶斯推理引擎:combo:low100:pc28_high_regular,target100_limit99,3,3,0,False,0,-1.56,27.71,19.23,46.7
+predictions,predictor2:贝叶斯推理引擎:combo:low100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-6.0,6.0,19.2,39.4
+predictions,predictor2:贝叶斯推理引擎:combo:low100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-6.0,6.0,19.2,39.4
+predictions,predictor2:贝叶斯推理引擎:number:direct:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,104.0
+predictions,predictor2:贝叶斯推理引擎:number:direct:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,103.0
+predictions,predictor2:贝叶斯推理引擎:number:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,104.0
+predictions,predictor2:贝叶斯推理引擎:number:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,103.0
+predictions,predictor2:贝叶斯推理引擎:odd_even:direct:pc28_high_regular,target100_bankroll,3,3,1,False,1,-99.5,-4.9,99.5,106.3
+predictions,predictor2:贝叶斯推理引擎:odd_even:direct:pc28_high_regular,target100_limit99,3,3,1,False,0,-98.5,-3.9,98.5,105.3
+predictions,predictor2:贝叶斯推理引擎:odd_even:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.78,-101.58,99.78,126.58
+predictions,predictor2:贝叶斯推理引擎:odd_even:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.76,-100.56,98.76,126.58
+predictions,predictor2:贝叶斯推理引擎:odd_even:high100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-2.5,11.1,7.55,13.6
+predictions,predictor2:贝叶斯推理引擎:odd_even:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-2.5,11.1,7.55,13.6
+predictions,predictor2:贝叶斯推理引擎:odd_even:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-8.26,14.18,9.2,11.1
+predictions,predictor2:贝叶斯推理引擎:odd_even:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-8.26,14.18,9.2,11.1
+predictions,predictor2:贝叶斯推理引擎:odd_even:inverse:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.9,-169.9,99.9,109.85
+predictions,predictor2:贝叶斯推理引擎:odd_even:inverse:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.9,-168.9,98.9,108.85
+predictions,predictor2:贝叶斯推理引擎:odd_even:inverse:pc28_netdisk_regular,target100_bankroll,3,3,0,False,2,-99.9,-231.06,99.9,105.62
+predictions,predictor2:贝叶斯推理引擎:odd_even:inverse:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.9,-229.04,98.9,104.6
+predictions,predictor2:贝叶斯推理引擎:odd_even:low100:pc28_high_regular,target100_bankroll,3,2,0,False,0,-31.85,-43.0,33.7,42.6
+predictions,predictor2:贝叶斯推理引擎:odd_even:low100:pc28_high_regular,target100_limit99,3,2,0,False,0,-31.85,-43.0,33.7,42.6
+predictions,predictor2:贝叶斯推理引擎:odd_even:low100:pc28_netdisk_regular,target100_bankroll,3,2,0,False,0,-14.82,-20.72,16.76,25.24
+predictions,predictor2:贝叶斯推理引擎:odd_even:low100:pc28_netdisk_regular,target100_limit99,3,2,0,False,0,-14.82,-20.72,16.76,25.24
+predictions,predictor4:追长龙:big_small:direct:pc28_high_regular,target100_bankroll,3,3,0,False,2,-99.95,-138.8,99.95,117.7
+predictions,predictor4:追长龙:big_small:direct:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.95,-136.8,98.95,116.7
+predictions,predictor4:追长龙:big_small:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,2,-99.22,-195.5,99.22,113.34
+predictions,predictor4:追长龙:big_small:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.2,-193.48,98.2,112.34
+predictions,predictor4:追长龙:big_small:high100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-10.15,-15.3,12.05,20.2
+predictions,predictor4:追长龙:big_small:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-10.15,-15.3,12.05,20.2
+predictions,predictor4:追长龙:big_small:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-10.94,-13.38,17.16,17.16
+predictions,predictor4:追长龙:big_small:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-10.94,-13.38,17.16,17.16
+predictions,predictor4:追长龙:big_small:inverse:pc28_high_regular,target100_bankroll,3,3,1,False,0,-21.05,77.85,59.45,133.45
+predictions,predictor4:追长龙:big_small:inverse:pc28_high_regular,target100_limit99,3,3,1,False,0,-21.05,77.85,59.45,133.45
+predictions,predictor4:追长龙:big_small:inverse:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-52.54,-20.6,80.44,138.66
+predictions,predictor4:追长龙:big_small:inverse:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-52.54,-20.6,80.44,138.66
+predictions,predictor4:追长龙:big_small:low100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-14.6,-6.6,14.6,17.85
+predictions,predictor4:追长龙:big_small:low100:pc28_high_regular,target100_limit99,3,3,0,False,0,-14.6,-6.6,14.6,17.85
+predictions,predictor4:追长龙:big_small:low100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-24.46,-13.28,24.46,25.44
+predictions,predictor4:追长龙:big_small:low100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-24.46,-13.28,24.46,25.44
+predictions,predictor4:追长龙:combo:direct:pc28_high_regular,target100_bankroll,3,3,0,False,2,-99.6,-185.25,99.6,128.79
+predictions,predictor4:追长龙:combo:direct:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.38,-183.03,98.38,127.79
+predictions,predictor4:追长龙:combo:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,2,-99.2,-276.8,99.2,124.8
+predictions,predictor4:追长龙:combo:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.6,-275.2,98.6,124.2
+predictions,predictor4:追长龙:combo:high100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-29.25,62.82,53.56,64.66
+predictions,predictor4:追长龙:combo:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-29.25,62.82,53.56,64.66
+predictions,predictor4:追长龙:combo:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-40.8,-70.2,46.8,54.0
+predictions,predictor4:追长龙:combo:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-40.8,-70.2,46.8,54.0
+predictions,predictor4:追长龙:combo:low100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-5.0,26.77,17.46,35.44
+predictions,predictor4:追长龙:combo:low100:pc28_high_regular,target100_limit99,3,3,0,False,0,-5.0,26.77,17.46,35.44
+predictions,predictor4:追长龙:combo:low100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-14.0,-7.2,27.8,31.4
+predictions,predictor4:追长龙:combo:low100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-14.0,-7.2,27.8,31.4
+predictions,predictor4:追长龙:number:direct:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,132.0
+predictions,predictor4:追长龙:number:direct:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,131.0
+predictions,predictor4:追长龙:number:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,132.0
+predictions,predictor4:追长龙:number:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,131.0
+predictions,predictor4:追长龙:odd_even:direct:pc28_high_regular,target100_bankroll,3,3,0,False,0,-63.6,-27.4,71.8,123.95
+predictions,predictor4:追长龙:odd_even:direct:pc28_high_regular,target100_limit99,3,3,0,False,0,-63.6,-27.4,71.8,123.95
+predictions,predictor4:追长龙:odd_even:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-89.38,-171.08,97.74,144.18
+predictions,predictor4:追长龙:odd_even:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-89.38,-171.08,97.74,144.18
+predictions,predictor4:追长龙:odd_even:high100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-2.1,31.05,10.6,10.75
+predictions,predictor4:追长龙:odd_even:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-2.1,31.05,10.6,10.75
+predictions,predictor4:追长龙:odd_even:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-7.42,15.3,8.28,12.66
+predictions,predictor4:追长龙:odd_even:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-7.42,15.3,8.28,12.66
+predictions,predictor4:追长龙:odd_even:inverse:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.15,-52.8,99.15,138.1
+predictions,predictor4:追长龙:odd_even:inverse:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.15,-51.8,98.15,138.1
+predictions,predictor4:追长龙:odd_even:inverse:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.48,-128.54,99.48,112.4
+predictions,predictor4:追长龙:odd_even:inverse:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.22,-127.28,98.22,112.4
+predictions,predictor4:追长龙:odd_even:low100:pc28_high_regular,target100_bankroll,3,2,0,False,0,-14.0,-12.25,17.55,24.05
+predictions,predictor4:追长龙:odd_even:low100:pc28_high_regular,target100_limit99,3,2,0,False,0,-14.0,-12.25,17.55,24.05
+predictions,predictor4:追长龙:odd_even:low100:pc28_netdisk_regular,target100_bankroll,3,2,0,False,0,-5.92,-4.48,11.74,18.36
+predictions,predictor4:追长龙:odd_even:low100:pc28_netdisk_regular,target100_limit99,3,2,0,False,0,-5.92,-4.48,11.74,18.36
+predictions,predictor5:找平衡:big_small:direct:pc28_high_regular,target100_bankroll,3,3,1,False,0,-44.15,115.15,53.4,87.4
+predictions,predictor5:找平衡:big_small:direct:pc28_high_regular,target100_limit99,3,3,1,False,0,-44.15,115.15,53.4,87.4
+predictions,predictor5:找平衡:big_small:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-72.64,-84.38,74.84,95.32
+predictions,predictor5:找平衡:big_small:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-72.64,-84.38,74.84,95.32
+predictions,predictor5:找平衡:big_small:high100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-8.5,7.8,17.3,18.85
+predictions,predictor5:找平衡:big_small:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-8.5,7.8,17.3,18.85
+predictions,predictor5:找平衡:big_small:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-11.08,-8.24,15.86,19.7
+predictions,predictor5:找平衡:big_small:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-11.08,-8.24,15.86,19.7
+predictions,predictor5:找平衡:big_small:inverse:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.9,-46.85,99.9,111.5
+predictions,predictor5:找平衡:big_small:inverse:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.3,-45.25,98.3,109.9
+predictions,predictor5:找平衡:big_small:inverse:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.02,-86.74,99.02,106.74
+predictions,predictor5:找平衡:big_small:inverse:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.98,-86.7,98.98,106.7
+predictions,predictor5:找平衡:big_small:low100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-3.9,-2.2,7.6,8.45
+predictions,predictor5:找平衡:big_small:low100:pc28_high_regular,target100_limit99,3,3,0,False,0,-3.9,-2.2,7.6,8.45
+predictions,predictor5:找平衡:big_small:low100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-3.24,-1.32,7.16,8.12
+predictions,predictor5:找平衡:big_small:low100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-3.24,-1.32,7.16,8.12
+predictions,predictor5:找平衡:combo:direct:pc28_high_regular,target100_bankroll,3,3,1,False,2,-99.42,-98.44,99.42,149.08
+predictions,predictor5:找平衡:combo:direct:pc28_high_regular,target100_limit99,3,3,1,False,0,-98.42,-96.44,98.42,148.08
+predictions,predictor5:找平衡:combo:direct:pc28_netdisk_regular,target100_bankroll,3,3,1,False,1,-99.8,-87.2,99.8,122.6
+predictions,predictor5:找平衡:combo:direct:pc28_netdisk_regular,target100_limit99,3,3,1,False,0,-98.8,-86.2,98.8,122.6
+predictions,predictor5:找平衡:combo:high100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-35.91,-48.39,58.39,111.79
+predictions,predictor5:找平衡:combo:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-35.91,-48.39,58.39,111.79
+predictions,predictor5:找平衡:combo:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-33.8,-84.2,61.2,90.4
+predictions,predictor5:找平衡:combo:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-33.8,-84.2,61.2,90.4
+predictions,predictor5:找平衡:combo:low100:pc28_high_regular,target100_bankroll,3,3,0,False,0,1.63,7.72,12.89,32.13
+predictions,predictor5:找平衡:combo:low100:pc28_high_regular,target100_limit99,3,3,0,False,0,1.63,7.72,12.89,32.13
+predictions,predictor5:找平衡:combo:low100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-15.6,-3.2,22.2,34.6
+predictions,predictor5:找平衡:combo:low100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-15.6,-3.2,22.2,34.6
+predictions,predictor5:找平衡:number:direct:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,103.0
+predictions,predictor5:找平衡:number:direct:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,102.0
+predictions,predictor5:找平衡:number:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,103.0
+predictions,predictor5:找平衡:number:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,102.0
+predictions,predictor5:找平衡:odd_even:direct:pc28_high_regular,target100_bankroll,3,3,1,False,0,-53.5,29.55,68.2,110.45
+predictions,predictor5:找平衡:odd_even:direct:pc28_high_regular,target100_limit99,3,3,1,False,0,-53.5,29.55,68.2,110.45
+predictions,predictor5:找平衡:odd_even:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-50.86,-56.66,68.34,112.06
+predictions,predictor5:找平衡:odd_even:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-50.86,-56.66,68.34,112.06
+predictions,predictor5:找平衡:odd_even:high100:pc28_high_regular,target100_bankroll,3,3,0,False,0,2.25,16.95,8.75,17.4
+predictions,predictor5:找平衡:odd_even:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,2.25,16.95,8.75,17.4
+predictions,predictor5:找平衡:odd_even:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-7.42,-6.56,12.36,16.62
+predictions,predictor5:找平衡:odd_even:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-7.42,-6.56,12.36,16.62
+predictions,predictor5:找平衡:odd_even:inverse:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.9,-31.0,99.9,123.4
+predictions,predictor5:找平衡:odd_even:inverse:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.9,-30.0,98.9,122.4
+predictions,predictor5:找平衡:odd_even:inverse:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.26,-132.52,99.26,117.32
+predictions,predictor5:找平衡:odd_even:inverse:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.26,-131.52,98.26,116.32
+predictions,predictor5:找平衡:odd_even:low100:pc28_high_regular,target100_bankroll,3,2,0,False,0,0.0,12.05,5.45,7.85
+predictions,predictor5:找平衡:odd_even:low100:pc28_high_regular,target100_limit99,3,2,0,False,0,0.0,12.05,5.45,7.85
+predictions,predictor5:找平衡:odd_even:low100:pc28_netdisk_regular,target100_bankroll,3,2,0,False,0,0.0,7.1,7.84,11.74
+predictions,predictor5:找平衡:odd_even:low100:pc28_netdisk_regular,target100_limit99,3,2,0,False,0,0.0,7.1,7.84,11.74
+predictions,predictor7:频次趋势 V1:big_small:direct:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.15,-110.85,99.15,176.45
+predictions,predictor7:频次趋势 V1:big_small:direct:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.15,-109.85,98.15,175.45
+predictions,predictor7:频次趋势 V1:big_small:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-100.0,-175.0,100.0,125.18
+predictions,predictor7:频次趋势 V1:big_small:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.98,-173.98,98.98,124.16
+predictions,predictor7:频次趋势 V1:big_small:high100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-10.95,-7.85,10.95,13.6
+predictions,predictor7:频次趋势 V1:big_small:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-10.95,-7.85,10.95,13.6
+predictions,predictor7:频次趋势 V1:big_small:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-15.16,-11.9,15.16,16.14
+predictions,predictor7:频次趋势 V1:big_small:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-15.16,-11.9,15.16,16.14
+predictions,predictor7:频次趋势 V1:big_small:inverse:pc28_high_regular,target100_bankroll,3,3,1,False,0,-85.5,67.6,99.0,151.9
+predictions,predictor7:频次趋势 V1:big_small:inverse:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-133.1,99.0,151.9
+predictions,predictor7:频次趋势 V1:big_small:inverse:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.88,-72.26,99.88,131.08
+predictions,predictor7:频次趋势 V1:big_small:inverse:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.88,-71.26,98.88,130.08
+predictions,predictor7:频次趋势 V1:big_small:low100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-4.05,-6.45,15.15,15.15
+predictions,predictor7:频次趋势 V1:big_small:low100:pc28_high_regular,target100_limit99,3,3,0,False,0,-4.05,-6.45,15.15,15.15
+predictions,predictor7:频次趋势 V1:big_small:low100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-4.26,0.24,15.78,15.78
+predictions,predictor7:频次趋势 V1:big_small:low100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-4.26,0.24,15.78,15.78
+predictions,predictor7:频次趋势 V1:combo:direct:pc28_high_regular,target100_bankroll,3,3,0,False,3,-99.9,-298.92,99.9,145.35
+predictions,predictor7:频次趋势 V1:combo:direct:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.83,-295.7,98.83,144.35
+predictions,predictor7:频次趋势 V1:combo:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-99.2,-297.6,99.2,129.8
+predictions,predictor7:频次趋势 V1:combo:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.2,-294.6,98.2,128.8
+predictions,predictor7:频次趋势 V1:combo:high100:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.03,-82.68,99.03,108.98
+predictions,predictor7:频次趋势 V1:combo:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.03,-81.68,98.03,107.98
+predictions,predictor7:频次趋势 V1:combo:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.8,-138.4,99.8,99.8
+predictions,predictor7:频次趋势 V1:combo:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.8,-137.4,98.8,98.8
+predictions,predictor7:频次趋势 V1:combo:low100:pc28_high_regular,target100_bankroll,3,3,0,False,0,1.43,20.76,11.78,15.0
+predictions,predictor7:频次趋势 V1:combo:low100:pc28_high_regular,target100_limit99,3,3,0,False,0,1.43,20.76,11.78,15.0
+predictions,predictor7:频次趋势 V1:combo:low100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-1.6,16.4,14.0,14.0
+predictions,predictor7:频次趋势 V1:combo:low100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-1.6,16.4,14.0,14.0
+predictions,predictor7:频次趋势 V1:number:direct:pc28_high_regular,target100_bankroll,3,3,1,False,2,-100.0,-89.0,100.0,184.0
+predictions,predictor7:频次趋势 V1:number:direct:pc28_high_regular,target100_limit99,3,3,1,False,0,-99.0,-87.0,99.0,183.0
+predictions,predictor7:频次趋势 V1:number:direct:pc28_netdisk_regular,target100_bankroll,3,3,1,False,2,-100.0,-89.0,100.0,177.0
+predictions,predictor7:频次趋势 V1:number:direct:pc28_netdisk_regular,target100_limit99,3,3,1,False,0,-99.0,-87.0,99.0,176.0
+predictions,predictor7:频次趋势 V1:odd_even:direct:pc28_high_regular,target100_bankroll,3,3,0,False,0,-32.6,87.35,96.0,110.85
+predictions,predictor7:频次趋势 V1:odd_even:direct:pc28_high_regular,target100_limit99,3,3,0,False,0,-32.6,87.35,96.0,110.85
+predictions,predictor7:频次趋势 V1:odd_even:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-50.46,-104.02,88.66,93.7
+predictions,predictor7:频次趋势 V1:odd_even:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-50.46,-104.02,88.66,93.7
+predictions,predictor7:频次趋势 V1:odd_even:high100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-20.95,-27.55,20.95,21.35
+predictions,predictor7:频次趋势 V1:odd_even:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-20.95,-27.55,20.95,21.35
+predictions,predictor7:频次趋势 V1:odd_even:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-9.24,-23.26,10.22,20.12
+predictions,predictor7:频次趋势 V1:odd_even:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-9.24,-23.26,10.22,20.12
+predictions,predictor7:频次趋势 V1:odd_even:inverse:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.85,-170.5,99.85,164.3
+predictions,predictor7:频次趋势 V1:odd_even:inverse:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.85,-169.5,98.85,163.3
+predictions,predictor7:频次趋势 V1:odd_even:inverse:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.32,-192.14,99.32,141.78
+predictions,predictor7:频次趋势 V1:odd_even:inverse:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.16,-190.98,98.16,140.62
+predictions,predictor7:频次趋势 V1:odd_even:low100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-1.9,13.1,6.0,6.0
+predictions,predictor7:频次趋势 V1:odd_even:low100:pc28_high_regular,target100_limit99,3,3,0,False,0,-1.9,13.1,6.0,6.0
+predictions,predictor7:频次趋势 V1:odd_even:low100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-1.24,6.16,5.18,5.18
+predictions,predictor7:频次趋势 V1:odd_even:low100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-1.24,6.16,5.18,5.18
+predictions,predictor8:组合马尔可夫 V1:big_small:direct:pc28_high_regular,target100_bankroll,3,3,0,False,2,-99.95,-263.3,99.95,129.15
+predictions,predictor8:组合马尔可夫 V1:big_small:direct:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.6,-261.0,98.6,128.45
+predictions,predictor8:组合马尔可夫 V1:big_small:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,2,-100.0,-293.16,100.0,109.48
+predictions,predictor8:组合马尔可夫 V1:big_small:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.98,-291.02,98.98,108.46
+predictions,predictor8:组合马尔可夫 V1:big_small:high100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-17.35,11.1,17.35,19.05
+predictions,predictor8:组合马尔可夫 V1:big_small:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-17.35,11.1,17.35,19.05
+predictions,predictor8:组合马尔可夫 V1:big_small:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-8.52,16.64,10.24,12.16
+predictions,predictor8:组合马尔可夫 V1:big_small:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-8.52,16.64,10.24,12.16
+predictions,predictor8:组合马尔可夫 V1:big_small:inverse:pc28_high_regular,target100_bankroll,3,3,1,False,0,15.75,203.3,44.75,73.9
+predictions,predictor8:组合马尔可夫 V1:big_small:inverse:pc28_high_regular,target100_limit99,3,3,1,False,0,15.75,203.3,44.75,73.9
+predictions,predictor8:组合马尔可夫 V1:big_small:inverse:pc28_netdisk_regular,target100_bankroll,3,3,1,False,0,4.98,144.32,50.0,66.88
+predictions,predictor8:组合马尔可夫 V1:big_small:inverse:pc28_netdisk_regular,target100_limit99,3,3,1,False,0,4.98,144.32,50.0,66.88
+predictions,predictor8:组合马尔可夫 V1:big_small:low100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-20.15,-33.45,22.6,28.1
+predictions,predictor8:组合马尔可夫 V1:big_small:low100:pc28_high_regular,target100_limit99,3,3,0,False,0,-20.15,-33.45,22.6,28.1
+predictions,predictor8:组合马尔可夫 V1:big_small:low100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-26.62,-50.54,29.56,31.48
+predictions,predictor8:组合马尔可夫 V1:big_small:low100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-26.62,-50.54,29.56,31.48
+predictions,predictor8:组合马尔可夫 V1:combo:direct:pc28_high_regular,target100_bankroll,3,3,1,False,2,-99.49,-95.67,99.49,144.94
+predictions,predictor8:组合马尔可夫 V1:combo:direct:pc28_high_regular,target100_limit99,3,3,1,False,0,-98.49,-93.67,98.49,143.94
+predictions,predictor8:组合马尔可夫 V1:combo:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-298.8,100.0,118.6
+predictions,predictor8:组合马尔可夫 V1:combo:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-295.8,99.0,117.6
+predictions,predictor8:组合马尔可夫 V1:combo:high100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-74.53,-80.05,91.32,117.22
+predictions,predictor8:组合马尔可夫 V1:combo:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-74.53,-80.05,91.32,117.22
+predictions,predictor8:组合马尔可夫 V1:combo:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.4,-143.8,99.4,106.2
+predictions,predictor8:组合马尔可夫 V1:combo:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.4,-142.8,98.4,105.2
+predictions,predictor8:组合马尔可夫 V1:combo:low100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-16.14,1.64,27.89,34.0
+predictions,predictor8:组合马尔可夫 V1:combo:low100:pc28_high_regular,target100_limit99,3,3,0,False,0,-16.14,1.64,27.89,34.0
+predictions,predictor8:组合马尔可夫 V1:combo:low100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-10.4,-3.8,20.2,27.4
+predictions,predictor8:组合马尔可夫 V1:combo:low100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-10.4,-3.8,20.2,27.4
+predictions,predictor8:组合马尔可夫 V1:number:direct:pc28_high_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,123.0
+predictions,predictor8:组合马尔可夫 V1:number:direct:pc28_high_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,122.0
+predictions,predictor8:组合马尔可夫 V1:number:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,3,-100.0,-300.0,100.0,119.0
+predictions,predictor8:组合马尔可夫 V1:number:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-297.0,99.0,118.0
+predictions,predictor8:组合马尔可夫 V1:odd_even:direct:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.75,-51.65,99.75,111.5
+predictions,predictor8:组合马尔可夫 V1:odd_even:direct:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.75,-50.65,98.75,110.5
+predictions,predictor8:组合马尔可夫 V1:odd_even:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.22,-158.38,99.22,104.9
+predictions,predictor8:组合马尔可夫 V1:odd_even:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.22,-157.38,98.22,104.9
+predictions,predictor8:组合马尔可夫 V1:odd_even:high100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-13.65,-12.35,15.35,23.4
+predictions,predictor8:组合马尔可夫 V1:odd_even:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-13.65,-12.35,15.35,23.4
+predictions,predictor8:组合马尔可夫 V1:odd_even:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-14.16,-17.52,21.46,24.08
+predictions,predictor8:组合马尔可夫 V1:odd_even:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-14.16,-17.52,21.46,24.08
+predictions,predictor8:组合马尔可夫 V1:odd_even:inverse:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.95,-153.75,99.95,158.25
+predictions,predictor8:组合马尔可夫 V1:odd_even:inverse:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.95,-152.75,98.95,158.25
+predictions,predictor8:组合马尔可夫 V1:odd_even:inverse:pc28_netdisk_regular,target100_bankroll,3,3,0,False,2,-99.5,-199.38,99.5,159.68
+predictions,predictor8:组合马尔可夫 V1:odd_even:inverse:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.3,-197.18,98.3,158.68
+predictions,predictor8:组合马尔可夫 V1:odd_even:low100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-5.15,1.3,7.85,15.35
+predictions,predictor8:组合马尔可夫 V1:odd_even:low100:pc28_high_regular,target100_limit99,3,3,0,False,0,-5.15,1.3,7.85,15.35
+predictions,predictor8:组合马尔可夫 V1:odd_even:low100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-0.88,7.44,4.7,12.12
+predictions,predictor8:组合马尔可夫 V1:odd_even:low100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-0.88,7.44,4.7,12.12
+predictions,predictor9:遗漏回补 V1:big_small:direct:pc28_high_regular,target100_bankroll,3,3,1,False,0,-12.05,123.2,41.65,113.3
+predictions,predictor9:遗漏回补 V1:big_small:direct:pc28_high_regular,target100_limit99,3,3,1,False,0,-12.05,123.2,41.65,113.3
+predictions,predictor9:遗漏回补 V1:big_small:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-20.76,-30.76,40.44,91.06
+predictions,predictor9:遗漏回补 V1:big_small:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-20.76,-30.76,40.44,91.06
+predictions,predictor9:遗漏回补 V1:big_small:high100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-10.85,-3.2,10.85,17.75
+predictions,predictor9:遗漏回补 V1:big_small:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-10.85,-3.2,10.85,17.75
+predictions,predictor9:遗漏回补 V1:big_small:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-12.18,-9.7,12.18,14.08
+predictions,predictor9:遗漏回补 V1:big_small:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-12.18,-9.7,12.18,14.08
+predictions,predictor9:遗漏回补 V1:big_small:inverse:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.4,-166.9,99.4,120.35
+predictions,predictor9:遗漏回补 V1:big_small:inverse:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.1,-165.6,98.1,119.05
+predictions,predictor9:遗漏回补 V1:big_small:inverse:pc28_netdisk_regular,target100_bankroll,3,3,0,False,2,-99.18,-250.6,99.18,119.14
+predictions,predictor9:遗漏回补 V1:big_small:inverse:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.18,-248.58,98.18,118.12
+predictions,predictor9:遗漏回补 V1:big_small:low100:pc28_high_regular,target100_bankroll,3,2,0,False,0,-2.1,4.3,6.6,8.3
+predictions,predictor9:遗漏回补 V1:big_small:low100:pc28_high_regular,target100_limit99,3,2,0,False,0,-2.1,4.3,6.6,8.3
+predictions,predictor9:遗漏回补 V1:big_small:low100:pc28_netdisk_regular,target100_bankroll,3,2,0,False,0,-1.54,2.36,6.32,7.3
+predictions,predictor9:遗漏回补 V1:big_small:low100:pc28_netdisk_regular,target100_limit99,3,2,0,False,0,-1.54,2.36,6.32,7.3
+predictions,predictor9:遗漏回补 V1:combo:direct:pc28_high_regular,target100_bankroll,3,3,3,True,0,101.01,305.73,56.27,120.5
+predictions,predictor9:遗漏回补 V1:combo:direct:pc28_high_regular,target100_limit99,3,3,3,True,0,101.01,305.73,56.27,120.5
+predictions,predictor9:遗漏回补 V1:combo:direct:pc28_netdisk_regular,target100_bankroll,3,3,1,False,1,-100.0,9.6,100.0,162.4
+predictions,predictor9:遗漏回补 V1:combo:direct:pc28_netdisk_regular,target100_limit99,3,3,1,False,0,-99.0,10.6,99.0,161.4
+predictions,predictor9:遗漏回补 V1:combo:high100:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.47,-47.2,99.47,106.91
+predictions,predictor9:遗漏回补 V1:combo:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.47,-46.2,98.47,105.91
+predictions,predictor9:遗漏回补 V1:combo:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,1,-99.4,-116.6,99.4,114.2
+predictions,predictor9:遗漏回补 V1:combo:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.4,-115.6,98.4,113.2
+predictions,predictor9:遗漏回补 V1:combo:low100:pc28_high_regular,target100_bankroll,3,3,0,False,0,11.0,50.06,14.34,19.89
+predictions,predictor9:遗漏回补 V1:combo:low100:pc28_high_regular,target100_limit99,3,3,0,False,0,11.0,50.06,14.34,19.89
+predictions,predictor9:遗漏回补 V1:combo:low100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-9.4,5.8,23.6,24.8
+predictions,predictor9:遗漏回补 V1:combo:low100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-9.4,5.8,23.6,24.8
+predictions,predictor9:遗漏回补 V1:number:direct:pc28_high_regular,target100_bankroll,3,3,1,False,2,-100.0,-51.0,100.0,181.0
+predictions,predictor9:遗漏回补 V1:number:direct:pc28_high_regular,target100_limit99,3,3,1,False,0,-99.0,-49.0,99.0,180.0
+predictions,predictor9:遗漏回补 V1:number:direct:pc28_netdisk_regular,target100_bankroll,3,3,1,False,2,-100.0,-56.0,100.0,157.0
+predictions,predictor9:遗漏回补 V1:number:direct:pc28_netdisk_regular,target100_limit99,3,3,1,False,0,-99.0,-54.0,99.0,156.0
+predictions,predictor9:遗漏回补 V1:odd_even:direct:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.45,-101.7,99.45,135.3
+predictions,predictor9:遗漏回补 V1:odd_even:direct:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.45,-100.7,98.45,134.3
+predictions,predictor9:遗漏回补 V1:odd_even:direct:pc28_netdisk_regular,target100_bankroll,3,3,0,False,2,-99.66,-156.5,99.66,134.12
+predictions,predictor9:遗漏回补 V1:odd_even:direct:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-98.6,-154.38,98.6,133.1
+predictions,predictor9:遗漏回补 V1:odd_even:high100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-14.4,-3.3,17.65,37.5
+predictions,predictor9:遗漏回补 V1:odd_even:high100:pc28_high_regular,target100_limit99,3,3,0,False,0,-14.4,-3.3,17.65,37.5
+predictions,predictor9:遗漏回补 V1:odd_even:high100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-7.38,-2.4,8.22,20.94
+predictions,predictor9:遗漏回补 V1:odd_even:high100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-7.38,-2.4,8.22,20.94
+predictions,predictor9:遗漏回补 V1:odd_even:inverse:pc28_high_regular,target100_bankroll,3,3,0,False,1,-99.3,-142.85,99.3,142.05
+predictions,predictor9:遗漏回补 V1:odd_even:inverse:pc28_high_regular,target100_limit99,3,3,0,False,0,-98.15,-141.7,98.15,140.9
+predictions,predictor9:遗漏回补 V1:odd_even:inverse:pc28_netdisk_regular,target100_bankroll,3,3,0,False,2,-100.0,-236.52,100.0,130.92
+predictions,predictor9:遗漏回补 V1:odd_even:inverse:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-99.0,-234.48,99.0,129.88
+predictions,predictor9:遗漏回补 V1:odd_even:low100:pc28_high_regular,target100_bankroll,3,3,0,False,0,-0.6,8.55,5.15,5.15
+predictions,predictor9:遗漏回补 V1:odd_even:low100:pc28_high_regular,target100_limit99,3,3,0,False,0,-0.6,8.55,5.15,5.15
+predictions,predictor9:遗漏回补 V1:odd_even:low100:pc28_netdisk_regular,target100_bankroll,3,3,0,False,0,-1.14,8.14,4.08,4.08
+predictions,predictor9:遗漏回补 V1:odd_even:low100:pc28_netdisk_regular,target100_limit99,3,3,0,False,0,-1.14,8.14,4.08,4.08

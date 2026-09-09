@@ -22,8 +22,7 @@ from pc28touzhu.domain.subscription_strategy import (
 
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 DEFAULT_SQLITE_BUSY_TIMEOUT_SECONDS = 30.0
-# 手动结束轮次的统一标记：与自动风控的 profit_target_hit / loss_limit_hit 区分开，
-# 让定时触发的跨日闸知道这轮是被主动让位的，不该占用当天的开轮额度。
+# 手动结束轮次的统一标记，与自动风控的 profit_target_hit / loss_limit_hit 区分开。
 MANUAL_STOP_REASON = "manual_stop"
 # route 轮次收口带动规则轮收口的标记，与规则级日风控停轮区分开。
 ROUTE_RUN_CLOSED_REASON = "route_run_closed"
@@ -4203,27 +4202,6 @@ class DatabaseRepository:
         )
         return self._serialize_auto_trigger_rule_run_row(row) if row else None
 
-    def block_auto_trigger_daily_start(
-        self, *, rule_id: int, user_id: int, subscription_id: int, stat_date: str
-    ) -> Dict[str, Any]:
-        """Persist a consumed local day when a prior-day round spans or ends today."""
-        now = _utc_now_iso()
-        normalized_date = str(stat_date or "").strip()
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO auto_trigger_rule_runs(
-                    rule_id, user_id, subscription_id, stat_date, started_issue_no,
-                    status, started_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, '', 'blocked', ?, ?, ?)
-                ON CONFLICT(rule_id, subscription_id, stat_date) DO NOTHING
-                """,
-                (int(rule_id), int(user_id), int(subscription_id), normalized_date, now, now, now),
-            )
-        return self.get_auto_trigger_rule_run_for_subscription_date(
-            rule_id=int(rule_id), subscription_id=int(subscription_id), stat_date=normalized_date,
-        ) or {}
-
     def get_active_auto_trigger_route_subscription_runtime_run(
         self,
         *,
@@ -4312,7 +4290,7 @@ class DatabaseRepository:
         stat_date: str,
         started_issue_no: str = "",
     ) -> Dict[str, Any]:
-        """Atomically reserve the one-start-per-subscription local day slot."""
+        """原子领取当日开轮额度；旧版跨日占位仅在没有关联轮次或投注事件时复用。"""
         now = _utc_now_iso()
         normalized_date = str(stat_date or "").strip()
         with self._connect() as conn:
@@ -4322,7 +4300,28 @@ class DatabaseRepository:
                     rule_id, user_id, subscription_id, stat_date, started_issue_no,
                     status, started_at, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
-                ON CONFLICT(rule_id, subscription_id, stat_date) DO NOTHING
+                ON CONFLICT(rule_id, subscription_id, stat_date) DO UPDATE SET
+                    started_issue_no = excluded.started_issue_no,
+                    status = 'active',
+                    stop_reason = '',
+                    started_at = excluded.started_at,
+                    stopped_at = NULL,
+                    updated_at = excluded.updated_at
+                WHERE auto_trigger_rule_runs.user_id = excluded.user_id
+                  AND auto_trigger_rule_runs.status = 'blocked'
+                  AND auto_trigger_rule_runs.started_issue_no = ''
+                  AND NOT EXISTS (
+                      SELECT 1 FROM subscription_progression_events
+                      WHERE auto_trigger_rule_run_id = auto_trigger_rule_runs.id
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM subscription_runtime_runs
+                      WHERE auto_trigger_rule_run_id = auto_trigger_rule_runs.id
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM auto_trigger_route_subscription_runtime_runs
+                      WHERE auto_trigger_rule_run_id = auto_trigger_rule_runs.id
+                  )
                 """,
                 (
                     int(rule_id), int(user_id), int(subscription_id), normalized_date,
@@ -4438,8 +4437,8 @@ class DatabaseRepository:
     ) -> Dict[str, Any]:
         """手动结束规则在跑的轮次，但不改规则本身的启用状态。
 
-        与自动风控停轮的区别：stop_reason 记为 manual_stop，定时触发的跨日闸会放行，
-        因此下一个时间窗口可以正常开新一轮。已下单待结算（placed）的单不动，留给结算流程自然收口。
+        stop_reason 记为 manual_stop，后续定时窗口仍按启动日限制每天最多新开一轮。
+        已下单待结算（placed）的单不动，留给结算流程自然收口。
         """
         rule = self.get_auto_trigger_rule(int(rule_id))
         if not rule or int(rule.get("user_id") or 0) != int(user_id):
@@ -4497,8 +4496,7 @@ class DatabaseRepository:
                 (MANUAL_STOP_REASON, now, now, *run_ids),
             )
             for run in runs:
-                # 跨日闸把这轮延续到的每一天都占了个 blocked 占位行，占位行会顶掉当天的开轮额度。
-                # 这轮被主动结束后占位理由不成立，删掉 stat_date 晚于本轮的占位行，让后续窗口能重新开轮。
+                # 兼容旧版跨日闸留下的空占位；只清理没有投注事件关联的 blocked 记录。
                 cursor = conn.execute(
                     """
                     DELETE FROM auto_trigger_rule_runs

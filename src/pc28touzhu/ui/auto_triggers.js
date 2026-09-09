@@ -204,12 +204,19 @@
 
     function eventReasonText(event) {
         const matchedText = (event.matched_conditions || []).map(conditionText).join("；");
+        const snapshot = event.snapshot || {};
+        if (event.reason === "schedule_day_already_started" && (
+            snapshot.cross_day_block || (snapshot.existing_day_run && snapshot.existing_day_run.status === "blocked")
+        )) {
+            return "因上一轮跨日延续被拦截，当天未新开轮次。";
+        }
         const scheduleReasons = {
             subscription_not_active: "跟单方案已停用，规则未触发。",
             source_not_active: "信号来源已停用，规则未触发。",
             outside_schedule_window: "当前不在定时窗口内。",
             schedule_weekday_blocked: "今天未启用定时触发。",
             schedule_day_already_started: "今日已经启动过一轮。",
+            schedule_previous_run_active: "上一轮仍在运行，结束后可在定时窗口启动新一轮。",
             schedule_signal_not_found: "定时窗口内没有可用的新信号。",
             schedule_signal_stale: "最新信号已超过允许延迟。",
             schedule_signal_before_window: "最新信号在窗口开始前就已发布，等窗口内新发布的信号。",

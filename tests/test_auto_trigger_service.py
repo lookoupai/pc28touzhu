@@ -224,7 +224,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(started["reason"], "schedule_started")
         self.assertEqual(started["snapshot"]["signal_issue_no"], "20260902102")
 
-    def test_schedule_weekday_and_cross_day_block(self):
+    def test_schedule_weekday_and_cross_day_wait_without_daily_claim(self):
         weekday_rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload(weekdays=["Mon", "Tue", "Thu", "Fri", "Sat", "Sun"]))["item"]
         blocked = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=weekday_rule["id"], now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc))
         self.assertEqual(blocked["rules"][0]["summary"]["skipped_count"], 1)
@@ -233,7 +233,32 @@ class AutoTriggerServiceTests(unittest.TestCase):
         cross_day = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc))
         self.assertEqual(cross_day["rules"][0]["summary"]["skipped_count"], 1)
         event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
-        self.assertEqual(event["reason"], "schedule_day_already_started")
+        self.assertEqual(event["reason"], "schedule_previous_run_active")
+        self.assertIsNone(self.repo.get_auto_trigger_rule_run_for_subscription_date(
+            rule_id=rule["id"], subscription_id=self.subscription["id"], stat_date="2026-09-02",
+        ))
+
+    def test_schedule_without_routes_can_start_after_overnight_stop(self):
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        old_run = self.repo.ensure_auto_trigger_rule_run(
+            rule_id=rule["id"], user_id=self.user_id, subscription_id=self.subscription["id"],
+            stat_date="2026-09-07", started_issue_no="20260907001",
+        )
+        with self.repo._connect() as conn:
+            conn.execute(
+                """UPDATE auto_trigger_rule_runs SET status='stopped', stop_reason='profit_target_hit',
+                   started_at='2026-09-07T10:02:18Z', stopped_at='2026-09-07T16:09:38Z' WHERE id=?""",
+                (old_run["id"],),
+            )
+        self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260908001",
+            bet_type="big_small", bet_value="大", published_at="2026-09-08T10:01:30Z",
+        )
+        result = run_auto_trigger_cycle(
+            self.repo, user_id=self.user_id, rule_id=rule["id"],
+            now=datetime(2026, 9, 8, 10, 2, tzinfo=timezone.utc),
+        )
+        self.assertEqual(result["summary"]["triggered_count"], 1)
 
     def test_manual_stop_current_run_reopens_today_window(self):
         rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
@@ -249,7 +274,15 @@ class AutoTriggerServiceTests(unittest.TestCase):
         blocked_run = self.repo.get_auto_trigger_rule_run_for_subscription_date(
             rule_id=rule["id"], subscription_id=self.subscription["id"], stat_date="2026-09-02",
         )
-        self.assertEqual(blocked_run["status"], "blocked")
+        self.assertIsNone(blocked_run)
+        # 旧版遗留的空占位仍可随手动停轮清理。
+        with self.repo._connect() as conn:
+            conn.execute(
+                """INSERT INTO auto_trigger_rule_runs(
+                    rule_id, user_id, subscription_id, stat_date, status, started_at
+                ) VALUES (?, ?, ?, '2026-09-02', 'blocked', '2026-09-02T10:05:00Z')""",
+                (rule["id"], self.user_id, self.subscription["id"]),
+            )
 
         result = stop_auto_trigger_rule_current_run(
             self.repo, rule_id=rule["id"], user_id=self.user_id, payload={"note": "测试手动结束"},
@@ -398,7 +431,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         )
         self.assertEqual(run["status"], "closed")
         self.assertEqual(run["stop_reason"], "route_run_closed")
-        # 收口时间取 route 轮的结束时间，别落在"今天"，否则跨日闸会误判今天的额度被占
+        # 收口时间保留 route 轮的实际结束时间，不使用页面读取时间。
         self.assertEqual(run["stopped_at"], "2026-09-02T12:00:00Z")
 
         # 新一轮刚建好、自己的 route 轮还没起来时，不能被历史 route 轮误判成脏数据

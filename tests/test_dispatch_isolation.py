@@ -12,6 +12,7 @@ from unittest.mock import patch
 from pc28touzhu.executor.db_repository import DatabaseRepository
 from pc28touzhu.services.auto_trigger_service import (
     create_auto_trigger_rule,
+    list_auto_trigger_rules,
     run_auto_trigger_cycle,
     stop_auto_trigger_rule_current_run,
     update_auto_trigger_rule,
@@ -434,6 +435,192 @@ class DispatchIsolationTests(unittest.TestCase):
         self._signal()
         second = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=self.now)
         self.assertEqual(second["rules"][0]["summary"]["triggered_count"], 1)
+
+    def _start_overnight_schedule(self, *, route_stop=False):
+        self.now = datetime(2026, 9, 7, 10, 2, tzinfo=timezone.utc)
+        rule = self._rule(risk={"enabled": True, "profit_target": 5} if not route_stop else None)
+        payload = {"schedule": {**rule["schedule"], "windows": [
+            {"id": "primary", "start": "18:01", "end": "18:30"},
+            {"id": "fallback", "start": "20:00", "end": "20:30"},
+        ]}}
+        if route_stop:
+            payload["routes"] = [{
+                **rule["routes"][0], "subscription_risk_mode": "override",
+                "subscription_risk_control": {"enabled": True, "profit_target": 5},
+            }]
+        rule = update_auto_trigger_rule(
+            self.repo, rule_id=rule["id"], user_id=self.user_id, payload=payload,
+        )["item"]
+        signal = self._signal()
+        started = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=self.now)
+        self.assertEqual(started["summary"]["triggered_count"], 1)
+        job = self.repo.list_execution_jobs(user_id=self.user_id, signal_id=signal["id"])[0]
+        self.repo.report_job_result(
+            str(job["id"]), "test-executor", 1, "delivered", "overnight-message", self._iso_now(), {}, None,
+        )
+        return rule, job
+
+    def _legacy_schedule_block(self, rule):
+        stat_date = self.now.astimezone(timezone(timedelta(hours=8))).date().isoformat()
+        with self.repo._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO auto_trigger_rule_runs(
+                    rule_id, user_id, subscription_id, stat_date, status, started_at
+                ) VALUES (?, ?, ?, ?, 'blocked', ?)
+                """,
+                (rule["id"], self.user_id, self.subscription["id"], stat_date, self._iso_now()),
+            )
+        return self.repo.get_auto_trigger_rule_run_for_subscription_date(
+            rule_id=rule["id"], subscription_id=self.subscription["id"], stat_date=stat_date,
+        )
+
+    def test_schedule_overnight_rule_stop_allows_evening_start(self):
+        rule, job = self._start_overnight_schedule()
+        self.now = datetime(2026, 9, 7, 16, 9, 38, tzinfo=timezone.utc)
+        self._settle(job, "hit")
+        old_run = self._rows("SELECT * FROM auto_trigger_rule_runs")[0]
+        self.assertEqual(old_run["status"], "stopped")
+        self.assertEqual(old_run["stat_date"], "2026-09-07")
+        old_stats = self._rows("SELECT * FROM auto_trigger_rule_daily_stats")
+
+        self.now = datetime(2026, 9, 8, 10, 1, 30, tzinfo=timezone.utc)
+        self._signal()
+        started = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=self.now)
+        self.assertEqual(started["summary"]["triggered_count"], 1)
+        self.assertEqual(self._rows("SELECT * FROM auto_trigger_rule_daily_stats"), old_stats)
+        self.assertEqual(self._rows("SELECT * FROM auto_trigger_rule_runs WHERE id=?", (old_run["id"],))[0], old_run)
+        listed = list_auto_trigger_rules(self.repo, user_id=self.user_id, stat_date="2026-09-08")["items"][0]
+        self.assertEqual(listed["schedule_status"], "主窗口已启动")
+
+        self.now = datetime(2026, 9, 8, 12, 0, 30, tzinfo=timezone.utc)
+        self._signal()
+        duplicate = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=self.now)
+        self.assertEqual(duplicate["summary"]["triggered_count"], 0)
+        self.assertEqual(duplicate["rules"][0]["events"][0]["reason"], "schedule_day_already_started")
+
+    def test_schedule_overnight_route_stop_reuses_legacy_block(self):
+        rule, job = self._start_overnight_schedule(route_stop=True)
+        self.now = datetime(2026, 9, 7, 16, 13, 10, tzinfo=timezone.utc)
+        self._settle(job, "hit")
+        old_run = self._rows("SELECT * FROM auto_trigger_rule_runs")[0]
+        self.assertEqual(old_run["status"], "closed")
+        self.now = datetime(2026, 9, 8, 10, 1, 2, tzinfo=timezone.utc)
+        blocked = self._legacy_schedule_block(rule)
+        listed = list_auto_trigger_rules(self.repo, user_id=self.user_id, stat_date="2026-09-08")["items"][0]
+        self.assertNotIn("已启动", listed["schedule_status"])
+        self._signal()
+        started = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=self.now)
+        self.assertEqual(started["summary"]["triggered_count"], 1)
+        current = self.repo.get_auto_trigger_rule_run(blocked["id"])
+        self.assertEqual(current["status"], "active")
+        self.assertEqual(current["stat_date"], "2026-09-08")
+        self.assertTrue(current["started_issue_no"])
+        self.assertEqual(self._rows("SELECT * FROM auto_trigger_rule_runs WHERE id=?", (old_run["id"],))[0], old_run)
+
+    def test_schedule_waits_for_previous_round_without_consuming_fallback(self):
+        rule, job = self._start_overnight_schedule(route_stop=True)
+        self.now = datetime(2026, 9, 8, 10, 1, 30, tzinfo=timezone.utc)
+        self._signal()
+        waiting = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=self.now)
+        self.assertEqual(waiting["summary"]["triggered_count"], 0)
+        self.assertEqual(waiting["rules"][0]["events"][0]["reason"], "schedule_previous_run_active")
+        self.assertEqual(self._rows("SELECT * FROM auto_trigger_rule_runs WHERE stat_date='2026-09-08'"), [])
+        listed = list_auto_trigger_rules(self.repo, user_id=self.user_id, stat_date="2026-09-08")["items"][0]
+        self.assertEqual(listed["schedule_status"], "上一轮仍在运行，等待结束")
+
+        self.now = datetime(2026, 9, 8, 11, 55, tzinfo=timezone.utc)
+        self._settle(job, "hit")
+        self.now = datetime(2026, 9, 8, 12, 0, 30, tzinfo=timezone.utc)
+        self._signal()
+        started = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=self.now)
+        self.assertEqual(started["summary"]["triggered_count"], 1)
+        self.assertEqual(started["rules"][0]["events"][0]["snapshot"]["window_id"], "fallback")
+
+    def test_legacy_schedule_block_waits_for_fresh_window_signal(self):
+        rule, job = self._start_overnight_schedule(route_stop=True)
+        self.now = datetime(2026, 9, 7, 16, 13, tzinfo=timezone.utc)
+        self._settle(job, "hit")
+        self.now = datetime(2026, 9, 8, 10, 1, 2, tzinfo=timezone.utc)
+        blocked = self._legacy_schedule_block(rule)
+        stale = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=self.now)
+        self.assertEqual(stale["summary"]["triggered_count"], 0)
+        self.assertEqual(stale["rules"][0]["events"][0]["reason"], "schedule_signal_before_window")
+        self.assertEqual(self.repo.get_auto_trigger_rule_run(blocked["id"]), blocked)
+
+        self.now = datetime(2026, 9, 8, 11, 0, tzinfo=timezone.utc)
+        self._signal()
+        outside = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=self.now)
+        self.assertEqual(outside["summary"]["triggered_count"], 0)
+        self.assertEqual(outside["rules"][0]["events"][0]["reason"], "outside_schedule_window")
+        self.assertEqual(self.repo.get_auto_trigger_rule_run(blocked["id"]), blocked)
+
+        self.now = datetime(2026, 9, 8, 12, 0, 30, tzinfo=timezone.utc)
+        self._signal()
+        started = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=self.now)
+        self.assertEqual(started["summary"]["triggered_count"], 1)
+        self.assertEqual(self.repo.get_auto_trigger_rule_run(blocked["id"])["started_at"], self._iso_now())
+
+    def test_legacy_schedule_block_dispatch_failure_can_retry(self):
+        rule, job = self._start_overnight_schedule(route_stop=True)
+        self.now = datetime(2026, 9, 7, 16, 13, tzinfo=timezone.utc)
+        self._settle(job, "hit")
+        self.now = datetime(2026, 9, 8, 10, 1, 30, tzinfo=timezone.utc)
+        blocked = self._legacy_schedule_block(rule)
+        financial = self._rows("SELECT * FROM auto_trigger_route_subscription_financial_state")
+        self._signal()
+        with patch.object(DatabaseRepository, "create_execution_job_record", side_effect=RuntimeError("写入失败")):
+            failed = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=self.now)
+        self.assertEqual(failed["summary"]["failed_count"], 1)
+        self.assertEqual(self.repo.get_auto_trigger_rule_run(blocked["id"]), blocked)
+        self.assertEqual(self._rows("SELECT * FROM auto_trigger_route_subscription_financial_state"), financial)
+        retry = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=self.now)
+        self.assertEqual(retry["summary"]["triggered_count"], 1)
+
+    def test_legacy_schedule_block_concurrent_start_creates_one_job(self):
+        rule, job = self._start_overnight_schedule(route_stop=True)
+        self.now = datetime(2026, 9, 7, 16, 13, tzinfo=timezone.utc)
+        self._settle(job, "hit")
+        self.now = datetime(2026, 9, 8, 10, 1, 30, tzinfo=timezone.utc)
+        blocked = self._legacy_schedule_block(rule)
+        signal = self._signal()
+        barrier = Barrier(2)
+
+        def start(_):
+            repo = DatabaseRepository(self.db_path)
+            barrier.wait(timeout=5)
+            return run_auto_trigger_cycle(repo, user_id=self.user_id, rule_id=rule["id"], now=self.now)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(start, range(2)))
+        self.assertEqual(sum(item["summary"]["triggered_count"] for item in results), 1)
+        self.assertEqual(sum(item["summary"]["failed_count"] for item in results), 0)
+        self.assertEqual(len(self.repo.list_execution_jobs(user_id=self.user_id, signal_id=signal["id"])), 1)
+        self.assertEqual(self.repo.get_auto_trigger_rule_run(blocked["id"])["status"], "active")
+
+    def test_legacy_schedule_block_with_execution_history_cannot_be_reused(self):
+        rule, job = self._start_overnight_schedule(route_stop=True)
+        old_event = self.repo.get_progression_event(job["progression_event_id"])
+        self.now = datetime(2026, 9, 8, 10, 1, 30, tzinfo=timezone.utc)
+        blocked = self._legacy_schedule_block(rule)
+        for table in ("subscription_progression_events", "auto_trigger_route_subscription_runtime_runs"):
+            with self.subTest(table=table):
+                with self.repo._connect() as conn:
+                    conn.execute(
+                        f"UPDATE {table} SET auto_trigger_rule_run_id=? WHERE auto_trigger_rule_run_id=?",
+                        (blocked["id"], old_event["auto_trigger_rule_run_id"]),
+                    )
+                claim = self.repo.claim_auto_trigger_daily_start(
+                    rule_id=rule["id"], user_id=self.user_id, subscription_id=self.subscription["id"],
+                    stat_date="2026-09-08", started_issue_no="new",
+                )
+                self.assertFalse(claim["claimed"])
+                self.assertEqual(self.repo.get_auto_trigger_rule_run(blocked["id"]), blocked)
+                with self.repo._connect() as conn:
+                    conn.execute(
+                        f"UPDATE {table} SET auto_trigger_rule_run_id=? WHERE auto_trigger_rule_run_id=?",
+                        (old_event["auto_trigger_rule_run_id"], blocked["id"]),
+                    )
 
     def test_manual_stop_preserves_balance_and_late_settlement_stays_in_old_run(self):
         rule = self._rule()

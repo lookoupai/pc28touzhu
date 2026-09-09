@@ -62,8 +62,6 @@ RUNTIME_RETENTION_DAYS = {
     "stats": 365,
 }
 SHANGHAI_TZ = timezone(timedelta(hours=8))
-# 与 executor/db_repository.MANUAL_STOP_REASON 必须同值：手动结束的轮次不占用当天开轮额度。
-MANUAL_STOP_REASON = "manual_stop"
 _PERFORMANCE_CACHE_LOCK = Lock()
 _PERFORMANCE_CACHE: Dict[str, Dict[str, Any]] = {}
 
@@ -647,8 +645,8 @@ def stop_auto_trigger_rule_current_run(
 ) -> Dict[str, Any]:
     """结束规则当前在跑的轮次，规则本身保持启用。
 
-    定位在"只停这一轮"与"停整条规则"之间：轮次被标记为 manual_stop，跨日闸随后放行，
-    下一个时间窗口可以照常开新一轮。已下单待结算的单不撤，交给结算流程收口。
+    轮次被标记为 manual_stop，下一个时间窗口仍按每天最多新开一轮判断。
+    已下单待结算的单不撤，交给结算流程收口。
     """
     normalized_rule_id = _to_positive_int(rule_id, "rule_id")
     normalized_user_id = _to_positive_int(user_id, "user_id")
@@ -743,7 +741,7 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = N
                 day_run = repository.get_auto_trigger_rule_run_for_subscription_date(
                     rule_id=int(rule["id"]), subscription_id=int(sub_id), stat_date=resolved_stat_date,
                 ) if hasattr(repository, "get_auto_trigger_rule_run_for_subscription_date") else None
-                if day_run:
+                if day_run and str(day_run.get("status") or "") != "blocked":
                     started = True
                     if hasattr(repository, "get_latest_auto_trigger_event"):
                         started_event = repository.get_latest_auto_trigger_event(
@@ -767,6 +765,8 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = N
                 schedule_status = "今日被风控停止"
             elif started:
                 schedule_status = "主窗口已启动" if started_window_id == "primary" else "今日已启动"
+            elif any(str(run.get("stat_date") or "") < resolved_stat_date for run in active_runs):
+                schedule_status = "上一轮仍在运行，等待结束"
             elif no_fresh_signal:
                 schedule_status = "今日无新鲜信号"
             else:
@@ -1437,13 +1437,12 @@ def _schedule_signal_age_seconds(signal: Dict[str, Any], now: datetime) -> Optio
     return max(0, age)
 
 
-def _schedule_cross_day_block(
+def _schedule_previous_active_run(
     repository: Any,
     *,
     rule: Dict[str, Any],
     subscription: Dict[str, Any],
     stat_date: str,
-    local_now: datetime,
 ) -> Optional[dict]:
     if hasattr(repository, "reconcile_auto_trigger_rule_subscription_runs"):
         repository.reconcile_auto_trigger_rule_subscription_runs(
@@ -1461,25 +1460,9 @@ def _schedule_cross_day_block(
         )
     else:
         return None
-    if not latest or str(latest.get("stat_date") or "") == str(stat_date):
-        return None
-    started_local_date = _stat_date_from_iso(latest.get("started_at"), timezone_name=str((rule.get("schedule") or {}).get("timezone") or "Asia/Shanghai"))
-    stopped_local_date = _stat_date_from_iso(latest.get("stopped_at"), timezone_name=str((rule.get("schedule") or {}).get("timezone") or "Asia/Shanghai"))
-    spans_today = str(latest.get("status") or "") == "active" and started_local_date and started_local_date != stat_date
-    # 手动结束的轮次视为主动让位：用户就是为了在今天的窗口重开一轮，不再消耗今天的额度。
-    manual_stopped = str(latest.get("stop_reason") or "").strip() == MANUAL_STOP_REASON
-    ended_today = (
-        not manual_stopped
-        and str(latest.get("status") or "") in {"closed", "stopped"}
-        and stopped_local_date == stat_date
-    )
-    if not (spans_today or ended_today):
-        return None
-    if hasattr(repository, "block_auto_trigger_daily_start"):
-        return repository.block_auto_trigger_daily_start(
-            rule_id=int(rule["id"]), user_id=int(rule["user_id"]),
-            subscription_id=int(subscription["id"]), stat_date=stat_date,
-        )
+    # 开轮次数归属于启动日。跨日旧轮只在仍运行时阻止重叠，不消耗今天的新开轮额度。
+    if latest and str(latest.get("stat_date") or "") != str(stat_date) and str(latest.get("status") or "") == "active":
+        return latest
     return None
 
 
@@ -1699,15 +1682,15 @@ def _evaluate_scheduled_auto_trigger_rule(
             has_routes = bool(rule.get("routes"))
             active_routes = []
             skipped_routes = []
-            cross_day_block = _schedule_cross_day_block(
+            previous_run = _schedule_previous_active_run(
                 repository, rule=rule, subscription=subscription,
-                stat_date=stat_date, local_now=local_now,
+                stat_date=stat_date,
             )
-            if cross_day_block:
+            if previous_run:
                 events.append(_record_event(
                     repository, rule=rule, subscription=subscription, performance=None,
-                    status="skipped", reason="schedule_day_already_started", stat_date=stat_date,
-                    schedule_snapshot={**schedule_snapshot, "cross_day_block": cross_day_block},
+                    status="skipped", reason="schedule_previous_run_active", stat_date=stat_date,
+                    schedule_snapshot={**schedule_snapshot, "previous_run": previous_run},
                 ))
                 summary["skipped_count"] += 1
                 continue
@@ -1715,7 +1698,7 @@ def _evaluate_scheduled_auto_trigger_rule(
                 existing_day_run = repository.get_auto_trigger_rule_run_for_subscription_date(
                     rule_id=int(rule["id"]), subscription_id=int(subscription["id"]), stat_date=stat_date,
                 )
-                if existing_day_run:
+                if existing_day_run and str(existing_day_run.get("status") or "") != "blocked":
                     events.append(_record_event(
                         repository, rule=rule, subscription=subscription, performance=None,
                         status="skipped", reason="schedule_day_already_started", stat_date=stat_date,

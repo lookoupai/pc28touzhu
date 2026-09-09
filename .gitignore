@@ -49,5 +49,8 @@ data/
 /analysis_*.py
 /fix_*.py
 
+# 本地数据库备份目录
+backups/
+
 # spec-workflow 工具目录
 .spec-workflow/
