@@ -51,6 +51,7 @@ def _mask_username(value: Any) -> str:
 
 
 def build_daily_profit_rankings(repository: Any, *, stat_date: str, top_n: int = 10) -> Dict[str, Any]:
+    top_n = max(1, int(top_n or 1))
     items = repository.list_daily_user_profit_rankings(stat_date=str(stat_date or "").strip())
     winners = [item for item in items if round(float(item.get("net_profit") or 0), 2) > 0]
     losers = [item for item in items if round(float(item.get("net_profit") or 0), 2) < 0]
@@ -62,6 +63,9 @@ def build_daily_profit_rankings(repository: Any, *, stat_date: str, top_n: int =
         "profit_user_count": len([item for item in items if round(float(item.get("net_profit") or 0), 2) > 0]),
         "loss_user_count": len([item for item in items if round(float(item.get("net_profit") or 0), 2) < 0]),
         "total_net_profit": round(sum(float(item.get("net_profit") or 0) for item in items), 2),
+        "manual_net_profit": round(sum(float(item.get("manual_net_profit") or 0) for item in items), 2),
+        "auto_net_profit": round(sum(float(item.get("auto_net_profit") or 0) for item in items), 2),
+        "top_n": max(1, int(top_n or 1)),
     }
     return {
         "summary": summary,
@@ -83,8 +87,9 @@ def build_daily_profit_report_text(
         "盈利人数: %s" % int(summary.get("profit_user_count") or 0),
         "亏损人数: %s" % int(summary.get("loss_user_count") or 0),
         "总净利润: %s" % _signed_money(summary.get("total_net_profit")),
+        "手动方案: %s | 自动触发: %s" % (_signed_money(summary.get("manual_net_profit")), _signed_money(summary.get("auto_net_profit"))),
         "",
-        "盈利榜",
+        "盈利榜 TOP%s" % int(summary.get("top_n") or 10),
     ]
     if profit_ranking:
         for index, item in enumerate(profit_ranking, start=1):
@@ -92,14 +97,66 @@ def build_daily_profit_report_text(
     else:
         lines.append("暂无上榜用户")
 
-    lines.extend(["", "亏损榜"])
+    lines.extend(["", "亏损榜 TOP%s" % int(summary.get("top_n") or 10)])
     if loss_ranking:
         for index, item in enumerate(loss_ranking, start=1):
             lines.append("%s. %s %s" % (index, _mask_username(item.get("username")), _signed_money(item.get("net_profit"))))
     else:
         lines.append("暂无上榜用户")
 
-    lines.extend(["", "数据口径：平台昨日已结算跟单结果"])
+    lines.extend(["", "数据口径：北京时间当日已结算结果，包含手动方案与自动触发"])
+    return "\n".join(lines)
+
+
+def build_monthly_profit_rankings(repository: Any, *, stat_month: str, top_n: int = 10) -> Dict[str, Any]:
+    top_n = max(1, int(top_n or 1))
+    items = repository.list_monthly_user_profit_rankings(stat_month=str(stat_month or "").strip())
+    winners = [item for item in items if round(float(item.get("net_profit") or 0), 2) > 0]
+    losers = [item for item in items if round(float(item.get("net_profit") or 0), 2) < 0]
+    winners = sorted(winners, key=lambda item: (-float(item.get("net_profit") or 0), int(item.get("user_id") or 0)))[:top_n]
+    losers = sorted(losers, key=lambda item: (float(item.get("net_profit") or 0), int(item.get("user_id") or 0)))[:top_n]
+    summary = {
+        "stat_month": str(stat_month or "").strip(),
+        "settled_user_count": len(items),
+        "profit_user_count": len([item for item in items if round(float(item.get("net_profit") or 0), 2) > 0]),
+        "loss_user_count": len([item for item in items if round(float(item.get("net_profit") or 0), 2) < 0]),
+        "total_net_profit": round(sum(float(item.get("net_profit") or 0) for item in items), 2),
+        "manual_net_profit": round(sum(float(item.get("manual_net_profit") or 0) for item in items), 2),
+        "auto_net_profit": round(sum(float(item.get("auto_net_profit") or 0) for item in items), 2),
+        "top_n": max(1, int(top_n or 1)),
+    }
+    return {"summary": summary, "profit_ranking": winners, "loss_ranking": losers}
+
+
+def build_monthly_profit_report_text(
+    *,
+    stat_month: str,
+    summary: Dict[str, Any],
+    profit_ranking: List[Dict[str, Any]],
+    loss_ranking: List[Dict[str, Any]],
+) -> str:
+    lines = [
+        "【%s 月度跟单收益榜】" % str(stat_month or ""),
+        "参与用户: %s" % int(summary.get("settled_user_count") or 0),
+        "盈利人数: %s" % int(summary.get("profit_user_count") or 0),
+        "亏损人数: %s" % int(summary.get("loss_user_count") or 0),
+        "总净利润: %s" % _signed_money(summary.get("total_net_profit")),
+        "手动方案: %s | 自动触发: %s" % (_signed_money(summary.get("manual_net_profit")), _signed_money(summary.get("auto_net_profit"))),
+        "",
+        "盈利 TOP%s" % int(summary.get("top_n") or 10),
+    ]
+    if profit_ranking:
+        for index, item in enumerate(profit_ranking, start=1):
+            lines.append("%s. %s %s" % (index, _mask_username(item.get("username")), _signed_money(item.get("net_profit"))))
+    else:
+        lines.append("暂无上榜用户")
+    lines.extend(["", "亏损 TOP%s" % int(summary.get("top_n") or 10)])
+    if loss_ranking:
+        for index, item in enumerate(loss_ranking, start=1):
+            lines.append("%s. %s %s" % (index, _mask_username(item.get("username")), _signed_money(item.get("net_profit"))))
+    else:
+        lines.append("暂无上榜用户")
+    lines.extend(["", "数据口径：北京时间该月已结算结果，包含手动方案与自动触发"])
     return "\n".join(lines)
 
 
@@ -176,6 +233,74 @@ def deliver_daily_profit_report(
         }
 
 
+def deliver_monthly_profit_report(
+    repository: Any,
+    *,
+    sender: TelegramTextSender,
+    target_chat_id: str,
+    stat_month: str,
+    top_n: int = 10,
+    report_type: str = "monthly_profit_loss",
+) -> Dict[str, Any]:
+    normalized_target_chat_id = str(target_chat_id or "").strip()
+    if not normalized_target_chat_id:
+        raise ValueError("target_chat_id 不能为空")
+    report_key = build_daily_report_key(
+        stat_date=str(stat_month or "").strip(),
+        target_chat_id=normalized_target_chat_id,
+        report_type=report_type,
+    )
+    current = repository.get_telegram_daily_report_record(report_key)
+    if current and str(current.get("status") or "") == "sent":
+        return {"skipped": True, "reason": "already_sent", "report_key": report_key, "record": current}
+    ranking = build_monthly_profit_rankings(
+        repository, stat_month=str(stat_month or "").strip(), top_n=max(1, int(top_n or 1)),
+    )
+    summary = ranking["summary"]
+    if int(summary.get("settled_user_count") or 0) <= 0:
+        return {"skipped": True, "reason": "empty_data", "report_key": report_key, "record": current}
+    message_text = build_monthly_profit_report_text(
+        stat_month=str(stat_month or "").strip(),
+        summary=summary,
+        profit_ranking=ranking["profit_ranking"],
+        loss_ranking=ranking["loss_ranking"],
+    )
+    try:
+        send_result = sender.send_text(normalized_target_chat_id, message_text)
+        record = repository.mark_telegram_daily_report_sent(
+            report_key=report_key,
+            stat_date=str(stat_month or "").strip(),
+            target_chat_id=normalized_target_chat_id,
+            report_type=report_type,
+            sent_at=_utc_now_iso(),
+        )
+        return {
+            "skipped": False,
+            "report_key": report_key,
+            "delivery_status": "sent",
+            "summary": summary,
+            "send_result": send_result,
+            "record": record,
+        }
+    except Exception as exc:
+        record = repository.mark_telegram_daily_report_failed(
+            report_key=report_key,
+            stat_date=str(stat_month or "").strip(),
+            target_chat_id=normalized_target_chat_id,
+            report_type=report_type,
+            error_message=str(exc),
+            failed_at=_utc_now_iso(),
+        )
+        return {
+            "skipped": False,
+            "report_key": report_key,
+            "delivery_status": "failed",
+            "summary": summary,
+            "error_message": str(exc) or exc.__class__.__name__,
+            "record": record,
+        }
+
+
 def run_daily_report_cycle(
     repository: Any,
     *,
@@ -202,4 +327,13 @@ def run_daily_report_cycle(
     )
     result["stat_date"] = stat_date
     result["now"] = local_now.isoformat()
+    if local_now.day == 1:
+        previous_month = (local_now.date().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+        result["monthly"] = deliver_monthly_profit_report(
+            repository,
+            sender=sender,
+            target_chat_id=target_chat_id,
+            stat_month=previous_month,
+            top_n=top_n,
+        )
     return result

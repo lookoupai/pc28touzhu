@@ -1,6 +1,7 @@
 """Telegram Bot binding and profit query services."""
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 from uuid import uuid4
@@ -24,8 +25,10 @@ TELEGRAM_BOT_COMMANDS = (
     {"command": "disable", "description": "暂停跟单方案"},
     {"command": "play", "description": "切换跟单玩法"},
     {"command": "restart", "description": "开始新一轮"},
-    {"command": "profit", "description": "查询跟单汇总"},
-    {"command": "plan", "description": "查询单方案盈亏"},
+    {"command": "profit", "description": "查询手动方案/自动触发汇总"},
+    {"command": "plan", "description": "查询手动方案盈亏"},
+    {"command": "rule", "description": "查询自动触发规则盈亏"},
+    {"command": "auto", "description": "查询自动触发汇总"},
     {"command": "status", "description": "查询当前跟单状态"},
 )
 SUBSCRIPTION_PLAY_FILTER_PRESETS = {
@@ -146,6 +149,69 @@ def _normalize_stat_date(value: Optional[str], *, reference_time: Optional[datet
         raise ValueError("日期格式必须为 YYYY-MM-DD") from exc
 
 
+def _previous_month(reference_time: Optional[datetime] = None) -> str:
+    local_now = (reference_time or _utc_now()).astimezone(SHANGHAI_TZ)
+    first = local_now.date().replace(day=1)
+    return (first - timedelta(days=1)).strftime("%Y-%m")
+
+
+def _normalize_stat_month(value: str) -> str:
+    text = str(value or "").strip()
+    try:
+        parsed = datetime.strptime(text, "%Y-%m")
+    except ValueError as exc:
+        raise ValueError("月份格式必须为 YYYY-MM") from exc
+    if parsed.strftime("%Y-%m") != text:
+        raise ValueError("月份格式必须为 YYYY-MM")
+    return text
+
+
+def _parse_query_period(value: Optional[str], *, reference_time: Optional[datetime] = None) -> Tuple[str, str]:
+    """Return (period_type, normalized_value), accepting common Chinese aliases."""
+    text = str(value or "").strip().lower()
+    local_now = (reference_time or _utc_now()).astimezone(SHANGHAI_TZ)
+    if text in {"", "昨天", "昨日", "前一天", "yesterday", "day"}:
+        return "day", (local_now.date() - timedelta(days=1)).isoformat()
+    if text in {"今天", "今日", "today"}:
+        return "day", local_now.date().isoformat()
+    if text in {"上月", "上个月", "前一个月", "前月", "lastmonth", "month", "monthly"}:
+        return "month", _previous_month(reference_time)
+    if text in {"本月", "这个月", "这月", "当月", "thismonth"}:
+        return "month", local_now.strftime("%Y-%m")
+    if len(text) == 10:
+        return "day", _normalize_stat_date(text, reference_time=reference_time)
+    if len(text) == 7:
+        return "month", _normalize_stat_month(text)
+    raise ValueError("时间范围支持：昨天、本月、上个月、YYYY-MM-DD 或 YYYY-MM")
+
+
+def _split_query_period(args: List[str], *, reference_time: Optional[datetime] = None) -> Tuple[Optional[Tuple[str, str]], List[str]]:
+    remaining = list(args or [])
+    period: Optional[Tuple[str, str]] = None
+    for index, token in enumerate(list(remaining)):
+        try:
+            period = _parse_query_period(token, reference_time=reference_time)
+        except ValueError:
+            if re.fullmatch(r"\d{4}-\d{1,2}(?:-\d{1,2})?", token):
+                raise ValueError("日期或月份无效，请使用 YYYY-MM-DD 或 YYYY-MM")
+            continue
+        remaining.pop(index)
+        break
+    return period, remaining
+
+
+def _split_query_source_and_period(args: List[str], *, reference_time: Optional[datetime] = None) -> Tuple[str, Optional[Tuple[str, str]], List[str]]:
+    remaining = list(args or [])
+    source = "manual"
+    if remaining and str(remaining[0]).strip().lower() in {"auto", "自动", "自动触发", "rule", "规则"}:
+        source = "auto"
+        remaining.pop(0)
+    elif remaining and str(remaining[0]).strip().lower() in {"manual", "手动", "方案", "plan"}:
+        remaining.pop(0)
+    period, remaining = _split_query_period(remaining, reference_time=reference_time)
+    return source, period, remaining
+
+
 def _default_stat_date_candidates(*, reference_time: Optional[datetime] = None) -> List[str]:
     local_now = (reference_time or _utc_now()).astimezone(SHANGHAI_TZ)
     today = local_now.date().isoformat()
@@ -185,13 +251,17 @@ def _build_help_text() -> str:
             "/restart <订阅ID> 开始新一轮",
             "/status 查询当前跟单状态、待结算金额",
             "/status <方案名> 查询指定方案当前状态",
-            "/profit 查询最近有已结算数据的汇总",
-            "/profit YYYY-MM-DD 查询指定日期汇总",
-            "/plan 查询最近有已结算数据的单方案列表",
-            "/plan YYYY-MM-DD 查询指定日期单方案列表",
-            "/plan <方案名> 查询最近有已结算数据的指定方案盈亏",
-            "/plan <方案名> YYYY-MM-DD 查询指定方案盈亏",
-            "说明：/profit 与 /plan 仅展示已结算数据；/status 展示当前状态与待结算金额；/restart 会清空当前轮次运行态并立即开始新一轮。",
+            "/profit 查询手动方案今日汇总，无数据时查昨日",
+            "/profit 昨天|本月|上个月|YYYY-MM-DD|YYYY-MM 查询时间范围",
+            "/profit auto 上个月 查询自动触发汇总",
+            "/plan 查询手动方案今日列表，无数据时查昨日",
+            "/plan 上个月 查询手动方案月度列表",
+            "/plan <方案名或#订阅ID> YYYY-MM 查询指定方案月度盈亏",
+            "/rule 查询自动触发规则昨日列表",
+            "/rule <规则名或ID> 上个月 查询规则月度盈亏",
+            "/auto 上个月 查询自动触发月度汇总",
+            "说明：/profit、/plan、/rule 只展示已结算数据；手动方案与自动触发统计分开；/status 展示当前状态与待结算金额。",
+            "历史盈亏长期保留，删除配置后仍可按原名称或 #ID 查询；同名时请使用 #ID。",
         ]
     )
 
@@ -614,14 +684,15 @@ def _render_restart_confirm_page(repository: Any, *, user_id: int, subscription_
 
 
 def _build_profit_summary_text(user: Dict[str, Any], summary: Dict[str, Any]) -> str:
-    stat_date = str(summary.get("stat_date") or "")
+    stat_date = str(summary.get("stat_date") or summary.get("stat_month") or "")
+    source_label = str(summary.get("source_label") or "手动方案")
     if int(summary.get("settled_event_count") or 0) <= 0:
-        return "%s 暂无已结算跟单数据。" % stat_date
+        return "%s 暂无%s已结算数据。" % (stat_date, source_label)
     return "\n".join(
         [
-            "【%s 跟单汇总】" % stat_date,
+            "【%s 跟单汇总 · %s】" % (stat_date, source_label),
             "账号: %s" % str(user.get("username") or ""),
-            "方案数: %s" % int(summary.get("plan_count") or 0),
+            "%s: %s" % ("方案数" if source_label == "手动方案" else "规则数", int(summary.get("plan_count") or summary.get("rule_count") or 0)),
             "已结算: %s" % int(summary.get("settled_event_count") or 0),
             "盈利: %.2f" % round(float(summary.get("profit_amount") or 0), 2),
             "亏损: %.2f" % round(float(summary.get("loss_amount") or 0), 2),
@@ -632,21 +703,31 @@ def _build_profit_summary_text(user: Dict[str, Any], summary: Dict[str, Any]) ->
                 int(summary.get("miss_count") or 0),
                 int(summary.get("refund_count") or 0),
             ),
-            "发送 /plan %s 查看单方案明细" % stat_date,
+            "发送 %s %s 查看明细" % ("/rule" if source_label == "自动触发" else "/plan", stat_date),
         ]
     )
 
 
+def _report_entity_name(item: Dict[str, Any], *, rule: bool = False) -> str:
+    name = str(item.get("rule_name" if rule else "source_name") or ("未命名规则" if rule else "未命名方案"))
+    if item.get("is_deleted"):
+        return name + "（已删除）"
+    if item.get("status") == "archived":
+        return name + "（已归档）"
+    return name
+
+
 def _build_plan_list_text(stat_date: str, items: List[Dict[str, Any]]) -> str:
     if not items:
-        return "%s 暂无单方案已结算数据。" % stat_date
-    lines = ["【%s 单方案明细】" % stat_date]
+        return "%s 暂无手动方案已结算数据。" % stat_date
+    lines = ["【%s 手动方案明细】" % stat_date]
     for index, item in enumerate(items, start=1):
         lines.append(
-            "%s. %s %s | 盈 %.2f 亏 %.2f | %s 笔"
+            "%s. %s #%s %s | 盈 %.2f 亏 %.2f | %s 笔"
             % (
                 index,
-                str(item.get("source_name") or "未命名方案"),
+                _report_entity_name(item),
+                int(item.get("subscription_id") or 0),
                 _signed_money(item.get("net_profit")),
                 round(float(item.get("profit_amount") or 0), 2),
                 round(float(item.get("loss_amount") or 0), 2),
@@ -656,11 +737,51 @@ def _build_plan_list_text(stat_date: str, items: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _build_rule_list_text(period_label: str, items: List[Dict[str, Any]]) -> str:
+    if not items:
+        return "%s 暂无自动触发规则已结算数据。" % period_label
+    lines = ["【%s 自动触发规则明细】" % period_label]
+    for index, item in enumerate(items, start=1):
+        lines.append(
+            "%s. %s #%s | %s | 盈 %.2f 亏 %.2f | %s 笔"
+            % (
+                index,
+                _report_entity_name(item, rule=True),
+                int(item.get("rule_id") or 0),
+                _signed_money(item.get("net_profit")),
+                round(float(item.get("profit_amount") or 0), 2),
+                round(float(item.get("loss_amount") or 0), 2),
+                int(item.get("settled_event_count") or 0),
+            )
+        )
+    return "\n".join(lines)
+
+
+def _build_rule_detail_text(item: Dict[str, Any]) -> str:
+    period_label = str(item.get("stat_date") or item.get("stat_month") or "")
+    return "\n".join(
+        [
+            "【%s 自动触发规则收益】" % period_label,
+            "规则: %s #%s" % (_report_entity_name(item, rule=True), int(item.get("rule_id") or 0)),
+            "盈利: %.2f" % round(float(item.get("profit_amount") or 0), 2),
+            "亏损: %.2f" % round(float(item.get("loss_amount") or 0), 2),
+            "净利润: %s" % _signed_money(item.get("net_profit")),
+            "已结算: %s" % int(item.get("settled_event_count") or 0),
+            "胜/负/退: %s/%s/%s"
+            % (
+                int(item.get("hit_count") or 0),
+                int(item.get("miss_count") or 0),
+                int(item.get("refund_count") or 0),
+            ),
+        ]
+    )
+
+
 def _build_plan_detail_text(item: Dict[str, Any]) -> str:
     return "\n".join(
         [
-            "【%s 方案收益】" % str(item.get("stat_date") or ""),
-            "方案: %s" % str(item.get("source_name") or "未命名方案"),
+            "【%s 手动方案收益】" % str(item.get("stat_date") or item.get("stat_month") or ""),
+            "方案: %s #%s" % (_report_entity_name(item), int(item.get("subscription_id") or 0)),
             "盈利: %.2f" % round(float(item.get("profit_amount") or 0), 2),
             "亏损: %.2f" % round(float(item.get("loss_amount") or 0), 2),
             "净利润: %s" % _signed_money(item.get("net_profit")),
@@ -1008,16 +1129,39 @@ def handle_telegram_command(
             ]
         )
 
-    if command in {"/profit", "/profitall"}:
-        if args:
-            stat_date = _normalize_stat_date(args[0], reference_time=reference_time)
-            summary = repository.get_user_daily_profit_summary(user_id=int(user["id"]), stat_date=stat_date)
-        else:
+    if command in {"/profit", "/profitall", "/auto"}:
+        source, period, leftovers = _split_query_source_and_period(args, reference_time=reference_time)
+        if command == "/auto":
+            source = "auto"
+        if leftovers:
+            return "查询格式：/profit [manual|auto] [昨天|本月|上个月|YYYY-MM-DD|YYYY-MM]"
+        if period is None and source == "manual":
             summary = _resolve_default_profit_summary(
                 repository,
                 user_id=int(user["id"]),
                 reference_time=reference_time,
             )
+        else:
+            period = period or ("day", _default_stat_date_candidates(reference_time=reference_time)[-1])
+            period_type, period_value = period
+            if source == "auto":
+                if period_type == "month":
+                    summary = repository.get_user_monthly_auto_trigger_profit_summary(
+                        user_id=int(user["id"]), stat_month=period_value,
+                    )
+                else:
+                    summary = repository.get_user_daily_auto_trigger_profit_summary(
+                        user_id=int(user["id"]), stat_date=period_value,
+                    )
+            elif period_type == "month":
+                summary = repository.get_user_monthly_profit_summary(
+                    user_id=int(user["id"]), stat_month=period_value,
+                )
+            else:
+                summary = repository.get_user_daily_profit_summary(
+                    user_id=int(user["id"]), stat_date=period_value,
+                )
+        summary["source_label"] = "自动触发" if source == "auto" else "手动方案"
         return _build_profit_summary_text(user, summary)
 
     if command == "/status":
@@ -1055,6 +1199,7 @@ def handle_telegram_command(
         )
 
     if command == "/plan":
+        period, plan_tokens = _split_query_period(args, reference_time=reference_time)
         if not args:
             stat_date, items = _resolve_default_plan_items(
                 repository,
@@ -1062,39 +1207,62 @@ def handle_telegram_command(
                 reference_time=reference_time,
             )
             return _build_plan_list_text(stat_date, items)
-
-        stat_date = ""
-        plan_name = ""
-        if len(args) == 1:
-            try:
-                stat_date = _normalize_stat_date(args[0], reference_time=reference_time)
-            except ValueError:
-                plan_name = args[0]
-        else:
-            try:
-                stat_date = _normalize_stat_date(args[-1], reference_time=reference_time)
-                plan_name = " ".join(args[:-1]).strip()
-            except ValueError:
-                plan_name = " ".join(args).strip()
-
-        if stat_date:
-            items = repository.list_user_daily_subscription_stats(user_id=int(user["id"]), stat_date=stat_date)
+        plan_name = " ".join(plan_tokens).strip()
+        if period:
+            period_type, period_value = period
+            if period_type == "month":
+                period_label = period_value
+                items = repository.list_user_monthly_subscription_stats(user_id=int(user["id"]), stat_month=period_value)
+            else:
+                period_label = period_value
+                items = repository.list_user_daily_subscription_stats(user_id=int(user["id"]), stat_date=period_value)
         else:
             stat_date, items = _resolve_default_plan_items(
                 repository,
                 user_id=int(user["id"]),
                 reference_time=reference_time,
             )
+            period_label = stat_date
         if not plan_name:
-            return _build_plan_list_text(stat_date, items)
+            return _build_plan_list_text(period_label, items)
 
-        matched = [item for item in items if str(item.get("source_name") or "") == plan_name]
+        matched = [
+            item for item in items
+            if str(item.get("source_name") or "") == plan_name
+            or (plan_name.startswith("#") and plan_name[1:] == str(item.get("subscription_id") or ""))
+        ]
         if len(matched) == 1:
             return _build_plan_detail_text(matched[0])
         if len(matched) > 1:
-            return "存在重名方案，请先发送 /plan %s 查看方案列表后确认名称。" % stat_date
+            return "存在重名方案，请用 /plan #订阅ID %s 查询。\n%s" % (
+                period_label, _build_plan_list_text(period_label, matched),
+            )
         source_names = repository.list_user_subscription_source_names(user_id=int(user["id"]))
-        return _build_candidate_text(stat_date, source_names)
+        return _build_candidate_text(period_label, source_names)
+
+    if command == "/rule":
+        period, rule_tokens = _split_query_period(args, reference_time=reference_time)
+        period = period or ("day", _default_stat_date_candidates(reference_time=reference_time)[-1])
+        period_type, period_value = period
+        if period_type == "month":
+            items = repository.list_user_monthly_auto_trigger_rule_stats(user_id=int(user["id"]), stat_month=period_value)
+        else:
+            items = repository.list_user_daily_auto_trigger_rule_stats(user_id=int(user["id"]), stat_date=period_value)
+        rule_name = " ".join(rule_tokens).strip()
+        if not rule_name:
+            return _build_rule_list_text(period_value, items)
+        matched = [
+            item for item in items
+            if rule_name == str(item.get("rule_name") or "")
+            or rule_name.lstrip("#") == str(item.get("rule_id") or "")
+        ]
+        if len(matched) == 1:
+            return _build_rule_detail_text(matched[0])
+        if len(matched) > 1:
+            return "存在重名规则，请用 /rule #规则ID %s 查询。\n%s" % (
+                period_value, _build_rule_list_text(period_value, matched),
+            )
+        return "未找到该规则在 %s 的已结算数据。\n%s" % (period_value, _build_rule_list_text(period_value, items))
 
     return _build_help_text()
 

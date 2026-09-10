@@ -24,7 +24,7 @@
 ./pc28 settlement
 ```
 
-不传 `executor-001` 时，默认管理 `platform + source-sync + auto-settlement + alert + telegram-bot + telegram-report` 六个服务。
+不传 `executor-001` 时，默认管理 `platform + source-sync + auto-trigger + auto-settlement + alert + telegram-bot + telegram-report` 七个服务。
 
 ## 手动安装
 
@@ -92,7 +92,7 @@ sudo systemctl enable --now pc28touzhu-telegram-bot.service
 
 `pc28touzhu-telegram-bot.service` 会在 `ExecStart` 中强制注入 `TG_BOT_ONCE=false`。
 
-9. 启动日报排行榜推送：
+9. 启动日报与月度排行榜推送（每月 1 日自动补发上月月榜）：
 
 ```bash
 sudo systemctl enable --now pc28touzhu-telegram-report.service

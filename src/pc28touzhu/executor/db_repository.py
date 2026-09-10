@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import calendar
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -18,6 +19,7 @@ from pc28touzhu.domain.subscription_strategy import (
     resolve_settlement_runtime_policy,
     upgrade_subscription_strategy,
 )
+from pc28touzhu.executor.profit_reporting import ensure_profit_reporting
 
 
 SHANGHAI_TZ = timezone(timedelta(hours=8))
@@ -89,6 +91,19 @@ def _round_money(value: Any, digits: int = 2) -> float:
         return round(float(value or 0), digits)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _month_bounds(stat_month: str) -> tuple[str, str]:
+    """Return inclusive/exclusive YYYY-MM bounds for month aggregations."""
+    text = str(stat_month or "").strip()
+    try:
+        parsed = datetime.strptime(text, "%Y-%m")
+    except ValueError as exc:
+        raise ValueError("月份格式必须为 YYYY-MM") from exc
+    if parsed.strftime("%Y-%m") != text:
+        raise ValueError("月份格式必须为 YYYY-MM")
+    days = calendar.monthrange(parsed.year, parsed.month)[1]
+    return text + "-01", (parsed.replace(day=days) + timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 def _signal_risk_play_key(signal: Optional[dict]) -> str:
@@ -863,6 +878,7 @@ class DatabaseRepository:
         "CREATE INDEX IF NOT EXISTS idx_subscription_daily_stats_date_user ON subscription_daily_stats(stat_date, user_id)",
         "CREATE INDEX IF NOT EXISTS idx_subscription_daily_stats_date_net ON subscription_daily_stats(stat_date, net_profit)",
         "CREATE INDEX IF NOT EXISTS idx_subscription_runtime_runs_subscription ON subscription_runtime_runs(subscription_id, user_id, started_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_progression_events_settled_time ON subscription_progression_events(status, settled_at, user_id, subscription_id)",
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_rules_user_status ON auto_trigger_rules(user_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_events_user_time ON auto_trigger_events(user_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_auto_trigger_rule_daily_stats_user_date ON auto_trigger_rule_daily_stats(user_id, stat_date, status)",
@@ -942,6 +958,7 @@ class DatabaseRepository:
             self._ensure_normalized_signal_columns(conn)
             self._ensure_dispatch_lookup_indexes(conn)
             self._ensure_user_telegram_indexes(conn)
+            ensure_profit_reporting(conn)
             conn.commit()
 
     def _ensure_normalized_signal_columns(self, conn: sqlite3.Connection) -> None:
@@ -1859,6 +1876,8 @@ class DatabaseRepository:
             "subscription_id": int(row["subscription_id"]),
             "source_id": int(row["source_id"]),
             "source_name": str(row.get("source_name") or ""),
+            "status": str(row.get("status") or ""),
+            "is_deleted": bool(row.get("is_deleted")),
             "profit_amount": _round_money(row.get("profit_amount")),
             "loss_amount": _round_money(row.get("loss_amount")),
             "net_profit": _round_money(row.get("net_profit")),
@@ -3893,9 +3912,67 @@ class DatabaseRepository:
 
     def delete_auto_trigger_rule_record(self, *, rule_id: int, user_id: int) -> bool:
         with self._connect() as conn:
+            if not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
+            params = {"rule_id": int(rule_id), "user_id": int(user_id)}
+            current = conn.execute(
+                "SELECT status FROM auto_trigger_rules WHERE id = :rule_id AND user_id = :user_id", params,
+            ).fetchone()
+            if not current:
+                return False
+            if current["status"] != "archived":
+                raise ValueError("请先归档自动触发规则，再执行删除")
+            route_ids_sql = "SELECT id FROM auto_trigger_rule_routes WHERE rule_id = :rule_id AND user_id = :user_id"
+            event_filter = f"(auto_trigger_rule_id = :rule_id OR auto_trigger_route_id IN ({route_ids_sql}))"
+            unfinished = conn.execute(
+                f"""
+                SELECT 1 FROM subscription_progression_events
+                WHERE user_id = :user_id AND status IN ('pending', 'placed') AND {event_filter}
+                UNION ALL
+                SELECT 1 FROM execution_jobs WHERE user_id = :user_id AND status = 'pending'
+                  AND (auto_trigger_route_id IN ({route_ids_sql}) OR progression_event_id IN (
+                    SELECT id FROM subscription_progression_events WHERE user_id = :user_id AND {event_filter}
+                  ))
+                UNION ALL
+                SELECT 1 FROM auto_trigger_rule_runs
+                WHERE rule_id = :rule_id AND user_id = :user_id AND status = 'active'
+                UNION ALL
+                SELECT 1 FROM auto_trigger_route_subscription_runtime_runs
+                WHERE rule_id = :rule_id AND user_id = :user_id AND status = 'active'
+                LIMIT 1
+                """, params,
+            ).fetchone()
+            if unfinished:
+                raise ValueError("规则仍有运行中的轮次或待结算投注，请先停止轮次并完成结算后再删除")
+            # Keep the rule ID on settled events after detaching disposable routes.
+            conn.execute(
+                f"""
+                UPDATE subscription_progression_events
+                SET auto_trigger_rule_id = COALESCE(auto_trigger_rule_id, :rule_id), auto_trigger_route_id = NULL
+                WHERE user_id = :user_id AND {event_filter}
+                """, params,
+            )
+            conn.execute(
+                f"""
+                UPDATE execution_jobs SET auto_trigger_route_id = NULL
+                WHERE user_id = :user_id AND auto_trigger_route_id IN ({route_ids_sql})
+                """, params,
+            )
+            for table_name in (
+                "auto_trigger_route_subscription_financial_state",
+                "auto_trigger_route_progression_state",
+                "auto_trigger_route_subscription_runtime_runs",
+                "auto_trigger_route_daily_stats",
+                "auto_trigger_events",
+                "auto_trigger_rule_runs",
+                "auto_trigger_rule_daily_stats",
+                "auto_trigger_rule_routes",
+            ):
+                conn.execute(
+                    f"DELETE FROM {table_name} WHERE rule_id = :rule_id AND user_id = :user_id", params,
+                )
             cursor = conn.execute(
-                "DELETE FROM auto_trigger_rules WHERE id = ? AND user_id = ?",
-                (int(rule_id), int(user_id)),
+                "DELETE FROM auto_trigger_rules WHERE id = :rule_id AND user_id = :user_id", params,
             )
             return cursor.rowcount > 0
 
@@ -5415,7 +5492,28 @@ class DatabaseRepository:
 
     def delete_subscription_record(self, *, subscription_id: int, user_id: int) -> bool:
         with self._connect() as conn:
+            if not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
             params = (int(subscription_id), int(user_id))
+            current = conn.execute(
+                "SELECT status FROM user_subscriptions WHERE id = ? AND user_id = ?", params,
+            ).fetchone()
+            if not current:
+                return False
+            if current["status"] != "archived":
+                raise ValueError("请先归档跟单策略，再执行删除")
+            unfinished = conn.execute(
+                """
+                SELECT 1 FROM subscription_progression_events
+                WHERE subscription_id = ? AND user_id = ? AND status IN ('pending', 'placed')
+                UNION ALL
+                SELECT 1 FROM execution_jobs
+                WHERE subscription_id = ? AND user_id = ? AND status = 'pending'
+                LIMIT 1
+                """, params + params,
+            ).fetchone()
+            if unfinished:
+                raise ValueError("方案仍有待执行或待结算投注，请先停止派单并完成结算后再删除")
             conn.execute(
                 """
                 UPDATE execution_jobs
@@ -6238,36 +6336,68 @@ class DatabaseRepository:
             ),
         )
 
-    def list_user_daily_subscription_stats(self, *, user_id: int, stat_date: str) -> list[Dict[str, Any]]:
+    def _list_user_manual_profit_reports(
+        self,
+        *,
+        user_id: int,
+        start_date: str,
+        end_date: str,
+        subscription_id: Optional[int] = None,
+        group_by_date: bool = False,
+        limit: Optional[int] = None,
+    ) -> list[Dict[str, Any]]:
+        params: list[Any] = [int(user_id), start_date, end_date]
+        subscription_filter = ""
+        if subscription_id is not None:
+            subscription_filter = " AND p.subscription_id = ?"
+            params.append(int(subscription_id))
+        date_group = ", p.stat_date" if group_by_date else ""
+        ordering = "stat_date DESC" if group_by_date else "net_profit DESC, source_name ASC, p.subscription_id ASC"
+        limit_sql = ""
+        if limit is not None:
+            limit_sql = " LIMIT ?"
+            params.append(max(1, min(int(limit or 7), 365)))
         rows = self._fetch_all(
-            """
+            f"""
             SELECT
-                sds.*,
-                ss.name AS source_name
-            FROM subscription_daily_stats sds
-            JOIN signal_sources ss ON ss.id = sds.source_id
-            WHERE sds.user_id = ? AND sds.stat_date = ?
-            ORDER BY sds.net_profit DESC, ss.name ASC, sds.subscription_id ASC
+                p.user_id, p.subscription_id, MAX(p.source_id) AS source_id,
+                CASE WHEN us.id IS NULL THEN MAX(p.source_name)
+                     ELSE COALESCE(NULLIF(ss.name, ''), MAX(p.source_name)) END AS source_name,
+                COALESCE(us.status, 'deleted') AS status,
+                us.id IS NULL AS is_deleted,
+                MAX(p.stat_date) AS stat_date,
+                SUM(p.profit_amount) AS profit_amount,
+                SUM(p.loss_amount) AS loss_amount,
+                SUM(p.net_profit) AS net_profit,
+                SUM(p.settled_event_count) AS settled_event_count,
+                SUM(p.hit_count) AS hit_count,
+                SUM(p.miss_count) AS miss_count,
+                SUM(p.refund_count) AS refund_count,
+                MAX(p.updated_at) AS updated_at
+            FROM profit_report_daily_stats p
+            LEFT JOIN user_subscriptions us ON us.id = p.subscription_id AND us.user_id = p.user_id
+            LEFT JOIN signal_sources ss ON ss.id = us.source_id
+            WHERE p.user_id = ? AND p.origin_type = 'manual'
+              AND p.stat_date >= ? AND p.stat_date < ? {subscription_filter}
+            GROUP BY p.user_id, p.subscription_id, us.id, us.status, ss.name {date_group}
+            ORDER BY {ordering} {limit_sql}
             """,
-            (int(user_id), str(stat_date or "").strip()),
+            tuple(params),
         )
         return [self._serialize_subscription_daily_stat_row(row) for row in rows]
 
-    def list_subscription_daily_stats(self, *, subscription_id: int, user_id: int, limit: int = 7) -> list[Dict[str, Any]]:
-        rows = self._fetch_all(
-            """
-            SELECT
-                sds.*,
-                ss.name AS source_name
-            FROM subscription_daily_stats sds
-            JOIN signal_sources ss ON ss.id = sds.source_id
-            WHERE sds.subscription_id = ? AND sds.user_id = ?
-            ORDER BY sds.stat_date DESC, sds.updated_at DESC, sds.id DESC
-            LIMIT ?
-            """,
-            (int(subscription_id), int(user_id), max(1, min(int(limit or 7), 365))),
+    def list_user_daily_subscription_stats(self, *, user_id: int, stat_date: str) -> list[Dict[str, Any]]:
+        start = datetime.strptime(str(stat_date or "").strip(), "%Y-%m-%d")
+        return self._list_user_manual_profit_reports(
+            user_id=user_id, start_date=start.strftime("%Y-%m-%d"),
+            end_date=(start + timedelta(days=1)).strftime("%Y-%m-%d"),
         )
-        return [self._serialize_subscription_daily_stat_row(row) for row in rows]
+
+    def list_subscription_daily_stats(self, *, subscription_id: int, user_id: int, limit: int = 7) -> list[Dict[str, Any]]:
+        return self._list_user_manual_profit_reports(
+            user_id=user_id, start_date="0001-01-01", end_date="9999-12-31",
+            subscription_id=subscription_id, group_by_date=True, limit=limit,
+        )
 
     def list_user_subscription_source_names(self, *, user_id: int) -> list[str]:
         rows = self._fetch_all(
@@ -6276,72 +6406,67 @@ class DatabaseRepository:
             FROM user_subscriptions us
             JOIN signal_sources ss ON ss.id = us.source_id
             WHERE us.user_id = ?
-            ORDER BY ss.name ASC, us.id ASC
+            UNION
+            SELECT DISTINCT p.source_name AS name FROM profit_report_daily_stats p
+            WHERE p.user_id = ? AND p.origin_type = 'manual'
+              AND NOT EXISTS (SELECT 1 FROM user_subscriptions us WHERE us.id = p.subscription_id AND us.user_id = p.user_id)
+            ORDER BY name ASC
             """,
-            (int(user_id),),
+            (int(user_id), int(user_id)),
         )
         return [str(row.get("name") or "") for row in rows if str(row.get("name") or "").strip()]
 
     def get_user_daily_profit_summary(self, *, user_id: int, stat_date: str) -> Dict[str, Any]:
-        row = self._fetch_one(
-            """
-            SELECT
-                COALESCE(SUM(profit_amount), 0) AS profit_amount,
-                COALESCE(SUM(loss_amount), 0) AS loss_amount,
-                COALESCE(SUM(net_profit), 0) AS net_profit,
-                COALESCE(SUM(settled_event_count), 0) AS settled_event_count,
-                COALESCE(SUM(hit_count), 0) AS hit_count,
-                COALESCE(SUM(miss_count), 0) AS miss_count,
-                COALESCE(SUM(refund_count), 0) AS refund_count,
-                COUNT(1) AS plan_count
-            FROM subscription_daily_stats
-            WHERE user_id = ? AND stat_date = ?
-            """,
-            (int(user_id), str(stat_date or "").strip()),
-        ) or {}
+        items = self.list_user_daily_subscription_stats(user_id=int(user_id), stat_date=stat_date)
         return {
             "stat_date": str(stat_date or "").strip(),
             "user_id": int(user_id),
-            "profit_amount": _round_money(row.get("profit_amount")),
-            "loss_amount": _round_money(row.get("loss_amount")),
-            "net_profit": _round_money(row.get("net_profit")),
-            "settled_event_count": int(row.get("settled_event_count") or 0),
-            "hit_count": int(row.get("hit_count") or 0),
-            "miss_count": int(row.get("miss_count") or 0),
-            "refund_count": int(row.get("refund_count") or 0),
-            "plan_count": int(row.get("plan_count") or 0),
+            "profit_amount": _round_money(sum(float(item.get("profit_amount") or 0) for item in items)),
+            "loss_amount": _round_money(sum(float(item.get("loss_amount") or 0) for item in items)),
+            "net_profit": _round_money(sum(float(item.get("net_profit") or 0) for item in items)),
+            "settled_event_count": sum(int(item.get("settled_event_count") or 0) for item in items),
+            "hit_count": sum(int(item.get("hit_count") or 0) for item in items),
+            "miss_count": sum(int(item.get("miss_count") or 0) for item in items),
+            "refund_count": sum(int(item.get("refund_count") or 0) for item in items),
+            "plan_count": len(items),
         }
 
-    def list_daily_user_profit_rankings(self, *, stat_date: str) -> list[Dict[str, Any]]:
+    def _list_user_profit_rankings(
+        self, *, start_date: str, end_date: str, stat_label: str, monthly: bool = False,
+    ) -> list[Dict[str, Any]]:
         rows = self._fetch_all(
             """
             SELECT
-                sds.user_id,
+                p.user_id,
                 u.username,
-                COALESCE(SUM(sds.profit_amount), 0) AS profit_amount,
-                COALESCE(SUM(sds.loss_amount), 0) AS loss_amount,
-                COALESCE(SUM(sds.net_profit), 0) AS net_profit,
-                COALESCE(SUM(sds.settled_event_count), 0) AS settled_event_count,
-                COALESCE(SUM(sds.hit_count), 0) AS hit_count,
-                COALESCE(SUM(sds.miss_count), 0) AS miss_count,
-                COALESCE(SUM(sds.refund_count), 0) AS refund_count,
-                COUNT(1) AS plan_count
-            FROM subscription_daily_stats sds
-            JOIN users u ON u.id = sds.user_id
-            WHERE sds.stat_date = ?
-            GROUP BY sds.user_id, u.username
-            ORDER BY sds.user_id ASC
+                SUM(p.profit_amount) AS profit_amount,
+                SUM(p.loss_amount) AS loss_amount,
+                SUM(p.net_profit) AS net_profit,
+                SUM(CASE WHEN p.origin_type = 'manual' THEN p.net_profit ELSE 0 END) AS manual_net_profit,
+                SUM(CASE WHEN p.origin_type = 'auto' THEN p.net_profit ELSE 0 END) AS auto_net_profit,
+                SUM(p.settled_event_count) AS settled_event_count,
+                SUM(p.hit_count) AS hit_count,
+                SUM(p.miss_count) AS miss_count,
+                SUM(p.refund_count) AS refund_count,
+                COUNT(DISTINCT p.subscription_id) AS plan_count
+            FROM profit_report_daily_stats p
+            JOIN users u ON u.id = p.user_id
+            WHERE p.stat_date >= ? AND p.stat_date < ?
+            GROUP BY p.user_id, u.username
+            ORDER BY p.user_id ASC
             """,
-            (str(stat_date or "").strip(),),
+            (start_date, end_date),
         )
         return [
             {
-                "stat_date": str(stat_date or "").strip(),
+                "stat_month" if monthly else "stat_date": stat_label,
                 "user_id": int(row["user_id"]),
                 "username": str(row.get("username") or ""),
                 "profit_amount": _round_money(row.get("profit_amount")),
                 "loss_amount": _round_money(row.get("loss_amount")),
                 "net_profit": _round_money(row.get("net_profit")),
+                "manual_net_profit": _round_money(row.get("manual_net_profit")),
+                "auto_net_profit": _round_money(row.get("auto_net_profit")),
                 "settled_event_count": int(row.get("settled_event_count") or 0),
                 "hit_count": int(row.get("hit_count") or 0),
                 "miss_count": int(row.get("miss_count") or 0),
@@ -6350,6 +6475,127 @@ class DatabaseRepository:
             }
             for row in rows
         ]
+
+    def list_daily_user_profit_rankings(self, *, stat_date: str) -> list[Dict[str, Any]]:
+        start = datetime.strptime(str(stat_date or "").strip(), "%Y-%m-%d")
+        return self._list_user_profit_rankings(
+            start_date=start.strftime("%Y-%m-%d"),
+            end_date=(start + timedelta(days=1)).strftime("%Y-%m-%d"),
+            stat_label=start.strftime("%Y-%m-%d"),
+        )
+
+    def list_user_monthly_subscription_stats(self, *, user_id: int, stat_month: str) -> list[Dict[str, Any]]:
+        start_date, end_date = _month_bounds(stat_month)
+        items = self._list_user_manual_profit_reports(
+            user_id=user_id, start_date=start_date, end_date=end_date,
+        )
+        for item in items:
+            item.pop("stat_date", None)
+            item["stat_month"] = str(stat_month or "").strip()
+        return items
+
+    def get_user_monthly_profit_summary(self, *, user_id: int, stat_month: str) -> Dict[str, Any]:
+        items = self.list_user_monthly_subscription_stats(user_id=int(user_id), stat_month=stat_month)
+        return {
+            "stat_month": str(stat_month or "").strip(),
+            "user_id": int(user_id),
+            "profit_amount": _round_money(sum(float(item.get("profit_amount") or 0) for item in items)),
+            "loss_amount": _round_money(sum(float(item.get("loss_amount") or 0) for item in items)),
+            "net_profit": _round_money(sum(float(item.get("net_profit") or 0) for item in items)),
+            "settled_event_count": sum(int(item.get("settled_event_count") or 0) for item in items),
+            "hit_count": sum(int(item.get("hit_count") or 0) for item in items),
+            "miss_count": sum(int(item.get("miss_count") or 0) for item in items),
+            "refund_count": sum(int(item.get("refund_count") or 0) for item in items),
+            "plan_count": len(items),
+        }
+
+    def list_monthly_user_profit_rankings(self, *, stat_month: str) -> list[Dict[str, Any]]:
+        start_date, end_date = _month_bounds(stat_month)
+        return self._list_user_profit_rankings(
+            start_date=start_date, end_date=end_date,
+            stat_label=str(stat_month or "").strip(), monthly=True,
+        )
+
+    def _list_user_auto_trigger_rule_settlements(self, *, user_id: int, start_date: str, end_date: str) -> list[Dict[str, Any]]:
+        # Reports outlive runtime counters and use the actual settlement date.
+        rows = self._fetch_all(
+            """
+            SELECT
+                p.rule_id, p.user_id,
+                COALESCE(NULLIF(r.name, ''), MAX(p.rule_name)) AS rule_name,
+                COALESCE(r.status, 'deleted') AS status,
+                r.id IS NULL AS is_deleted,
+                SUM(p.profit_amount) AS profit_amount,
+                SUM(p.loss_amount) AS loss_amount,
+                SUM(p.net_profit) AS net_profit,
+                SUM(p.settled_event_count) AS settled_event_count,
+                SUM(p.hit_count) AS hit_count,
+                SUM(p.miss_count) AS miss_count,
+                SUM(p.refund_count) AS refund_count
+            FROM profit_report_daily_stats p
+            LEFT JOIN auto_trigger_rules r ON r.id = p.rule_id AND r.user_id = p.user_id
+            WHERE p.user_id = ? AND p.origin_type = 'auto'
+              AND p.stat_date >= ? AND p.stat_date < ?
+            GROUP BY p.rule_id, p.user_id, r.id, r.name, r.status
+            ORDER BY net_profit DESC, rule_id ASC
+            """,
+            (int(user_id), start_date, end_date),
+        )
+        return [
+            {
+                "rule_id": int(row.get("rule_id") or 0),
+                "user_id": int(row["user_id"]),
+                "rule_name": str(row.get("rule_name") or ("规则 #%s" % int(row.get("rule_id") or 0))),
+                "profit_amount": _round_money(row.get("profit_amount")),
+                "loss_amount": _round_money(row.get("loss_amount")),
+                "net_profit": _round_money(row.get("net_profit")),
+                "settled_event_count": int(row.get("settled_event_count") or 0),
+                "hit_count": int(row.get("hit_count") or 0),
+                "miss_count": int(row.get("miss_count") or 0),
+                "refund_count": int(row.get("refund_count") or 0),
+                "status": str(row.get("status") or "deleted"),
+                "is_deleted": bool(row.get("is_deleted")),
+            }
+            for row in rows
+        ]
+
+    def list_user_daily_auto_trigger_rule_stats(self, *, user_id: int, stat_date: str) -> list[Dict[str, Any]]:
+        start = datetime.strptime(str(stat_date or "").strip(), "%Y-%m-%d")
+        items = self._list_user_auto_trigger_rule_settlements(
+            user_id=int(user_id), start_date=start.strftime("%Y-%m-%d"),
+            end_date=(start + timedelta(days=1)).strftime("%Y-%m-%d"),
+        )
+        return [{**item, "stat_date": start.strftime("%Y-%m-%d")} for item in items]
+
+    def get_user_daily_auto_trigger_profit_summary(self, *, user_id: int, stat_date: str) -> Dict[str, Any]:
+        items = self.list_user_daily_auto_trigger_rule_stats(user_id=int(user_id), stat_date=stat_date)
+        return self._aggregate_auto_trigger_summary(user_id=int(user_id), stat_label=str(stat_date or "").strip(), items=items)
+
+    def list_user_monthly_auto_trigger_rule_stats(self, *, user_id: int, stat_month: str) -> list[Dict[str, Any]]:
+        start_date, end_date = _month_bounds(stat_month)
+        items = self._list_user_auto_trigger_rule_settlements(
+            user_id=int(user_id), start_date=start_date, end_date=end_date,
+        )
+        return [{**item, "stat_month": str(stat_month or "").strip()} for item in items]
+
+    def get_user_monthly_auto_trigger_profit_summary(self, *, user_id: int, stat_month: str) -> Dict[str, Any]:
+        items = self.list_user_monthly_auto_trigger_rule_stats(user_id=int(user_id), stat_month=stat_month)
+        return self._aggregate_auto_trigger_summary(user_id=int(user_id), stat_label=str(stat_month or "").strip(), items=items, monthly=True)
+
+    @staticmethod
+    def _aggregate_auto_trigger_summary(*, user_id: int, stat_label: str, items: list[Dict[str, Any]], monthly: bool = False) -> Dict[str, Any]:
+        return {
+            "stat_month" if monthly else "stat_date": stat_label,
+            "user_id": int(user_id),
+            "profit_amount": _round_money(sum(float(item.get("profit_amount") or 0) for item in items)),
+            "loss_amount": _round_money(sum(float(item.get("loss_amount") or 0) for item in items)),
+            "net_profit": _round_money(sum(float(item.get("net_profit") or 0) for item in items)),
+            "settled_event_count": sum(int(item.get("settled_event_count") or 0) for item in items),
+            "hit_count": sum(int(item.get("hit_count") or 0) for item in items),
+            "miss_count": sum(int(item.get("miss_count") or 0) for item in items),
+            "refund_count": sum(int(item.get("refund_count") or 0) for item in items),
+            "rule_count": len(items),
+        }
 
     def get_telegram_daily_report_record(self, report_key: str) -> Optional[Dict[str, Any]]:
         row = self._fetch_one(
@@ -6891,20 +7137,9 @@ class DatabaseRepository:
                 ),
             )
 
-            if source_id is not None:
-                self._upsert_subscription_daily_stat(
-                    conn,
-                    stat_date=_shanghai_date(now),
-                    user_id=int(user_id),
-                    subscription_id=int(subscription_id),
-                    source_id=int(source_id),
-                    profit_delta=profit_delta,
-                    loss_delta=loss_delta,
-                    net_delta=net_delta,
-                    result_type=normalized_result,
-                    updated_at=now,
-                )
-
+            # Routed auto-trigger settlements are reported through rule/route
+            # statistics only.  Keeping them out of subscription_daily_stats
+            # prevents manual plan reports from mixing the two data sources.
             stat_date = str(current_event.get("auto_trigger_stat_date") or "").strip() or _shanghai_date(now)
             rule_stat = self.upsert_auto_trigger_rule_daily_stat(
                 conn,
@@ -7445,7 +7680,7 @@ class DatabaseRepository:
                     reason=threshold_status,
                 )
 
-            if source_id is not None:
+            if source_id is not None and current_event.get("auto_trigger_rule_id") is None:
                 self._upsert_subscription_daily_stat(
                     conn,
                     stat_date=_shanghai_date(now),

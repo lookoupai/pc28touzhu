@@ -52,16 +52,18 @@ def main() -> int:
             timezone_name=report["timezone"],
         )
         print(
-            "report cycle stat_date=%s skipped=%s reason=%s delivery=%s"
+            "report cycle stat_date=%s skipped=%s reason=%s delivery=%s monthly=%s"
             % (
                 result.get("stat_date") or "--",
                 result.get("skipped"),
                 result.get("reason") or "--",
                 result.get("delivery_status") or "--",
+                (result.get("monthly") or {}).get("delivery_status") or (result.get("monthly") or {}).get("reason") or "--",
             )
         )
         if config.telegram_report.once:
-            return 1 if result.get("delivery_status") == "failed" else 0
+            failed = result.get("delivery_status") == "failed" or (result.get("monthly") or {}).get("delivery_status") == "failed"
+            return 1 if failed else 0
         time.sleep(report["interval_seconds"])
 
 

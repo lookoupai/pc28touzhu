@@ -1069,7 +1069,7 @@
         const item = binding || null;
         const commandState = item && item.is_bound ? "已可查询" : "待绑定";
         const commandDetail = item && item.is_bound
-            ? "当前 Telegram 私聊账号已绑定，可直接使用 /subs、/play、/restart、/profit 和 /plan。"
+            ? "当前 Telegram 私聊账号已绑定，可直接使用 /subs、/play、/restart、/profit、/plan、/rule 和 /auto。"
             : "完成绑定后，收益查询 Bot 才能识别你当前平台账号。";
         const codeValue = tokenState.isActive
             ? tokenState.bindToken
@@ -1133,7 +1133,7 @@
         }
         botBindingCommand.textContent = currentBindCommand();
         botBindingCommandMeta.textContent = tokenState.isActive
-            ? "复制后直接发送给收益查询 Bot。绑定完成后，可继续使用 /subs、/play、/restart、/profit 和 /plan。"
+            ? "复制后直接发送给收益查询 Bot。绑定完成后，可继续使用 /subs、/play、/restart、/profit、/plan、/rule 和 /auto。"
             : "绑定码只在网页端生成。当前默认有效期来自后台 Telegram 配置。";
         botBindingActions.innerHTML = [
             '<button id="generateBindCodeBtn" class="primary-btn" type="button">' + escapeHtml(generateButtonText) + '</button>',
@@ -1143,7 +1143,7 @@
         botBindingInstructions.innerHTML = [
             '<p>1. 绑定码只能在网页端生成，默认有效期由后台 Telegram 配置决定。</p>',
             '<p>2. 到 Telegram 私聊收益查询 Bot，先发送 <span class="mono-text">/start</span>，再发送上面的绑定命令。</p>',
-            '<p>3. 绑定完成后，可在同一个私聊窗口继续发送 <span class="mono-text">/subs</span>、<span class="mono-text">/play</span>、<span class="mono-text">/restart</span>、<span class="mono-text">/profit</span>、<span class="mono-text">/plan</span>。</p>',
+            '<p>3. 绑定完成后，可在同一个私聊窗口继续发送 <span class="mono-text">/subs</span>、<span class="mono-text">/play</span>、<span class="mono-text">/restart</span>、<span class="mono-text">/profit</span>、<span class="mono-text">/plan</span>、<span class="mono-text">/rule</span>、<span class="mono-text">/auto</span>。</p>',
             '<p>4. 如果 Bot 没有响应，请联系管理员确认收益查询 Bot 已启用且 Token 正常。</p>',
         ].join("");
     }
@@ -7434,11 +7434,11 @@
             }
             if (target.classList.contains("delete-subscription-btn")) {
                 const subscriptionId = target.getAttribute("data-subscription-id");
-                if (!subscriptionId || !confirmDangerousAction("删除后将无法恢复。只有已归档的跟单策略才能被删除。确认继续吗？")) {
+                if (!subscriptionId || !confirmDangerousAction("策略配置删除后无法恢复，已结算的历史盈亏会保留。请先归档并处理完待执行、待结算投注。确认删除吗？")) {
                     return;
                 }
                 try {
-                    await deleteEntity("/api/platform/subscriptions/", subscriptionId, "跟单策略已删除。");
+                    await deleteEntity("/api/platform/subscriptions/", subscriptionId, "跟单策略已删除，历史盈亏已保留。");
                 } catch (error) {
                     setStatus(error.message, true);
                 }
