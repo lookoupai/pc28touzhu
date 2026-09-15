@@ -76,6 +76,21 @@
     }
 
     function deriveAiSourceName(urlObject) {
+        const fieldNames = {
+            odd_even: "单双",
+            big_small: "大小",
+            combo: "组合",
+        };
+        if (urlObject.pathname === "/api/export/consensus/pc28/best-pair-signals") {
+            const ids = urlObject.searchParams.get("predictor_ids");
+            return ids ? "PC28 最佳组合共识 (" + ids + ")" : "PC28 最佳组合共识";
+        }
+        if (urlObject.pathname === "/api/export/consensus/pc28/signals") {
+            const ids = urlObject.searchParams.get("predictor_ids");
+            const field = urlObject.searchParams.get("field");
+            const name = "PC28 多方案共识" + (field ? " " + (fieldNames[field] || field) : "");
+            return ids ? name + " (" + ids + ")" : name;
+        }
         const match = urlObject.pathname.match(/\/(?:api\/export|public|api\/public)\/predictors\/(\d+)(?:\/signals)?$/);
         if (match) {
             return "AITradingSimulator 方案 #" + match[1];
@@ -116,13 +131,15 @@
 
         const validPath = (
             /^\/api\/export\/predictors\/\d+\/signals$/.test(parsed.pathname) ||
-            parsed.pathname === "/api/export/signals/pc28"
+            parsed.pathname === "/api/export/signals/pc28" ||
+            parsed.pathname === "/api/export/consensus/pc28/signals" ||
+            parsed.pathname === "/api/export/consensus/pc28/best-pair-signals"
         );
         if (!validPath) {
-            throw new Error("当前只支持 AITradingSimulator 的公开方案页链接或 signals 导出地址");
+            throw new Error("当前只支持 AITradingSimulator 的公开方案页链接或 signals/consensus 导出地址");
         }
 
-        if (parsed.pathname !== "/api/export/signals/pc28") {
+        if (/^\/api\/export\/predictors\/\d+\/signals$/.test(parsed.pathname)) {
             const view = parsed.searchParams.get("view");
             if (!view) {
                 parsed.searchParams.set("view", "execution");
