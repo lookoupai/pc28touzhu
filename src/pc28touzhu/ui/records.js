@@ -114,7 +114,15 @@
             },
             body: options && options.body ? JSON.stringify(options.body) : undefined,
         });
-        const payload = await response.json();
+        let payload;
+        try {
+            payload = await response.json();
+        } catch (error) {
+            if (!response.ok) {
+                throw new Error("服务器返回了非预期的响应（HTTP " + response.status + "），请求可能被网站防火墙拦截，请联系管理员处理。");
+            }
+            throw error;
+        }
         if (!response.ok) {
             throw new Error(payload.error || "请求失败");
         }

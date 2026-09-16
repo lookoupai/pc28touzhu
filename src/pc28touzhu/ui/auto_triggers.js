@@ -74,6 +74,9 @@
         });
         const data = await response.json().catch(function () { return {}; });
         if (!response.ok) {
+            if (!data || !Object.keys(data).length) {
+                throw new Error("服务器返回了非预期的响应（HTTP " + response.status + "），请求可能被网站防火墙拦截，请联系管理员处理。");
+            }
             throw new Error(data.error || "请求失败");
         }
         return data;

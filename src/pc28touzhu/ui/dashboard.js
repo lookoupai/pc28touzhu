@@ -201,7 +201,15 @@
             },
             body: options && options.body ? JSON.stringify(options.body) : undefined,
         });
-        const payload = await response.json();
+        let payload;
+        try {
+            payload = await response.json();
+        } catch (error) {
+            if (!response.ok) {
+                throw new Error("服务器返回了非预期的响应（HTTP " + response.status + "），请求可能被网站防火墙拦截，请联系管理员处理。");
+            }
+            throw error;
+        }
         if (!response.ok) {
             throw new Error(payload.error || "请求失败");
         }
@@ -1020,7 +1028,7 @@
                         },
                         function (item) {
                             const fetchConfig = item.config && item.config.fetch ? item.config.fetch : {};
-                            return '<div class="cell-stack"><span class="mono-text">' + escapeHtml(truncateText(fetchConfig.url || "--", 80)) + '</span><span class="cell-muted">' + escapeHtml(formatJsonPreview(item.config || {}, "--")) + "</span></div>";
+                            return '<div class="cell-stack"><span class="mono-text">' + escapeHtml(fetchConfig.url || "--") + '</span><span class="cell-muted">' + escapeHtml(formatJsonPreview(item.config || {}, "--")) + "</span></div>";
                         },
                         function (item) {
                             return '<button class="ghost-btn table-action-btn" type="button" data-action="fetch-source" data-id="' + escapeHtml(String(item.id)) + '">手动抓取</button>';

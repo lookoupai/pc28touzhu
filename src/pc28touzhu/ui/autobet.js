@@ -31,6 +31,7 @@
     const sourceCards = document.getElementById("sourceCards");
     const sourceList = document.getElementById("sourceList");
     const sourceForm = document.getElementById("sourceForm");
+    const sourceUrlError = document.getElementById("sourceUrlError");
     const accountCards = document.getElementById("accountList");
     const targetCards = document.getElementById("targetList");
     const subscriptionCards = document.getElementById("subscriptionList");
@@ -560,6 +561,15 @@
         statusMessage.classList.toggle("is-error", Boolean(isError));
     }
 
+    function setSourceUrlError(message) {
+        if (!(sourceUrlError instanceof HTMLElement)) {
+            return;
+        }
+        sourceUrlError.textContent = message || "";
+        sourceUrlError.classList.toggle("is-error", Boolean(message));
+        sourceUrlError.hidden = !message;
+    }
+
     function reportUiError(scope, error) {
         const message = error && error.message ? error.message : String(error || "未知错误");
         if (window.console && typeof window.console.error === "function") {
@@ -784,7 +794,15 @@
             },
             body: options && options.body ? JSON.stringify(options.body) : undefined,
         });
-        const payload = await response.json();
+        let payload;
+        try {
+            payload = await response.json();
+        } catch (error) {
+            if (!response.ok) {
+                throw new Error("服务器返回了非预期的响应（HTTP " + response.status + "），请求可能被网站防火墙拦截，请联系管理员处理。");
+            }
+            throw error;
+        }
         if (!response.ok) {
             const reason = String(payload.why || "").trim();
             const nextStep = String(payload.next_step || "").trim();
@@ -5301,7 +5319,7 @@
                 detailMarkup: [
                     renderConfigDetailRows([
                         renderConfigDetailRow("来源说明", subscriptionText),
-                        renderConfigDetailRow("抓取地址", truncateText(fetchConfig.url || "--", 88), "mono-text"),
+                        renderConfigDetailRow("抓取地址", fetchConfig.url || "--", "mono-text"),
                         renderConfigDetailRow("最近 raw", latestRawText),
                         renderConfigDetailRow("最近 signal", latestSignalText),
                         renderConfigDetailRow("最近任务", latestJobText),
@@ -5963,6 +5981,7 @@
         if (!source || !(sourceForm instanceof HTMLFormElement)) {
             return;
         }
+        setSourceUrlError("");
         const fetchConfig = source.config && source.config.fetch ? source.config.fetch : {};
         sourceForm.elements.edit_id.value = String(source.id || "");
         sourceForm.elements.name.value = source.name || "";
@@ -6463,6 +6482,7 @@
         sourceForm.addEventListener("submit", async function (event) {
             event.preventDefault();
             try {
+                setSourceUrlError("");
                 if (!state.currentUser) {
                     throw new Error("请先登录，再导入来源");
                 }
@@ -6470,7 +6490,9 @@
                 const normalized = normalizeAiSourceUrl(sourceForm.elements.source_url.value);
                 const existingSource = findImportedAiSourceByUrl(normalized.url, editId);
                 if (existingSource) {
-                    throw new Error("该方案已存在于你的来源列表中，无需重复导入");
+                    throw new Error(editId
+                        ? "保存失败：这个链接已经是来源「" + (existingSource.name || "--") + "」的抓取地址。"
+                        : "该方案已存在于你的来源列表中，无需重复导入");
                 }
                 setButtonBusy(createSourceBtn, true, editId ? "保存中..." : "导入中...");
                 const payload = {
@@ -6506,16 +6528,25 @@
                 setStatus(editId ? "来源已更新。" : "来源已导入，现在可以直接把它接到跟单策略。", false);
             } catch (error) {
                 setStatus(error.message, true);
+                setSourceUrlError(error.message);
             } finally {
                 setButtonBusy(createSourceBtn, false, sourceForm && String(sourceForm.elements.edit_id.value || "").trim() ? "保存来源" : "导入来源");
             }
         });
+
+        sourceForm.addEventListener("invalid", function (event) {
+            if (event.target !== sourceForm.elements.source_url) {
+                return;
+            }
+            setSourceUrlError("链接格式未通过浏览器校验：请检查粘贴内容是否夹带了多余文字（例如“抓取地址”标签）、中文标点，或缺少 http:// 前缀。");
+        }, true);
     }
 
     if (cancelSourceEditBtn instanceof HTMLButtonElement && sourceForm instanceof HTMLFormElement) {
         cancelSourceEditBtn.addEventListener("click", function () {
             sourceForm.reset();
             sourceForm.elements.visibility.value = "private";
+            setSourceUrlError("");
             setFormEditingState(sourceForm, createSourceBtn, cancelSourceEditBtn, false, "导入来源");
         });
     }
