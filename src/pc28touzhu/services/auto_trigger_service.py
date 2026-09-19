@@ -548,6 +548,21 @@ def _daily_risk_stop_reason(daily_risk_control: Dict[str, Any], *, net_profit: A
     return ""
 
 
+def _has_stopped_route_days(repository: Any, *, rule: Dict[str, Any], stat_date: str) -> bool:
+    for route in rule.get("routes") or []:
+        route_id = int(route.get("id") or 0)
+        if route_id <= 0:
+            continue
+        stat = repository.get_auto_trigger_route_daily_stat(
+            route_id=route_id,
+            user_id=int(rule["user_id"]),
+            stat_date=stat_date,
+        )
+        if str(stat.get("status") or "") == "stopped":
+            return True
+    return False
+
+
 def _resume_stopped_rule_day_if_allowed(
     repository: Any,
     *,
@@ -560,11 +575,15 @@ def _resume_stopped_rule_day_if_allowed(
         user_id=int(rule["user_id"]),
         stat_date=stat_date,
     )
-    if str(stat.get("status") or "") != "stopped":
-        return None
     if _daily_risk_stop_reason(daily_risk_control, net_profit=stat.get("net_profit")):
         return None
     if not hasattr(repository, "resume_auto_trigger_rule_day"):
+        return None
+    # 规则级停了、或只是路由级停了（如路由独立风控先触顶），都要把当日恢复，
+    # 否则路由级 stopped 会让评估一直以 route_daily_risk_stopped 跳过。
+    rule_day_stopped = str(stat.get("status") or "") == "stopped"
+    route_day_stopped = _has_stopped_route_days(repository, rule=rule, stat_date=stat_date)
+    if not rule_day_stopped and not route_day_stopped:
         return None
     return repository.resume_auto_trigger_rule_day(
         rule_id=int(rule["id"]),
@@ -627,11 +646,14 @@ def resume_auto_trigger_rule_day(repository: Any, *, rule_id: Any, user_id: Any,
         user_id=normalized_user_id,
         stat_date=resolved_stat_date,
     )
-    if str(stat.get("status") or "") != "stopped":
-        return {"resumed": False, "stat": stat}
     stop_reason = _daily_risk_stop_reason(daily_risk_control, net_profit=stat.get("net_profit"))
     if stop_reason:
         raise ValueError("当前当日净盈亏仍达到规则风控阈值，请先调高阈值或关闭规则每日风控")
+    # 路由级当日停止（含路由独立风控先触顶）同样需要恢复；仓库方法幂等，非 stopped 行不受影响。
+    rule_day_stopped = str(stat.get("status") or "") == "stopped"
+    route_day_stopped = _has_stopped_route_days(repository, rule=rule, stat_date=resolved_stat_date)
+    if not rule_day_stopped and not route_day_stopped:
+        return {"resumed": False, "stat": stat}
     resumed_stat = repository.resume_auto_trigger_rule_day(
         rule_id=normalized_rule_id,
         user_id=normalized_user_id,

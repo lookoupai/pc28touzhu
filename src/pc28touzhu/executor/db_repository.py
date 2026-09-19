@@ -4663,6 +4663,11 @@ class DatabaseRepository:
         user_id: int,
         stat_date: str,
     ) -> Dict[str, Any]:
+        """恢复规则当日触发：规则日统计、规则轮次与路由日统计一起解除停止。
+
+        触发评估要求规则级和路由级当日统计都不处于 stopped 才会开新一轮，
+        因此恢复必须覆盖两层，否则规则当天仍然无法继续。幂等：非 stopped 的行不动。
+        """
         now = _utc_now_iso()
         normalized_stat_date = str(stat_date or "").strip()
         with self._connect() as conn:
@@ -4682,6 +4687,17 @@ class DatabaseRepository:
                 UPDATE auto_trigger_rule_runs
                 SET status = 'active',
                     stop_reason = '',
+                    stopped_at = NULL,
+                    updated_at = ?
+                WHERE rule_id = ? AND user_id = ? AND stat_date = ? AND status = 'stopped'
+                """,
+                (now, int(rule_id), int(user_id), normalized_stat_date),
+            )
+            conn.execute(
+                """
+                UPDATE auto_trigger_route_daily_stats
+                SET status = 'active',
+                    stopped_reason = '',
                     stopped_at = NULL,
                     updated_at = ?
                 WHERE rule_id = ? AND user_id = ? AND stat_date = ? AND status = 'stopped'

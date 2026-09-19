@@ -1177,6 +1177,207 @@ class AutoTriggerServiceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             resume_auto_trigger_rule_day(self.repo, rule_id=rule["id"], user_id=self.user_id, stat_date=today)
 
+    def test_update_disabling_daily_risk_resumes_rule_and_route_days(self):
+        first_target = self.repo.list_delivery_targets(self.user_id)[0]
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "取消日风控恢复路由日",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "daily_risk_control": {"enabled": True, "profit_target": 9, "loss_limit": 0},
+                "routes": [
+                    {
+                        "delivery_target_id": first_target["id"],
+                        "name": "继承风控路由",
+                        "subscription_risk_mode": "disabled",
+                    },
+                ],
+            },
+        )["item"]
+        route_id = rule["routes"][0]["id"]
+
+        first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+        self.assertEqual(first["summary"]["triggered_count"], 1)
+        job = self.repo.list_execution_jobs(user_id=self.user_id)[0]
+        event = self.repo.get_progression_event(job["progression_event_id"])
+        self.repo.settle_progression_event(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            result_type="hit",
+            progression_event_id=event["id"],
+        )
+        stat_date = event["auto_trigger_stat_date"]
+        rule_stat = self.repo.get_auto_trigger_rule_daily_stat(
+            rule_id=rule["id"], user_id=self.user_id, stat_date=stat_date,
+        )
+        route_stat = self.repo.get_auto_trigger_route_daily_stat(
+            route_id=route_id, user_id=self.user_id, stat_date=stat_date,
+        )
+        self.assertEqual(rule_stat["status"], "stopped")
+        self.assertEqual(route_stat["status"], "stopped")
+
+        updated = update_auto_trigger_rule(
+            self.repo,
+            rule_id=rule["id"],
+            user_id=self.user_id,
+            payload={
+                **rule,
+                "daily_risk_control": {"enabled": False, "profit_target": 0, "loss_limit": 0},
+            },
+        )
+        self.assertTrue(updated["daily_risk_resume"]["resumed"])
+        self.assertEqual(
+            self.repo.get_auto_trigger_rule_daily_stat(
+                rule_id=rule["id"], user_id=self.user_id, stat_date=stat_date,
+            )["status"],
+            "active",
+        )
+        self.assertEqual(
+            self.repo.get_auto_trigger_route_daily_stat(
+                route_id=route_id, user_id=self.user_id, stat_date=stat_date,
+            )["status"],
+            "active",
+        )
+
+        self.repo.create_signal_record(
+            source_id=self.source["id"],
+            lottery_type="pc28",
+            issue_no="20260418003",
+            bet_type="big_small",
+            bet_value="小",
+            normalized_payload={"message_text": "小10"},
+            published_at="2026-04-18T09:35:00Z",
+        )
+        second = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(issue_no="20260418002"),
+        )
+        self.assertEqual(second["summary"]["triggered_count"], 1)
+
+    def test_manual_resume_clears_route_only_daily_stop(self):
+        second_target = self.repo.create_delivery_target_record(
+            user_id=self.user_id,
+            executor_type="telegram_group",
+            target_key="-100654323",
+            target_name="正式群 B",
+            status="active",
+        )
+        first_target = self.repo.list_delivery_targets(self.user_id)[0]
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "路由独立触顶后手动恢复",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "daily_risk_control": {"enabled": True, "profit_target": 100, "loss_limit": 0},
+                "routes": [
+                    {
+                        "delivery_target_id": first_target["id"],
+                        "name": "A 路由",
+                        "route_risk_mode": "override",
+                        "route_risk_control": {"enabled": True, "profit_target": 9, "loss_limit": 0},
+                        "subscription_risk_mode": "disabled",
+                    },
+                    {
+                        "delivery_target_id": second_target["id"],
+                        "name": "B 路由",
+                        "route_risk_mode": "inherit_rule",
+                        "subscription_risk_mode": "disabled",
+                    },
+                ],
+            },
+        )["item"]
+        route_a_id = rule["routes"][0]["id"]
+        route_b_id = rule["routes"][1]["id"]
+
+        first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+        self.assertEqual(first["summary"]["triggered_count"], 1)
+        jobs = self.repo.list_execution_jobs(user_id=self.user_id)
+        job_a = next(job for job in jobs if job["auto_trigger_route_id"] == route_a_id)
+        event_a = self.repo.get_progression_event(job_a["progression_event_id"])
+        self.repo.settle_progression_event(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            result_type="hit",
+            progression_event_id=event_a["id"],
+        )
+        stat_date = event_a["auto_trigger_stat_date"]
+        self.assertEqual(
+            self.repo.get_auto_trigger_route_daily_stat(
+                route_id=route_a_id, user_id=self.user_id, stat_date=stat_date,
+            )["status"],
+            "stopped",
+        )
+        self.assertEqual(
+            self.repo.get_auto_trigger_rule_daily_stat(
+                rule_id=rule["id"], user_id=self.user_id, stat_date=stat_date,
+            )["status"],
+            "active",
+        )
+
+        resumed = resume_auto_trigger_rule_day(self.repo, rule_id=rule["id"], user_id=self.user_id, stat_date=stat_date)
+        self.assertTrue(resumed["resumed"])
+        self.assertEqual(
+            self.repo.get_auto_trigger_route_daily_stat(
+                route_id=route_a_id, user_id=self.user_id, stat_date=stat_date,
+            )["status"],
+            "active",
+        )
+
+        job_b = next(job for job in jobs if job["auto_trigger_route_id"] == route_b_id)
+        event_b = self.repo.get_progression_event(job_b["progression_event_id"])
+        self.repo.settle_progression_event(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            result_type="miss",
+            progression_event_id=event_b["id"],
+        )
+        self.repo.report_job_result(
+            job_id=str(job_b["id"]),
+            executor_id="test-executor",
+            attempt_no=1,
+            delivery_status="sent",
+            remote_message_id="remote-b-1",
+            executed_at="2026-04-18T09:40:00Z",
+            raw_result={},
+            error_message=None,
+        )
+
+        self.repo.create_signal_record(
+            source_id=self.source["id"],
+            lottery_type="pc28",
+            issue_no="20260418003",
+            bet_type="big_small",
+            bet_value="小",
+            normalized_payload={"message_text": "小10"},
+            published_at="2026-04-18T09:35:00Z",
+        )
+        second = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(issue_no="20260418002"),
+        )
+        self.assertEqual(second["summary"]["triggered_count"], 1)
+        all_jobs = self.repo.list_execution_jobs(user_id=self.user_id, limit=10)
+        route_a_jobs = [job for job in all_jobs if job["auto_trigger_route_id"] == route_a_id]
+        route_b_jobs = [job for job in all_jobs if job["auto_trigger_route_id"] == route_b_id]
+        self.assertEqual(len(route_a_jobs), 2)
+        self.assertEqual(len(route_b_jobs), 2)
+
     def test_auto_trigger_profit_uses_event_stat_date_when_settled_after_midnight(self):
         rule = create_auto_trigger_rule(
             self.repo,
