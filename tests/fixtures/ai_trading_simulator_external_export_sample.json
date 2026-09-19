@@ -1,0 +1,82 @@
+{
+ "items": [
+  {
+   "issue_no": "3483593",
+   "lottery_type": "pc28",
+   "published_at": "2026-09-18 16:19:46",
+   "schema_version": "1.0",
+   "signal_id": "pc28-predictor-1-3483593",
+   "signals": [
+    {
+     "bet_type": "big_small",
+     "bet_value": "大",
+     "confidence": 72.4941,
+     "message_text": "大10",
+     "normalized_payload": {
+      "odds_profile": "regular",
+      "predictor_id": 1,
+      "primary_metric": "big_small",
+      "profit_rule_id": "pc28_netdisk",
+      "requested_targets": [
+       "big_small",
+       "odd_even",
+       "combo"
+      ],
+      "share_level": "records"
+     }
+    },
+    {
+     "bet_type": "odd_even",
+     "bet_value": "单",
+     "confidence": 72.4941,
+     "message_text": "单10",
+     "normalized_payload": {
+      "odds_profile": "regular",
+      "predictor_id": 1,
+      "primary_metric": "big_small",
+      "profit_rule_id": "pc28_netdisk",
+      "requested_targets": [
+       "big_small",
+       "odd_even",
+       "combo"
+      ],
+      "share_level": "records"
+     }
+    },
+    {
+     "bet_type": "combo",
+     "bet_value": "大单",
+     "confidence": 72.4941,
+     "message_text": "大单10",
+     "normalized_payload": {
+      "odds_profile": "regular",
+      "predictor_id": 1,
+      "primary_metric": "big_small",
+      "profit_rule_id": "pc28_netdisk",
+      "requested_targets": [
+       "big_small",
+       "odd_even",
+       "combo"
+      ],
+      "share_level": "records"
+     }
+    }
+   ],
+   "source_ref": {
+    "engine_type": "external",
+    "fetched_at": "2026-09-18 16:19:46",
+    "model_key": "quantum",
+    "model_name": "理论概率偏差",
+    "platform": "AITradingSimulator",
+    "predictor_id": 1,
+    "predictor_name": "JND 量子模型",
+    "share_level": "records",
+    "source_name": "JND 公共来源"
+   },
+   "source_type": "ai_trading_simulator"
+  }
+ ],
+ "lottery_type": "pc28",
+ "predictor_id": 1,
+ "view": "execution"
+}
