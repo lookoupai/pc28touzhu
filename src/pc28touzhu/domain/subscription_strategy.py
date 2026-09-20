@@ -4,9 +4,11 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from pc28touzhu.domain.pc28_play_filter import normalize_play_filter_keys, normalize_play_filter_mode
+from pc28touzhu.domain.pc28_profit_rules import coerce_odds_overrides, drop_matching_catalog_odds, normalize_odds_overrides
 from pc28touzhu.domain.settlement_rules import (
     ALLOWED_SETTLEMENT_RULE_IDS,
     DEFAULT_SETTLEMENT_RULE_ID,
+    get_settlement_rule,
     legacy_profit_rule_args_from_settlement_rule_id as _legacy_profit_rule_args_from_settlement_rule_id,
     normalize_settlement_rule_id,
     settlement_rule_id_from_legacy as _settlement_rule_id_from_legacy,
@@ -185,7 +187,15 @@ def _normalize_settlement_policy_v2(payload: Any) -> Dict[str, Any]:
     )
     if rule_source == "subscription_fixed" and not settlement_rule_id:
         raise ValueError("固定结算规则时，strategy.settlement_policy.settlement_rule_id 不能为空")
-    return {
+    odds_overrides: Dict[str, Any] = {}
+    if rule_source == "subscription_fixed":
+        try:
+            odds_overrides = normalize_odds_overrides(data.get("odds_overrides"))
+        except ValueError as exc:
+            raise ValueError("strategy.settlement_policy.odds_overrides 无效：%s" % exc) from exc
+        rule = get_settlement_rule(settlement_rule_id) or {}
+        odds_overrides = drop_matching_catalog_odds(odds_overrides, rule.get("implemented_odds"))
+    policy = {
         "rule_source": rule_source,
         "settlement_rule_id": settlement_rule_id,
         "fallback_profit_ratio": _normalize_ratio(
@@ -193,6 +203,9 @@ def _normalize_settlement_policy_v2(payload: Any) -> Dict[str, Any]:
             "strategy.settlement_policy.fallback_profit_ratio",
         ),
     }
+    if rule_source == "subscription_fixed":
+        policy["odds_overrides"] = odds_overrides
+    return policy
 
 
 def _normalize_risk_control_v2(payload: Any) -> Dict[str, Any]:
@@ -547,10 +560,15 @@ def resolve_settlement_runtime_policy(strategy: Any, signal_payload: Any) -> Dic
         allow_empty=True,
     )
     if str(settlement_policy.get("rule_source") or "follow_signal") == "subscription_fixed" and configured_rule_id:
+        rule = get_settlement_rule(configured_rule_id) or {}
         return {
             "rule_source": "subscription_fixed",
             "settlement_rule_id": configured_rule_id,
             "fallback_profit_ratio": fallback_profit_ratio,
+            "odds_overrides": drop_matching_catalog_odds(
+                coerce_odds_overrides(settlement_policy.get("odds_overrides")),
+                rule.get("implemented_odds"),
+            ),
             "resolved_from": "subscription",
         }
     signal_rule_id = resolve_signal_settlement_rule_id(signal_payload)
@@ -559,12 +577,14 @@ def resolve_settlement_runtime_policy(strategy: Any, signal_payload: Any) -> Dic
             "rule_source": "follow_signal",
             "settlement_rule_id": signal_rule_id,
             "fallback_profit_ratio": fallback_profit_ratio,
+            "odds_overrides": {},
             "resolved_from": "signal_hint",
         }
     return {
         "rule_source": str(settlement_policy.get("rule_source") or "follow_signal"),
         "settlement_rule_id": None,
         "fallback_profit_ratio": fallback_profit_ratio,
+        "odds_overrides": {},
         "resolved_from": "fallback_ratio",
     }
 

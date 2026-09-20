@@ -529,6 +529,19 @@ select[multiple].text-input {
     display: none;
 }
 
+.route-odds-fields {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    align-items: end;
+}
+
+.route-odds-fields .field-hint,
+.route-odds-fields .ghost-btn {
+    grid-column: 1 / -1;
+    justify-self: flex-start;
+}
+
 .guard-group-head {
     margin-bottom: 0;
 }

@@ -1321,6 +1321,119 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(settled["event"]["settlement_snapshot"]["rule_source"], "subscription_fixed")
         self.assertEqual(settled["event"]["result_context"]["result_type"], "hit")
 
+    def test_progression_event_settlement_uses_fullpay_2_8_odds(self):
+        user_id = self.repo.create_user("sub-fullpay-2-8-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-fullpay-2-8",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={
+                "play_filter": {"mode": "all", "selected_keys": []},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                "settlement_policy": {
+                    "rule_source": "subscription_fixed",
+                    "settlement_rule_id": "pc28_fullpay_2_8_regular",
+                    "fallback_profit_ratio": 1.0,
+                },
+                "risk_control": {"enabled": False, "profit_target": 0, "loss_limit": 0},
+                "dispatch": {"expire_after_seconds": 120},
+            },
+        )
+        signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407016",
+            bet_type="big_small",
+            bet_value="大",
+        )
+        event = self.repo.create_progression_event_record(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            signal_id=signal["id"],
+            issue_no="20260407016",
+            progression_step=1,
+            stake_amount=10,
+            base_stake=10,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            status="placed",
+        )
+
+        settled = self.repo.settle_progression_event(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            result_type="hit",
+            progression_event_id=event["id"],
+        )
+
+        self.assertEqual(settled["financial"]["realized_profit"], 18.4)
+        self.assertEqual(settled["event"]["profit_delta"], 18.4)
+        self.assertEqual(settled["event"]["settlement_rule_id"], "pc28_fullpay_2_8_regular")
+        self.assertEqual(settled["event"]["settlement_snapshot"]["implemented_odds"]["big_small"], 2.84)
+
+    def test_progression_event_settlement_uses_subscription_odds_overlay(self):
+        user_id = self.repo.create_user("sub-odds-overlay-user")
+        source_id = self.repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="internal_ai",
+            name="model-odds-overlay",
+        )["id"]
+        subscription = self.repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source_id,
+            strategy={
+                "play_filter": {"mode": "all", "selected_keys": []},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                "settlement_policy": {
+                    "rule_source": "subscription_fixed",
+                    "settlement_rule_id": "pc28_fullpay_2_8_regular",
+                    "fallback_profit_ratio": 1.0,
+                    "odds_overrides": {"big_small": 2.9, "odd_even": 2.9},
+                },
+                "risk_control": {"enabled": False, "profit_target": 0, "loss_limit": 0},
+                "dispatch": {"expire_after_seconds": 120},
+            },
+        )
+        signal = self.repo.create_signal_record(
+            source_id=source_id,
+            lottery_type="pc28",
+            issue_no="20260407017",
+            bet_type="big_small",
+            bet_value="大",
+        )
+        event = self.repo.create_progression_event_record(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            signal_id=signal["id"],
+            issue_no="20260407017",
+            progression_step=1,
+            stake_amount=10,
+            base_stake=10,
+            multiplier=1,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            status="placed",
+        )
+
+        settled = self.repo.settle_progression_event(
+            subscription_id=subscription["id"],
+            user_id=user_id,
+            result_type="hit",
+            progression_event_id=event["id"],
+        )
+
+        self.assertEqual(settled["financial"]["realized_profit"], 19.0)
+        self.assertEqual(settled["event"]["profit_delta"], 19.0)
+        self.assertEqual(settled["event"]["settlement_snapshot"]["odds_overrides"]["big_small"], 2.9)
+        self.assertEqual(settled["event"]["settlement_snapshot"]["resolved_odds"]["big_small"], 2.9)
+
     def test_subscription_serialization_projects_strategy_v1_and_v2(self):
         user_id = self.repo.create_user("sub-strategy-v2-user")
         source_id = self.repo.create_source_record(

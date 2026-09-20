@@ -448,6 +448,7 @@ def _dispatch_signal_for_auto_trigger_routes(
                     fallback_profit_ratio=float(settlement_policy.get("fallback_profit_ratio") or 1.0),
                     resolved_from=str(settlement_policy.get("resolved_from") or ""),
                     signal=signal,
+                    odds_overrides=settlement_policy.get("odds_overrides"),
                 ),
                 auto_trigger_rule_id=(
                     int(auto_trigger_context["rule_id"]) if auto_trigger_context.get("rule_id") else None
@@ -788,6 +789,7 @@ def _dispatch_signal(
                         fallback_profit_ratio=float(settlement_policy.get("fallback_profit_ratio") or 1.0),
                         resolved_from=str(settlement_policy.get("resolved_from") or ""),
                         signal=signal,
+                        odds_overrides=settlement_policy.get("odds_overrides"),
                     ),
                     auto_trigger_rule_id=(
                         int(resolved_auto_trigger_context["rule_id"])

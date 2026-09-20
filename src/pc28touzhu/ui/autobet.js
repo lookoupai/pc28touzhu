@@ -117,10 +117,24 @@
     const SUBSCRIPTION_SETTLEMENT_RULE_LABELS = {
         follow_signal: "跟随来源规则",
         subscription_fixed: "固定规则",
-        pc28_netdisk_regular: "网盘常规",
-        pc28_netdisk_abc: "网盘 ABC",
+        pc28_netdisk_regular: "OK游戏网盘",
+        pc28_netdisk_abc: "OK游戏网盘 ABC",
         pc28_high_regular: "高赔常规",
         pc28_high_abc: "高赔 ABC",
+        pc28_fullpay_netdisk_regular: "彩28网盘",
+        pc28_fullpay_2_0_regular: "满赔2.0",
+        pc28_fullpay_2_8_regular: "满赔2.8",
+        pc28_fullpay_3_2_regular: "满赔3.2",
+    };
+    const SETTLEMENT_RULE_UI_PRESETS = {
+        pc28_netdisk_regular: {bigSmall: 1.98, comboSmallOddBigEven: 3.6, comboBigOddSmallEven: 4.2, refundHint: "无回本。OK游戏网盘 1.98 / 3.6 / 4.2。"},
+        pc28_netdisk_abc: {bigSmall: 1.98, comboSmallOddBigEven: 4.8, comboBigOddSmallEven: 3.1, refundHint: "无回本。OK游戏网盘 ABC 目录。"},
+        pc28_high_regular: {bigSmall: 2.846, comboSmallOddBigEven: 6.78, comboBigOddSmallEven: 6.33, refundHint: "中奖时遇 13/14、对子、顺子、豹子退本。这是旧高赔目录 2.846 / 6.78 / 6.33，与满赔2.8 的 2.84 / 6.79 不是同一套。"},
+        pc28_high_abc: {bigSmall: 1.98, comboSmallOddBigEven: 4.9, comboBigOddSmallEven: 3.1, refundHint: "中奖时遇 13/14、对子、顺子、豹子退本。高赔 ABC 目录。"},
+        pc28_fullpay_netdisk_regular: {bigSmall: 1.99, comboSmallOddBigEven: 3.71, comboBigOddSmallEven: 4.32, refundHint: "大小单双中奖遇 0/27 退本，未中全亏；组合不退。顺子不含 890/190。"},
+        pc28_fullpay_2_0_regular: {bigSmall: 2, comboSmallOddBigEven: 4.76, comboBigOddSmallEven: 4.32, refundHint: "大小单双中奖遇 0/27 退本，未中全亏。组合中奖遇 13/14 退本。大小单双中奖 13/14：≤2001 赔 2，>2001 降赔 1.98。"},
+        pc28_fullpay_2_8_regular: {bigSmall: 2.84, comboSmallOddBigEven: 6.79, comboBigOddSmallEven: 6.33, refundHint: "大小单双和组合中奖时遇 13/14、对子、顺子、豹子退本。顺子含 890/190。"},
+        pc28_fullpay_3_2_regular: {bigSmall: 3.2, comboSmallOddBigEven: 7, comboBigOddSmallEven: 6.5, refundHint: "中奖时遇 13/14 退本；中奖时 ABC 任球为 0 或 9 退本。不对子、顺子、豹子单独退。"},
     };
     const RECENT_PIPELINE_LIMIT = 200;
     const templatePreviewPayload = document.getElementById("templatePreviewPayload");
@@ -2270,6 +2284,108 @@
         }
     }
 
+    function settlementRulePreset(ruleId) {
+        return SETTLEMENT_RULE_UI_PRESETS[String(ruleId || "")] || SETTLEMENT_RULE_UI_PRESETS.pc28_netdisk_regular;
+    }
+
+    function sameOddsValue(left, right) {
+        return Math.round(Number(left) * 10000) === Math.round(Number(right) * 10000);
+    }
+
+    function parseOddsInputValue(raw) {
+        const text = String(raw == null ? "" : raw).trim();
+        if (!text) {
+            return null;
+        }
+        const odds = Number(text);
+        if (!Number.isFinite(odds) || odds <= 1 || odds > 1000) {
+            throw new Error("自定义赔率必须大于 1 且不超过 1000");
+        }
+        return Math.round(odds * 10000) / 10000;
+    }
+
+    function oddsInputValue(value) {
+        if (value == null || value === "") {
+            return "";
+        }
+        return String(value);
+    }
+
+    function comboOverrideValue(overrides, names, fallback) {
+        const payload = overrides && typeof overrides === "object" ? overrides : {};
+        const combo = payload.combo && typeof payload.combo === "object" ? payload.combo : {};
+        for (let index = 0; index < names.length; index += 1) {
+            if (combo[names[index]] != null && String(combo[names[index]]).trim() !== "") {
+                return combo[names[index]];
+            }
+        }
+        return fallback;
+    }
+
+    function fillSubscriptionOddsInputs(ruleId, overrides) {
+        if (!(subscriptionForm instanceof HTMLFormElement)) {
+            return;
+        }
+        const preset = settlementRulePreset(ruleId);
+        const payload = overrides && typeof overrides === "object" ? overrides : {};
+        const bigSmall = payload.big_small != null ? payload.big_small : (payload.odd_even != null ? payload.odd_even : preset.bigSmall);
+        if (subscriptionForm.elements.odds_big_small instanceof HTMLInputElement) {
+            subscriptionForm.elements.odds_big_small.value = oddsInputValue(bigSmall);
+        }
+        if (subscriptionForm.elements.odds_combo_small_odd_big_even instanceof HTMLInputElement) {
+            subscriptionForm.elements.odds_combo_small_odd_big_even.value = oddsInputValue(
+                comboOverrideValue(payload, ["小单", "大双"], payload.combo_small_odd_big_even != null ? payload.combo_small_odd_big_even : preset.comboSmallOddBigEven)
+            );
+        }
+        if (subscriptionForm.elements.odds_combo_big_odd_small_even instanceof HTMLInputElement) {
+            subscriptionForm.elements.odds_combo_big_odd_small_even.value = oddsInputValue(
+                comboOverrideValue(payload, ["大单", "小双"], payload.combo_big_odd_small_even != null ? payload.combo_big_odd_small_even : preset.comboBigOddSmallEven)
+            );
+        }
+        const hint = document.getElementById("subscriptionSettlementRefundHint");
+        if (hint instanceof HTMLElement) {
+            hint.textContent = preset.refundHint + " 与预设相同的赔率不会写入自定义覆盖。";
+        }
+    }
+
+    function collectSubscriptionOddsOverrides(ruleId) {
+        if (!(subscriptionForm instanceof HTMLFormElement)) {
+            return {};
+        }
+        const preset = settlementRulePreset(ruleId);
+        const overrides = {};
+        const bigSmall = parseOddsInputValue(subscriptionForm.elements.odds_big_small && subscriptionForm.elements.odds_big_small.value);
+        if (bigSmall != null && !sameOddsValue(bigSmall, preset.bigSmall)) {
+            overrides.big_small = bigSmall;
+            overrides.odd_even = bigSmall;
+        }
+        const comboA = parseOddsInputValue(subscriptionForm.elements.odds_combo_small_odd_big_even && subscriptionForm.elements.odds_combo_small_odd_big_even.value);
+        if (comboA != null && !sameOddsValue(comboA, preset.comboSmallOddBigEven)) {
+            overrides.combo = overrides.combo || {};
+            overrides.combo["小单"] = comboA;
+            overrides.combo["大双"] = comboA;
+        }
+        const comboB = parseOddsInputValue(subscriptionForm.elements.odds_combo_big_odd_small_even && subscriptionForm.elements.odds_combo_big_odd_small_even.value);
+        if (comboB != null && !sameOddsValue(comboB, preset.comboBigOddSmallEven)) {
+            overrides.combo = overrides.combo || {};
+            overrides.combo["大单"] = comboB;
+            overrides.combo["小双"] = comboB;
+        }
+        return overrides;
+    }
+
+    function hasCustomOddsOverrides(overrides) {
+        const payload = overrides && typeof overrides === "object" ? overrides : {};
+        if (payload.big_small != null || payload.odd_even != null) {
+            return true;
+        }
+        if (payload.combo_small_odd_big_even != null || payload.combo_big_odd_small_even != null) {
+            return true;
+        }
+        const combo = payload.combo && typeof payload.combo === "object" ? payload.combo : {};
+        return Object.keys(combo).length > 0;
+    }
+
     function syncSubscriptionSettlementUI() {
         if (!(subscriptionForm instanceof HTMLFormElement)) {
             return;
@@ -2296,6 +2412,18 @@
             subscriptionSettlementRuleHint.textContent = isFixedRule
                 ? "当前会强制按你指定的规则记收益盈亏，不再跟随来源信号里的结算口径。"
                 : "默认跟随来源信号里的结算规则。只有当你明确知道自己要统一按哪套口径记账时，才建议固定指定。";
+        }
+        if (isFixedRule && subscriptionForm.elements.settlement_rule_id instanceof HTMLSelectElement) {
+            const currentBigSmall = String((subscriptionForm.elements.odds_big_small && subscriptionForm.elements.odds_big_small.value) || "").trim();
+            if (!currentBigSmall) {
+                fillSubscriptionOddsInputs(subscriptionForm.elements.settlement_rule_id.value, {});
+            } else {
+                const hint = document.getElementById("subscriptionSettlementRefundHint");
+                const preset = settlementRulePreset(subscriptionForm.elements.settlement_rule_id.value);
+                if (hint instanceof HTMLElement) {
+                    hint.textContent = preset.refundHint + " 与预设相同的赔率不会写入自定义覆盖。";
+                }
+            }
         }
     }
 
@@ -2408,6 +2536,7 @@
         if (subscriptionForm.elements.settlement_rule_id instanceof HTMLSelectElement) {
             subscriptionForm.elements.settlement_rule_id.value = "pc28_netdisk_regular";
         }
+        fillSubscriptionOddsInputs("pc28_netdisk_regular", {});
         subscriptionForm.elements.fallback_profit_ratio.value = "1";
         if (subscriptionRiskControlEnabledCheckbox instanceof HTMLInputElement) {
             subscriptionRiskControlEnabledCheckbox.checked = false;
@@ -2837,7 +2966,8 @@
                 ? legacyPayload.risk_control.win_profit_ratio
                 : 1);
         if (ruleSource === "subscription_fixed" && settlementRuleId) {
-            return "结算 " + (SUBSCRIPTION_SETTLEMENT_RULE_LABELS[settlementRuleId] || settlementRuleId) + " · 兜底净利 " + amountText(fallbackProfitRatio) + " 倍";
+            const custom = hasCustomOddsOverrides(settlementPolicy.odds_overrides) ? " · 自定义赔率" : "";
+            return "结算 " + (SUBSCRIPTION_SETTLEMENT_RULE_LABELS[settlementRuleId] || settlementRuleId) + custom + " · 兜底净利 " + amountText(fallbackProfitRatio) + " 倍";
         }
         return "结算 跟随来源规则 · 兜底净利 " + amountText(fallbackProfitRatio) + " 倍";
     }
@@ -5545,10 +5675,14 @@
                 : '<article class="subscription-blocker-card"><strong>当前没有阻塞项</strong><p>账号、群组测试、模板和启用状态都正常，后续重点看执行记录。</p></article>';
             const progression = item.progression && typeof item.progression === "object" ? item.progression : null;
             const financial = item.financial && typeof item.financial === "object" ? item.financial : null;
+            const settlementRuleId = String((item.strategy_v2 && item.strategy_v2.settlement_policy && item.strategy_v2.settlement_policy.settlement_rule_id) || "").trim();
+            const settlementCopy = settlementRuleId && SETTLEMENT_RULE_UI_PRESETS[settlementRuleId]
+                ? SETTLEMENT_RULE_UI_PRESETS[settlementRuleId].refundHint
+                : "系统会按当前结算规则识别回本（如中奖遇 0/27、13/14、对子、顺子、豹子、ABC 含 0/9）。";
             const settlementPanelMarkup = progression && progression.pending_event_id && String(progression.pending_status || "") === "placed"
                 ? [
                     '<div class="subscription-settlement-panel">',
-                    '<div class="subscription-settlement-copy"><strong>自动结算</strong><p>输入和值或三球表达式，例如 14、4+4+6、1,2,3。高赔会自动识别 13/14、豹子、顺子、对子等特殊退本。</p></div>',
+                    '<div class="subscription-settlement-copy"><strong>自动结算</strong><p>输入和值或三球表达式，例如 14、4+4+6、1,2,3。' + escapeHtml(settlementCopy) + '</p></div>',
                     '<div class="subscription-settlement-form">',
                     '<input class="text-input subscription-settlement-input" type="text" name="draw_input" placeholder="例如：4+4+6 或 14" inputmode="numeric" autocomplete="off">',
                     '<button class="ghost-btn resolve-progression-btn" type="button" data-subscription-id="' + item.id + '" data-progression-event-id="' + progression.pending_event_id + '">自动结算</button>',
@@ -7147,6 +7281,9 @@
             const settlementRuleId = settlementRuleSource === "subscription_fixed"
                 ? String(form.settlement_rule_id.value || "").trim()
                 : "";
+            const oddsOverrides = settlementRuleSource === "subscription_fixed"
+                ? collectSubscriptionOddsOverrides(settlementRuleId)
+                : {};
             const fallbackProfitRatio = Number(form.fallback_profit_ratio.value || 0);
             const riskControlEnabled = subscriptionRiskControlEnabledCheckbox instanceof HTMLInputElement
                 && subscriptionRiskControlEnabledCheckbox.checked;
@@ -7201,6 +7338,7 @@
                     rule_source: settlementRuleSource,
                     settlement_rule_id: settlementRuleSource === "subscription_fixed" ? settlementRuleId : null,
                     fallback_profit_ratio: fallbackProfitRatio,
+                    ...(settlementRuleSource === "subscription_fixed" ? {odds_overrides: oddsOverrides} : {}),
                 },
                 risk_control: {
                     enabled: riskControlEnabled,
@@ -7371,6 +7509,10 @@
                 if (subscriptionForm.elements.settlement_rule_id instanceof HTMLSelectElement) {
                     subscriptionForm.elements.settlement_rule_id.value = String(settlementPolicy.settlement_rule_id || "pc28_netdisk_regular");
                 }
+                fillSubscriptionOddsInputs(
+                    String(settlementPolicy.settlement_rule_id || "pc28_netdisk_regular"),
+                    settlementPolicy.odds_overrides
+                );
                 refreshSubscriptionTargetSelects();
                 setSubscriptionTargetSelection(subscriptionDispatchTargetIds(item));
                 syncSubscriptionTargetHint();
@@ -7585,6 +7727,23 @@
     if (subscriptionSettlementRuleSourceSelect instanceof HTMLSelectElement) {
         subscriptionSettlementRuleSourceSelect.addEventListener("change", function () {
             syncSubscriptionSettlementUI();
+            if (currentSubscriptionSettlementRuleSource() === "subscription_fixed" && subscriptionForm instanceof HTMLFormElement && subscriptionForm.elements.settlement_rule_id instanceof HTMLSelectElement) {
+                fillSubscriptionOddsInputs(subscriptionForm.elements.settlement_rule_id.value, {});
+            }
+        });
+    }
+    if (subscriptionForm instanceof HTMLFormElement && subscriptionForm.elements.settlement_rule_id instanceof HTMLSelectElement) {
+        subscriptionForm.elements.settlement_rule_id.addEventListener("change", function () {
+            fillSubscriptionOddsInputs(subscriptionForm.elements.settlement_rule_id.value, {});
+        });
+    }
+    const resetSubscriptionOddsBtn = document.getElementById("resetSubscriptionOddsBtn");
+    if (resetSubscriptionOddsBtn instanceof HTMLButtonElement) {
+        resetSubscriptionOddsBtn.addEventListener("click", function () {
+            if (!(subscriptionForm instanceof HTMLFormElement) || !(subscriptionForm.elements.settlement_rule_id instanceof HTMLSelectElement)) {
+                return;
+            }
+            fillSubscriptionOddsInputs(subscriptionForm.elements.settlement_rule_id.value, {});
         });
     }
 

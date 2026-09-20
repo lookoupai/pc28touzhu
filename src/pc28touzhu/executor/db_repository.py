@@ -10,10 +10,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from pc28touzhu.domain.pc28_play_filter import resolve_signal_play_filter_key
-from pc28touzhu.domain.pc28_profit_rules import resolve_pc28_hit_profit
-from pc28touzhu.domain.settlement_rules import build_settlement_snapshot
+from pc28touzhu.domain.pc28_profit_rules import coerce_odds_overrides
+from pc28touzhu.domain.settlement_rules import build_settlement_snapshot, resolve_pc28_settled_hit_detail
 from pc28touzhu.domain.subscription_strategy import (
-    legacy_profit_rule_args_from_settlement_rule_id,
     present_subscription_item,
     resolve_risk_control_policy,
     resolve_settlement_runtime_policy,
@@ -221,6 +220,7 @@ def _event_settlement_context(
     if event_rule_id or snapshot:
         normalized_rule_id = event_rule_id or str(snapshot.get("settlement_rule_id") or "").strip().lower() or None
         fallback_profit_ratio = round(float(snapshot.get("fallback_profit_ratio") or 1.0), 4)
+        odds_overrides = coerce_odds_overrides(snapshot.get("odds_overrides"))
         if not snapshot:
             snapshot = build_settlement_snapshot(
                 rule_source="event_snapshot",
@@ -228,11 +228,13 @@ def _event_settlement_context(
                 fallback_profit_ratio=fallback_profit_ratio,
                 resolved_from="event_row",
                 signal=signal,
+                odds_overrides=odds_overrides,
             )
         return {
             "rule_source": str(snapshot.get("rule_source") or ""),
             "settlement_rule_id": normalized_rule_id,
             "fallback_profit_ratio": fallback_profit_ratio,
+            "odds_overrides": odds_overrides,
             "resolved_from": str(snapshot.get("resolved_from") or "event_snapshot"),
             "snapshot": dict(snapshot),
         }
@@ -243,6 +245,7 @@ def _event_settlement_context(
         fallback_profit_ratio=float(settlement_policy.get("fallback_profit_ratio") or 1.0),
         resolved_from=str(settlement_policy.get("resolved_from") or ""),
         signal=signal,
+        odds_overrides=settlement_policy.get("odds_overrides"),
     )
     return {
         **settlement_policy,
@@ -250,21 +253,43 @@ def _event_settlement_context(
     }
 
 
-def _progression_hit_profit_delta(*, settlement_context: Dict[str, Any], signal: Optional[Dict[str, Any]], stake_amount: float) -> float:
+def _progression_hit_profit_delta(
+    *,
+    settlement_context: Dict[str, Any],
+    signal: Optional[Dict[str, Any]],
+    stake_amount: float,
+    result_context: Optional[dict] = None,
+) -> float:
     settlement_rule_id = settlement_context.get("settlement_rule_id")
     fallback_profit_ratio = settlement_context.get("fallback_profit_ratio")
+    snapshot = settlement_context.get("snapshot") if isinstance(settlement_context.get("snapshot"), dict) else {}
+    odds_overrides = coerce_odds_overrides(
+        settlement_context.get("odds_overrides")
+        if settlement_context.get("odds_overrides") is not None
+        else snapshot.get("odds_overrides")
+    )
+    draw_snapshot = None
+    if isinstance(result_context, dict):
+        raw_draw = result_context.get("draw_snapshot")
+        draw_snapshot = raw_draw if isinstance(raw_draw, dict) else None
     if settlement_rule_id:
-        legacy_rule = legacy_profit_rule_args_from_settlement_rule_id(settlement_rule_id)
-        if legacy_rule:
-            profit_delta = resolve_pc28_hit_profit(
-                stake_amount=float(stake_amount or 0),
-                bet_type=str((signal or {}).get("bet_type") or ""),
-                bet_value=str((signal or {}).get("bet_value") or ""),
-                profit_rule_id=legacy_rule.get("profit_rule_id"),
-                odds_profile=legacy_rule.get("odds_profile"),
-            )
-            if profit_delta is not None:
-                return _round_money(profit_delta)
+        detail = resolve_pc28_settled_hit_detail(
+            stake_amount=float(stake_amount or 0),
+            signal=signal,
+            settlement_rule_id=settlement_rule_id,
+            odds_overrides=odds_overrides,
+            draw_snapshot=draw_snapshot,
+            snapshot=snapshot,
+        )
+        if detail is not None:
+            adjustment = detail.get("adjustment")
+            if adjustment:
+                next_snapshot = dict(snapshot)
+                resolved_odds = dict(next_snapshot.get("resolved_odds") or {})
+                resolved_odds["adjustment"] = adjustment
+                next_snapshot["resolved_odds"] = resolved_odds
+                settlement_context["snapshot"] = next_snapshot
+            return _round_money(detail.get("profit"))
     return _round_money(float(stake_amount or 0) * float(fallback_profit_ratio or 1.0))
 
 
@@ -7115,6 +7140,7 @@ class DatabaseRepository:
                     settlement_context=settlement_context,
                     signal=signal,
                     stake_amount=stake_amount,
+                    result_context=result_context,
                 )
                 net_delta = profit_delta
             elif normalized_result == "miss":
@@ -7541,6 +7567,7 @@ class DatabaseRepository:
                     settlement_context=settlement_context,
                     signal=signal,
                     stake_amount=stake_amount,
+                    result_context=result_context,
                 )
                 net_delta = profit_delta
             elif normalized_result == "miss":

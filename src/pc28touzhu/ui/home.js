@@ -184,13 +184,23 @@
             ? payloadV2.settlement_policy
             : {};
         const settlementLabels = {
-            pc28_netdisk_regular: "网盘常规",
-            pc28_netdisk_abc: "网盘 ABC",
+            pc28_netdisk_regular: "OK游戏网盘",
+            pc28_netdisk_abc: "OK游戏网盘 ABC",
             pc28_high_regular: "高赔常规",
             pc28_high_abc: "高赔 ABC",
+            pc28_fullpay_netdisk_regular: "彩28网盘",
+            pc28_fullpay_2_0_regular: "满赔2.0",
+            pc28_fullpay_2_8_regular: "满赔2.8",
+            pc28_fullpay_3_2_regular: "满赔3.2",
         };
+        const customOdds = settlementPolicy.odds_overrides && typeof settlementPolicy.odds_overrides === "object"
+            && (
+                settlementPolicy.odds_overrides.big_small != null
+                || settlementPolicy.odds_overrides.odd_even != null
+                || settlementPolicy.odds_overrides.combo
+            );
         const settlementSummary = String(settlementPolicy.rule_source || "follow_signal") === "subscription_fixed" && settlementPolicy.settlement_rule_id
-            ? ("结算 " + (settlementLabels[settlementPolicy.settlement_rule_id] || settlementPolicy.settlement_rule_id))
+            ? ("结算 " + (settlementLabels[settlementPolicy.settlement_rule_id] || settlementPolicy.settlement_rule_id) + (customOdds ? "·自定义赔率" : ""))
             : "结算 跟随来源";
         if (payload.base_stake != null && payload.multiplier != null && payload.max_steps != null) {
             return [playSummary, "倍投", "起始 " + payload.base_stake, "每次乘 " + payload.multiplier, "最多追 " + payload.max_steps + " 手", settlementSummary].join(" · ");

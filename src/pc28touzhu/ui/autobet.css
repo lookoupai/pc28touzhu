@@ -1237,9 +1237,23 @@
     min-width: 0;
 }
 
+.subscription-odds-fields {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    align-items: start;
+}
+
+.subscription-odds-fields .field-hint,
+.subscription-odds-fields .ghost-btn {
+    grid-column: 1 / -1;
+    justify-self: flex-start;
+}
+
 .subscription-fixed-field[hidden],
 .subscription-play-filter-fields[hidden],
 .subscription-settlement-fixed-field[hidden],
+.subscription-odds-fields[hidden],
 .subscription-follow-tip-field[hidden],
 .subscription-martingale-field[hidden],
 .subscription-martingale-advanced-field[hidden],

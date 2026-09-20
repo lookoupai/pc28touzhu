@@ -782,12 +782,32 @@
                                     <label class="subscription-settlement-fixed-field" hidden>
                                         <span>固定结算规则</span>
                                         <select class="text-input" name="settlement_rule_id">
-                                            <option value="pc28_netdisk_regular">网盘常规</option>
-                                            <option value="pc28_netdisk_abc">网盘 ABC</option>
-                                            <option value="pc28_high_regular">高赔常规</option>
+                                            <option value="pc28_netdisk_regular">OK游戏网盘</option>
+                                            <option value="pc28_netdisk_abc">OK游戏网盘 ABC</option>
+                                            <option value="pc28_high_regular">高赔常规（2.846）</option>
                                             <option value="pc28_high_abc">高赔 ABC</option>
+                                            <option value="pc28_fullpay_netdisk_regular">彩28网盘</option>
+                                            <option value="pc28_fullpay_2_0_regular">满赔2.0</option>
+                                            <option value="pc28_fullpay_2_8_regular">满赔2.8</option>
+                                            <option value="pc28_fullpay_3_2_regular">满赔3.2</option>
                                         </select>
                                     </label>
+                                    <div class="subscription-settlement-fixed-field subscription-odds-fields wide" hidden>
+                                        <label>
+                                            <span>大小 / 单双赔率</span>
+                                            <input class="text-input" name="odds_big_small" type="number" min="1.0001" max="1000" step="0.0001">
+                                        </label>
+                                        <label>
+                                            <span>大双 / 小单赔率</span>
+                                            <input class="text-input" name="odds_combo_small_odd_big_even" type="number" min="1.0001" max="1000" step="0.0001">
+                                        </label>
+                                        <label>
+                                            <span>大单 / 小双赔率</span>
+                                            <input class="text-input" name="odds_combo_big_odd_small_even" type="number" min="1.0001" max="1000" step="0.0001">
+                                        </label>
+                                        <p id="subscriptionSettlementRefundHint" class="field-hint">固定规则后可微调这三项赔率；与预设相同则不会写入自定义覆盖。</p>
+                                        <button id="resetSubscriptionOddsBtn" class="ghost-btn" type="button">恢复预设赔率</button>
+                                    </div>
                                     <label class="subscription-settlement-field">
                                         <span>兜底净利倍数</span>
                                         <input class="text-input" name="fallback_profit_ratio" type="number" min="0.01" step="0.01" value="1">

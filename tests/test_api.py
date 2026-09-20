@@ -3143,6 +3143,94 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(payload["item"]["strategy_v2"]["settlement_policy"]["settlement_rule_id"], "pc28_high_regular")
         self.assertEqual(payload["item"]["strategy_v2"]["dispatch"]["delivery_target_ids"], [target["id"]])
 
+    def test_create_subscription_follow_signal_drops_odds_overrides(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions",
+                method="POST",
+                body={
+                    "source_id": 1,
+                    "strategy_v2": {
+                        "play_filter": {"mode": "all", "selected_keys": []},
+                        "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                        "settlement_policy": {
+                            "rule_source": "follow_signal",
+                            "fallback_profit_ratio": 1.0,
+                            "odds_overrides": {
+                                "big_small": 2.9,
+                                "odd_even": 2.9,
+                                "combo": {"小单": 6.9, "大双": 6.9},
+                            },
+                        },
+                    },
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        settlement_policy = payload["item"]["strategy_v2"]["settlement_policy"]
+        self.assertEqual(settlement_policy["rule_source"], "follow_signal")
+        self.assertNotIn("odds_overrides", settlement_policy)
+
+    def test_create_subscription_fixed_rule_persists_nested_combo_overlay(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions",
+                method="POST",
+                body={
+                    "source_id": 1,
+                    "strategy_v2": {
+                        "play_filter": {"mode": "all", "selected_keys": []},
+                        "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                        "settlement_policy": {
+                            "rule_source": "subscription_fixed",
+                            "settlement_rule_id": "pc28_fullpay_2_8_regular",
+                            "fallback_profit_ratio": 1.0,
+                            "odds_overrides": {
+                                "big_small": 2.84,
+                                "odd_even": 2.9,
+                                "combo": {"小单": 6.79, "大双": 6.79, "大单": 6.4, "小双": 6.4},
+                            },
+                        },
+                    },
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "200 OK")
+        settlement_policy = payload["item"]["strategy_v2"]["settlement_policy"]
+        self.assertEqual(settlement_policy["settlement_rule_id"], "pc28_fullpay_2_8_regular")
+        self.assertEqual(
+            settlement_policy["odds_overrides"],
+            {"odd_even": 2.9, "combo": {"大单": 6.4, "小双": 6.4}},
+        )
+
+    def test_create_subscription_rejects_odds_overrides_out_of_range(self):
+        status, _, payload = invoke(
+            self.app,
+            build_testing_environ(
+                "/api/platform/subscriptions",
+                method="POST",
+                body={
+                    "source_id": 1,
+                    "strategy_v2": {
+                        "play_filter": {"mode": "all", "selected_keys": []},
+                        "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                        "settlement_policy": {
+                            "rule_source": "subscription_fixed",
+                            "settlement_rule_id": "pc28_fullpay_2_8_regular",
+                            "odds_overrides": {"big_small": 1001},
+                        },
+                    },
+                },
+                headers=self.session_headers,
+            ),
+        )
+        self.assertEqual(status, "400 Bad Request")
+        self.assertIn("odds_overrides", payload["error"])
+
     def test_create_subscription_requires_selected_delivery_targets_when_requested(self):
         status, _, payload = invoke(
             self.app,

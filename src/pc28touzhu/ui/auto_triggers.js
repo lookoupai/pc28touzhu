@@ -35,11 +35,25 @@
         [100, "近100期"],
     ];
     const settlementRuleOptions = [
-        ["pc28_netdisk_regular", "PC28 网盘常规"],
-        ["pc28_netdisk_abc", "PC28 网盘 ABC"],
+        ["pc28_netdisk_regular", "OK游戏网盘"],
+        ["pc28_netdisk_abc", "OK游戏网盘 ABC"],
         ["pc28_high_regular", "PC28 高赔常规"],
         ["pc28_high_abc", "PC28 高赔 ABC"],
+        ["pc28_fullpay_netdisk_regular", "彩28网盘"],
+        ["pc28_fullpay_2_0_regular", "满赔2.0"],
+        ["pc28_fullpay_2_8_regular", "满赔2.8"],
+        ["pc28_fullpay_3_2_regular", "满赔3.2"],
     ];
+    const SETTLEMENT_RULE_UI_PRESETS = {
+        pc28_netdisk_regular: {bigSmall: 1.98, comboSmallOddBigEven: 3.6, comboBigOddSmallEven: 4.2, refundHint: "无回本。OK游戏网盘"},
+        pc28_netdisk_abc: {bigSmall: 1.98, comboSmallOddBigEven: 4.8, comboBigOddSmallEven: 3.1, refundHint: "无回本。OK游戏网盘 ABC"},
+        pc28_high_regular: {bigSmall: 2.846, comboSmallOddBigEven: 6.78, comboBigOddSmallEven: 6.33, refundHint: "中奖遇 13/14、对子、顺子、豹子退本（旧高赔 2.846）"},
+        pc28_high_abc: {bigSmall: 1.98, comboSmallOddBigEven: 4.9, comboBigOddSmallEven: 3.1, refundHint: "中奖遇 13/14、对子、顺子、豹子退本"},
+        pc28_fullpay_netdisk_regular: {bigSmall: 1.99, comboSmallOddBigEven: 3.71, comboBigOddSmallEven: 4.32, refundHint: "大小单双中奖遇 0/27 退本，未中全亏；组合不退"},
+        pc28_fullpay_2_0_regular: {bigSmall: 2, comboSmallOddBigEven: 4.76, comboBigOddSmallEven: 4.32, refundHint: "大小单双中奖遇 0/27 退本，未中全亏；组合中奖 13/14 退本；大小 13/14 注>2001 降赔 1.98"},
+        pc28_fullpay_2_8_regular: {bigSmall: 2.84, comboSmallOddBigEven: 6.79, comboBigOddSmallEven: 6.33, refundHint: "中奖遇 13/14、对子、顺子、豹子退本"},
+        pc28_fullpay_3_2_regular: {bigSmall: 3.2, comboSmallOddBigEven: 7, comboBigOddSmallEven: 6.5, refundHint: "中奖遇 13/14 退本；中奖且 ABC 含 0/9 退本"},
+    };
 
     function $(id) {
         return document.getElementById(id);
@@ -544,6 +558,91 @@
         }).join("");
     }
 
+    function settlementRulePreset(ruleId) {
+        return SETTLEMENT_RULE_UI_PRESETS[String(ruleId || "")] || SETTLEMENT_RULE_UI_PRESETS.pc28_netdisk_regular;
+    }
+
+    function sameOddsValue(left, right) {
+        return Math.round(Number(left) * 10000) === Math.round(Number(right) * 10000);
+    }
+
+    function parseOddsInputValue(raw) {
+        const text = String(raw == null ? "" : raw).trim();
+        if (!text) {
+            return null;
+        }
+        const odds = Number(text);
+        if (!Number.isFinite(odds) || odds <= 1 || odds > 1000) {
+            throw new Error("自定义赔率必须大于 1 且不超过 1000");
+        }
+        return Math.round(odds * 10000) / 10000;
+    }
+
+    function comboOverrideValue(overrides, names, fallback) {
+        const payload = overrides && typeof overrides === "object" ? overrides : {};
+        const combo = payload.combo && typeof payload.combo === "object" ? payload.combo : {};
+        for (let index = 0; index < names.length; index += 1) {
+            if (combo[names[index]] != null && String(combo[names[index]]).trim() !== "") {
+                return combo[names[index]];
+            }
+        }
+        return fallback;
+    }
+
+    function routeOddsValues(ruleId, overrides) {
+        const preset = settlementRulePreset(ruleId);
+        const payload = overrides && typeof overrides === "object" ? overrides : {};
+        return {
+            bigSmall: payload.big_small != null ? payload.big_small : (payload.odd_even != null ? payload.odd_even : preset.bigSmall),
+            comboSmallOddBigEven: comboOverrideValue(payload, ["小单", "大双"], payload.combo_small_odd_big_even != null ? payload.combo_small_odd_big_even : preset.comboSmallOddBigEven),
+            comboBigOddSmallEven: comboOverrideValue(payload, ["大单", "小双"], payload.combo_big_odd_small_even != null ? payload.combo_big_odd_small_even : preset.comboBigOddSmallEven),
+            refundHint: preset.refundHint,
+        };
+    }
+
+    function fillRouteOddsInputs(card, ruleId, overrides) {
+        const values = routeOddsValues(ruleId, overrides);
+        const bigSmall = card.querySelector(".route-odds-big-small");
+        const comboA = card.querySelector(".route-odds-combo-a");
+        const comboB = card.querySelector(".route-odds-combo-b");
+        const hint = card.querySelector(".route-settlement-hint");
+        if (bigSmall) {
+            bigSmall.value = values.bigSmall;
+        }
+        if (comboA) {
+            comboA.value = values.comboSmallOddBigEven;
+        }
+        if (comboB) {
+            comboB.value = values.comboBigOddSmallEven;
+        }
+        if (hint) {
+            hint.textContent = values.refundHint;
+        }
+    }
+
+    function collectRouteOddsOverrides(card, ruleId) {
+        const preset = settlementRulePreset(ruleId);
+        const overrides = {};
+        const bigSmall = parseOddsInputValue(card.querySelector(".route-odds-big-small") && card.querySelector(".route-odds-big-small").value);
+        if (bigSmall != null && !sameOddsValue(bigSmall, preset.bigSmall)) {
+            overrides.big_small = bigSmall;
+            overrides.odd_even = bigSmall;
+        }
+        const comboA = parseOddsInputValue(card.querySelector(".route-odds-combo-a") && card.querySelector(".route-odds-combo-a").value);
+        if (comboA != null && !sameOddsValue(comboA, preset.comboSmallOddBigEven)) {
+            overrides.combo = overrides.combo || {};
+            overrides.combo["小单"] = comboA;
+            overrides.combo["大双"] = comboA;
+        }
+        const comboB = parseOddsInputValue(card.querySelector(".route-odds-combo-b") && card.querySelector(".route-odds-combo-b").value);
+        if (comboB != null && !sameOddsValue(comboB, preset.comboBigOddSmallEven)) {
+            overrides.combo = overrides.combo || {};
+            overrides.combo["大单"] = comboB;
+            overrides.combo["小双"] = comboB;
+        }
+        return overrides;
+    }
+
     function routeRowHtml(route, index) {
         const item = route || {};
         const routeRiskMode = item.route_risk_mode || (item.risk_mode === "override" ? "override" : (item.risk_mode === "disabled" ? "disabled" : "inherit_rule"));
@@ -555,6 +654,7 @@
         const routeRiskControl = item.route_risk_control || item.risk_control || {};
         const subscriptionRiskControl = item.subscription_risk_control || {};
         const settlementPolicy = item.settlement_policy || {};
+        const oddsValues = routeOddsValues(settlementPolicy.settlement_rule_id || "pc28_netdisk_regular", settlementPolicy.odds_overrides);
         const stakingPolicy = item.staking_policy || {};
         const playFilter = item.play_filter || {};
         return '' +
@@ -580,6 +680,13 @@
                     '</div>' +
                     '<label class="field"><span>结算</span><select class="text-input route-settlement-mode">' + options([["inherit", "继承跟单方案"], ["override", "单独设置"]], settlementMode) + '</select></label>' +
                     '<label class="field route-settlement-field"><span>结算规则</span><select class="text-input route-settlement-rule">' + options(settlementRuleOptions, settlementPolicy.settlement_rule_id || "pc28_netdisk_regular") + '</select></label>' +
+                    '<div class="route-settlement-field route-odds-fields">' +
+                        '<label class="field"><span>大小/单双</span><input class="text-input route-odds-big-small" type="number" min="1.0001" max="1000" step="0.0001" value="' + escapeHtml(oddsValues.bigSmall) + '"></label>' +
+                        '<label class="field"><span>大双/小单</span><input class="text-input route-odds-combo-a" type="number" min="1.0001" max="1000" step="0.0001" value="' + escapeHtml(oddsValues.comboSmallOddBigEven) + '"></label>' +
+                        '<label class="field"><span>大单/小双</span><input class="text-input route-odds-combo-b" type="number" min="1.0001" max="1000" step="0.0001" value="' + escapeHtml(oddsValues.comboBigOddSmallEven) + '"></label>' +
+                        '<p class="field-hint route-settlement-hint">' + escapeHtml(oddsValues.refundHint) + '</p>' +
+                        '<button class="ghost-btn reset-route-odds-btn" type="button">恢复预设</button>' +
+                    '</div>' +
                     '<label class="field"><span>投注</span><select class="text-input route-staking-mode">' + options([["inherit", "继承跟单方案"], ["override", "固定金额"]], stakingMode) + '</select></label>' +
                     '<label class="field route-staking-field"><span>固定金额</span><input class="text-input route-fixed-amount" type="number" min="0.01" step="0.01" value="' + escapeHtml(stakingPolicy.fixed_amount || 10) + '"></label>' +
                     '<label class="field"><span>玩法</span><select class="text-input route-play-filter-mode">' + options([["inherit", "继承规则动作"], ["keep", "保持跟单方案"], ["matched_metric", "命中玩法"], ["fixed_metric", "固定玩法"]], playFilterMode) + '</select></label>' +
@@ -599,7 +706,9 @@
         const templateMode = card.querySelector(".route-template-mode").value;
         card.querySelector(".route-risk-fields").hidden = riskMode !== "override";
         card.querySelector(".route-subscription-risk-fields").hidden = subscriptionRiskMode !== "override";
-        card.querySelector(".route-settlement-field").hidden = settlementMode !== "override";
+        card.querySelectorAll(".route-settlement-field").forEach(function (field) {
+            field.hidden = settlementMode !== "override";
+        });
         card.querySelector(".route-staking-field").hidden = stakingMode !== "override";
         card.querySelector(".route-fixed-metric-field").hidden = playFilterMode !== "fixed_metric";
         card.querySelector(".route-template-field").hidden = templateMode !== "override";
@@ -772,9 +881,11 @@
                 };
             }
             if (settlementMode === "override") {
+                const settlementRuleId = card.querySelector(".route-settlement-rule").value;
                 route.settlement_policy = {
-                    settlement_rule_id: card.querySelector(".route-settlement-rule").value,
+                    settlement_rule_id: settlementRuleId,
                     fallback_profit_ratio: 1,
+                    odds_overrides: collectRouteOddsOverrides(card, settlementRuleId),
                 };
             }
             if (stakingMode === "override") {
@@ -973,7 +1084,21 @@
         $("routeRows").addEventListener("change", function (event) {
             const target = event.target;
             if (target instanceof HTMLElement && target.closest(".route-card")) {
-                updateRouteRowVisibility(target.closest(".route-card"));
+                const card = target.closest(".route-card");
+                updateRouteRowVisibility(card);
+                if (target.classList.contains("route-settlement-rule")) {
+                    fillRouteOddsInputs(card, target.value, {});
+                }
+            }
+        });
+        $("routeRows").addEventListener("click", function (event) {
+            const target = event.target;
+            if (target instanceof HTMLElement && target.classList.contains("reset-route-odds-btn")) {
+                const card = target.closest(".route-card");
+                const ruleSelect = card ? card.querySelector(".route-settlement-rule") : null;
+                if (card && ruleSelect) {
+                    fillRouteOddsInputs(card, ruleSelect.value, {});
+                }
             }
         });
         $("conditionRows").addEventListener("change", function (event) {

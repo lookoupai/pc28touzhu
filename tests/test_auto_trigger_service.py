@@ -2192,6 +2192,96 @@ class AutoTriggerServiceTests(unittest.TestCase):
             self.assertTrue(event["auto_trigger_rule_run_id"])
             self.assertTrue(event["auto_trigger_stat_date"])
 
+    def test_route_settlement_overlay_does_not_affect_inherit_route(self):
+        self.repo.update_subscription_record(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            source_id=self.source["id"],
+            strategy={
+                "play_filter": {"mode": "selected", "selected_keys": ["big_small:大", "big_small:小"]},
+                "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                "settlement_policy": {
+                    "rule_source": "subscription_fixed",
+                    "settlement_rule_id": "pc28_high_regular",
+                    "fallback_profit_ratio": 1.0,
+                },
+            },
+            status="active",
+        )
+        second_target = self.repo.create_delivery_target_record(
+            user_id=self.user_id,
+            executor_type="telegram_group",
+            target_key="-100654322",
+            target_name="覆盖赔率群",
+            status="active",
+        )
+        first_target = self.repo.list_delivery_targets(self.user_id)[0]
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "路由赔率覆盖",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "routes": [
+                    {
+                        "delivery_target_id": first_target["id"],
+                        "name": "继承方案",
+                        "risk_mode": "inherit",
+                        "settlement_mode": "inherit",
+                        "settlement_policy": {
+                            "settlement_rule_id": "pc28_fullpay_2_8_regular",
+                            "odds_overrides": {"big_small": 2.9, "odd_even": 2.9},
+                        },
+                    },
+                    {
+                        "delivery_target_id": second_target["id"],
+                        "name": "覆盖满赔2.8",
+                        "risk_mode": "inherit",
+                        "settlement_mode": "override",
+                        "settlement_policy": {
+                            "settlement_rule_id": "pc28_fullpay_2_8_regular",
+                            "odds_overrides": {
+                                "big_small": 2.9,
+                                "odd_even": 2.9,
+                                "combo": {"小单": 6.79, "大双": 6.79, "大单": 6.4, "小双": 6.4},
+                            },
+                        },
+                    },
+                ],
+            },
+        )["item"]
+        inherit_route = next(route for route in rule["routes"] if route["settlement_mode"] == "inherit")
+        override_route = next(route for route in rule["routes"] if route["settlement_mode"] == "override")
+        self.assertEqual(inherit_route["settlement_policy"], {})
+        self.assertEqual(override_route["settlement_policy"]["settlement_rule_id"], "pc28_fullpay_2_8_regular")
+        self.assertEqual(
+            override_route["settlement_policy"]["odds_overrides"],
+            {"big_small": 2.9, "odd_even": 2.9, "combo": {"大单": 6.4, "小双": 6.4}},
+        )
+
+        result = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        events = [
+            self.repo.get_progression_event(job["progression_event_id"])
+            for job in self.repo.list_execution_jobs(user_id=self.user_id)
+        ]
+        by_route = {event["auto_trigger_route_id"]: event for event in events}
+        inherit_event = by_route[inherit_route["id"]]
+        override_event = by_route[override_route["id"]]
+        self.assertEqual(inherit_event["settlement_rule_id"], "pc28_high_regular")
+        self.assertEqual(inherit_event["settlement_snapshot"]["odds_overrides"], {})
+        self.assertEqual(inherit_event["settlement_snapshot"]["implemented_odds"]["big_small"], 2.846)
+        self.assertEqual(override_event["settlement_rule_id"], "pc28_fullpay_2_8_regular")
+        self.assertEqual(override_event["settlement_snapshot"]["odds_overrides"]["big_small"], 2.9)
+        self.assertEqual(override_event["settlement_snapshot"]["resolved_odds"]["big_small"], 2.9)
+        self.assertEqual(override_event["settlement_snapshot"]["resolved_odds"]["combo"]["大单"], 6.4)
+
     def test_route_dispatch_allows_signal_matching_performance_issue(self):
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
         rule = create_auto_trigger_rule(

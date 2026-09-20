@@ -1674,10 +1674,13 @@ def resolve_subscription_progression(repository: Any, *, subscription_id: Any, u
 
     settlement_policy = resolve_settlement_runtime_policy(current.get("strategy_v2") or current.get("strategy"), signal.get("normalized_payload"))
     settlement_rule_id = str(current_event.get("settlement_rule_id") or settlement_policy.get("settlement_rule_id") or "").strip()
+    snapshot = current_event.get("settlement_snapshot") if isinstance(current_event.get("settlement_snapshot"), dict) else {}
+    frozen_rule = snapshot.get("rule") if isinstance(snapshot.get("rule"), dict) else None
     resolved = resolve_pc28_result_for_signal(
         signal=signal,
         settlement_rule_id=settlement_rule_id,
         draw_context=draw_context,
+        rule=frozen_rule,
     )
     result = repository.settle_progression_event(
         subscription_id=normalized_subscription_id,

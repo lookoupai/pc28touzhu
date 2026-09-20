@@ -18,7 +18,8 @@ except ImportError:  # pragma: no cover - Python 3.8 compatibility
     ZoneInfoNotFoundError = LookupError
 
 from pc28touzhu.domain.subscription_strategy import upgrade_subscription_strategy
-from pc28touzhu.domain.settlement_rules import normalize_settlement_rule_id
+from pc28touzhu.domain.pc28_profit_rules import drop_matching_catalog_odds, normalize_odds_overrides
+from pc28touzhu.domain.settlement_rules import get_settlement_rule, normalize_settlement_rule_id
 from pc28touzhu.services.dispatch_service import dispatch_signal
 
 
@@ -344,10 +345,16 @@ def _normalize_route_settlement_policy(value: Any) -> dict:
         payload.get("settlement_rule_id"),
         allow_empty=False,
     )
+    try:
+        odds_overrides = normalize_odds_overrides(payload.get("odds_overrides"))
+    except ValueError as exc:
+        raise ValueError("routes[].settlement_policy.odds_overrides 无效：%s" % exc) from exc
+    rule = get_settlement_rule(settlement_rule_id) or {}
     return {
         "rule_source": "subscription_fixed",
         "settlement_rule_id": settlement_rule_id,
         "fallback_profit_ratio": max(0.0001, round(float(payload.get("fallback_profit_ratio") or 1.0), 4)),
+        "odds_overrides": drop_matching_catalog_odds(odds_overrides, rule.get("implemented_odds")),
     }
 
 
