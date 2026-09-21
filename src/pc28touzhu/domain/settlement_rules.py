@@ -23,7 +23,6 @@ DEFAULT_SETTLEMENT_RULE_ID = "pc28_netdisk_regular"
 
 def _metric_settlement(
     *,
-    always_refund_sums: tuple[int, ...] = (),
     on_hit_refund_sums: tuple[int, ...] = (),
     refund_pair: bool = False,
     refund_straight: bool = False,
@@ -33,7 +32,6 @@ def _metric_settlement(
     legacy_policy: str = "none",
 ) -> Dict[str, Any]:
     return {
-        "always_refund_sum_values": list(always_refund_sums),
         "on_hit_refund_sum_values": list(on_hit_refund_sums),
         "on_hit_refund_pair": bool(refund_pair),
         "on_hit_refund_straight": bool(refund_straight),
@@ -101,7 +99,7 @@ SETTLEMENT_RULE_CATALOG: Dict[str, Dict[str, Any]] = {
     },
     "pc28_high_regular": {
         "id": "pc28_high_regular",
-        "name": "PC28 高赔常规",
+        "name": "OK游戏高赔常规",
         "lottery_type": "pc28",
         "profit_rule_id": "pc28_high",
         "odds_profile": "regular",
@@ -117,7 +115,7 @@ SETTLEMENT_RULE_CATALOG: Dict[str, Dict[str, Any]] = {
     },
     "pc28_high_abc": {
         "id": "pc28_high_abc",
-        "name": "PC28 高赔 ABC",
+        "name": "OK游戏高赔 ABC",
         "lottery_type": "pc28",
         "profit_rule_id": "pc28_high",
         "odds_profile": "abc",
@@ -149,7 +147,7 @@ SETTLEMENT_RULE_CATALOG: Dict[str, Dict[str, Any]] = {
     },
     "pc28_fullpay_2_0_regular": {
         "id": "pc28_fullpay_2_0_regular",
-        "name": "满赔2.0",
+        "name": "彩28满赔2.0",
         "lottery_type": "pc28",
         "profit_rule_id": "pc28_fullpay_2_0",
         "odds_profile": "regular",
@@ -170,7 +168,7 @@ SETTLEMENT_RULE_CATALOG: Dict[str, Dict[str, Any]] = {
     },
     "pc28_fullpay_2_8_regular": {
         "id": "pc28_fullpay_2_8_regular",
-        "name": "满赔2.8",
+        "name": "彩28满赔2.8",
         "lottery_type": "pc28",
         "profit_rule_id": "pc28_fullpay_2_8",
         "odds_profile": "regular",
@@ -186,7 +184,7 @@ SETTLEMENT_RULE_CATALOG: Dict[str, Dict[str, Any]] = {
     },
     "pc28_fullpay_3_2_regular": {
         "id": "pc28_fullpay_3_2_regular",
-        "name": "满赔3.2",
+        "name": "彩28满赔3.2",
         "lottery_type": "pc28",
         "profit_rule_id": "pc28_fullpay_3_2",
         "odds_profile": "regular",
@@ -478,13 +476,6 @@ def _resolve_refund_aware_result(
     special_flags: Dict[str, Any],
     spec: Dict[str, Any],
 ) -> tuple[str, Optional[str]]:
-    always_sums = {
-        int(item)
-        for item in (spec.get("always_refund_sum_values") or [])
-        if _parse_optional_int(item) is not None
-    }
-    if sum_value is not None and int(sum_value) in always_sums:
-        return ("refund", _sum_refund_reason(sorted(always_sums)))
     if not hit:
         return ("miss", None)
     on_hit_sums = {

@@ -37,12 +37,12 @@
     const settlementRuleOptions = [
         ["pc28_netdisk_regular", "OK游戏网盘"],
         ["pc28_netdisk_abc", "OK游戏网盘 ABC"],
-        ["pc28_high_regular", "PC28 高赔常规"],
-        ["pc28_high_abc", "PC28 高赔 ABC"],
+        ["pc28_high_regular", "OK游戏高赔常规"],
+        ["pc28_high_abc", "OK游戏高赔 ABC"],
         ["pc28_fullpay_netdisk_regular", "彩28网盘"],
-        ["pc28_fullpay_2_0_regular", "满赔2.0"],
-        ["pc28_fullpay_2_8_regular", "满赔2.8"],
-        ["pc28_fullpay_3_2_regular", "满赔3.2"],
+        ["pc28_fullpay_2_0_regular", "彩28满赔2.0"],
+        ["pc28_fullpay_2_8_regular", "彩28满赔2.8"],
+        ["pc28_fullpay_3_2_regular", "彩28满赔3.2"],
     ];
     const SETTLEMENT_RULE_UI_PRESETS = {
         pc28_netdisk_regular: {bigSmall: 1.98, comboSmallOddBigEven: 3.6, comboBigOddSmallEven: 4.2, refundHint: "无回本。OK游戏网盘"},

@@ -186,12 +186,12 @@
         const settlementLabels = {
             pc28_netdisk_regular: "OK游戏网盘",
             pc28_netdisk_abc: "OK游戏网盘 ABC",
-            pc28_high_regular: "高赔常规",
-            pc28_high_abc: "高赔 ABC",
+            pc28_high_regular: "OK游戏高赔常规",
+            pc28_high_abc: "OK游戏高赔 ABC",
             pc28_fullpay_netdisk_regular: "彩28网盘",
-            pc28_fullpay_2_0_regular: "满赔2.0",
-            pc28_fullpay_2_8_regular: "满赔2.8",
-            pc28_fullpay_3_2_regular: "满赔3.2",
+            pc28_fullpay_2_0_regular: "彩28满赔2.0",
+            pc28_fullpay_2_8_regular: "彩28满赔2.8",
+            pc28_fullpay_3_2_regular: "彩28满赔3.2",
         };
         const customOdds = settlementPolicy.odds_overrides && typeof settlementPolicy.odds_overrides === "object"
             && (
