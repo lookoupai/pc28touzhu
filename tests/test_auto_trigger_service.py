@@ -12,11 +12,13 @@ from pc28touzhu.services.dispatch_service import dispatch_signal
 from pc28touzhu.services.auto_trigger_service import (
     clear_auto_trigger_performance_cache,
     create_auto_trigger_rule,
+    delete_auto_trigger_rule,
     list_auto_trigger_rules,
     resume_auto_trigger_rule_day,
     run_auto_trigger_cycle,
     stop_auto_trigger_rule_current_run,
     update_auto_trigger_rule,
+    update_auto_trigger_rule_status,
 )
 
 
@@ -3253,6 +3255,36 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(runs[0]["route_name"], "测试群路由")
         self.assertEqual(runs[0]["status"], "closed")
         self.assertEqual(runs[0]["end_reason"], "profit_target_hit")
+
+    def test_delete_rule_requires_archived_and_clears_runtime_tables(self):
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        with self.assertRaises(ValueError) as ctx:
+            delete_auto_trigger_rule(self.repo, rule_id=rule["id"], user_id=self.user_id)
+        self.assertIn("请先归档", str(ctx.exception))
+
+        update_auto_trigger_rule_status(self.repo, rule_id=rule["id"], user_id=self.user_id, status="archived")
+        result = delete_auto_trigger_rule(self.repo, rule_id=rule["id"], user_id=self.user_id)
+        self.assertTrue(result["deleted"])
+        self.assertEqual(self.repo.list_auto_trigger_rules(user_id=self.user_id), [])
+
+    def test_delete_rule_blocks_when_pending_settlement_exists(self):
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260418002",
+            bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
+            published_at="2026-09-02T10:04:30Z",
+        )
+        with patch("pc28touzhu.services.auto_trigger_service._http_json_fetch") as fetch:
+            result = run_auto_trigger_cycle(
+                self.repo, user_id=self.user_id, rule_id=rule["id"],
+                now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc),
+            )
+        fetch.assert_not_called()
+        self.assertEqual(result["rules"][0]["summary"]["triggered_count"], 1)
+        update_auto_trigger_rule_status(self.repo, rule_id=rule["id"], user_id=self.user_id, status="archived")
+        with self.assertRaises(ValueError) as ctx:
+            delete_auto_trigger_rule(self.repo, rule_id=rule["id"], user_id=self.user_id)
+        self.assertIn("待结算", str(ctx.exception))
 
 
 if __name__ == "__main__":

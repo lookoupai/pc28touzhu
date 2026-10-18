@@ -447,7 +447,8 @@
                         (isDailyRiskStopped(rule) || stoppedRouteCount ? '<button class="tiny-btn resume-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">继续今日触发</button>' : '') +
                         (ruleActiveRuns(rule).length ? '<button class="tiny-btn stop-run-btn" type="button" data-id="' + escapeHtml(rule.id) + '">结束当前轮次</button>' : '') +
                         '<button class="tiny-btn status-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '" data-status="' + (rule.status === "active" ? "inactive" : "active") + '">' + (rule.status === "active" ? "停用" : "启用") + '</button>' +
-                        '<button class="tiny-btn status-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '" data-status="archived">归档</button>' +
+                        (rule.status === "archived" ? '' : '<button class="tiny-btn status-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '" data-status="archived">归档</button>') +
+                        (rule.status === "archived" ? '<button class="tiny-btn danger-btn delete-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">删除</button>' : '') +
                     '</div>' +
                 '</article>';
         }).join("");
@@ -1216,6 +1217,28 @@
                     });
                     await loadData();
                     setStatus(stopCurrentRunText(result), false);
+                } catch (error) {
+                    setStatus(error.message, true);
+                } finally {
+                    target.removeAttribute("disabled");
+                }
+                return;
+            }
+            if (target.classList.contains("delete-rule-btn")) {
+                if (!window.confirm("删除后规则配置和运行统计将无法恢复；已结算的历史盈亏记录会保留。确认删除吗？")) {
+                    return;
+                }
+                try {
+                    target.setAttribute("disabled", "disabled");
+                    await request("/api/platform/auto-trigger-rules/" + target.dataset.id + "/delete", {
+                        method: "POST",
+                        body: {},
+                    });
+                    if (String(state.editingRuleId || "") === String(target.dataset.id)) {
+                        state.editingRuleId = "";
+                    }
+                    setStatus("规则已删除。", false);
+                    await loadData();
                 } catch (error) {
                     setStatus(error.message, true);
                 } finally {
