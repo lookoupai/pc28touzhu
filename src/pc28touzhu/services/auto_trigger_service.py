@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - Python 3.8 compatibility
 
 from pc28touzhu.domain.subscription_strategy import upgrade_subscription_strategy
 from pc28touzhu.domain.pc28_profit_rules import drop_matching_catalog_odds, normalize_odds_overrides
+from pc28touzhu.domain.pc28_issue_window import evaluate_pc28_issue_dispatch_window
 from pc28touzhu.domain.settlement_rules import get_settlement_rule, normalize_settlement_rule_id
 from pc28touzhu.services.dispatch_service import dispatch_signal
 
@@ -1265,6 +1266,7 @@ def _record_event(
     matched_conditions: Optional[list[dict]] = None,
     trigger_match: Optional[dict] = None,
     dispatch_result: Optional[dict] = None,
+    dispatch_gate: Optional[dict] = None,
     play_filter_result: Optional[dict] = None,
     restart_state: Optional[dict] = None,
     performance_fetch: Optional[dict] = None,
@@ -1292,6 +1294,8 @@ def _record_event(
         snapshot["successful_path_count"] = len(trigger_match.get("successful_paths") or [])
     if dispatch_result is not None:
         snapshot["dispatch_result"] = dispatch_result
+    if dispatch_gate is not None:
+        snapshot["dispatch_gate"] = dispatch_gate
     if play_filter_result is not None:
         snapshot["play_filter_result"] = play_filter_result
     if restart_state is not None:
@@ -1341,6 +1345,60 @@ def _record_event(
         matched_conditions=matched_conditions or [],
         snapshot=snapshot,
     )
+
+
+def _condition_dispatch_gate(
+    repository: Any,
+    *,
+    subscription: Dict[str, Any],
+    latest_settled_issue_no: str,
+    matched_conditions: Optional[list[dict]] = None,
+    action: Optional[dict] = None,
+    draw_clock: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """条件规则在提交开轮前，先判定“最新 ready 信号”当前是否仍可投注。
+
+    信号源逐期发布预测，发布时刻与开奖结算存在竞速（实测可晚 2~5 秒）：条件命中瞬间，
+    最新 ready 信号往往还是刚结算的那一期，封盘闸判定目标期已开奖（issue_already_drawn）。
+    此时若照常建轮、记 triggered 并进入冷却，本轮触发就被白白烧掉，轮次也成了永远不派
+    单的空壳（会在“在跑轮次”里一直挂着）。这里与 dispatch_signal 用同一把闸预先判定；
+    判定不可投就记 skipped 跳过本轮，由下个周期（30s）拿到新信号后重试。无时钟时沿用
+    与派单一致的 fail-open 行为，不额外收紧。
+    """
+    if not bool((action or {}).get("dispatch_latest_signal", True)):
+        return {"allowed": True, "reason": "dispatch_disabled"}
+    signal_bet_type = _signal_bet_type_for_auto_trigger_context(
+        {
+            "rule_action": action or {},
+            "matched_conditions": matched_conditions or [],
+        }
+    )
+    signal = repository.get_latest_ready_signal_for_source(
+        source_id=int(subscription["source_id"]),
+        bet_type=signal_bet_type,
+    )
+    if not signal:
+        return {
+            "allowed": False,
+            "reason": "signal_not_found",
+            "bet_type": signal_bet_type or "",
+            "latest_settled_issue_no": str(latest_settled_issue_no or ""),
+        }
+    verdict = evaluate_pc28_issue_dispatch_window(
+        issue_no=str(signal.get("issue_no") or ""),
+        draw_clock=draw_clock,
+        now=now,
+    )
+    return {
+        "allowed": bool(verdict.get("allowed", True)),
+        "reason": str(verdict.get("reason") or "ok"),
+        "signal_id": int(signal["id"]) if signal.get("id") is not None else None,
+        "signal_issue_no": str(signal.get("issue_no") or ""),
+        "latest_settled_issue_no": str(latest_settled_issue_no or ""),
+        "bet_type": signal_bet_type or "",
+        "issue_window": verdict,
+    }
 
 
 def _dispatch_latest_signal_if_available(
@@ -2142,6 +2200,36 @@ def evaluate_auto_trigger_rule(
                         subscription=subscription,
                         matched_conditions=matched,
                     )
+                # 条件命中但“最新 ready 信号”当前已不可投（目标期已开奖/余量不足）时，
+                # 不建轮、不记 triggered、不进冷却，记 skipped 交给下个周期用新信号重试；
+                # 否则可投信号源的发布迟滞会把每一轮条件命中都烧成“永远在跑的空壳轮次”。
+                if bool(action.get("dispatch_latest_signal", True)):
+                    dispatch_gate = _condition_dispatch_gate(
+                        unit,
+                        subscription=subscription,
+                        latest_settled_issue_no=latest_issue_no,
+                        matched_conditions=matched,
+                        action=action,
+                        draw_clock=draw_clock,
+                        now=now,
+                    )
+                    if not dispatch_gate.get("allowed"):
+                        events.append(_record_event(
+                            unit,
+                            rule=rule,
+                            subscription=subscription,
+                            performance=performance,
+                            status="skipped",
+                            reason=str(dispatch_gate.get("reason") or "signal_not_dispatchable"),
+                            matched_conditions=matched,
+                            trigger_match=trigger_match,
+                            dispatch_gate=dispatch_gate,
+                            play_filter_result=play_filter_result,
+                            performance_fetch=performance_fetch,
+                            stat_date=stat_date,
+                        ))
+                        summary["skipped_count"] += 1
+                        continue
                 if not has_routes:
                     rule_run = unit.ensure_auto_trigger_rule_run(
                         rule_id=int(rule["id"]),

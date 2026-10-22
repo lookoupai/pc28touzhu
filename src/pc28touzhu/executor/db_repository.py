@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import calendar
 import sqlite3
 from contextlib import contextmanager
@@ -27,6 +28,11 @@ DEFAULT_SQLITE_BUSY_TIMEOUT_SECONDS = 30.0
 MANUAL_STOP_REASON = "manual_stop"
 # route 轮次收口带动规则轮收口的标记，与规则级日风控停轮区分开。
 ROUTE_RUN_CLOSED_REASON = "route_run_closed"
+# 条件触发建轮后从未产出任何派单（无下注、无路由轮、无待派任务）的空壳轮次，
+# 超过该时长即自动收口，避免“在跑轮次”被永远空转的轮次占满。
+PHANTOM_RULE_RUN_MIN_AGE_SECONDS = max(int(os.getenv("PHANTOM_RULE_RUN_MIN_AGE_SECONDS", "7200")), 300)
+# 空壳轮次自动收口的标记，便于在数据库里与其余 stop 原因区分开。
+PHANTOM_RULE_RUN_STOP_REASON = "phantom_no_dispatch"
 
 
 def _utc_now_iso() -> str:
@@ -6121,6 +6127,47 @@ class DatabaseRepository:
             """,
             (int(rule_id), int(user_id), subscription_id, subscription_id,
              ROUTE_RUN_CLOSED_REASON, _utc_now_iso(), _utc_now_iso()),
+        )
+        # 兜底：条件触发建轮但从未产出任何派单的空壳轮次（无路由轮、无下注）也要收口，
+        # 否则这类空轮会一直占着“在跑轮次”。只处理足够旧的行，避免误伤正在落子的轮次；
+        # 且仅限条件触发——定时触发有 claim/release 与既有收口链路，新轮待路由启程属正常态。
+        now = _utc_now_iso()
+        cutoff_iso = _format_iso8601(
+            _parse_iso8601(now) - timedelta(seconds=PHANTOM_RULE_RUN_MIN_AGE_SECONDS)
+        )
+        conn.execute(
+            """
+            UPDATE auto_trigger_rule_runs
+            SET status = 'closed',
+                stop_reason = CASE WHEN stop_reason = '' THEN ? ELSE stop_reason END,
+                stopped_at = COALESCE(stopped_at, ?),
+                updated_at = ?
+            WHERE rule_id = ? AND user_id = ? AND status = 'active'
+              AND (? IS NULL OR subscription_id = ?)
+              AND started_at < ?
+              AND EXISTS (
+                  SELECT 1 FROM auto_trigger_rules r
+                  WHERE r.id = auto_trigger_rule_runs.rule_id
+                    AND COALESCE(NULLIF(r.trigger_mode, ''), 'condition') = 'condition'
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM auto_trigger_route_subscription_runtime_runs child
+                  WHERE child.rule_id = auto_trigger_rule_runs.rule_id
+                    AND child.user_id = auto_trigger_rule_runs.user_id
+                    AND child.subscription_id = auto_trigger_rule_runs.subscription_id
+                    AND child.auto_trigger_rule_run_id = auto_trigger_rule_runs.id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM subscription_progression_events pe
+                  WHERE pe.auto_trigger_rule_run_id = auto_trigger_rule_runs.id
+                    AND pe.user_id = auto_trigger_rule_runs.user_id
+              )
+            """,
+            (
+                PHANTOM_RULE_RUN_STOP_REASON, now, now,
+                int(rule_id), int(user_id), subscription_id, subscription_id,
+                cutoff_iso,
+            ),
         )
         return int(conn.execute("SELECT changes()").fetchone()[0])
 

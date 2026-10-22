@@ -1565,6 +1565,82 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(event["matched_conditions"][0]["type"], "miss_streak")
         self.assertEqual(event["matched_conditions"][0]["actual_miss_streak"], 5)
 
+    def test_condition_trigger_skips_when_signal_already_drawn_then_retries_fresh(self):
+        # 信号源逐期发布滞后于开奖结算时（实测差 2~5 秒），条件命中瞬间的最新 ready 信号
+        # 正是刚结算那一期。过去这段会被建轮+记 triggered+进冷却，留下一堆永不下单的空壳轮次；
+        # 修复后应与派单共用封盘闸预判：不可投则记 skipped 交给下个周期用新信号重试。
+        now = datetime(2026, 4, 18, 9, 30, 0, tzinfo=timezone.utc)
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            status="standby",
+        )
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "空壳轮次回归",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"type": "miss_streak", "metric": "big_small", "operator": "gte", "threshold": 5}
+                ],
+                "action": {"dispatch_latest_signal": True},
+            },
+        )["item"]
+        performance = lambda url: self._performance_payload(
+            issue_no="20260418001", big_small_rate=80.0, combo_rate=80.0, big_small_miss_streak=5,
+        )
+        drawn_clock = {
+            "latest_issue_no": "20260418001",
+            "latest_open_time": (now - timedelta(seconds=100)).isoformat(),
+            "fetched_at": now.isoformat(),
+        }
+        with patch("pc28touzhu.executor.db_repository._utc_now_iso", return_value=now.isoformat().replace("+00:00", "Z")), patch(
+            "pc28touzhu.services.dispatch_service._utc_now", return_value=now
+        ):
+            first = run_auto_trigger_cycle(
+                self.repo, user_id=self.user_id, rule_id=rule["id"],
+                fetcher=performance, now=now, draw_clock=drawn_clock,
+            )
+        self.assertEqual(first["summary"]["triggered_count"], 0)
+        self.assertEqual(first["summary"]["skipped_count"], 1)
+        event = first["rules"][0]["events"][0]
+        self.assertEqual(event["status"], "skipped")
+        self.assertEqual(event["reason"], "issue_already_drawn")
+        self.assertEqual(event["snapshot"]["dispatch_gate"]["signal_issue_no"], "20260418001")
+        self.assertEqual(self.repo.list_execution_jobs(user_id=self.user_id), [])
+        # 不得留下空壳轮次，也不得记 triggered 触发冷却
+        self.assertEqual(self.repo.list_active_auto_trigger_rule_runs(rule_id=rule["id"], user_id=self.user_id), [])
+
+        # 下一期信号就绪（offset 1）且余量充足后，同条件重试即可正常派单
+        self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260418002",
+            bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
+            published_at="2026-04-18T09:30:30Z",
+        )
+        fresh_clock = {
+            "latest_issue_no": "20260418001",
+            "latest_open_time": (now + timedelta(seconds=200)).isoformat(),
+            "fetched_at": now.isoformat(),
+        }
+        with patch("pc28touzhu.executor.db_repository._utc_now_iso", return_value=now.isoformat().replace("+00:00", "Z")), patch(
+            "pc28touzhu.services.dispatch_service._utc_now", return_value=now
+        ):
+            second = run_auto_trigger_cycle(
+                self.repo, user_id=self.user_id, rule_id=rule["id"],
+                fetcher=performance, now=now, draw_clock=fresh_clock,
+            )
+        self.assertEqual(second["summary"]["triggered_count"], 1)
+        jobs = self.repo.list_execution_jobs(user_id=self.user_id)
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["subscription_id"], self.subscription["id"])
+        trigger = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(trigger["status"], "triggered")
+        run = next(iter(self.repo.list_active_auto_trigger_rule_runs(rule_id=rule["id"], user_id=self.user_id)), None)
+        self.assertIsNotNone(run)
+
     def test_guard_group_pairs_same_metric_before_cross_metric_conditions(self):
         self.repo.update_subscription_status(
             subscription_id=self.subscription["id"],
