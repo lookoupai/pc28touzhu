@@ -1641,6 +1641,298 @@ class AutoTriggerServiceTests(unittest.TestCase):
         run = next(iter(self.repo.list_active_auto_trigger_rule_runs(rule_id=rule["id"], user_id=self.user_id)), None)
         self.assertIsNotNone(run)
 
+    def test_rule_daily_hit_rate_gate_stops_day_after_settlements(self):
+        # 只开命中率熔断（不配置盈/损）：当日结算满 N 单且命中率低于阈值 → 当日停止触发，
+        # 后续触发按 daily_risk_stopped 跳过，且熔断未恢复时禁止手动恢复当日。
+        from pc28touzhu.services.platform_service import update_subscription
+
+        update_subscription(
+            self.repo,
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            payload={
+                "source_id": self.source["id"],
+                "strategy_v2": {
+                    "play_filter": {"mode": "selected", "selected_keys": ["big_small:大", "big_small:小"]},
+                    "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                    "settlement_policy": {"rule_source": "follow_signal", "settlement_rule_id": None, "fallback_profit_ratio": 1},
+                    "risk_control": {"enabled": False},
+                    "dispatch": {"expire_after_seconds": 120, "delivery_target_ids": [self.repo.list_delivery_targets(self.user_id)[0]["id"]]},
+                },
+            },
+        )
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "命中率熔断",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "daily_risk_control": {
+                    "enabled": True,
+                    "profit_target": 0,
+                    "loss_limit": 0,
+                    "hit_rate_gate": {"enabled": True, "threshold": 50, "min_settled_count": 3},
+                },
+            },
+        )["item"]
+
+        # 第 1 单由规则触发开出；规则轮开跑后，后续单据由直派自动归属当前规则轮。
+        first = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(issue_no="20260418000"),
+        )
+        self.assertEqual(first["summary"]["triggered_count"], 1)
+        jobs = self.repo.list_execution_jobs(user_id=self.user_id)
+        self.assertEqual(len(jobs), 1)
+        for index, signal_issue in enumerate(("20260418002", "20260418003")):
+            follow_signal = self.repo.create_signal_record(
+                source_id=self.source["id"], lottery_type="pc28", issue_no=signal_issue,
+                bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
+                published_at="2026-04-18T09:1%d:00Z" % index,
+            )
+            dispatch_signal(self.repo, follow_signal["id"])
+            jobs = self.repo.list_execution_jobs(user_id=self.user_id)
+            self.assertEqual(len(jobs), index + 2)
+
+        # 三单全部结算为未中：满 3 单且命中率 0% < 50% → 当日熔断
+        for job in jobs:
+            self.repo.report_job_result(
+                job_id=str(job["id"]), executor_id="test-executor", attempt_no=1,
+                delivery_status="delivered", remote_message_id="msg-%s" % job["id"],
+                executed_at="2026-04-18T09:30:30Z", raw_result={}, error_message=None,
+            )
+            self.repo.settle_progression_event(
+                subscription_id=self.subscription["id"],
+                user_id=self.user_id,
+                result_type="miss",
+                progression_event_id=job["progression_event_id"],
+            )
+
+        rules_payload = list_auto_trigger_rules(self.repo, user_id=self.user_id)
+        stat = rules_payload["items"][0]["daily_stat"]
+        self.assertEqual(stat["status"], "stopped")
+        self.assertEqual(stat["stopped_reason"], "daily_hit_rate_low")
+        self.assertEqual(stat["miss_count"], 3)
+
+        blocked = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(issue_no="20260418003"),
+        )
+        self.assertEqual(blocked["summary"]["triggered_count"], 0)
+        self.assertEqual(blocked["summary"]["skipped_count"], 1)
+        self.assertEqual(blocked["rules"][0]["events"][0]["reason"], "daily_risk_stopped")
+
+        after_signal = self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260418004",
+            bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
+            published_at="2026-04-18T09:45:00Z",
+        )
+        blocked_dispatch = dispatch_signal(self.repo, after_signal["id"])
+        self.assertEqual(blocked_dispatch["created_count"], 0)
+
+        rule_id = rules_payload["items"][0]["id"]
+        with self.assertRaises(ValueError):
+            resume_auto_trigger_rule_day(self.repo, rule_id=rule_id, user_id=self.user_id)
+
+    def test_route_daily_hit_rate_gate_stops_route_day(self):
+        target = self.repo.list_delivery_targets(self.user_id)[0]
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "路由命中率熔断",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "routes": [
+                    {
+                        "delivery_target_id": target["id"],
+                        "route_risk_mode": "override",
+                        "route_risk_control": {
+                            "enabled": True,
+                            "profit_target": 0,
+                            "loss_limit": 0,
+                            "hit_rate_gate": {"enabled": True, "threshold": 50, "min_settled_count": 2},
+                        },
+                        "subscription_risk_mode": "disabled",
+                    },
+                ],
+            },
+        )["item"]
+        route_id = rule["routes"][0]["id"]
+
+        first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload())
+        self.assertEqual(first["summary"]["triggered_count"], 1)
+        first_job = self.repo.list_execution_jobs(user_id=self.user_id)[0]
+        self.repo.report_job_result(
+            job_id=str(first_job["id"]), executor_id="test-executor", attempt_no=1,
+            delivery_status="delivered", remote_message_id="msg-1",
+            executed_at="2026-04-18T09:35:30Z", raw_result={}, error_message=None,
+        )
+        self.repo.settle_progression_event(
+            subscription_id=self.subscription["id"], user_id=self.user_id,
+            result_type="miss", progression_event_id=first_job["progression_event_id"],
+        )
+        route_stat = self.repo.get_auto_trigger_route_daily_stat(
+            route_id=route_id, user_id=self.user_id, stat_date=first_job and self.repo.get_progression_event(first_job["progression_event_id"])["auto_trigger_stat_date"],
+        )
+        self.assertEqual(str(route_stat.get("status") or ""), "active")
+
+        second_signal = self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260418002",
+            bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
+            published_at="2026-04-18T09:40:00Z",
+        )
+        dispatch_signal(self.repo, second_signal["id"])
+        second_job = [job for job in self.repo.list_execution_jobs(user_id=self.user_id) if job["signal_id"] == second_signal["id"]][0]
+        self.repo.report_job_result(
+            job_id=str(second_job["id"]), executor_id="test-executor", attempt_no=1,
+            delivery_status="delivered", remote_message_id="msg-2",
+            executed_at="2026-04-18T09:42:30Z", raw_result={}, error_message=None,
+        )
+        self.repo.settle_progression_event(
+            subscription_id=self.subscription["id"], user_id=self.user_id,
+            result_type="miss", progression_event_id=second_job["progression_event_id"],
+        )
+        second_event = self.repo.get_progression_event(second_job["progression_event_id"])
+        route_stat = self.repo.get_auto_trigger_route_daily_stat(
+            route_id=route_id, user_id=self.user_id, stat_date=second_event["auto_trigger_stat_date"],
+        )
+        self.assertEqual(route_stat["status"], "stopped")
+        self.assertEqual(route_stat["stopped_reason"], "daily_hit_rate_low")
+
+        blocked = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(issue_no="20260418002"),
+        )
+        self.assertEqual(blocked["summary"]["triggered_count"], 0)
+        self.assertEqual(blocked["rules"][0]["events"][0]["reason"], "route_daily_risk_stopped")
+
+    def test_rule_hit_rate_gate_marks_stopped_at_trigger_time_when_ledger_already_breached(self):
+        # 当天中途才开启熔断、账本已不达标：触发评估这一刻就按当日账本判定，
+        # 当场落 stopped 并跳过开轮（不必等下一次结算才补标记）。
+        from datetime import timedelta
+        from pc28touzhu.services.auto_trigger_service import list_auto_trigger_rules
+
+        rule = create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "中途开启熔断",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True},
+                "daily_risk_control": {
+                    "enabled": True,
+                    "profit_target": 0,
+                    "loss_limit": 0,
+                    "hit_rate_gate": {"enabled": True, "threshold": 50, "min_settled_count": 2},
+                },
+            },
+        )["item"]
+        today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        with self.repo._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO auto_trigger_rule_daily_stats(
+                    rule_id, user_id, stat_date, profit_amount, loss_amount, net_profit,
+                    settled_event_count, hit_count, miss_count, refund_count, status
+                ) VALUES (?, ?, ?, 0, 30, -30, 3, 0, 3, 0, 'active')
+                """,
+                (rule["id"], self.user_id, today),
+            )
+
+        result = run_auto_trigger_cycle(
+            self.repo,
+            user_id=self.user_id,
+            fetcher=lambda url: self._performance_payload(),
+        )
+        self.assertEqual(result["summary"]["triggered_count"], 0)
+        self.assertEqual(result["summary"]["skipped_count"], 1)
+        self.assertEqual(result["rules"][0]["events"][0]["reason"], "daily_risk_stopped")
+
+        stat = list_auto_trigger_rules(self.repo, user_id=self.user_id)["items"][0]["daily_stat"]
+        self.assertEqual(stat["status"], "stopped")
+        self.assertEqual(stat["stopped_reason"], "daily_hit_rate_low")
+
+    def test_subscription_hit_rate_gate_blocks_direct_dispatch(self):
+        from datetime import timedelta
+        from pc28touzhu.services.platform_service import update_subscription
+
+        update_subscription(
+            self.repo,
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            payload={
+                "source_id": self.source["id"],
+                "strategy_v2": {
+                    "play_filter": {"mode": "selected", "selected_keys": ["odd_even:单", "odd_even:双"]},
+                    "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                    "settlement_policy": {"rule_source": "follow_signal", "settlement_rule_id": None, "fallback_profit_ratio": 1},
+                    "risk_control": {
+                        "enabled": True,
+                        "profit_target": 0,
+                        "loss_limit": 0,
+                        "hit_rate_gate": {"enabled": True, "threshold": 50, "min_settled_count": 2},
+                    },
+                    "dispatch": {"expire_after_seconds": 120, "delivery_target_ids": [self.repo.list_delivery_targets(self.user_id)[0]["id"]]},
+                },
+            },
+        )
+        gated = self.subscription
+        today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        with self.repo._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO subscription_daily_stats(
+                    stat_date, user_id, subscription_id, source_id,
+                    profit_amount, loss_amount, net_profit,
+                    settled_event_count, hit_count, miss_count, refund_count
+                ) VALUES (?, ?, ?, ?, 0, 20, -20, 2, 0, 2, 0)
+                """,
+                (today, self.user_id, gated["id"], self.source["id"]),
+            )
+
+        blocked_signal = self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260418010",
+            bet_type="odd_even", bet_value="双", normalized_payload={"message_text": "双10"},
+            published_at="2026-04-18T10:00:00Z",
+        )
+        blocked = dispatch_signal(self.repo, blocked_signal["id"])
+        self.assertEqual(blocked["created_count"], 0)
+        self.assertEqual(blocked["skipped_count"], 1)
+
+        # 命中率回到阈值之上（1中1未中=50%）后恢复直派
+        with self.repo._connect() as conn:
+            conn.execute(
+                "UPDATE subscription_daily_stats SET hit_count = 1, miss_count = 1 WHERE subscription_id = ?",
+                (gated["id"],),
+            )
+        allowed_signal = self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260418011",
+            bet_type="odd_even", bet_value="双", normalized_payload={"message_text": "双10"},
+            published_at="2026-04-18T10:03:00Z",
+        )
+        allowed = dispatch_signal(self.repo, allowed_signal["id"])
+        self.assertEqual(allowed["created_count"], 1)
+
     def test_guard_group_pairs_same_metric_before_cross_metric_conditions(self):
         self.repo.update_subscription_status(
             subscription_id=self.subscription["id"],

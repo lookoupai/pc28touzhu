@@ -149,6 +149,18 @@
                                     <span>每日止损</span>
                                     <input class="text-input" name="daily_loss_limit" type="number" min="0" step="0.01" value="0">
                                 </label>
+                                <label class="field">
+                                    <span>命中率熔断阈值(%)</span>
+                                    <input class="text-input" name="daily_hit_rate_threshold" type="number" min="1" max="99" step="0.1" value="50" placeholder="组合建议25，大小/单双建议50">
+                                </label>
+                                <label class="field">
+                                    <span>熔断最小结算单数</span>
+                                    <input class="text-input" name="daily_hit_rate_min_settled" type="number" min="1" step="1" value="20">
+                                </label>
+                                <label class="check-row">
+                                    <input name="daily_hit_rate_gate_enabled" type="checkbox">
+                                    <span>当日结算满N单且命中率低于阈值时，今日停止触发（次日自动恢复）</span>
+                                </label>
                                 <label class="check-row">
                                     <input name="daily_cancel_pending_jobs" type="checkbox" checked>
                                     <span>达到阈值后取消未执行任务</span>

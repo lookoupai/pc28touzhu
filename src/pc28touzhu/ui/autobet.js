@@ -2439,13 +2439,17 @@
             }
             field.hidden = !enabled;
         });
-        ["profit_target", "loss_limit"].forEach(function (name) {
+        ["profit_target", "loss_limit", "risk_hit_rate_threshold", "risk_hit_rate_min_settled"].forEach(function (name) {
             const input = subscriptionForm.elements[name];
             if (!(input instanceof HTMLInputElement)) {
                 return;
             }
             input.disabled = !enabled;
         });
+        const gateEnabledInput = subscriptionForm.elements.risk_hit_rate_gate_enabled;
+        if (gateEnabledInput instanceof HTMLInputElement) {
+            gateEnabledInput.disabled = !enabled;
+        }
         Object.keys(SUBSCRIPTION_RISK_PLAY_LIMIT_FIELDS).forEach(function (playKey) {
             const fields = SUBSCRIPTION_RISK_PLAY_LIMIT_FIELDS[playKey];
             [fields.profit, fields.loss].forEach(function (name) {
@@ -2544,6 +2548,11 @@
         subscriptionForm.elements.profit_target.value = "";
         subscriptionForm.elements.loss_limit.value = "";
         applySubscriptionRiskPlayLimits({});
+        if (subscriptionForm.elements.risk_hit_rate_gate_enabled instanceof HTMLInputElement) {
+            subscriptionForm.elements.risk_hit_rate_gate_enabled.checked = false;
+        }
+        subscriptionForm.elements.risk_hit_rate_threshold.value = "";
+        subscriptionForm.elements.risk_hit_rate_min_settled.value = "";
         refreshSubscriptionTargetSelects();
         setSubscriptionAdvancedVisible(false);
         syncSubscriptionBetFilterUI();
@@ -3038,6 +3047,12 @@
             summarizeRiskPlayLimits(riskControl.play_limits).forEach(function (item) {
                 riskParts.push(item);
             });
+            const summaryGate = riskControl.hit_rate_gate && typeof riskControl.hit_rate_gate === "object"
+                ? riskControl.hit_rate_gate
+                : {};
+            if (summaryGate.enabled) {
+                riskParts.push("当日命中率 ≥" + String(summaryGate.threshold) + "%（满" + String(summaryGate.min_settled_count) + "单）");
+            }
             parts.push("自动停单 " + riskParts.join(" / "));
         }
         return parts.length ? parts.join(" · ") : "已保存跟单策略";
@@ -7289,6 +7304,13 @@
                 && subscriptionRiskControlEnabledCheckbox.checked;
             const profitTarget = String(form.profit_target.value || "").trim();
             const lossLimit = String(form.loss_limit.value || "").trim();
+            const hitRateGateEnabled = form.risk_hit_rate_gate_enabled instanceof HTMLInputElement
+                && form.risk_hit_rate_gate_enabled.checked;
+            const hitRateThreshold = Number(form.risk_hit_rate_threshold.value || 0);
+            const hitRateMinSettled = Number(form.risk_hit_rate_min_settled.value || 20);
+            if (hitRateGateEnabled && !(hitRateThreshold > 0 && hitRateThreshold < 100)) {
+                throw new Error("启用当日命中率熔断时，阈值必须为 0~100 之间的百分比");
+            }
             if (strategyMode === "fixed" && (!Number.isFinite(stakeAmount) || stakeAmount <= 0)) {
                 throw new Error("均注模式下，请填写大于 0 的固定金额");
             }
@@ -7345,6 +7367,11 @@
                     profit_target: profitTarget ? Number(profitTarget) : 0,
                     loss_limit: lossLimit ? Number(lossLimit) : 0,
                     play_limits: subscriptionRiskPlayLimitsFromForm(form),
+                    hit_rate_gate: {
+                        enabled: hitRateGateEnabled,
+                        threshold: hitRateGateEnabled ? hitRateThreshold : 0,
+                        min_settled_count: hitRateMinSettled > 0 ? hitRateMinSettled : 20,
+                    },
                 },
                 dispatch: {
                     expire_after_seconds: expireAfterSeconds,
@@ -7503,6 +7530,18 @@
                     ? String(riskControl.loss_limit)
                     : "";
                 applySubscriptionRiskPlayLimits(riskControl.play_limits);
+                const editGate = riskControl.hit_rate_gate && typeof riskControl.hit_rate_gate === "object"
+                    ? riskControl.hit_rate_gate
+                    : {};
+                if (subscriptionForm.elements.risk_hit_rate_gate_enabled instanceof HTMLInputElement) {
+                    subscriptionForm.elements.risk_hit_rate_gate_enabled.checked = Boolean(editGate.enabled);
+                }
+                subscriptionForm.elements.risk_hit_rate_threshold.value = Number(editGate.threshold || 0) > 0
+                    ? String(editGate.threshold)
+                    : "";
+                subscriptionForm.elements.risk_hit_rate_min_settled.value = Number(editGate.min_settled_count || 0) > 0
+                    ? String(editGate.min_settled_count)
+                    : "";
                 if (subscriptionSettlementRuleSourceSelect instanceof HTMLSelectElement) {
                     subscriptionSettlementRuleSourceSelect.value = normalizeSubscriptionSettlementRuleSource(settlementPolicy.rule_source);
                 }

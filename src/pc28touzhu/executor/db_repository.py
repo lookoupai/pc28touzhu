@@ -14,6 +14,7 @@ from pc28touzhu.domain.pc28_play_filter import resolve_signal_play_filter_key
 from pc28touzhu.domain.pc28_profit_rules import coerce_odds_overrides
 from pc28touzhu.domain.settlement_rules import build_settlement_snapshot, resolve_pc28_settled_hit_detail
 from pc28touzhu.domain.subscription_strategy import (
+    hit_rate_gate_stop_reason,
     present_subscription_item,
     resolve_risk_control_policy,
     resolve_settlement_runtime_policy,
@@ -4824,6 +4825,12 @@ class DatabaseRepository:
                 stop_reason = "profit_target_hit"
             elif loss_limit > 0 and current_rule_net <= -loss_limit:
                 stop_reason = "loss_limit_hit"
+            if not stop_reason:
+                stop_reason = hit_rate_gate_stop_reason(
+                    daily_risk_control,
+                    hit_count=rule_stat.get("hit_count"),
+                    miss_count=rule_stat.get("miss_count"),
+                )
         if stop_reason:
             conn.execute(
                 """
@@ -4888,6 +4895,116 @@ class DatabaseRepository:
             "stat_date": str(stat_date or "").strip(),
             "net_profit": _round_money(rule_stat.get("net_profit")),
         }
+
+    def mark_auto_trigger_rule_day_stopped_if_hit_rate_low(
+        self,
+        *,
+        rule_id: int,
+        user_id: int,
+        stat_date: str,
+    ) -> bool:
+        """触发评估前的兜底：当日账本已跌破命中率熔断但结算钩子尚未落标记时，当场收口当日。
+
+        典型场景：当天中途才启用熔断/调低阈值，账本已不达标——按“启动前先算”的语义，
+        这一轮不应再开出，同时把 stopped 落库让页面与额度判断立刻可见。
+        """
+        with self._connect() as conn:
+            rule_row = conn.execute(
+                "SELECT daily_risk_control_json FROM auto_trigger_rules WHERE id = ? AND user_id = ? LIMIT 1",
+                (int(rule_id), int(user_id)),
+            ).fetchone()
+            if not rule_row:
+                return False
+            daily_risk_control = _safe_json_loads(rule_row["daily_risk_control_json"])
+            if not bool(daily_risk_control.get("enabled")):
+                return False
+            stat = self.get_auto_trigger_rule_daily_stat(
+                rule_id=int(rule_id), user_id=int(user_id), stat_date=str(stat_date or "").strip(),
+            )
+            if str(stat.get("status") or "") == "stopped":
+                return False
+            if not hit_rate_gate_stop_reason(
+                daily_risk_control,
+                hit_count=stat.get("hit_count"),
+                miss_count=stat.get("miss_count"),
+            ):
+                return False
+            self._apply_auto_trigger_rule_daily_risk(
+                conn,
+                rule_id=int(rule_id),
+                user_id=int(user_id),
+                stat_date=str(stat_date or "").strip(),
+                rule_stat=stat,
+                updated_at=_utc_now_iso(),
+            )
+            return True
+
+    def mark_auto_trigger_route_day_stopped_if_hit_rate_low(
+        self,
+        *,
+        route_id: int,
+        user_id: int,
+        stat_date: str,
+    ) -> bool:
+        """路由版触发前兜底：路由当日账本跌破熔断且未落标记时，标记停止并收口该路由活动轮。"""
+        with self._connect() as conn:
+            route_row = conn.execute(
+                """
+                SELECT r.*, ar.daily_risk_control_json AS rule_control_json
+                FROM auto_trigger_rule_routes r
+                LEFT JOIN auto_trigger_rules ar ON ar.id = r.rule_id
+                WHERE r.id = ? AND r.user_id = ?
+                LIMIT 1
+                """,
+                (int(route_id), int(user_id)),
+            ).fetchone()
+            if not route_row:
+                return False
+            route = dict(route_row)
+            route_mode = str(route.get("route_risk_mode") or "").strip() or "inherit_rule"
+            if route_mode == "disabled":
+                return False
+            if route_mode == "override" and route.get("route_risk_control_json"):
+                risk_control = _safe_json_loads(route.get("route_risk_control_json"))
+            else:
+                risk_control = _safe_json_loads(route.get("rule_control_json"))
+            if not bool(risk_control.get("enabled")):
+                return False
+            stat = self.get_auto_trigger_route_daily_stat(
+                route_id=int(route_id), user_id=int(user_id), stat_date=str(stat_date or "").strip(),
+            )
+            if str(stat.get("status") or "") == "stopped":
+                return False
+            if not hit_rate_gate_stop_reason(
+                risk_control,
+                hit_count=stat.get("hit_count"),
+                miss_count=stat.get("miss_count"),
+            ):
+                return False
+            now = _utc_now_iso()
+            conn.execute(
+                """
+                UPDATE auto_trigger_route_daily_stats
+                SET status = 'stopped',
+                    stopped_reason = 'daily_hit_rate_low',
+                    stopped_at = COALESCE(stopped_at, ?),
+                    updated_at = ?
+                WHERE route_id = ? AND user_id = ? AND stat_date = ?
+                """,
+                (now, now, int(route_id), int(user_id), str(stat_date or "").strip()),
+            )
+            conn.execute(
+                """
+                UPDATE auto_trigger_route_subscription_runtime_runs
+                SET status = 'closed',
+                    ended_at = COALESCE(ended_at, ?),
+                    end_reason = CASE WHEN end_reason = '' THEN 'daily_hit_rate_low' ELSE end_reason END,
+                    updated_at = ?
+                WHERE route_id = ? AND user_id = ? AND status = 'active'
+                """,
+                (now, now, int(route_id), int(user_id)),
+            )
+            return True
 
     def upsert_auto_trigger_route_daily_stat(
         self,
@@ -6370,6 +6487,35 @@ class DatabaseRepository:
             ),
         )
 
+    def get_subscription_daily_stat_counts(
+        self,
+        *,
+        subscription_id: int,
+        user_id: int,
+        stat_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """直派订阅当日已结算计数（命中率熔断判定用）；未指定日期时按上海自然日。
+
+        只统计直派账本 subscription_daily_stats（路由单不计入），与派单闸的口径一致。
+        """
+        normalized_date = str(stat_date or "").strip() or _shanghai_date(_utc_now_iso())
+        row = self._fetch_one(
+            """
+            SELECT settled_event_count, hit_count, miss_count, refund_count
+            FROM subscription_daily_stats
+            WHERE subscription_id = ? AND user_id = ? AND stat_date = ?
+            LIMIT 1
+            """,
+            (int(subscription_id), int(user_id), normalized_date),
+        )
+        return {
+            "stat_date": normalized_date,
+            "settled_event_count": int(row["settled_event_count"]) if row else 0,
+            "hit_count": int(row["hit_count"]) if row else 0,
+            "miss_count": int(row["miss_count"]) if row else 0,
+            "refund_count": int(row["refund_count"]) if row else 0,
+        }
+
     def _upsert_subscription_daily_stat(
         self,
         conn: sqlite3.Connection,
@@ -7307,6 +7453,12 @@ class DatabaseRepository:
                 route_stop_reason = str(route_stat.get("stopped_reason") or "daily_risk_stopped")
             else:
                 route_stop_reason = _risk_stop_reason(route_risk_control, net_profit=route_stat.get("net_profit"))
+                if not route_stop_reason:
+                    route_stop_reason = hit_rate_gate_stop_reason(
+                        route_risk_control,
+                        hit_count=route_stat.get("hit_count"),
+                        miss_count=route_stat.get("miss_count"),
+                    )
                 if route_stop_reason:
                     conn.execute(
                         """

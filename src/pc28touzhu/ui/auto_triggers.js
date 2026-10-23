@@ -301,6 +301,10 @@
         if (Number(payload.loss_limit || 0) > 0) {
             parts.push("止损 " + String(payload.loss_limit));
         }
+        const gate = payload.hit_rate_gate || {};
+        if (gate.enabled) {
+            parts.push("命中率 ≥" + String(gate.threshold) + "%（满" + String(gate.min_settled_count) + "单）");
+        }
         return parts.length ? ("每日风控：" + parts.join(" / ")) : "";
     }
 
@@ -340,7 +344,12 @@
         if (!stat || stat.status !== "stopped") {
             return "";
         }
-        return String(stat.stat_date || "--") + " 状态：已停止触发" + (stat.stopped_reason ? "（" + String(stat.stopped_reason) + "）" : "");
+        const reasonText = {
+            daily_hit_rate_low: "当日命中率低于熔断阈值",
+            profit_target_hit: "止盈",
+            loss_limit_hit: "止损",
+        }[String(stat.stopped_reason || "")] || String(stat.stopped_reason || "");
+        return String(stat.stat_date || "--") + " 状态：已停止触发（" + reasonText + "）";
     }
 
     function isDailyRiskStopped(rule) {
@@ -673,6 +682,9 @@
                     '<div class="route-risk-fields">' +
                         '<label class="field"><span>路由止盈</span><input class="text-input route-profit-target" type="number" min="0" step="0.01" value="' + escapeHtml(routeRiskControl.profit_target || 0) + '"></label>' +
                         '<label class="field"><span>路由止损</span><input class="text-input route-loss-limit" type="number" min="0" step="0.01" value="' + escapeHtml(routeRiskControl.loss_limit || 0) + '"></label>' +
+                        '<label class="field"><span>命中率熔断阈值(%)</span><input class="text-input route-hit-rate-threshold" type="number" min="1" max="99" step="0.1" value="' + escapeHtml((routeRiskControl.hit_rate_gate || {}).threshold || 50) + '"></label>' +
+                        '<label class="field"><span>熔断最小结算单数</span><input class="text-input route-hit-rate-min-settled" type="number" min="1" step="1" value="' + escapeHtml((routeRiskControl.hit_rate_gate || {}).min_settled_count || 20) + '"></label>' +
+                        '<label class="check-row"><input class="route-hit-rate-gate-enabled" type="checkbox"' + ((routeRiskControl.hit_rate_gate || {}).enabled ? " checked" : "") + '><span>当日命中率低于阈值时熔断该路由</span></label>' +
                     '</div>' +
                     '<label class="field"><span>方案风控</span><select class="text-input route-subscription-risk-mode">' + options([["inherit_rule", "继承规则默认"], ["inherit_subscription", "继承跟单方案"], ["override", "单独设置"], ["disabled", "关闭"]], subscriptionRiskMode) + '</select></label>' +
                     '<div class="route-subscription-risk-fields">' +
@@ -776,9 +788,13 @@
         form.elements.play_filter_action.value = item.action && item.action.play_filter_action ? item.action.play_filter_action : "keep";
         form.elements.fixed_metric.value = item.action && item.action.fixed_metric ? item.action.fixed_metric : "big_small";
         const dailyRisk = item.daily_risk_control || {};
+        const dailyGate = dailyRisk.hit_rate_gate || {};
         form.elements.daily_risk_enabled.checked = Boolean(dailyRisk.enabled);
         form.elements.daily_profit_target.value = String(dailyRisk.profit_target || 0);
         form.elements.daily_loss_limit.value = String(dailyRisk.loss_limit || 0);
+        form.elements.daily_hit_rate_gate_enabled.checked = Boolean(dailyGate.enabled);
+        form.elements.daily_hit_rate_threshold.value = String(dailyGate.threshold || 50);
+        form.elements.daily_hit_rate_min_settled.value = String(dailyGate.min_settled_count || 20);
         form.elements.daily_cancel_pending_jobs.checked = dailyRisk.cancel_pending_jobs !== false;
         renderSubscriptionOptions(item.subscription_ids || []);
         renderConditions(item.conditions || []);
@@ -868,6 +884,11 @@
                     enabled: true,
                     profit_target: Number(card.querySelector(".route-profit-target").value || 0),
                     loss_limit: Number(card.querySelector(".route-loss-limit").value || 0),
+                    hit_rate_gate: {
+                        enabled: card.querySelector(".route-hit-rate-gate-enabled").checked,
+                        threshold: Number(card.querySelector(".route-hit-rate-threshold").value || 0),
+                        min_settled_count: Number(card.querySelector(".route-hit-rate-min-settled").value || 20),
+                    },
                     timezone: "Asia/Shanghai",
                     cancel_pending_jobs: true,
                 };
@@ -939,6 +960,11 @@
                 enabled: form.elements.daily_risk_enabled.checked,
                 profit_target: Number(form.elements.daily_profit_target.value || 0),
                 loss_limit: Number(form.elements.daily_loss_limit.value || 0),
+                hit_rate_gate: {
+                    enabled: form.elements.daily_hit_rate_gate_enabled.checked,
+                    threshold: Number(form.elements.daily_hit_rate_threshold.value || 0),
+                    min_settled_count: Number(form.elements.daily_hit_rate_min_settled.value || 20),
+                },
                 timezone: "Asia/Shanghai",
                 cancel_pending_jobs: form.elements.daily_cancel_pending_jobs.checked,
             },

@@ -20,6 +20,60 @@ ALLOWED_SETTLEMENT_RULE_SOURCES = {"follow_signal", "subscription_fixed"}
 ALLOWED_RISK_PLAY_KEYS = ("big_small", "odd_even", "combo")
 DEFAULT_EXPIRE_AFTER_SECONDS = 120
 DEFAULT_FALLBACK_PROFIT_RATIO = 1.0
+# 命中率熔断：当日已结算（命中+未中，回本不计）满 N 单且命中率低于阈值时停止当日跟单。
+HIT_RATE_GATE_STOP_REASON = "daily_hit_rate_low"
+DEFAULT_HIT_RATE_GATE_MIN_SETTLED = 20
+
+
+def normalize_hit_rate_gate(value: Any, field_name: str = "hit_rate_gate") -> Dict[str, Any]:
+    """归一化命中率熔断配置；未启用时保持默认值便于透传保存。"""
+    data = _to_object(value)
+    enabled = bool(data.get("enabled"))
+    threshold = _to_optional_non_negative_float(data.get("threshold"), "%s.threshold" % field_name)
+    min_settled_raw = data.get("min_settled_count")
+    if min_settled_raw in {None, ""}:
+        min_settled = DEFAULT_HIT_RATE_GATE_MIN_SETTLED
+    else:
+        try:
+            min_settled = int(min_settled_raw)
+        except (TypeError, ValueError):
+            raise ValueError("%s.min_settled_count 必须为整数" % field_name)
+        if min_settled < 1:
+            raise ValueError("%s.min_settled_count 不能小于 1" % field_name)
+    if enabled:
+        if threshold is None or not 0 < threshold < 100:
+            raise ValueError("%s.threshold 启用时必须为 0~100 之间的命中率百分比" % field_name)
+    return {
+        "enabled": enabled,
+        "threshold": float(threshold or 0.0),
+        "min_settled_count": min_settled,
+    }
+
+
+def hit_rate_gate_stop_reason(
+    risk_control: Any,
+    *,
+    hit_count: Any,
+    miss_count: Any,
+) -> str:
+    """按当日已结算计数判定命中率熔断是否触发；未达标样本数时不生效。"""
+    gate = _to_object(_to_object(risk_control).get("hit_rate_gate"))
+    if not bool(gate.get("enabled")):
+        return ""
+    try:
+        hits = int(hit_count or 0)
+        misses = int(miss_count or 0)
+    except (TypeError, ValueError):
+        return ""
+    settled = hits + misses
+    if settled <= 0 or settled < int(gate.get("min_settled_count") or 1):
+        return ""
+    threshold = float(gate.get("threshold") or 0.0)
+    if threshold <= 0:
+        return ""
+    if 100.0 * hits / settled < threshold:
+        return HIT_RATE_GATE_STOP_REASON
+    return ""
 
 
 def _to_object(value: Any) -> Dict[str, Any]:
@@ -214,17 +268,19 @@ def _normalize_risk_control_v2(payload: Any) -> Dict[str, Any]:
     profit_target = round(float(_to_optional_non_negative_float(data.get("profit_target"), "strategy.risk_control.profit_target") or 0), 2)
     loss_limit = round(float(_to_optional_non_negative_float(data.get("loss_limit"), "strategy.risk_control.loss_limit") or 0), 2)
     play_limits = _normalize_risk_control_play_limits(data.get("play_limits", data.get("play_thresholds")))
+    hit_rate_gate = normalize_hit_rate_gate(data.get("hit_rate_gate"), "strategy.risk_control.hit_rate_gate")
     has_play_limit = any(
         item["profit_target"] > 0 or item["loss_limit"] > 0
         for item in play_limits.values()
     )
-    if enabled and profit_target <= 0 and loss_limit <= 0 and not has_play_limit:
-        raise ValueError("启用止盈止损时，止盈或止损至少要设置一个大于 0 的阈值")
+    if enabled and profit_target <= 0 and loss_limit <= 0 and not has_play_limit and not hit_rate_gate["enabled"]:
+        raise ValueError("启用止盈止损时，止盈、止损或命中率熔断至少要设置一个")
     return {
         "enabled": enabled,
         "profit_target": profit_target,
         "loss_limit": loss_limit,
         "play_limits": play_limits,
+        "hit_rate_gate": hit_rate_gate,
     }
 
 

@@ -17,7 +17,11 @@ except ImportError:  # pragma: no cover - Python 3.8 compatibility
     ZoneInfo = None
     ZoneInfoNotFoundError = LookupError
 
-from pc28touzhu.domain.subscription_strategy import upgrade_subscription_strategy
+from pc28touzhu.domain.subscription_strategy import (
+    hit_rate_gate_stop_reason,
+    normalize_hit_rate_gate,
+    upgrade_subscription_strategy,
+)
 from pc28touzhu.domain.pc28_profit_rules import drop_matching_catalog_odds, normalize_odds_overrides
 from pc28touzhu.domain.pc28_issue_window import evaluate_pc28_issue_dispatch_window
 from pc28touzhu.domain.settlement_rules import get_settlement_rule, normalize_settlement_rule_id
@@ -257,8 +261,9 @@ def _normalize_daily_risk_control(value: Any) -> dict:
     enabled = bool(payload.get("enabled", False))
     profit_target = max(0.0, _round_money(payload.get("profit_target")))
     loss_limit = max(0.0, _round_money(payload.get("loss_limit")))
-    if enabled and profit_target <= 0 and loss_limit <= 0:
-        raise ValueError("启用规则日止盈止损时，止盈或止损至少需要配置一个")
+    hit_rate_gate = normalize_hit_rate_gate(payload.get("hit_rate_gate"), "daily_risk_control.hit_rate_gate")
+    if enabled and profit_target <= 0 and loss_limit <= 0 and not hit_rate_gate["enabled"]:
+        raise ValueError("启用规则日止盈止损时，止盈、止损或命中率熔断至少需要配置一个")
     timezone_name = str(payload.get("timezone") or "Asia/Shanghai").strip() or "Asia/Shanghai"
     if timezone_name != "Asia/Shanghai":
         raise ValueError("daily_risk_control.timezone 当前仅支持 Asia/Shanghai")
@@ -266,6 +271,7 @@ def _normalize_daily_risk_control(value: Any) -> dict:
         "enabled": enabled,
         "profit_target": profit_target,
         "loss_limit": loss_limit,
+        "hit_rate_gate": hit_rate_gate,
         "timezone": timezone_name,
         "cancel_pending_jobs": bool(payload.get("cancel_pending_jobs", True)),
     }
@@ -556,6 +562,48 @@ def _daily_risk_stop_reason(daily_risk_control: Dict[str, Any], *, net_profit: A
     return ""
 
 
+def _rule_day_stop_reason(daily_risk_control: Dict[str, Any], *, stat: Dict[str, Any]) -> str:
+    """规则日是否仍触发风控：止盈止损 + 命中率熔断共用同一恢复闸。"""
+    reason = _daily_risk_stop_reason(daily_risk_control, net_profit=(stat or {}).get("net_profit"))
+    if reason:
+        return reason
+    return hit_rate_gate_stop_reason(
+        daily_risk_control,
+        hit_count=(stat or {}).get("hit_count"),
+        miss_count=(stat or {}).get("miss_count"),
+    )
+
+
+def _route_day_gate_stop_reason(repository: Any, *, rule: Dict[str, Any], stat_date: str) -> str:
+    """任一路由的命中率熔断仍在触发时返回其原因，供恢复闸判定。"""
+    rule_control = rule.get("daily_risk_control") if isinstance(rule.get("daily_risk_control"), dict) else {}
+    for route in rule.get("routes") or []:
+        route_id = int(route.get("id") or 0)
+        if route_id <= 0:
+            continue
+        route_mode = str(route.get("route_risk_mode") or "inherit_rule")
+        if route_mode == "disabled":
+            continue
+        route_control = (
+            route.get("route_risk_control")
+            if route_mode == "override" and isinstance(route.get("route_risk_control"), dict)
+            else rule_control
+        )
+        stat = repository.get_auto_trigger_route_daily_stat(
+            route_id=route_id,
+            user_id=int(rule["user_id"]),
+            stat_date=stat_date,
+        )
+        reason = hit_rate_gate_stop_reason(
+            route_control,
+            hit_count=stat.get("hit_count"),
+            miss_count=stat.get("miss_count"),
+        )
+        if reason:
+            return reason
+    return ""
+
+
 def _has_stopped_route_days(repository: Any, *, rule: Dict[str, Any], stat_date: str) -> bool:
     for route in rule.get("routes") or []:
         route_id = int(route.get("id") or 0)
@@ -583,7 +631,10 @@ def _resume_stopped_rule_day_if_allowed(
         user_id=int(rule["user_id"]),
         stat_date=stat_date,
     )
-    if _daily_risk_stop_reason(daily_risk_control, net_profit=stat.get("net_profit")):
+    stop_reason = _rule_day_stop_reason(daily_risk_control, stat=stat)
+    if not stop_reason:
+        stop_reason = _route_day_gate_stop_reason(repository, rule=rule, stat_date=stat_date)
+    if stop_reason:
         return None
     if not hasattr(repository, "resume_auto_trigger_rule_day"):
         return None
@@ -654,9 +705,11 @@ def resume_auto_trigger_rule_day(repository: Any, *, rule_id: Any, user_id: Any,
         user_id=normalized_user_id,
         stat_date=resolved_stat_date,
     )
-    stop_reason = _daily_risk_stop_reason(daily_risk_control, net_profit=stat.get("net_profit"))
+    stop_reason = _rule_day_stop_reason(daily_risk_control, stat=stat)
+    if not stop_reason:
+        stop_reason = _route_day_gate_stop_reason(repository, rule=rule, stat_date=resolved_stat_date)
     if stop_reason:
-        raise ValueError("当前当日净盈亏仍达到规则风控阈值，请先调高阈值或关闭规则每日风控")
+        raise ValueError("当前当日风控条件仍触发（%s），请先调整阈值或关闭对应风控开关" % stop_reason)
     # 路由级当日停止（含路由独立风控先触顶）同样需要恢复；仓库方法幂等，非 stopped 行不受影响。
     rule_day_stopped = str(stat.get("status") or "") == "stopped"
     route_day_stopped = _has_stopped_route_days(repository, rule=rule, stat_date=resolved_stat_date)
@@ -1469,7 +1522,17 @@ def _is_rule_day_stopped(repository: Any, rule: Dict[str, Any], *, stat_date: st
         user_id=int(rule["user_id"]),
         stat_date=stat_date,
     )
-    return {"stopped": str(stat.get("status") or "") == "stopped", "stat": stat}
+    if str(stat.get("status") or "") == "stopped":
+        return {"stopped": True, "stat": stat}
+    # 只读兜底：结算钩子尚未落下 stopped 标记（如当天中途才开启熔断/调低阈值）时，
+    # 触发评估这一刻也按当日账本实时判定，不达标即视为当日已停止。
+    if hit_rate_gate_stop_reason(
+        daily_risk_control,
+        hit_count=stat.get("hit_count"),
+        miss_count=stat.get("miss_count"),
+    ):
+        return {"stopped": True, "stat": stat, "reason": "daily_hit_rate_low"}
+    return {"stopped": False, "stat": stat}
 
 
 def _schedule_now(now: Optional[datetime], timezone_name: str) -> datetime:
@@ -1619,6 +1682,21 @@ def _active_routes_for_subscription(
                 {"route_id": route_id, "reason": "route_daily_risk_stopped", "stat_date": route_stat_date, "stat": stat}
             )
             continue
+        # 触发前兜底：路由当日账本已跌破熔断但尚未落标记（当天中途才开启/调阈值）时当场收口。
+        if hasattr(repository, "mark_auto_trigger_route_day_stopped_if_hit_rate_low"):
+            repository.mark_auto_trigger_route_day_stopped_if_hit_rate_low(
+                route_id=route_id, user_id=int(rule["user_id"]), stat_date=route_stat_date,
+            )
+            stat = repository.get_auto_trigger_route_daily_stat(
+                route_id=route_id,
+                user_id=int(rule["user_id"]),
+                stat_date=route_stat_date,
+            )
+            if str(stat.get("status") or "") == "stopped":
+                skipped_routes.append(
+                    {"route_id": route_id, "reason": "route_daily_risk_stopped", "stat_date": route_stat_date, "stat": stat}
+                )
+                continue
         open_state = repository.auto_trigger_route_has_open_run(
             route_id=route_id,
             subscription_id=int(subscription["id"]),
@@ -1739,6 +1817,11 @@ def _evaluate_scheduled_auto_trigger_rule(
                 ))
                 summary["skipped_count"] += 1
                 continue
+            # 定时开轮前同样先按当日账本兜底判定命中率熔断，不达标当日不再开新轮。
+            if hasattr(repository, "mark_auto_trigger_rule_day_stopped_if_hit_rate_low"):
+                repository.mark_auto_trigger_rule_day_stopped_if_hit_rate_low(
+                    rule_id=int(rule["id"]), user_id=int(rule["user_id"]), stat_date=stat_date,
+                )
             daily_risk = _is_rule_day_stopped(repository, rule, stat_date=stat_date)
             if daily_risk.get("stopped"):
                 events.append(_record_event(
@@ -2005,6 +2088,11 @@ def evaluate_auto_trigger_rule(
         return evaluate_scheduled_auto_trigger_rule(repository, rule, now=now, draw_clock=draw_clock)
     daily_risk_control = rule.get("daily_risk_control") if isinstance(rule.get("daily_risk_control"), dict) else {}
     stat_date = _today_stat_date(timezone_name=str(daily_risk_control.get("timezone") or "Asia/Shanghai"))
+    # 触发前先按当日账本兜底判定命中率熔断：不达标当场落 stopped，不再开出这一轮。
+    if hasattr(repository, "mark_auto_trigger_rule_day_stopped_if_hit_rate_low"):
+        repository.mark_auto_trigger_rule_day_stopped_if_hit_rate_low(
+            rule_id=int(rule["id"]), user_id=int(rule["user_id"]), stat_date=stat_date,
+        )
     day_state = _is_rule_day_stopped(repository, rule, stat_date=stat_date)
     has_routes = bool(rule.get("routes"))
     subscription_ids = rule.get("subscription_ids") if rule.get("scope_mode") == "selected_subscriptions" else None

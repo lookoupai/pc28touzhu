@@ -9,7 +9,9 @@ from pc28touzhu.domain.pc28_play_filter import strategy_matches_signal
 from pc28touzhu.domain.pc28_issue_window import evaluate_pc28_issue_dispatch_window
 from pc28touzhu.domain.settlement_rules import build_settlement_snapshot
 from pc28touzhu.domain.subscription_strategy import (
+    hit_rate_gate_stop_reason,
     resolve_dispatch_policy,
+    resolve_risk_control_policy,
     resolve_settlement_runtime_policy,
     resolve_staking_runtime_policy,
     upgrade_subscription_strategy,
@@ -135,6 +137,37 @@ def _target_allows_dispatch(repository: Any, target_id: int, *, from_rule: bool)
         return False
     mode = str(target.get("dispatch_mode") or "shared")
     return mode == "shared" or mode == ("rule_only" if from_rule else "direct_only")
+
+
+def _subscription_hit_rate_gate_blocked(
+    repository: Any,
+    *,
+    strategy: Dict[str, Any],
+    subscription_id: int,
+    user_id: int,
+) -> bool:
+    """直派订阅的当日命中率熔断：当日结算满 N 单且命中率低于阈值时暂停继续直派。
+
+    每次派单前按当日直派账本实时判定，无状态、次日自然恢复；
+    未启用或样本不足时放行。
+    """
+    risk_control = resolve_risk_control_policy(strategy)
+    gate = risk_control.get("hit_rate_gate") if isinstance(risk_control.get("hit_rate_gate"), dict) else {}
+    if not bool(gate.get("enabled")):
+        return False
+    if not hasattr(repository, "get_subscription_daily_stat_counts"):
+        return False
+    stat = repository.get_subscription_daily_stat_counts(
+        subscription_id=subscription_id,
+        user_id=user_id,
+    )
+    return bool(
+        hit_rate_gate_stop_reason(
+            {"hit_rate_gate": gate},
+            hit_count=stat.get("hit_count"),
+            miss_count=stat.get("miss_count"),
+        )
+    )
 
 
 def _build_stake_plan(strategy: Dict[str, Any], signal: Dict[str, Any], current_step: int = 1) -> Dict[str, Any]:
@@ -746,6 +779,12 @@ def _dispatch_signal(
             skipped_count += 1
             continue
         if resolved_auto_trigger_context and resolved_auto_trigger_context.get("stopped"):
+            skipped_count += 1
+            continue
+        if not resolved_auto_trigger_context and _subscription_hit_rate_gate_blocked(
+            repository, strategy=strategy, subscription_id=subscription_id, user_id=int(candidate["user_id"]),
+        ):
+            # 直派订阅当日命中率熔断：路由单有自己的规则/路由风控，不走这条闸。
             skipped_count += 1
             continue
         if hasattr(repository, "execution_job_exists_for_target") and repository.execution_job_exists_for_target(

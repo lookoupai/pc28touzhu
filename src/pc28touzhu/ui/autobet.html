@@ -872,6 +872,24 @@
                                             </span>
                                         </label>
                                     </div>
+                                    <div class="wide subscription-risk-field subscription-risk-hit-rate-gate" hidden>
+                                        <div class="subscription-risk-play-limit-header">
+                                            <span>当日命中率熔断（直派专用）</span>
+                                            <small class="field-hint">当日直派已结算满 N 单且命中率低于阈值时，当天暂停继续直派，次日自动恢复。组合建议 25%，大小/单双建议 50%。</small>
+                                        </div>
+                                        <label class="checkbox-line">
+                                            <input name="risk_hit_rate_gate_enabled" type="checkbox">
+                                            <span>启用当日命中率熔断</span>
+                                        </label>
+                                        <label>
+                                            <span>命中率阈值(%)</span>
+                                            <input class="text-input" name="risk_hit_rate_threshold" type="number" min="1" max="99" step="0.1" placeholder="25 或 50">
+                                        </label>
+                                        <label>
+                                            <span>最小结算单数</span>
+                                            <input class="text-input" name="risk_hit_rate_min_settled" type="number" min="1" step="1" placeholder="20">
+                                        </label>
+                                    </div>
                                 </div>
                             </div>
                             <div class="form-actions">
