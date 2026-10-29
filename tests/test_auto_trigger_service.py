@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -143,6 +144,17 @@ class AutoTriggerServiceTests(unittest.TestCase):
             "action": {"dispatch_latest_signal": True},
         }
 
+    def _multi_window_payload(self, *, cooldown_issues=0):
+        payload = self._schedule_payload()
+        payload["cooldown_issues"] = cooldown_issues
+        payload["schedule"]["windows"] = [
+            {"id": "w1", "start": "08:00", "end": "08:30"},
+            {"id": "w2", "start": "15:00", "end": "15:30"},
+        ]
+        # 不实际派单，聚焦窗口语义：轮次是否在跑由规则轮次本身表示。
+        payload["action"] = {"dispatch_latest_signal": False}
+        return payload
+
     def test_schedule_primary_window_dispatches_without_performance_fetch(self):
         fresh = self.repo.create_signal_record(
             source_id=self.source["id"], lottery_type="pc28", issue_no="20260418002",
@@ -174,7 +186,161 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(first["rules"][0]["summary"]["triggered_count"], 1)
         self.assertEqual(second["rules"][0]["summary"]["skipped_count"], 1)
         reasons = [item["reason"] for item in self.repo.list_auto_trigger_events(user_id=self.user_id, limit=10)]
-        self.assertIn("schedule_day_already_started", reasons)
+        # 主窗口开的轮次仍在运行：备用窗口不再另开一轮，等旧轮结束。
+        self.assertIn("schedule_previous_run_active", reasons)
+
+    def test_schedule_multi_window_starts_each_window_once(self):
+        self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260418002",
+            bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
+            published_at="2026-09-02T00:04:30Z",
+        )
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._multi_window_payload())["item"]
+        first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 0, 5, tzinfo=timezone.utc))
+        self.assertEqual(first["rules"][0]["summary"]["triggered_count"], 1)
+        started_event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(started_event["snapshot"]["window_id"], "w1")
+
+        # 15:00 窗口到达时，8:00 开的轮次仍在运行：不再重复触发。
+        waiting = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 7, 5, tzinfo=timezone.utc))
+        self.assertEqual(waiting["rules"][0]["summary"]["triggered_count"], 0)
+        waiting_event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(waiting_event["reason"], "schedule_previous_run_active")
+        runs = self.repo.list_auto_trigger_rule_runs_for_subscription_date(
+            rule_id=rule["id"], subscription_id=self.subscription["id"], stat_date="2026-09-02",
+        )
+        self.assertEqual([run["window_id"] for run in runs], ["w1"])
+
+        # 结束在跑轮次后，15:00 窗口开新一轮。
+        stop_auto_trigger_rule_current_run(self.repo, rule_id=rule["id"], user_id=self.user_id)
+        self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260418003",
+            bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
+            published_at="2026-09-02T07:04:30Z",
+        )
+        restarted = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 7, 6, tzinfo=timezone.utc))
+        self.assertEqual(restarted["rules"][0]["summary"]["triggered_count"], 1)
+        restarted_event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(restarted_event["snapshot"]["window_id"], "w2")
+
+        # 同一窗口内再次评估：每个窗口每天最多一轮。
+        duplicate = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 7, 10, tzinfo=timezone.utc))
+        self.assertEqual(duplicate["rules"][0]["summary"]["triggered_count"], 0)
+        duplicate_event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(duplicate_event["reason"], "schedule_day_already_started")
+
+    def test_schedule_normalizes_and_sorts_multiple_windows(self):
+        payload = self._multi_window_payload()
+        payload["schedule"]["windows"] = [
+            {"start": "15:00", "end": "15:30"},
+            {"id": "w1", "start": "08:00", "end": "08:30"},
+        ]
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=payload)["item"]
+        windows = rule["schedule"]["windows"]
+        self.assertEqual([item["id"] for item in windows], ["w1", "w2"])
+        self.assertEqual([item["start"] for item in windows], ["08:00", "15:00"])
+        self.assertNotIn("max_starts_per_local_day", rule["schedule"])
+
+    def test_schedule_rejects_duplicate_window_ids(self):
+        payload = self._multi_window_payload()
+        payload["schedule"]["windows"] = [
+            {"id": "w1", "start": "08:00", "end": "08:30"},
+            {"id": "w1", "start": "15:00", "end": "15:30"},
+        ]
+        with self.assertRaises(ValueError):
+            create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=payload)
+
+    def test_migration_adds_window_id_and_per_window_daily_claim(self):
+        db_path = os.path.join(self.tmpdir.name, "legacy-run-schema.db")
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE auto_trigger_rule_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rule_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    subscription_id INTEGER NOT NULL,
+                    stat_date TEXT NOT NULL,
+                    started_issue_no TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    stop_reason TEXT NOT NULL DEFAULT '',
+                    started_at TEXT NOT NULL,
+                    stopped_at TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                    FOREIGN KEY(rule_id) REFERENCES auto_trigger_rules(id),
+                    FOREIGN KEY(user_id) REFERENCES users(id),
+                    FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id),
+                    UNIQUE(rule_id, subscription_id, stat_date)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO auto_trigger_rule_runs(
+                    rule_id, user_id, subscription_id, stat_date, started_issue_no, status, started_at
+                ) VALUES (1, 1, 1, '2026-09-01', 'legacy', 'active', '2026-09-01T10:00:00Z')
+                """
+            )
+        repo = DatabaseRepository(db_path)
+        repo.initialize_database()
+        with sqlite3.connect(db_path) as conn:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(auto_trigger_rule_runs)").fetchall()}
+            self.assertIn("window_id", columns)
+            unique_columns = []
+            for index in conn.execute("PRAGMA index_list(auto_trigger_rule_runs)").fetchall():
+                if int(index[2]) == 1 and str(index[3]) == "u":
+                    unique_columns = [row[2] for row in conn.execute("PRAGMA index_info(%s)" % index[1]).fetchall()]
+            self.assertEqual(unique_columns, ["rule_id", "subscription_id", "stat_date", "window_id"])
+            legacy_row = conn.execute(
+                "SELECT window_id, status, started_issue_no FROM auto_trigger_rule_runs WHERE stat_date = '2026-09-01'"
+            ).fetchone()
+        self.assertEqual(legacy_row, ("", "active", "legacy"))
+
+        # 同一天不同窗口各可认领一次；同窗口二次认领失败。
+        user_id = repo.create_user("legacy-mig-user")
+        source = repo.create_source_record(
+            owner_user_id=user_id,
+            source_type="ai_trading_simulator_export",
+            name="迁移来源",
+            status="active",
+            config={"fetch": {"url": "https://example.com/api/export/predictors/5/signals"}},
+        )
+        subscription = repo.create_subscription_record(
+            user_id=user_id,
+            source_id=source["id"],
+            status="active",
+            strategy={},
+        )
+        rule = repo.create_auto_trigger_rule_record(
+            user_id=user_id,
+            name="迁移规则",
+            status="active",
+            scope_mode="selected_subscriptions",
+            subscription_ids=[subscription["id"]],
+            trigger_mode="schedule",
+            schedule={
+                "timezone": "Asia/Shanghai",
+                "weekdays": ["Mon"],
+                "windows": [{"id": "w1", "start": "08:00", "end": "08:30"}],
+                "signal_max_age_seconds": 300,
+            },
+        )
+        first = repo.claim_auto_trigger_daily_start(
+            rule_id=rule["id"], user_id=user_id, subscription_id=subscription["id"],
+            stat_date="2026-09-02", started_issue_no="a", window_id="w1",
+        )
+        self.assertTrue(first["claimed"])
+        second = repo.claim_auto_trigger_daily_start(
+            rule_id=rule["id"], user_id=user_id, subscription_id=subscription["id"],
+            stat_date="2026-09-02", started_issue_no="b", window_id="w2",
+        )
+        self.assertTrue(second["claimed"])
+        again = repo.claim_auto_trigger_daily_start(
+            rule_id=rule["id"], user_id=user_id, subscription_id=subscription["id"],
+            stat_date="2026-09-02", started_issue_no="c", window_id="w1",
+        )
+        self.assertFalse(again["claimed"])
 
     def test_schedule_stale_primary_signal_can_be_replaced_in_fallback(self):
         self.repo.create_signal_record(
@@ -3416,6 +3582,13 @@ class AutoTriggerServiceTests(unittest.TestCase):
             raw_result={},
             error_message=None,
         )
+        # 用“上海时间昨天”的深夜时刻模拟跨日轮次；写死日期会被运行数据保留清理任务删掉。
+        cross_day_started_at = (
+            datetime.now(timezone(timedelta(hours=8))) - timedelta(days=1)
+        ).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        cross_day_stat_date = (
+            datetime.now(timezone(timedelta(hours=8))) - timedelta(days=1)
+        ).strftime("%Y-%m-%d")
         with self.repo._connect() as conn:
             conn.execute(
                 """
@@ -3424,9 +3597,9 @@ class AutoTriggerServiceTests(unittest.TestCase):
                 WHERE route_id = ? AND subscription_id = ? AND user_id = ? AND status = 'active'
                 """,
                 (
-                    "2026-06-27T15:27:52Z",
-                    "2026-06-27T15:27:52Z",
-                    "2026-06-27T15:35:00Z",
+                    cross_day_started_at,
+                    cross_day_started_at,
+                    cross_day_started_at,
                     route_id,
                     self.subscription["id"],
                     self.user_id,
@@ -3455,9 +3628,9 @@ class AutoTriggerServiceTests(unittest.TestCase):
             auto_trigger_route_id=route_id,
         )
         self.assertIsNotNone(second_event)
-        self.assertEqual(second_event["auto_trigger_stat_date"], "2026-06-27")
+        self.assertEqual(second_event["auto_trigger_stat_date"], cross_day_stat_date)
         rule_run = self.repo.get_auto_trigger_rule_run(second_event["auto_trigger_rule_run_id"])
-        self.assertEqual(rule_run["stat_date"], "2026-06-27")
+        self.assertEqual(rule_run["stat_date"], cross_day_stat_date)
 
         self.repo.settle_progression_event(
             subscription_id=self.subscription["id"],
@@ -3468,7 +3641,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         stat = self.repo.get_auto_trigger_rule_daily_stat(
             rule_id=rule["id"],
             user_id=self.user_id,
-            stat_date="2026-06-27",
+            stat_date=cross_day_stat_date,
         )
         self.assertEqual(stat["settled_event_count"], 1)
         self.assertEqual(stat["loss_amount"], 10.0)

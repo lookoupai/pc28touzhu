@@ -122,14 +122,11 @@
                                         </div>
                                     </div>
                                     <div class="field schedule-window-field">
-                                        <span>主窗口</span>
-                                        <div class="schedule-time-pair"><input class="text-input" name="schedule_primary_start" type="time" value="18:00" aria-label="主窗口开始时间"><span>至</span><input class="text-input" name="schedule_primary_end" type="time" value="18:30" aria-label="主窗口结束时间"></div>
+                                        <span>定时任务（窗口）</span>
+                                        <div id="scheduleWindowRows" class="schedule-window-rows"></div>
+                                        <button id="addScheduleWindowBtn" class="ghost-btn" type="button">添加定时任务</button>
                                     </div>
-                                    <div class="field schedule-window-field">
-                                        <span>备用窗口</span>
-                                        <div class="schedule-time-pair"><input class="text-input" name="schedule_fallback_start" type="time" value="20:00" aria-label="备用窗口开始时间"><span>至</span><input class="text-input" name="schedule_fallback_end" type="time" value="20:30" aria-label="备用窗口结束时间"></div>
-                                    </div>
-                                    <p class="meta-line schedule-note">每天最多新开一轮。上一轮跨日延续不占当天次数，未结束时等待。主窗口未启动时，备用窗口才会补启动；窗口结束后不会补发旧信号。</p>
+                                    <p class="meta-line schedule-note">每个定时任务在窗口开始后尝试启动一轮，每个窗口每天最多启动一轮。上一轮（任意窗口启动）还没达到停止条件时，后续窗口不会重复触发；上一轮结束后，下一个窗口会开新一轮。窗口结束后不会补发旧信号。</p>
                                 </div>
                             </div>
                             <label class="check-row wide">

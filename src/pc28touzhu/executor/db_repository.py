@@ -739,6 +739,7 @@ class DatabaseRepository:
             user_id INTEGER NOT NULL,
             subscription_id INTEGER NOT NULL,
             stat_date TEXT NOT NULL,
+            window_id TEXT NOT NULL DEFAULT '',
             started_issue_no TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'active',
             stop_reason TEXT NOT NULL DEFAULT '',
@@ -749,7 +750,7 @@ class DatabaseRepository:
             FOREIGN KEY(rule_id) REFERENCES auto_trigger_rules(id),
             FOREIGN KEY(user_id) REFERENCES users(id),
             FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id),
-            UNIQUE(rule_id, subscription_id, stat_date)
+            UNIQUE(rule_id, subscription_id, stat_date, window_id)
         )
         """,
         """
@@ -985,6 +986,7 @@ class DatabaseRepository:
             self._ensure_subscription_financial_state_columns(conn)
             self._ensure_subscription_runtime_run_columns(conn)
             self._ensure_auto_trigger_rule_columns(conn)
+            self._ensure_auto_trigger_rule_run_columns(conn)
             self._ensure_auto_trigger_rule_route_columns(conn)
             self._ensure_route_runtime_run_columns(conn)
             self._ensure_normalized_signal_columns(conn)
@@ -1256,6 +1258,85 @@ class DatabaseRepository:
         for column_name, ddl in column_definitions.items():
             if column_name not in existing_columns:
                 conn.execute(ddl)
+
+    def _ensure_auto_trigger_rule_run_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(auto_trigger_rule_runs)").fetchall()
+        }
+        if "window_id" not in columns:
+            conn.execute("ALTER TABLE auto_trigger_rule_runs ADD COLUMN window_id TEXT NOT NULL DEFAULT ''")
+        self._rebuild_auto_trigger_rule_runs_with_window_unique(conn)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_auto_trigger_rule_runs_subscription "
+            "ON auto_trigger_rule_runs(subscription_id, user_id, id)"
+        )
+
+    def _rebuild_auto_trigger_rule_runs_with_window_unique(self, conn: sqlite3.Connection) -> None:
+        """旧表唯一键为 (rule_id, subscription_id, stat_date)，只允许一天一轮。
+
+        多窗口定时任务要求同一天可以按窗口各开一轮，这里检测到旧的三列唯一
+        自动索引时重建表，把唯一键扩成 (rule_id, subscription_id, stat_date, window_id)。
+        """
+        needs_rebuild = False
+        for index in conn.execute("PRAGMA index_list(auto_trigger_rule_runs)").fetchall():
+            if int(index["unique"] or 0) != 1:
+                continue
+            index_columns = [
+                str(row["name"])
+                for row in conn.execute("PRAGMA index_info(%s)" % str(index["name"])).fetchall()
+            ]
+            if index_columns == ["rule_id", "subscription_id", "stat_date"]:
+                needs_rebuild = True
+                break
+        if not needs_rebuild:
+            return
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE auto_trigger_rule_runs_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rule_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    subscription_id INTEGER NOT NULL,
+                    stat_date TEXT NOT NULL,
+                    window_id TEXT NOT NULL DEFAULT '',
+                    started_issue_no TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    stop_reason TEXT NOT NULL DEFAULT '',
+                    started_at TEXT NOT NULL,
+                    stopped_at TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                    FOREIGN KEY(rule_id) REFERENCES auto_trigger_rules(id),
+                    FOREIGN KEY(user_id) REFERENCES users(id),
+                    FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id),
+                    UNIQUE(rule_id, subscription_id, stat_date, window_id)
+                )
+                """
+            )
+            source_columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(auto_trigger_rule_runs)").fetchall()
+            }
+            target_columns = [
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(auto_trigger_rule_runs_new)").fetchall()
+            ]
+            selected_columns = [column for column in target_columns if column in source_columns]
+            if selected_columns:
+                columns_sql = ", ".join(selected_columns)
+                conn.execute(
+                    "INSERT INTO auto_trigger_rule_runs_new(%s) SELECT %s FROM auto_trigger_rule_runs"
+                    % (columns_sql, columns_sql)
+                )
+            conn.execute("DROP TABLE auto_trigger_rule_runs")
+            conn.execute("ALTER TABLE auto_trigger_rule_runs_new RENAME TO auto_trigger_rule_runs")
+            conn.commit()
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON")
 
     def _ensure_auto_trigger_rule_route_columns(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute("PRAGMA table_info(auto_trigger_rule_routes)").fetchall()
@@ -1601,6 +1682,7 @@ class DatabaseRepository:
             "user_id": int(row["user_id"]),
             "subscription_id": int(row["subscription_id"]),
             "stat_date": str(row.get("stat_date") or ""),
+            "window_id": str(row.get("window_id") or ""),
             "started_issue_no": str(row.get("started_issue_no") or ""),
             "status": str(row.get("status") or "active"),
             "stop_reason": str(row.get("stop_reason") or ""),
@@ -4256,17 +4338,33 @@ class DatabaseRepository:
         return self._serialize_auto_trigger_rule_run_row(row) if row else None
 
     def get_auto_trigger_rule_run_for_subscription_date(
-        self, *, rule_id: int, subscription_id: int, stat_date: str
+        self, *, rule_id: int, subscription_id: int, stat_date: str, window_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
-        row = self._fetch_one(
+        """按日取规则轮次；window_id 为 None 时返回当日最新一条（不区分窗口）。"""
+        sql = """
+            SELECT * FROM auto_trigger_rule_runs
+            WHERE rule_id = ? AND subscription_id = ? AND stat_date = ?
+        """
+        params: list[Any] = [int(rule_id), int(subscription_id), str(stat_date or "").strip()]
+        if window_id is not None:
+            sql += " AND window_id = ?"
+            params.append(str(window_id))
+        sql += " ORDER BY id DESC LIMIT 1"
+        row = self._fetch_one(sql, tuple(params))
+        return self._serialize_auto_trigger_rule_run_row(row) if row else None
+
+    def list_auto_trigger_rule_runs_for_subscription_date(
+        self, *, rule_id: int, subscription_id: int, stat_date: str
+    ) -> list[Dict[str, Any]]:
+        rows = self._fetch_all(
             """
             SELECT * FROM auto_trigger_rule_runs
             WHERE rule_id = ? AND subscription_id = ? AND stat_date = ?
-            LIMIT 1
+            ORDER BY id ASC
             """,
             (int(rule_id), int(subscription_id), str(stat_date or "").strip()),
         )
-        return self._serialize_auto_trigger_rule_run_row(row) if row else None
+        return [self._serialize_auto_trigger_rule_run_row(dict(row)) for row in rows]
 
     def get_latest_auto_trigger_rule_run_for_subscription(self, *, subscription_id: int, user_id: int) -> Optional[Dict[str, Any]]:
         row = self._fetch_one(
@@ -4345,16 +4443,18 @@ class DatabaseRepository:
         subscription_id: int,
         stat_date: str,
         started_issue_no: str = "",
+        window_id: str = "",
     ) -> Dict[str, Any]:
         now = _utc_now_iso()
+        normalized_window_id = str(window_id or "").strip()
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO auto_trigger_rule_runs(
-                    rule_id, user_id, subscription_id, stat_date, started_issue_no,
+                    rule_id, user_id, subscription_id, stat_date, window_id, started_issue_no,
                     status, started_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
-                ON CONFLICT(rule_id, subscription_id, stat_date) DO UPDATE SET
+                ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                ON CONFLICT(rule_id, subscription_id, stat_date, window_id) DO UPDATE SET
                     user_id = excluded.user_id,
                     started_issue_no = CASE
                         WHEN auto_trigger_rule_runs.started_issue_no = '' THEN excluded.started_issue_no
@@ -4373,6 +4473,7 @@ class DatabaseRepository:
                     int(user_id),
                     int(subscription_id),
                     str(stat_date or "").strip(),
+                    normalized_window_id,
                     str(started_issue_no or ""),
                     now,
                     now,
@@ -4383,10 +4484,10 @@ class DatabaseRepository:
             """
             SELECT *
             FROM auto_trigger_rule_runs
-            WHERE rule_id = ? AND subscription_id = ? AND stat_date = ?
+            WHERE rule_id = ? AND subscription_id = ? AND stat_date = ? AND window_id = ?
             LIMIT 1
             """,
-            (int(rule_id), int(subscription_id), str(stat_date or "").strip()),
+            (int(rule_id), int(subscription_id), str(stat_date or "").strip(), normalized_window_id),
         )
         return self._serialize_auto_trigger_rule_run_row(row) if row else {}
 
@@ -4398,53 +4499,103 @@ class DatabaseRepository:
         subscription_id: int,
         stat_date: str,
         started_issue_no: str = "",
+        window_id: str = "",
     ) -> Dict[str, Any]:
-        """原子领取当日开轮额度；旧版跨日占位仅在没有关联轮次或投注事件时复用。"""
+        """原子领取“当日该窗口”的开轮额度；旧版跨日空占位仅在无关联轮次/投注事件时转换复用。"""
         now = _utc_now_iso()
         normalized_date = str(stat_date or "").strip()
+        normalized_window_id = str(window_id or "").strip()
         with self._connect() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO auto_trigger_rule_runs(
-                    rule_id, user_id, subscription_id, stat_date, started_issue_no,
-                    status, started_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
-                ON CONFLICT(rule_id, subscription_id, stat_date) DO UPDATE SET
-                    started_issue_no = excluded.started_issue_no,
-                    status = 'active',
-                    stop_reason = '',
-                    started_at = excluded.started_at,
-                    stopped_at = NULL,
-                    updated_at = excluded.updated_at
-                WHERE auto_trigger_rule_runs.user_id = excluded.user_id
-                  AND auto_trigger_rule_runs.status = 'blocked'
-                  AND auto_trigger_rule_runs.started_issue_no = ''
-                  AND NOT EXISTS (
-                      SELECT 1 FROM subscription_progression_events
-                      WHERE auto_trigger_rule_run_id = auto_trigger_rule_runs.id
-                  )
-                  AND NOT EXISTS (
-                      SELECT 1 FROM subscription_runtime_runs
-                      WHERE auto_trigger_rule_run_id = auto_trigger_rule_runs.id
-                  )
-                  AND NOT EXISTS (
-                      SELECT 1 FROM auto_trigger_route_subscription_runtime_runs
-                      WHERE auto_trigger_rule_run_id = auto_trigger_rule_runs.id
-                  )
-                """,
-                (
-                    int(rule_id), int(user_id), int(subscription_id), normalized_date,
-                    str(started_issue_no or ""), now, now, now,
-                ),
-            )
-            claimed = cursor.rowcount == 1
+            if normalized_window_id:
+                # 旧版本留下的 blocked 空占位（window_id=''）不代表已启动；把它转换成
+                # 当前窗口的认领行，避免迁移后残留一条永远不会被复用的占位。
+                converted = conn.execute(
+                    """
+                    UPDATE auto_trigger_rule_runs
+                    SET window_id = ?,
+                        started_issue_no = ?,
+                        status = 'active',
+                        stop_reason = '',
+                        started_at = ?,
+                        stopped_at = NULL,
+                        updated_at = ?
+                    WHERE rule_id = ? AND user_id = ? AND subscription_id = ? AND stat_date = ?
+                      AND window_id = ''
+                      AND status = 'blocked'
+                      AND started_issue_no = ''
+                      AND NOT EXISTS (
+                          SELECT 1 FROM auto_trigger_rule_runs claimed
+                          WHERE claimed.rule_id = auto_trigger_rule_runs.rule_id
+                            AND claimed.subscription_id = auto_trigger_rule_runs.subscription_id
+                            AND claimed.stat_date = auto_trigger_rule_runs.stat_date
+                            AND claimed.window_id = ?
+                            AND claimed.status <> 'blocked'
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM subscription_progression_events
+                          WHERE auto_trigger_rule_run_id = auto_trigger_rule_runs.id
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM subscription_runtime_runs
+                          WHERE auto_trigger_rule_run_id = auto_trigger_rule_runs.id
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM auto_trigger_route_subscription_runtime_runs
+                          WHERE auto_trigger_rule_run_id = auto_trigger_rule_runs.id
+                      )
+                    """,
+                    (
+                        normalized_window_id, str(started_issue_no or ""), now, now,
+                        int(rule_id), int(user_id), int(subscription_id), normalized_date,
+                        normalized_window_id,
+                    ),
+                )
+                claimed = converted.rowcount == 1
+            else:
+                claimed = False
+            if not claimed:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO auto_trigger_rule_runs(
+                        rule_id, user_id, subscription_id, stat_date, window_id, started_issue_no,
+                        status, started_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                    ON CONFLICT(rule_id, subscription_id, stat_date, window_id) DO UPDATE SET
+                        started_issue_no = excluded.started_issue_no,
+                        status = 'active',
+                        stop_reason = '',
+                        started_at = excluded.started_at,
+                        stopped_at = NULL,
+                        updated_at = excluded.updated_at
+                    WHERE auto_trigger_rule_runs.user_id = excluded.user_id
+                      AND auto_trigger_rule_runs.status = 'blocked'
+                      AND auto_trigger_rule_runs.started_issue_no = ''
+                      AND NOT EXISTS (
+                          SELECT 1 FROM subscription_progression_events
+                          WHERE auto_trigger_rule_run_id = auto_trigger_rule_runs.id
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM subscription_runtime_runs
+                          WHERE auto_trigger_rule_run_id = auto_trigger_rule_runs.id
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM auto_trigger_route_subscription_runtime_runs
+                          WHERE auto_trigger_rule_run_id = auto_trigger_rule_runs.id
+                      )
+                    """,
+                    (
+                        int(rule_id), int(user_id), int(subscription_id), normalized_date,
+                        normalized_window_id, str(started_issue_no or ""), now, now, now,
+                    ),
+                )
+                claimed = cursor.rowcount == 1
         row = self._fetch_one(
             """
             SELECT * FROM auto_trigger_rule_runs
-            WHERE rule_id = ? AND subscription_id = ? AND stat_date = ?
+            WHERE rule_id = ? AND subscription_id = ? AND stat_date = ? AND window_id = ?
             LIMIT 1
             """,
-            (int(rule_id), int(subscription_id), normalized_date),
+            (int(rule_id), int(subscription_id), normalized_date, normalized_window_id),
         )
         return {
             "claimed": bool(claimed),
@@ -4458,6 +4609,7 @@ class DatabaseRepository:
         user_id: int,
         subscription_id: int,
         stat_date: str,
+        window_id: str = "",
     ) -> bool:
         """Release a reservation when no dispatch was created, enabling same-window retry."""
         with self._connect() as conn:
@@ -4465,6 +4617,7 @@ class DatabaseRepository:
                 """
                 DELETE FROM auto_trigger_rule_runs
                 WHERE rule_id = ? AND user_id = ? AND subscription_id = ? AND stat_date = ?
+                  AND window_id = ?
                   AND status = 'active'
                   AND NOT EXISTS (
                       SELECT 1 FROM subscription_progression_events
@@ -4473,6 +4626,7 @@ class DatabaseRepository:
                 """,
                 (
                     int(rule_id), int(user_id), int(subscription_id), str(stat_date or "").strip(),
+                    str(window_id or "").strip(),
                     int(rule_id),
                 ),
             )
@@ -4546,7 +4700,7 @@ class DatabaseRepository:
     ) -> Dict[str, Any]:
         """手动结束规则在跑的轮次，但不改规则本身的启用状态。
 
-        stop_reason 记为 manual_stop，后续定时窗口仍按启动日限制每天最多新开一轮。
+        stop_reason 记为 manual_stop，后续定时窗口仍按“每个窗口每天最多新开一轮”判断。
         已下单待结算（placed）的单不动，留给结算流程自然收口。
         """
         rule = self.get_auto_trigger_rule(int(rule_id))

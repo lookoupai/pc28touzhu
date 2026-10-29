@@ -232,8 +232,8 @@
             source_not_active: "信号来源已停用，规则未触发。",
             outside_schedule_window: "当前不在定时窗口内。",
             schedule_weekday_blocked: "今天未启用定时触发。",
-            schedule_day_already_started: "今日已经启动过一轮。",
-            schedule_previous_run_active: "上一轮仍在运行，结束后可在定时窗口启动新一轮。",
+            schedule_day_already_started: "该定时窗口今日已经启动过一轮。",
+            schedule_previous_run_active: "上一轮仍在运行（尚未达到停止条件），后续窗口不再重复触发；结束后可在尚未结束的窗口开新一轮。",
             schedule_signal_not_found: "定时窗口内没有可用的新信号。",
             schedule_signal_stale: "最新信号已超过允许延迟。",
             schedule_signal_before_window: "最新信号在窗口开始前就已发布，等窗口内新发布的信号。",
@@ -418,8 +418,8 @@
             const conditions = (rule.conditions || []).map(conditionText).join("；") || "--";
             const schedule = rule.schedule || {};
             const scheduleText = isSchedule ? ("定时触发：" + ((schedule.windows || []).map(function (item) {
-                return String(item.id || "") + " " + String(item.start || "") + "-" + String(item.end || "");
-            }).join(" / ") || "未配置") + "，每天最多1轮") : "";
+                return String(item.start || "") + "-" + String(item.end || "");
+            }).join(" / ") || "未配置") + "，每个窗口每天最多1轮") : "";
             const guardGroups = (rule.guard_groups || []).map(function (group, index) {
                 const groupConditions = (group.conditions || []).map(conditionText).join("；") || "--";
                 return "条件区" + String(index + 1) + "：" + groupConditions;
@@ -759,6 +759,46 @@
         }
     }
 
+    function scheduleWindowRowHtml(item) {
+        const row = item || {};
+        return '' +
+            '<div class="schedule-window-row"' + (row.id ? ' data-window-id="' + escapeHtml(row.id) + '"' : '') + '>' +
+                '<input class="text-input schedule-window-start" type="time" value="' + escapeHtml(row.start || "18:00") + '" aria-label="窗口开始时间">' +
+                '<span>至</span>' +
+                '<input class="text-input schedule-window-end" type="time" value="' + escapeHtml(row.end || "18:30") + '" aria-label="窗口结束时间">' +
+                '<button class="ghost-btn remove-schedule-window-btn" type="button">删除</button>' +
+            '</div>';
+    }
+
+    function renderScheduleWindowRows(windows) {
+        const list = (windows || []).length ? windows : [
+            {id: "primary", start: "18:00", end: "18:30"},
+            {id: "fallback", start: "20:00", end: "20:30"},
+        ];
+        $("scheduleWindowRows").innerHTML = list.map(scheduleWindowRowHtml).join("");
+    }
+
+    function collectScheduleWindows() {
+        const rows = Array.from(document.querySelectorAll("#scheduleWindowRows .schedule-window-row"));
+        const usedIds = new Set(rows.map(function (row) { return String(row.dataset.windowId || ""); }).filter(Boolean));
+        let nextIndex = 1;
+        return rows.map(function (row) {
+            let id = String(row.dataset.windowId || "");
+            if (!id) {
+                while (usedIds.has("w" + nextIndex)) {
+                    nextIndex += 1;
+                }
+                id = "w" + nextIndex;
+                usedIds.add(id);
+            }
+            return {
+                id: id,
+                start: row.querySelector(".schedule-window-start").value,
+                end: row.querySelector(".schedule-window-end").value,
+            };
+        });
+    }
+
     function resetForm(rule) {
         const form = $("ruleForm");
         const item = rule || {};
@@ -776,13 +816,7 @@
         form.querySelectorAll('input[name="schedule_weekday"]').forEach(function (input) {
             input.checked = weekdays.has(input.value);
         });
-        const windows = schedule.windows || [];
-        const primary = windows.find(function (item) { return item.id === "primary"; }) || {};
-        const fallback = windows.find(function (item) { return item.id === "fallback"; }) || {};
-        form.elements.schedule_primary_start.value = primary.start || "18:00";
-        form.elements.schedule_primary_end.value = primary.end || "18:30";
-        form.elements.schedule_fallback_start.value = fallback.start || "20:00";
-        form.elements.schedule_fallback_end.value = fallback.end || "20:30";
+        renderScheduleWindowRows(schedule.windows || []);
         form.elements.dispatch_latest_signal.checked = item.action ? item.action.dispatch_latest_signal !== false : true;
         form.elements.skip_multiple_metrics_matched.checked = Boolean(item.action && item.action.skip_multiple_metrics_matched);
         form.elements.play_filter_action.value = item.action && item.action.play_filter_action ? item.action.play_filter_action : "keep";
@@ -940,11 +974,7 @@
             schedule: {
                 timezone: form.elements.schedule_timezone.value,
                 weekdays: Array.from(form.querySelectorAll('input[name="schedule_weekday"]:checked')).map(function (input) { return input.value; }),
-                windows: [
-                    {id: "primary", start: form.elements.schedule_primary_start.value, end: form.elements.schedule_primary_end.value},
-                    {id: "fallback", start: form.elements.schedule_fallback_start.value, end: form.elements.schedule_fallback_end.value},
-                ],
-                max_starts_per_local_day: 1,
+                windows: collectScheduleWindows(),
                 signal_max_age_seconds: Number(form.elements.schedule_signal_max_age_seconds.value || 300),
             },
             condition_mode: "any",
@@ -1108,6 +1138,9 @@
             $("routeRows").insertAdjacentHTML("beforeend", routeRowHtml(null, index));
             updateRouteRowVisibility($("routeRows").lastElementChild);
         });
+        $("addScheduleWindowBtn").addEventListener("click", function () {
+            $("scheduleWindowRows").insertAdjacentHTML("beforeend", scheduleWindowRowHtml(null));
+        });
         $("routeRows").addEventListener("change", function (event) {
             const target = event.target;
             if (target instanceof HTMLElement && target.closest(".route-card")) {
@@ -1180,6 +1213,16 @@
                 const rows = target.closest(".condition-rows");
                 if (rows && rows.querySelectorAll(".condition-row").length > 1) {
                     target.closest(".condition-row").remove();
+                }
+                return;
+            }
+            if (target.classList.contains("remove-schedule-window-btn")) {
+                const windowRows = $("scheduleWindowRows");
+                if (windowRows && windowRows.querySelectorAll(".schedule-window-row").length > 1) {
+                    const row = target.closest(".schedule-window-row");
+                    if (row) {
+                        row.remove();
+                    }
                 }
                 return;
             }

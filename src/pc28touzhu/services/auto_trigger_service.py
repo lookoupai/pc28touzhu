@@ -315,12 +315,23 @@ def _normalize_schedule(value: Any) -> dict:
         raise ValueError("schedule.windows 至少需要一个时间窗口")
     windows = []
     seen_ids = set()
+    explicit_ids = {
+        str(item.get("id") or "").strip()
+        for item in raw_windows
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
     for index, item in enumerate(raw_windows, start=1):
         if not isinstance(item, dict):
             raise ValueError("schedule.windows[%s] 必须为对象" % index)
-        window_id = str(item.get("id") or ("primary" if index == 1 else "fallback")).strip()
-        if window_id not in {"primary", "fallback"} or window_id in seen_ids:
-            raise ValueError("schedule.windows 的 id 仅支持不重复的 primary 或 fallback")
+        window_id = str(item.get("id") or "").strip()
+        if not window_id:
+            suffix = index
+            window_id = "w%s" % suffix
+            while window_id in seen_ids or window_id in explicit_ids:
+                suffix += 1
+                window_id = "w%s" % suffix
+        if window_id in seen_ids:
+            raise ValueError("schedule.windows 的 id 不能重复：%s" % window_id)
         start = str(item.get("start") or "").strip()
         end = str(item.get("end") or "").strip()
         for field, value_text in (("start", start), ("end", end)):
@@ -330,9 +341,7 @@ def _normalize_schedule(value: Any) -> dict:
             raise ValueError("schedule.windows[%s] 必须满足 start 早于 end" % index)
         seen_ids.add(window_id)
         windows.append({"id": window_id, "start": start, "end": end})
-    max_starts = int(payload.get("max_starts_per_local_day") or 1)
-    if max_starts != 1:
-        raise ValueError("schedule.max_starts_per_local_day 第一版固定为 1")
+    windows.sort(key=lambda item: (item["start"], item["end"]))
     signal_max_age = _to_positive_int(
         payload.get("signal_max_age_seconds") if payload.get("signal_max_age_seconds") not in (None, "") else 300,
         "schedule.signal_max_age_seconds",
@@ -341,7 +350,6 @@ def _normalize_schedule(value: Any) -> dict:
         "timezone": timezone_name,
         "weekdays": normalized_weekdays,
         "windows": windows,
-        "max_starts_per_local_day": 1,
         "signal_max_age_seconds": signal_max_age,
     }
 
@@ -728,7 +736,7 @@ def stop_auto_trigger_rule_current_run(
 ) -> Dict[str, Any]:
     """结束规则当前在跑的轮次，规则本身保持启用。
 
-    轮次被标记为 manual_stop，下一个时间窗口仍按每天最多新开一轮判断。
+    轮次被标记为 manual_stop，后续时间窗口仍按“每个窗口每天最多新开一轮”判断。
     已下单待结算的单不撤，交给结算流程收口。
     """
     normalized_rule_id = _to_positive_int(rule_id, "rule_id")
@@ -818,21 +826,23 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = N
             local_now = _schedule_now(None, schedule["timezone"])
             schedule_sub_ids = rule.get("subscription_ids") if rule.get("scope_mode") == "selected_subscriptions" else [item.get("id") for item in repository.list_auto_trigger_candidate_subscriptions(user_id=normalized_user_id)]
             started = False
-            started_window_id = ""
+            started_window_ids: set[str] = set()
             no_fresh_signal = False
             for sub_id in schedule_sub_ids or []:
-                day_run = repository.get_auto_trigger_rule_run_for_subscription_date(
-                    rule_id=int(rule["id"]), subscription_id=int(sub_id), stat_date=resolved_stat_date,
-                ) if hasattr(repository, "get_auto_trigger_rule_run_for_subscription_date") else None
-                if day_run and str(day_run.get("status") or "") != "blocked":
-                    started = True
-                    if hasattr(repository, "get_latest_auto_trigger_event"):
-                        started_event = repository.get_latest_auto_trigger_event(
-                            rule_id=int(rule["id"]), subscription_id=int(sub_id), status="triggered",
-                        )
-                        started_snapshot = started_event.get("snapshot") if isinstance(started_event, dict) else {}
-                        if str(started_snapshot.get("stat_date") or "") == str(resolved_stat_date):
-                            started_window_id = str(started_snapshot.get("window_id") or "")
+                day_runs: list[dict] = []
+                if hasattr(repository, "list_auto_trigger_rule_runs_for_subscription_date"):
+                    day_runs = repository.list_auto_trigger_rule_runs_for_subscription_date(
+                        rule_id=int(rule["id"]), subscription_id=int(sub_id), stat_date=resolved_stat_date,
+                    )
+                elif hasattr(repository, "get_auto_trigger_rule_run_for_subscription_date"):
+                    day_run = repository.get_auto_trigger_rule_run_for_subscription_date(
+                        rule_id=int(rule["id"]), subscription_id=int(sub_id), stat_date=resolved_stat_date,
+                    )
+                    day_runs = [day_run] if day_run else []
+                for day_run in day_runs:
+                    if day_run and str(day_run.get("status") or "") != "blocked":
+                        started = True
+                        started_window_ids.add(str(day_run.get("window_id") or ""))
                 if hasattr(repository, "get_latest_auto_trigger_event"):
                     skipped_event = repository.get_latest_auto_trigger_event(
                         rule_id=int(rule["id"]), subscription_id=int(sub_id), status="skipped",
@@ -847,7 +857,15 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = N
             if str(daily_stat.get("status") or "") == "stopped":
                 schedule_status = "今日被风控停止"
             elif started:
-                schedule_status = "主窗口已启动" if started_window_id == "primary" else "今日已启动"
+                started_labels = [
+                    str(item.get("start") or "")
+                    for item in schedule["windows"]
+                    if item.get("id") in started_window_ids
+                ]
+                if started_labels:
+                    schedule_status = "今日已启动（" + "、".join(started_labels) + "）"
+                else:
+                    schedule_status = "今日已启动"
             elif any(str(run.get("stat_date") or "") < resolved_stat_date for run in active_runs):
                 schedule_status = "上一轮仍在运行，等待结束"
             elif no_fresh_signal:
@@ -855,17 +873,13 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = N
             else:
                 current_local_date = local_now.strftime("%Y-%m-%d")
                 current_hm = local_now.strftime("%H:%M")
-                fallback = next((item for item in schedule["windows"] if item.get("id") == "fallback"), None)
-                primary = next((item for item in schedule["windows"] if item.get("id") == "primary"), None)
-                if (
-                    resolved_stat_date == current_local_date
-                    and primary
-                    and fallback
-                    and str(primary.get("end") or "") <= current_hm < str(fallback.get("end") or "")
-                ):
-                    schedule_status = "主窗口未启动，等待备用窗口"
-                else:
+                windows = schedule["windows"]
+                if resolved_stat_date != current_local_date or not windows:
                     schedule_status = "未启动"
+                elif all(current_hm >= str(item.get("end") or "") for item in windows):
+                    schedule_status = "今日窗口已结束"
+                else:
+                    schedule_status = "未启动，等待定时窗口"
         items.append(
             {
                 **rule,
@@ -1593,6 +1607,7 @@ def _schedule_previous_active_run(
     rule: Dict[str, Any],
     subscription: Dict[str, Any],
     stat_date: str,
+    window_id: str = "",
 ) -> Optional[dict]:
     if hasattr(repository, "reconcile_auto_trigger_rule_subscription_runs"):
         repository.reconcile_auto_trigger_rule_subscription_runs(
@@ -1611,8 +1626,13 @@ def _schedule_previous_active_run(
     else:
         return None
     # 开轮次数归属于启动日。跨日旧轮只在仍运行时阻止重叠，不消耗今天的新开轮额度。
-    if latest and str(latest.get("stat_date") or "") != str(stat_date) and str(latest.get("status") or "") == "active":
-        return latest
+    # 同日其它窗口开的轮次仍在运行时同样阻止：上一轮没跑到停止条件，后面的窗口
+    # 再开一轮与继续跑旧轮没有区别，等旧轮结束后的窗口才会开新一轮。
+    if latest and str(latest.get("status") or "") == "active":
+        if str(latest.get("stat_date") or "") != str(stat_date):
+            return latest
+        if window_id and str(latest.get("window_id") or "") != str(window_id):
+            return latest
     return None
 
 
@@ -1854,7 +1874,7 @@ def _evaluate_scheduled_auto_trigger_rule(
             skipped_routes = []
             previous_run = _schedule_previous_active_run(
                 repository, rule=rule, subscription=subscription,
-                stat_date=stat_date,
+                stat_date=stat_date, window_id=window_id,
             )
             if previous_run:
                 events.append(_record_event(
@@ -1867,6 +1887,7 @@ def _evaluate_scheduled_auto_trigger_rule(
             if hasattr(repository, "get_auto_trigger_rule_run_for_subscription_date"):
                 existing_day_run = repository.get_auto_trigger_rule_run_for_subscription_date(
                     rule_id=int(rule["id"]), subscription_id=int(subscription["id"]), stat_date=stat_date,
+                    window_id=window_id,
                 )
                 if existing_day_run and str(existing_day_run.get("status") or "") != "blocked":
                     events.append(_record_event(
@@ -1983,7 +2004,7 @@ def _evaluate_scheduled_auto_trigger_rule(
                 claim = repository.claim_auto_trigger_daily_start(
                     rule_id=int(rule["id"]), user_id=int(rule["user_id"]),
                     subscription_id=int(subscription["id"]), stat_date=stat_date,
-                    started_issue_no=signal_issue_no,
+                    started_issue_no=signal_issue_no, window_id=window_id,
                 )
                 if not claim.get("claimed"):
                     events.append(_record_event(
@@ -1999,11 +2020,13 @@ def _evaluate_scheduled_auto_trigger_rule(
                 if has_routes:
                     prepared_routes = []
                     for route in active_routes:
+                        route_stat_date = str(route.get("_auto_trigger_stat_date") or stat_date)
                         route_rule_run = repository.ensure_auto_trigger_rule_run(
                             rule_id=int(rule["id"]), user_id=int(rule["user_id"]),
                             subscription_id=int(subscription["id"]),
-                            stat_date=str(route.get("_auto_trigger_stat_date") or stat_date),
+                            stat_date=route_stat_date,
                             started_issue_no=signal_issue_no,
+                            window_id=window_id if route_stat_date == stat_date else "",
                         )
                         prepared_route = {
                             **route,
@@ -2041,6 +2064,7 @@ def _evaluate_scheduled_auto_trigger_rule(
                             repository.release_auto_trigger_daily_start(
                                 rule_id=int(rule["id"]), user_id=int(rule["user_id"]),
                                 subscription_id=int(subscription["id"]), stat_date=stat_date,
+                                window_id=window_id,
                             )
                         claimed = False
                         events.append(_record_event(
@@ -2068,6 +2092,7 @@ def _evaluate_scheduled_auto_trigger_rule(
                     repository.release_auto_trigger_daily_start(
                         rule_id=int(rule["id"]), user_id=int(rule["user_id"]),
                         subscription_id=int(subscription["id"]), stat_date=stat_date,
+                        window_id=window_id,
                     )
                 except Exception:
                     pass

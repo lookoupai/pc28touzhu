@@ -491,13 +491,14 @@ class DispatchIsolationTests(unittest.TestCase):
         self.assertEqual(self._rows("SELECT * FROM auto_trigger_rule_daily_stats"), old_stats)
         self.assertEqual(self._rows("SELECT * FROM auto_trigger_rule_runs WHERE id=?", (old_run["id"],))[0], old_run)
         listed = list_auto_trigger_rules(self.repo, user_id=self.user_id, stat_date="2026-09-08")["items"][0]
-        self.assertEqual(listed["schedule_status"], "主窗口已启动")
+        self.assertIn("今日已启动", listed["schedule_status"])
 
         self.now = datetime(2026, 9, 8, 12, 0, 30, tzinfo=timezone.utc)
         self._signal()
         duplicate = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=self.now)
         self.assertEqual(duplicate["summary"]["triggered_count"], 0)
-        self.assertEqual(duplicate["rules"][0]["events"][0]["reason"], "schedule_day_already_started")
+        # 主窗口开的轮次仍在运行，备用窗口不另开一轮。
+        self.assertEqual(duplicate["rules"][0]["events"][0]["reason"], "schedule_previous_run_active")
 
     def test_schedule_overnight_route_stop_reuses_legacy_block(self):
         rule, job = self._start_overnight_schedule(route_stop=True)
