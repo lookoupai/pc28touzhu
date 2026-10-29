@@ -812,7 +812,7 @@
         const schedule = item.schedule || {};
         form.elements.schedule_timezone.value = schedule.timezone || "Asia/Shanghai";
         form.elements.schedule_signal_max_age_seconds.value = String(schedule.signal_max_age_seconds || 300);
-        const weekdays = new Set(schedule.weekdays || ["Mon", "Tue", "Thu", "Fri", "Sat", "Sun"]);
+        const weekdays = new Set(schedule.weekdays || ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
         form.querySelectorAll('input[name="schedule_weekday"]').forEach(function (input) {
             input.checked = weekdays.has(input.value);
         });
