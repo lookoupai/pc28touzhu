@@ -824,10 +824,27 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = N
         if str(rule.get("trigger_mode") or "condition") == "schedule":
             schedule = _normalize_schedule(rule.get("schedule") or {})
             local_now = _schedule_now(None, schedule["timezone"])
-            schedule_sub_ids = rule.get("subscription_ids") if rule.get("scope_mode") == "selected_subscriptions" else [item.get("id") for item in repository.list_auto_trigger_candidate_subscriptions(user_id=normalized_user_id)]
+            scope_selected = rule.get("scope_mode") == "selected_subscriptions"
+            candidate_subscriptions: list[dict] = []
+            if hasattr(repository, "list_auto_trigger_candidate_subscriptions"):
+                candidate_subscriptions = repository.list_auto_trigger_candidate_subscriptions(
+                    user_id=normalized_user_id,
+                    subscription_ids=rule.get("subscription_ids") if scope_selected else None,
+                )
+            if scope_selected:
+                schedule_sub_ids = rule.get("subscription_ids")
+            else:
+                schedule_sub_ids = [item.get("id") for item in candidate_subscriptions]
+            subscription_states: Dict[int, dict] = {}
+            for item in candidate_subscriptions:
+                try:
+                    subscription_states[int(item["id"])] = item
+                except (TypeError, ValueError):
+                    continue
             started = False
             started_window_ids: set[str] = set()
             no_fresh_signal = False
+            schedule_blocker_reason = ""
             for sub_id in schedule_sub_ids or []:
                 day_runs: list[dict] = []
                 if hasattr(repository, "list_auto_trigger_rule_runs_for_subscription_date"):
@@ -843,6 +860,16 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = N
                     if day_run and str(day_run.get("status") or "") != "blocked":
                         started = True
                         started_window_ids.add(str(day_run.get("window_id") or ""))
+                # 方案/来源未就绪时定时开不了轮：按当前状态直接判定，比翻事件记录更可靠。
+                if not schedule_blocker_reason:
+                    state = subscription_states.get(int(sub_id)) if sub_id is not None else None
+                    if state is not None:
+                        subscription_state = str(state.get("status") or "")
+                        source_state = str((state.get("source") or {}).get("status") or "")
+                        if subscription_state not in {"active", "standby"}:
+                            schedule_blocker_reason = "subscription_not_active"
+                        elif source_state != "active":
+                            schedule_blocker_reason = "source_not_active"
                 if hasattr(repository, "get_latest_auto_trigger_event"):
                     skipped_event = repository.get_latest_auto_trigger_event(
                         rule_id=int(rule["id"]), subscription_id=int(sub_id), status="skipped",
@@ -868,6 +895,10 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = N
                     schedule_status = "今日已启动"
             elif any(str(run.get("stat_date") or "") < resolved_stat_date for run in active_runs):
                 schedule_status = "上一轮仍在运行，等待结束"
+            elif schedule_blocker_reason == "subscription_not_active":
+                schedule_status = "跟单方案未启用，定时无法启动"
+            elif schedule_blocker_reason == "source_not_active":
+                schedule_status = "信号来源未启用，定时无法启动"
             elif no_fresh_signal:
                 schedule_status = "今日无新鲜信号"
             else:

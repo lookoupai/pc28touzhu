@@ -250,6 +250,32 @@ class AutoTriggerServiceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=payload)
 
+    def test_schedule_status_surfaces_disabled_subscription(self):
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"], user_id=self.user_id, status="inactive",
+        )
+        listed = list_auto_trigger_rules(self.repo, user_id=self.user_id, stat_date="2026-09-02")["items"]
+        target = next(item for item in listed if int(item["id"]) == int(rule["id"]))
+        self.assertEqual(target["schedule_status"], "跟单方案未启用，定时无法启动")
+
+        # 恢复方案后不再显示阻塞原因。
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"], user_id=self.user_id, status="standby",
+        )
+        listed = list_auto_trigger_rules(self.repo, user_id=self.user_id, stat_date="2026-09-02")["items"]
+        target = next(item for item in listed if int(item["id"]) == int(rule["id"]))
+        self.assertNotEqual(target["schedule_status"], "跟单方案未启用，定时无法启动")
+
+    def test_schedule_status_surfaces_disabled_source(self):
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        self.repo.update_source_status(
+            source_id=self.source["id"], owner_user_id=self.user_id, status="inactive",
+        )
+        listed = list_auto_trigger_rules(self.repo, user_id=self.user_id, stat_date="2026-09-02")["items"]
+        target = next(item for item in listed if int(item["id"]) == int(rule["id"]))
+        self.assertEqual(target["schedule_status"], "信号来源未启用，定时无法启动")
+
     def test_migration_adds_window_id_and_per_window_daily_claim(self):
         db_path = os.path.join(self.tmpdir.name, "legacy-run-schema.db")
         with sqlite3.connect(db_path) as conn:
