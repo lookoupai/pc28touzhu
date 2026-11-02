@@ -329,6 +329,14 @@ def _route_continuation_strategy(
     return strategy
 
 
+def _route_play_filter_fixed_metric(route: Dict[str, Any]) -> str:
+    play_filter = route.get("play_filter") if isinstance(route.get("play_filter"), dict) else {}
+    if str(route.get("play_filter_mode") or "inherit").strip() != "fixed_metric":
+        return ""
+    fixed_metric = str(play_filter.get("fixed_metric") or "").strip()
+    return fixed_metric if fixed_metric in PLAY_FILTER_KEYS_BY_METRIC else ""
+
+
 def _dispatch_signal_for_auto_trigger_routes(
     repository: Any,
     signal: Dict[str, Any],
@@ -352,24 +360,32 @@ def _dispatch_signal_for_auto_trigger_routes(
     created_count = 0
     existing_count = 0
     skipped_count = 0
+    skipped_routes: list[Dict[str, Any]] = []
     jobs = []
+
+    def _skip_route(route: Dict[str, Any], reason: str, **detail: Any) -> None:
+        nonlocal skipped_count
+        skipped_count += 1
+        entry: Dict[str, Any] = {"route_id": route.get("id"), "reason": reason}
+        entry.update(detail)
+        skipped_routes.append(entry)
 
     for route in routes:
         if str(subscription.get("status") or "") not in {"active", "standby"}:
-            skipped_count += 1
+            _skip_route(route, "subscription_not_active", subscription_status=str(subscription.get("status") or ""))
             continue
         route_id = int(route["id"])
         if hasattr(repository, "get_auto_trigger_rule_route"):
             current_route = repository.get_auto_trigger_rule_route(route_id)
             if not current_route or current_route.get("status") != "active":
-                skipped_count += 1
+                _skip_route(route, "route_not_active", route_status=str((current_route or {}).get("status") or ""))
                 continue
             route = {**route, **current_route}
         route_stat_date = str(route.get("_auto_trigger_stat_date") or stat_date).strip()
         route_rule_run_id = route.get("_auto_trigger_rule_run_id") or auto_trigger_context.get("rule_run_id")
         delivery_target_id = int(route["delivery_target_id"])
         if not _target_allows_dispatch(repository, delivery_target_id, from_rule=True):
-            skipped_count += 1
+            _skip_route(route, "target_not_dispatchable", delivery_target_id=delivery_target_id)
             continue
         # 候选可能是在用户停轮之前读取的，事务内必须重新核对所属规则轮。
         if route_rule_run_id and hasattr(repository, "get_auto_trigger_rule_run"):
@@ -382,7 +398,12 @@ def _dispatch_signal_for_auto_trigger_routes(
                 or int(owning_run.get("rule_id") or 0) != int(auto_trigger_context.get("rule_id") or 0)
                 or not owning_rule or owning_rule.get("status") != "active"
             ):
-                skipped_count += 1
+                _skip_route(
+                    route,
+                    "rule_run_not_active",
+                    rule_run_id=int(route_rule_run_id),
+                    run_status=str((owning_run or {}).get("status") or ""),
+                )
                 continue
         if auto_trigger_context.get("rule_id") and _auto_trigger_rule_day_is_stopped(
             repository,
@@ -390,14 +411,14 @@ def _dispatch_signal_for_auto_trigger_routes(
             user_id=user_id,
             stat_date=route_stat_date or stat_date,
         ):
-            skipped_count += 1
+            _skip_route(route, "rule_day_stopped", stat_date=route_stat_date or stat_date)
             continue
         if str(route.get("target_status") or "active") != "active":
-            skipped_count += 1
+            _skip_route(route, "target_not_active", target_status=str(route.get("target_status") or ""))
             continue
         account_status = str(route.get("telegram_account_status") or "active")
         if route.get("telegram_account_id") is not None and account_status != "active":
-            skipped_count += 1
+            _skip_route(route, "telegram_account_not_active", account_status=account_status)
             continue
         if route_stat_date and _route_is_stopped(
             repository,
@@ -405,7 +426,7 @@ def _dispatch_signal_for_auto_trigger_routes(
             user_id=user_id,
             stat_date=route_stat_date,
         ):
-            skipped_count += 1
+            _skip_route(route, "route_daily_risk_stopped", stat_date=route_stat_date)
             continue
         if _route_subscription_is_stopped(
             repository,
@@ -413,14 +434,14 @@ def _dispatch_signal_for_auto_trigger_routes(
             subscription_id=int(subscription_id),
             user_id=user_id,
         ):
-            skipped_count += 1
+            _skip_route(route, "route_subscription_risk_stopped")
             continue
         if repository.auto_trigger_route_has_open_run(
             route_id=route_id,
             subscription_id=int(subscription_id),
             user_id=user_id,
         ).get("has_open_run"):
-            skipped_count += 1
+            _skip_route(route, "route_has_open_run")
             continue
 
         strategy = (
@@ -432,22 +453,62 @@ def _dispatch_signal_for_auto_trigger_routes(
                 auto_trigger_context,
             )
         )
+        # 玩法不一致时按路由固定玩法在同期号内换选信号：触发选单取的是“最新一条”，
+        # 逐期发多种玩法的源会拿到非路由玩法（如最新是组合、路由只收单双），
+        # 同期里通常有匹配玩法的信号，换选即可派单；换不到才按玩法不匹配跳过。
+        route_signal = signal
+        signal_substitution: Dict[str, Any] | None = None
         if not strategy_matches_signal(strategy, signal):
-            skipped_count += 1
+            route_metric = _route_play_filter_fixed_metric(route)
+            if not route_metric:
+                rule_action = (
+                    auto_trigger_context.get("rule_action")
+                    if isinstance(auto_trigger_context.get("rule_action"), dict)
+                    else {}
+                )
+                if str(rule_action.get("play_filter_action") or "keep").strip() == "fixed_metric":
+                    metric = str(rule_action.get("fixed_metric") or "").strip()
+                    route_metric = metric if metric in PLAY_FILTER_KEYS_BY_METRIC else ""
+            if (
+                route_metric
+                and str(signal.get("bet_type") or "") != route_metric
+                and hasattr(repository, "get_latest_ready_signal_for_source")
+            ):
+                candidate_signal = repository.get_latest_ready_signal_for_source(
+                    source_id=int(subscription["source_id"]),
+                    issue_no=str(signal.get("issue_no") or ""),
+                    bet_type=route_metric,
+                )
+                if candidate_signal and strategy_matches_signal(strategy, candidate_signal):
+                    route_signal = candidate_signal
+                    signal_substitution = {
+                        "bet_type": route_metric,
+                        "signal_id": int(candidate_signal["id"]),
+                        "bet_value": str(candidate_signal.get("bet_value") or ""),
+                    }
+        if not strategy_matches_signal(strategy, route_signal):
+            _skip_route(
+                route,
+                "play_filter_mismatch",
+                signal_bet_type=str(route_signal.get("bet_type") or ""),
+                signal_bet_value=str(route_signal.get("bet_value") or ""),
+                play_filter=(strategy.get("play_filter") if isinstance(strategy.get("play_filter"), dict) else {}),
+                signal_substitution=signal_substitution,
+            )
             continue
         if hasattr(repository, "execution_job_exists_for_target") and repository.execution_job_exists_for_target(
-            signal_id=int(signal["id"]),
+            signal_id=int(route_signal["id"]),
             subscription_id=int(subscription_id),
             delivery_target_id=delivery_target_id,
             from_route=False,
         ):
             # 同一信号已由其他 route 或直派占用该目标。
-            skipped_count += 1
+            _skip_route(route, "target_already_dispatched", signal_id=int(route_signal["id"]))
             continue
 
         progression_event = repository.get_progression_event_by_signal(
             subscription_id=int(subscription_id),
-            signal_id=int(signal["id"]),
+            signal_id=int(route_signal["id"]),
             auto_trigger_route_id=route_id,
         )
         if not progression_event:
@@ -458,15 +519,15 @@ def _dispatch_signal_for_auto_trigger_routes(
             )
             stake_plan_preview = _build_stake_plan(
                 strategy,
-                signal,
+                route_signal,
                 current_step=int(progression_state.get("current_step") or 1),
             )
-            settlement_policy = resolve_settlement_runtime_policy(strategy, signal.get("normalized_payload"))
+            settlement_policy = resolve_settlement_runtime_policy(strategy, route_signal.get("normalized_payload"))
             progression_event = repository.create_progression_event_record(
                 subscription_id=int(subscription_id),
                 user_id=user_id,
-                signal_id=int(signal["id"]),
-                issue_no=str(signal.get("issue_no") or ""),
+                signal_id=int(route_signal["id"]),
+                issue_no=str(route_signal.get("issue_no") or ""),
                 progression_step=int(stake_plan_preview["current_step"]),
                 stake_amount=float(stake_plan_preview["amount"]),
                 base_stake=float(stake_plan_preview["base_stake"]),
@@ -480,7 +541,7 @@ def _dispatch_signal_for_auto_trigger_routes(
                     settlement_rule_id=settlement_policy.get("settlement_rule_id"),
                     fallback_profit_ratio=float(settlement_policy.get("fallback_profit_ratio") or 1.0),
                     resolved_from=str(settlement_policy.get("resolved_from") or ""),
-                    signal=signal,
+                    signal=route_signal,
                     odds_overrides=settlement_policy.get("odds_overrides"),
                 ),
                 auto_trigger_rule_id=(
@@ -496,23 +557,25 @@ def _dispatch_signal_for_auto_trigger_routes(
             )
 
         current_step = int((progression_event or {}).get("progression_step") or 1)
-        stake_plan = _build_stake_plan(strategy, signal, current_step=current_step)
+        stake_plan = _build_stake_plan(strategy, route_signal, current_step=current_step)
         stake_plan.setdefault("meta", {})
         stake_plan["meta"].update({
             "progression_event_id": int(progression_event["id"]),
             "progression_step": current_step,
             "auto_trigger_route_id": route_id,
         })
+        if signal_substitution is not None:
+            stake_plan["meta"]["signal_substitution"] = signal_substitution
 
         template = None
         template_id = _route_template_id(route)
         if template_id is not None and hasattr(repository, "get_message_template"):
             template = repository.get_message_template(template_id)
-        planned_message_text = _message_text_from_template(signal, float(stake_plan["amount"]), template)
+        planned_message_text = _message_text_from_template(route_signal, float(stake_plan["amount"]), template)
         execute_after = base_execute_after
         expire_at = _job_expire_at(execute_after, strategy, stake_plan, issue_window)
         idempotency_key = "signal:%s:rule:%s:route:%s:target:%s" % (
-            signal["id"],
+            route_signal["id"],
             auto_trigger_context.get("rule_id") or "",
             route_id,
             delivery_target_id,
@@ -520,7 +583,7 @@ def _dispatch_signal_for_auto_trigger_routes(
 
         created = repository.create_execution_job_record(
             user_id=user_id,
-            signal_id=int(signal["id"]),
+            signal_id=int(route_signal["id"]),
             subscription_id=int(subscription_id),
             progression_event_id=int(progression_event["id"]),
             auto_trigger_route_id=route_id,
@@ -548,6 +611,7 @@ def _dispatch_signal_for_auto_trigger_routes(
         "created_count": created_count,
         "existing_count": existing_count,
         "skipped_count": skipped_count,
+        "skipped_routes": skipped_routes,
         "jobs": jobs,
     }
 
@@ -570,22 +634,31 @@ def _dispatch_signal_for_active_auto_trigger_routes(
     created_count = 0
     existing_count = 0
     skipped_count = 0
+    skipped_routes: list[Dict[str, Any]] = []
     jobs = []
 
     for candidate in candidates:
+        route_id_hint = int((candidate.get("route") or {}).get("id") or 0)
+
+        def _skip(reason: str = "", **detail: Any) -> None:
+            nonlocal skipped_count
+            skipped_count += 1
+            if reason:
+                skipped_routes.append({"route_id": route_id_hint, "reason": reason, **detail})
+
         if retry_only and (
             not candidate.get("runtime_started_signal_id")
             or int(signal["id"]) < int(candidate["runtime_started_signal_id"])
         ):
             # 重试时重新核对轮次，不能把旧轮次的信号补进新开轮次。
-            skipped_count += 1
+            _skip("runtime_run_stale")
             continue
         route = candidate.get("route") if isinstance(candidate.get("route"), dict) else {}
         if not route:
-            skipped_count += 1
+            _skip("route_missing")
             continue
         if not candidate.get("rule_run_id"):
-            skipped_count += 1
+            _skip("rule_run_missing")
             continue
         if _auto_trigger_rule_day_is_stopped(
             repository,
@@ -593,7 +666,7 @@ def _dispatch_signal_for_active_auto_trigger_routes(
             user_id=int(candidate["user_id"]),
             stat_date=str(candidate.get("stat_date") or ""),
         ):
-            skipped_count += 1
+            _skip("rule_day_stopped", stat_date=str(candidate.get("stat_date") or ""))
             continue
         strategy = _route_continuation_strategy(
             candidate.get("strategy_json") if isinstance(candidate.get("strategy_json"), dict) else {},
@@ -601,7 +674,12 @@ def _dispatch_signal_for_active_auto_trigger_routes(
             candidate,
         )
         if not strategy_matches_signal(strategy, signal):
-            skipped_count += 1
+            _skip(
+                "play_filter_mismatch",
+                signal_bet_type=str(signal.get("bet_type") or ""),
+                signal_bet_value=str(signal.get("bet_value") or ""),
+                play_filter=(strategy.get("play_filter") if isinstance(strategy.get("play_filter"), dict) else {}),
+            )
             continue
         route_with_strategy = {**route, "_runtime_strategy": strategy}
         context = {
@@ -625,6 +703,7 @@ def _dispatch_signal_for_active_auto_trigger_routes(
         created_count += int(result.get("created_count") or 0)
         existing_count += int(result.get("existing_count") or 0)
         skipped_count += int(result.get("skipped_count") or 0)
+        skipped_routes.extend(result.get("skipped_routes") or [])
         jobs.extend(result.get("jobs") or [])
 
     return {
@@ -633,6 +712,7 @@ def _dispatch_signal_for_active_auto_trigger_routes(
         "created_count": created_count,
         "existing_count": existing_count,
         "skipped_count": skipped_count,
+        "skipped_routes": skipped_routes,
         "jobs": jobs,
     }
 
@@ -893,5 +973,6 @@ def _dispatch_signal(
         "created_count": created_count + int(active_route_result.get("created_count") or 0),
         "existing_count": existing_count + int(active_route_result.get("existing_count") or 0),
         "skipped_count": skipped_count + int(active_route_result.get("skipped_count") or 0),
+        "skipped_routes": list(active_route_result.get("skipped_routes") or []),
         "jobs": list(active_route_result.get("jobs") or []) + jobs,
     }

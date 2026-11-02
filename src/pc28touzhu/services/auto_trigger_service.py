@@ -1448,6 +1448,7 @@ def _record_event(
 def _condition_dispatch_gate(
     repository: Any,
     *,
+    rule: Dict[str, Any],
     subscription: Dict[str, Any],
     latest_settled_issue_no: str,
     matched_conditions: Optional[list[dict]] = None,
@@ -1472,15 +1473,18 @@ def _condition_dispatch_gate(
             "matched_conditions": matched_conditions or [],
         }
     )
-    signal = repository.get_latest_ready_signal_for_source(
-        source_id=int(subscription["source_id"]),
-        bet_type=signal_bet_type,
+    bet_types = [signal_bet_type] if signal_bet_type else _signal_bet_types_for_subscription_on_rule(
+        repository, subscription, rule,
+    )
+    signal = _pick_signal_for_subscription_on_rule(
+        repository, subscription=subscription, rule=rule, bet_types=bet_types,
     )
     if not signal:
         return {
             "allowed": False,
             "reason": "signal_not_found",
-            "bet_type": signal_bet_type or "",
+            "bet_type": (bet_types[0] if bet_types else "") or signal_bet_type or "",
+            "bet_types": bet_types,
             "latest_settled_issue_no": str(latest_settled_issue_no or ""),
         }
     verdict = evaluate_pc28_issue_dispatch_window(
@@ -1506,17 +1510,22 @@ def _dispatch_latest_signal_if_available(
     latest_settled_issue_no: str,
     auto_trigger_context: Optional[Dict[str, Any]] = None,
     draw_clock: Optional[Dict[str, Any]] = None,
+    rule: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    signal_bet_type = _signal_bet_type_for_auto_trigger_context(auto_trigger_context)
-    signal = repository.get_latest_ready_signal_for_source(
-        source_id=int(subscription["source_id"]),
-        bet_type=signal_bet_type,
+    context = auto_trigger_context if isinstance(auto_trigger_context, dict) else {}
+    signal_bet_type = _signal_bet_type_for_auto_trigger_context(context)
+    bet_types = [signal_bet_type] if signal_bet_type else _signal_bet_types_for_subscription_on_rule(
+        repository, subscription, rule if isinstance(rule, dict) else {"routes": context.get("routes") or [], "action": context.get("rule_action") or {}},
+    )
+    signal = _pick_signal_for_subscription_on_rule(
+        repository, subscription=subscription, rule=rule if isinstance(rule, dict) else {}, bet_types=bet_types,
     )
     if not signal:
         return {
             "skipped": True,
             "reason": "latest_signal_not_found",
-            "bet_type": signal_bet_type or "",
+            "bet_type": (bet_types[0] if bet_types else "") or signal_bet_type or "",
+            "bet_types": bet_types,
             "created_count": 0,
         }
     signal_issue_no = str(signal.get("issue_no") or "")
@@ -1556,6 +1565,107 @@ def _signal_bet_type_for_auto_trigger_context(auto_trigger_context: Optional[Dic
         return None
     metric = str((matched_conditions[0] or {}).get("metric") or "").strip()
     return metric if metric in ALLOWED_METRICS else None
+
+
+def _signal_bet_type_for_subscription_strategy(subscription: Dict[str, Any]) -> Optional[str]:
+    """订阅玩法筛选恰好收敛到单一玩法时，按该玩法选信号。
+
+    信号源普遍一期同时发布大小/单双/组合三种信号；“保持原玩法”若不看玩法筛选直接取
+    最新一条，会把组合信号喂给只收单双的路由，派单侧永远对不上。这里仅在筛选唯一时
+    收窄选型，混合玩法（如大小+单双并存）仍取最新信号、交由派单侧按玩法兜底换选。
+    """
+    strategy = (
+        subscription.get("strategy_v2")
+        if isinstance(subscription.get("strategy_v2"), dict)
+        else (subscription.get("strategy") if isinstance(subscription.get("strategy"), dict) else {})
+    )
+    play_filter = strategy.get("play_filter") if isinstance(strategy.get("play_filter"), dict) else {}
+    if str(play_filter.get("mode") or "all").strip() != "selected":
+        return None
+    selected_keys = play_filter.get("selected_keys") if isinstance(play_filter.get("selected_keys"), list) else []
+    metrics = {
+        str(key or "").split(":", 1)[0].strip()
+        for key in selected_keys
+        if isinstance(key, str) and str(key).strip() in PLAY_FILTER_KEYS_BY_METRIC
+    }
+    if len(metrics) != 1:
+        return None
+    metric = next(iter(metrics))
+    return metric if metric in ALLOWED_METRICS else None
+
+
+def _signal_bet_type_for_route_play_filter(route: Dict[str, Any]) -> Optional[str]:
+    """路由固定玩法时返回该玩法；继承/命中/保持与空配置不收窄选型。"""
+    play_filter = route.get("play_filter") if isinstance(route.get("play_filter"), dict) else {}
+    if str(route.get("play_filter_mode") or "inherit").strip() != "fixed_metric":
+        return None
+    fixed_metric = str(play_filter.get("fixed_metric") or "").strip()
+    return fixed_metric if fixed_metric in ALLOWED_METRICS else None
+
+
+def _signal_bet_types_for_subscription_on_rule(
+    repository: Any,
+    subscription: Dict[str, Any],
+    rule: Dict[str, Any],
+) -> list[str]:
+    """触发选信号的玩法候选：固定玩法优先，其次订阅玩法筛选，最后放行全部玩法。
+
+    顺序即优先级：路由/规则的显式玩法切换最贴近用户意图；订阅自身筛选次之。
+    全空时返回 ["" ]（等价于不限玩法取最新），保持旧行为。
+    """
+    action = rule.get("action") if isinstance(rule.get("action"), dict) else {}
+    explicit = _signal_bet_type_for_auto_trigger_context({"rule_action": action})
+    if explicit:
+        return [explicit]
+    route_candidates: list[str] = []
+    for route in rule.get("routes") or []:
+        if not isinstance(route, dict) or str(route.get("status") or "active") != "active":
+            continue
+        route_bet_type = _signal_bet_type_for_route_play_filter(route)
+        if route_bet_type and route_bet_type not in route_candidates:
+            route_candidates.append(route_bet_type)
+    if len(route_candidates) == 1:
+        return route_candidates
+    if route_candidates:
+        # 多个路由要求不同玩法时无法单选：取最新信号，交给派单侧逐路由换选。
+        return [""]
+    subscription_bet_type = _signal_bet_type_for_subscription_strategy(subscription)
+    if subscription_bet_type:
+        return [subscription_bet_type]
+    return [""]
+
+
+def _pick_signal_for_subscription_on_rule(
+    repository: Any,
+    *,
+    subscription: Dict[str, Any],
+    rule: Dict[str, Any],
+    bet_types: Optional[list[str]] = None,
+) -> Optional[Dict[str, Any]]:
+    """按玩法候选依次取最新 ready 信号，取玩法最优且期号最新的那条。
+
+    候选玩法在同一期各发一条的信号源上等价于“按玩法过滤后取最新”；
+    无候选时退化为旧行为（不限玩法取最新）。
+    """
+    candidates = [str(item or "").strip() for item in (bet_types if bet_types is not None else [""])]
+    if not candidates:
+        return None
+    best: Optional[Dict[str, Any]] = None
+    best_key: Optional[tuple[int, int]] = None
+    for bet_type in candidates:
+        signal = repository.get_latest_ready_signal_for_source(
+            source_id=int(subscription["source_id"]),
+            bet_type=bet_type or None,
+        )
+        if not signal:
+            continue
+        try:
+            key = (int(str(signal.get("issue_no") or "0") or 0), int(signal.get("id") or 0))
+        except (TypeError, ValueError):
+            key = (0, int(signal.get("id") or 0))
+        if best_key is None or key > best_key:
+            best, best_key = signal, key
+    return best
 
 
 def _is_rule_day_stopped(repository: Any, rule: Dict[str, Any], *, stat_date: str) -> Dict[str, Any]:
@@ -1960,14 +2070,17 @@ def _evaluate_scheduled_auto_trigger_rule(
 
             action = rule.get("action") if isinstance(rule.get("action"), dict) else {}
             signal_bet_type = _signal_bet_type_for_auto_trigger_context({"rule_action": action})
-            signal = repository.get_latest_ready_signal_for_source(
-                source_id=int(subscription["source_id"]), bet_type=signal_bet_type,
+            bet_types = [signal_bet_type] if signal_bet_type else _signal_bet_types_for_subscription_on_rule(
+                repository, subscription, rule,
+            )
+            signal = _pick_signal_for_subscription_on_rule(
+                repository, subscription=subscription, rule=rule, bet_types=bet_types,
             )
             if not signal:
                 events.append(_record_event(
                     repository, rule=rule, subscription=subscription, performance=None,
                     status="skipped", reason="schedule_signal_not_found", stat_date=stat_date,
-                    schedule_snapshot=schedule_snapshot,
+                    schedule_snapshot={**schedule_snapshot, "signal_bet_types": bet_types},
                 ))
                 summary["skipped_count"] += 1
                 continue
@@ -2350,6 +2463,7 @@ def evaluate_auto_trigger_rule(
                 if bool(action.get("dispatch_latest_signal", True)):
                     dispatch_gate = _condition_dispatch_gate(
                         unit,
+                        rule=rule,
                         subscription=subscription,
                         latest_settled_issue_no=latest_issue_no,
                         matched_conditions=matched,
@@ -2440,6 +2554,7 @@ def evaluate_auto_trigger_rule(
                         latest_settled_issue_no=latest_issue_no,
                         auto_trigger_context=dispatch_context,
                         draw_clock=draw_clock,
+                        rule=rule,
                     )
                 event = _record_event(
                     unit,

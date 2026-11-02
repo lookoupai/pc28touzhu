@@ -3853,6 +3853,230 @@ class AutoTriggerServiceTests(unittest.TestCase):
             delete_auto_trigger_rule(self.repo, rule_id=rule["id"], user_id=self.user_id)
         self.assertIn("待结算", str(ctx.exception))
 
+    def _multi_metric_signals_for_issue(self, issue_no, published_at):
+        # 信号源逐期发布大小/单双/组合三条，组合最后入库（id 最大，即“最新一条”）。
+        for bet_type, bet_value, text in (
+            ("big_small", "小", "小1"),
+            ("odd_even", "双", "双1"),
+            ("combo", "小双", "小双1"),
+        ):
+            self.repo.create_signal_record(
+                source_id=self.source["id"], lottery_type="pc28", issue_no=issue_no,
+                bet_type=bet_type, bet_value=bet_value,
+                normalized_payload={"message_text": text}, published_at=published_at,
+            )
+
+    def test_keep_action_with_fixed_route_picks_route_metric_signal(self):
+        # “保持原玩法” + 路由固定单双：最新信号是组合时，应按路由玩法改取同期单双信号，
+        # 而不是把组合信号喂给单双路由后永远跳过（历史线上问题）。
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"], user_id=self.user_id, status="standby",
+        )
+        target = self.repo.list_delivery_targets(self.user_id)[0]
+        self._multi_metric_signals_for_issue("20260418002", "2026-04-18T09:35:00Z")
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "保持玩法但路由固定单双",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "odd_even", "operator": "gte", "threshold": 5, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True, "play_filter_action": "keep"},
+                "routes": [
+                    {"delivery_target_id": target["id"], "name": "单双路由",
+                     "play_filter_mode": "fixed_metric", "play_filter": {"fixed_metric": "odd_even"}},
+                ],
+            },
+        )
+        performance = self._performance_payload(
+            issue_no="20260418001", odd_even_miss_streak=5, odd_even_rate=50.0,
+        )
+
+        result = run_auto_trigger_cycle(
+            self.repo, user_id=self.user_id,
+            fetcher=lambda url: performance,
+        )
+
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        event = result["rules"][0]["events"][0]
+        dispatch_result = event["snapshot"]["dispatch_result"]
+        self.assertEqual(dispatch_result["created_count"], 1)
+        jobs = self.repo.list_execution_jobs(user_id=self.user_id)
+        self.assertEqual(len(jobs), 1)
+        signal = self.repo.get_signal(jobs[0]["signal_id"])
+        self.assertEqual(signal["bet_type"], "odd_even")
+        self.assertEqual(signal["bet_value"], "双")
+        self.assertEqual(signal["issue_no"], "20260418002")
+
+    def test_route_fixed_metric_substitutes_signal_within_same_issue(self):
+        # 多个路由要求不同玩法时选型不收窄（取最新=组合），派单侧按路由固定玩法
+        # 在同期号内换选：单双路由换到 odd_even:双 成功出单，大小路由换不到则跳过。
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"], user_id=self.user_id, status="standby",
+        )
+        target = self.repo.list_delivery_targets(self.user_id)[0]
+        other_target = self.repo.create_delivery_target_record(
+            user_id=self.user_id,
+            executor_type="telegram_group",
+            target_key="-100123457",
+            target_name="测试群2",
+            status="active",
+        )
+        # 只发单双与组合两条：大小路由在同期无信号可换，覆盖换选失败分支。
+        for bet_type, bet_value, text in (
+            ("odd_even", "双", "双1"),
+            ("combo", "小双", "小双1"),
+        ):
+            self.repo.create_signal_record(
+                source_id=self.source["id"], lottery_type="pc28", issue_no="20260418002",
+                bet_type=bet_type, bet_value=bet_value,
+                normalized_payload={"message_text": text}, published_at="2026-04-18T09:35:00Z",
+            )
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "双路由各自换选",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "odd_even", "operator": "gte", "threshold": 5, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True, "play_filter_action": "keep"},
+                "routes": [
+                    {"delivery_target_id": target["id"], "name": "单双路由",
+                     "play_filter_mode": "fixed_metric", "play_filter": {"fixed_metric": "odd_even"}},
+                    {"delivery_target_id": other_target["id"], "name": "大小路由",
+                     "play_filter_mode": "fixed_metric", "play_filter": {"fixed_metric": "big_small"}},
+                ],
+            },
+        )
+        performance = self._performance_payload(
+            issue_no="20260418001", odd_even_miss_streak=5, odd_even_rate=50.0,
+        )
+
+        result = run_auto_trigger_cycle(
+            self.repo, user_id=self.user_id,
+            fetcher=lambda url: performance,
+        )
+
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        event = result["rules"][0]["events"][0]
+        dispatch_result = event["snapshot"]["dispatch_result"]
+        self.assertEqual(dispatch_result["created_count"], 1)
+        self.assertEqual(dispatch_result["skipped_count"], 1)
+        skipped = dispatch_result["skipped_routes"]
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["reason"], "play_filter_mismatch")
+        self.assertEqual(skipped[0]["signal_bet_type"], "combo")
+        jobs = self.repo.list_execution_jobs(user_id=self.user_id)
+        self.assertEqual(len(jobs), 1)
+        signal = self.repo.get_signal(jobs[0]["signal_id"])
+        self.assertEqual(signal["bet_type"], "odd_even")
+        self.assertEqual(
+            jobs[0]["stake_plan"].get("meta", {}).get("signal_substitution", {}).get("signal_id"),
+            signal["id"],
+        )
+
+    def test_no_matching_signal_skips_before_triggering(self):
+        # 同期没有路由玩法的信号（只有组合）：触发评估阶段就应记 skipped（signal_not_found），
+        # 不建轮、不烧冷却，等下个周期拿到可投信号再触发。
+        self.repo.update_subscription_status(
+            subscription_id=self.subscription["id"], user_id=self.user_id, status="standby",
+        )
+        target = self.repo.list_delivery_targets(self.user_id)[0]
+        self.repo.create_signal_record(
+            source_id=self.source["id"], lottery_type="pc28", issue_no="20260418002",
+            bet_type="combo", bet_value="小双",
+            normalized_payload={"message_text": "小双1"}, published_at="2026-04-18T09:35:00Z",
+        )
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "无单双信号可换",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "odd_even", "operator": "gte", "threshold": 5, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": True, "play_filter_action": "keep"},
+                "routes": [
+                    {"delivery_target_id": target["id"], "name": "单双路由",
+                     "play_filter_mode": "fixed_metric", "play_filter": {"fixed_metric": "odd_even"}},
+                ],
+            },
+        )
+        performance = self._performance_payload(
+            issue_no="20260418001", odd_even_miss_streak=5, odd_even_rate=50.0,
+        )
+
+        result = run_auto_trigger_cycle(
+            self.repo, user_id=self.user_id,
+            fetcher=lambda url: performance,
+        )
+
+        self.assertEqual(result["summary"]["triggered_count"], 0)
+        event = result["rules"][0]["events"][0]
+        self.assertEqual(event["status"], "skipped")
+        self.assertEqual(event["reason"], "signal_not_found")
+        self.assertEqual(event["snapshot"]["dispatch_gate"]["bet_types"], ["odd_even"])
+        self.assertEqual(self.repo.list_execution_jobs(user_id=self.user_id), [])
+
+    def test_subscription_strategy_filter_narrows_signal_choice(self):
+        # 无路由的兼容模式：订阅玩法筛选唯一（单双）时按单双取信号，
+        # 不再被最新的组合信号顶掉。
+        from pc28touzhu.services.platform_service import update_subscription
+
+        update_subscription(
+            self.repo,
+            subscription_id=self.subscription["id"],
+            user_id=self.user_id,
+            payload={
+                "source_id": self.source["id"],
+                "strategy_v2": {
+                    "play_filter": {"mode": "selected", "selected_keys": ["odd_even:单", "odd_even:双"]},
+                    "staking_policy": {"mode": "fixed", "fixed_amount": 10},
+                    "dispatch": {"expire_after_seconds": 120, "delivery_target_ids": []},
+                },
+            },
+        )
+        self._multi_metric_signals_for_issue("20260418002", "2026-04-18T09:35:00Z")
+        create_auto_trigger_rule(
+            self.repo,
+            user_id=self.user_id,
+            payload={
+                "name": "订阅筛选单双",
+                "scope_mode": "selected_subscriptions",
+                "subscription_ids": [self.subscription["id"]],
+                "cooldown_issues": 0,
+                "conditions": [
+                    {"metric": "odd_even", "operator": "gte", "threshold": 5, "min_sample_count": 100}
+                ],
+                "action": {"dispatch_latest_signal": False, "play_filter_action": "keep"},
+            },
+        )
+        performance = self._performance_payload(
+            issue_no="20260418001", odd_even_miss_streak=5, odd_even_rate=50.0,
+        )
+
+        result = run_auto_trigger_cycle(
+            self.repo, user_id=self.user_id,
+            fetcher=lambda url: performance,
+        )
+
+        # 关闭派单也校验选型：无路由模式按订阅玩法（单双）开局，而不是组合。
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        event = result["rules"][0]["events"][0]
+        self.assertEqual(event["status"], "triggered")
+        self.assertEqual(self.repo.list_execution_jobs(user_id=self.user_id), [])
+
 
 if __name__ == "__main__":
     unittest.main()
