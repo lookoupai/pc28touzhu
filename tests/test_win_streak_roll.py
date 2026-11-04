@@ -110,9 +110,11 @@ class AllInCycleTests(unittest.TestCase):
             result = settle_period(policy, state, {"triplet": [5, 8, 2]})  # 15 大单，主注单中
             state = result["state"]
             balances.append(state["balance"])
+        # 整数注码 + 未押出的尾差留仓：100 -> 139.30 -> 押 139（主 97）-> 193.33
+        #                                        -> 押 193（主 135）-> 268.98
         self.assertAlmostEqual(balances[0], 139.30)
-        self.assertAlmostEqual(balances[1], 194.04)
-        self.assertAlmostEqual(balances[2], 270.30)
+        self.assertAlmostEqual(balances[1], 193.33)
+        self.assertAlmostEqual(balances[2], 268.98)
         self.assertEqual(state["status"], "stopped")
         self.assertEqual(state["stop_reason"], STOP_REASON_WIN_STREAK)
 
@@ -171,8 +173,9 @@ class ChainCycleTests(unittest.TestCase):
         state = settle_period(policy, state, {"triplet": [5, 8, 2]}, settlement_rule_id=self.RULE)["state"]
         result = settle_period(policy, state, {"triplet": [2, 3, 4]}, settlement_rule_id=self.RULE)  # 9 单中遇顺子退本
         self.assertEqual(result["main_result"]["result_type"], "refund")
-        self.assertAlmostEqual(result["net_pnl"], -59.64)  # 198.8*0.3 辅助注亏损
-        self.assertAlmostEqual(result["state"]["cycle_stake"], 139.16)
+        # 整数注码：198.80 -> 总额 198（主 138 / 辅助 60）；主注遇顺子退本，辅助注亏 60
+        self.assertAlmostEqual(result["net_pnl"], -60.0)
+        self.assertAlmostEqual(result["state"]["cycle_stake"], 138.0)
         self.assertEqual(result["state"]["win_streak"], 0)
 
     def test_wipe_stops_day_at_exact_daily_loss(self):
@@ -182,7 +185,8 @@ class ChainCycleTests(unittest.TestCase):
         result = settle_period(policy, state, {"triplet": [5, 5, 4]}, settlement_rule_id=self.RULE)  # 全 miss
         self.assertAlmostEqual(result["payout_total"], 0.0)
         self.assertAlmostEqual(result["state"]["cycle_stake"], 0.0)
-        self.assertAlmostEqual(result["state"]["day_pnl"], -100.0)
+        # 整数注码下 198.80 只能押 198，尾差 0.80 留仓，所以当天净亏 99.20
+        self.assertAlmostEqual(result["state"]["day_pnl"], -99.20)
         self.assertEqual(result["state"]["status"], "stopped")
         self.assertEqual(result["state"]["stop_reason"], STOP_REASON_BALANCE_DEPLETED)
 

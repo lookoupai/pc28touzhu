@@ -59,11 +59,11 @@ class StakeTests(unittest.TestCase):
         self.assertAlmostEqual(stakes["aux"], 30.0)
         self.assertAlmostEqual(stakes["total"], 100.0)
 
-    def test_split_rounds_to_two_decimals_without_losing_cents(self):
+    def test_split_keeps_whole_stakes_and_leaves_the_change(self):
         stakes = split_stakes(139.31)
-        self.assertAlmostEqual(stakes["main"], 97.52)
-        self.assertAlmostEqual(stakes["aux"], 41.79)
-        self.assertAlmostEqual(stakes["total"], 139.31)
+        self.assertAlmostEqual(stakes["main"], 97.0)
+        self.assertAlmostEqual(stakes["aux"], 42.0)
+        self.assertAlmostEqual(stakes["total"], 139.0)  # 尾差 0.31 留在仓里
 
     def test_build_bets_uses_current_balance(self):
         state = create_day(100.0)
@@ -168,9 +168,10 @@ class StopTests(unittest.TestCase):
             result = settle_period(state, structure="A", draw_context={"triplet": [5, 8, 2]})
             balances.append(result["new_balance"])
             state = result["state"]
+        # 整数注码 + 尾差留仓：100 -> 139.30 -> 押 139（主 97）-> 193.33 -> 押 193（主 135）-> 268.98
         self.assertAlmostEqual(balances[0], 139.30)
-        self.assertAlmostEqual(balances[1], 194.04)
-        self.assertAlmostEqual(balances[2], 270.30)
+        self.assertAlmostEqual(balances[1], 193.33)
+        self.assertAlmostEqual(balances[2], 268.98)
 
     def test_stopped_day_cannot_place_more_bets(self):
         state = create_day(100.0)
@@ -197,7 +198,8 @@ class StopTests(unittest.TestCase):
         self.assertEqual(state["win_streak"], 1)
         state = settle_period(state, structure="A", draw_context={"triplet": [5, 5, 4]})["state"]
         self.assertEqual(state["win_streak"], 0)
-        self.assertAlmostEqual(state["balance"], 0.0)
+        # 整数注码：139.30 只能押 139，尾差 0.30 留在余额里；余额不足以下注按止损收口
+        self.assertAlmostEqual(state["balance"], 0.30)
         self.assertEqual(state["status"], "stopped")
 
 

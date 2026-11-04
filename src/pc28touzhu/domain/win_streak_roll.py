@@ -52,8 +52,10 @@ from pc28touzhu.domain.settlement_rules import (
 )
 from pc28touzhu.domain.split_roll_strategy import (
     DEFAULT_SETTLEMENT_RULE_ID,
+    MIN_PLACEABLE_TOTAL,
     STRUCTURES,
     normalize_structure,
+    split_integer_stakes,
 )
 from pc28touzhu.domain.win_streak_stop import (
     DEFAULT_TARGET_STREAK,
@@ -84,6 +86,7 @@ DEFAULT_ON_BUST = "close_day"
 DEFAULT_CLOSE_SCOPE = "rule"
 DEFAULT_MAX_CYCLES_PER_DAY = 1
 
+
 # 写进规则 / 路由当日统计的停止原因；恢复闸门必须认这几个原因，否则保存一次配置就会解封。
 CYCLE_STOP_REASON_TARGET = "cycle_target_hit"
 CYCLE_STOP_REASON_BUST = "cycle_balance_depleted"
@@ -107,6 +110,7 @@ __all__ = [
     "normalize_win_streak_roll_policy",
     "normalize_stop_policy",
     "resolve_day_close_action",
+    "MIN_PLACEABLE_TOTAL",
     "ALLOWED_ON_TARGET",
     "ALLOWED_ON_BUST",
     "ALLOWED_CLOSE_SCOPES",
@@ -308,14 +312,16 @@ def build_period_plan(
         raise ValueError("当天玩法已停止，不能再产生投注")
 
     roll_mode = str(policy.get("roll_mode") or DEFAULT_ROLL_MODE)
-    stake_total = _round_money(state.get("balance") if roll_mode == "all_in" else state.get("cycle_stake"))
-    if stake_total <= 0:
+    available = _round_money(state.get("balance") if roll_mode == "all_in" else state.get("cycle_stake"))
+    if available <= 0:
         raise ValueError("当期无可投注余额")
-    main_share = float(policy.get("main_share") or DEFAULT_MAIN_SHARE)
-    main_stake = _round_money(stake_total * main_share)
-    aux_stake = _round_money(stake_total - main_stake)
-    if aux_stake < 0:
-        main_stake, aux_stake = stake_total, 0.0
+    # 注码按整数下（平台最小注 1）：总额向下取整，主注按占比向下取整，尾差留在仓里
+    stakes = split_integer_stakes(available, policy.get("main_share"))
+    if stakes["total"] <= 0:
+        raise ValueError("当期资金不足以下注（整数下注至少需要两注）")
+    stake_total = stakes["total"]
+    main_stake = stakes["main"]
+    aux_stake = stakes["aux"]
 
     structure = structure_for_period(policy, signal)
     config = STRUCTURES[structure]
@@ -401,12 +407,14 @@ def apply_period_outcome(
         balance = _round_money(float(state.get("balance") or 0) + net_pnl)
         day_pnl: Optional[float] = _round_money(float(state.get("day_pnl") or 0) + net_pnl)
         cycle_stake: Optional[float] = payout
-        risk_capital = cycle_stake
+        risk_capital = cycle_stake if float(cycle_stake or 0) >= MIN_PLACEABLE_TOTAL else 0.0
     else:
-        balance = payout
+        # 整数注码可能小于余额，没押出去的尾差要留在账户里，不能随本期结果丢掉
+        unbet_remainder = max(0.0, _round_money(float(state.get("balance") or 0) - stake_amount))
+        balance = _round_money(payout + unbet_remainder)
         day_pnl = None
         cycle_stake = None
-        risk_capital = balance
+        risk_capital = balance if float(balance or 0) >= MIN_PLACEABLE_TOTAL else 0.0
     if balance < 0:
         balance = 0.0
 

@@ -841,7 +841,16 @@ def _dispatch_win_streak_roll_legs(
     if pending:
         return {"created_count": 0, "existing_count": 0, "skipped_count": 1, "skip_reason": "cycle_pending_settlement", "jobs": []}
 
-    plan = build_period_plan(policy, state, signal, stat_date=today)
+    try:
+        plan = build_period_plan(policy, state, signal, stat_date=today)
+    except ValueError as exc:
+        # 结算时已按资金下限收口，这里只做兜底：资金凑不出两注就不出单，别让评估记 failed
+        if "资金不足" not in str(exc) and "无可投注余额" not in str(exc):
+            raise
+        return {
+            "created_count": 0, "existing_count": 0, "skipped_count": 1,
+            "skip_reason": "cycle_insufficient_stake", "jobs": [],
+        }
     settlement_policy = resolve_settlement_runtime_policy(strategy, signal.get("normalized_payload"))
     settlement_rule_id = str(settlement_policy.get("settlement_rule_id") or "")
 

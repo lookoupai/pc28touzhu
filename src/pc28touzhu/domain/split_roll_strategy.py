@@ -48,6 +48,8 @@ from pc28touzhu.domain.win_streak_stop import (
 
 
 DEFAULT_DAY_BALANCE = 100.0
+# 整数下注下凑不出两注（< 2）就无法继续这一期，等同于本金耗尽
+MIN_PLACEABLE_TOTAL = 2.0
 DEFAULT_SETTLEMENT_RULE_ID = "pc28_fullpay_netdisk_regular"
 MAIN_SHARE = 0.70
 AUX_SHARE = 0.30
@@ -61,6 +63,7 @@ STRUCTURES = {
 
 __all__ = [
     "DEFAULT_DAY_BALANCE",
+    "MIN_PLACEABLE_TOTAL",
     "DEFAULT_SETTLEMENT_RULE_ID",
     "MAIN_SHARE",
     "AUX_SHARE",
@@ -74,6 +77,7 @@ __all__ = [
     "create_day",
     "reset_day",
     "split_stakes",
+    "split_integer_stakes",
     "build_period_bets",
     "settle_leg",
     "settle_period",
@@ -154,19 +158,37 @@ def reset_day(
     return create_day(balance, target_streak=target_streak, settlement_rule_id=settlement_rule_id)
 
 
-def split_stakes(balance: Any) -> Dict[str, float]:
-    """按 70/30 拆分当期注额；保证 主注 + 辅助注 == balance。"""
+def split_integer_stakes(stake_total: Any, main_share: Any = MAIN_SHARE) -> Dict[str, float]:
+    """两腿整数注：总额向下取整，主注按占比向下取整，余数全部给辅助注。
+
+    投注按整数下（平台最小注 1），不允许出现 0.1 这类带小数的单子，未押出去的
+    尾差（不足 1 的部分）留在仓里继续滚：
+        189.90 -> 总额 189，主注 132，辅助 57（余 0.90 留仓）
+        19.88  -> 总额 19，主注 13，辅助 6（余 0.88 留仓）
+    资金不足以开出两注（总额 < 2）时返回全 0，由调用方决定跳过还是收口。
+    """
     try:
-        amount = round(float(balance), 2)
+        amount = round(float(stake_total), 2)
     except (TypeError, ValueError):
-        raise ValueError("balance 必须为数字")
+        raise ValueError("stake_total 必须为数字")
     if amount < 0:
-        raise ValueError("balance 不能为负数")
-    main_stake = _round_money(amount * MAIN_SHARE)
-    aux_stake = _round_money(amount - main_stake)
-    if aux_stake < 0:
-        main_stake, aux_stake = amount, 0.0
-    return {"main": main_stake, "aux": aux_stake, "total": _round_money(main_stake + aux_stake)}
+        raise ValueError("stake_total 不能为负数")
+    share = MAIN_SHARE if main_share in (None, "") else float(main_share)
+    total = int(amount + 1e-9)  # 向下取整，1e-9 抵消浮点误差
+    if total < 2:
+        return {"main": 0.0, "aux": 0.0, "total": 0.0}
+    main_stake = int(total * share + 1e-9)
+    if main_stake < 1:
+        return {"main": 0.0, "aux": 0.0, "total": 0.0}
+    aux_stake = total - main_stake
+    if aux_stake < 1:
+        main_stake, aux_stake = total - 1, 1
+    return {"main": float(main_stake), "aux": float(aux_stake), "total": float(total)}
+
+
+def split_stakes(balance: Any) -> Dict[str, float]:
+    """按 70/30 拆分当期注额；两腿都是整数注，主注 + 辅助注 == 总额（整数）。"""
+    return split_integer_stakes(balance, MAIN_SHARE)
 
 
 def build_period_bets(state: Dict[str, Any], structure: Any) -> Dict[str, Any]:
@@ -178,6 +200,8 @@ def build_period_bets(state: Dict[str, Any], structure: Any) -> Dict[str, Any]:
     key = normalize_structure(structure)
     config = STRUCTURES[key]
     stakes = split_stakes(state.get("balance"))
+    if stakes["total"] <= 0:
+        raise ValueError("当期资金不足以下注（整数下注至少需要两注）")
     return {
         "structure": key,
         "label": config["label"],
@@ -279,8 +303,11 @@ def settle_period(
         settlement_rule_id=rule_id,
     )
 
-    # 当期总投注 = balance，因此新余额 = 两笔实际返还之和（spec 第 5 条）
-    new_balance = _round_money(main_result["payout"] + aux_result["payout"])
+    # 当期总投注 = 取整后的总额；未押出去的尾差留在余额里（spec 第 5 条 + 整数下注）
+    staked_total = _round_money(bets["total_stake"])
+    new_balance = _round_money(
+        main_result["payout"] + aux_result["payout"] + max(0.0, balance_before - staked_total)
+    )
     if new_balance < 0:  # 防御：四舍五入不得产生负余额
         new_balance = 0.0
     net_pnl = _round_money(new_balance - balance_before)
@@ -293,7 +320,7 @@ def settle_period(
             "stop_reason": state.get("stop_reason"),
         },
         net_pnl,
-        balance=new_balance,
+        balance=new_balance if new_balance >= MIN_PLACEABLE_TOTAL else 0.0,
     )
 
     new_state = {
