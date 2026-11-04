@@ -317,6 +317,39 @@ class CycleStopPolicyTests(CycleSettlementTimingTests):
         self.assertEqual(state["cycles_today"], 0)
         self.assertEqual(self._rule_day(rule)["status"], "active")
 
+    def test_manual_restart_reopens_todays_stopped_run(self):
+        """开始新一轮要把今天手动停掉的轮次退回占位态，否则当天窗口再也开不起来。"""
+        rule, run, subscription = self._create_rule()
+        stopped = self.repo.stop_auto_trigger_rule_current_run(
+            rule_id=int(rule["id"]), user_id=self.user_id, subscription_id=int(subscription["id"]),
+        )
+        self.assertTrue(stopped["stopped"])
+        self.assertEqual(self.repo.get_auto_trigger_rule_run(int(run["id"]))["status"], "stopped")
+
+        result = restart_subscription_cycle(
+            self.repo, subscription_id=subscription["id"], user_id=self.user_id,
+            payload={"note": "测试重开今日窗口"},
+        )
+        self.assertIn(int(rule["id"]), result["rule_runs_reopened"])
+        reopened = self.repo.get_auto_trigger_rule_run(int(run["id"]))
+        self.assertEqual(reopened["status"], "blocked")
+        self.assertEqual(reopened["stop_reason"], "")
+
+    def test_manual_restart_does_not_reopen_risk_stopped_run(self):
+        """风控停轮不能被开始新一轮解封：止盈止损/熔断停掉的轮次保持 stopped。"""
+        rule, run, subscription = self._create_rule()
+        self.repo.stop_auto_trigger_rule_day(
+            rule_id=int(rule["id"]), user_id=self.user_id, stat_date=STAT_DATE, reason="daily_hit_rate_low",
+        )
+        self.assertEqual(self.repo.get_auto_trigger_rule_run(int(run["id"]))["status"], "stopped")
+
+        result = restart_subscription_cycle(
+            self.repo, subscription_id=subscription["id"], user_id=self.user_id,
+            payload={"note": "测试风控停轮不解封"},
+        )
+        self.assertEqual(result["rule_runs_reopened"], [])
+        self.assertEqual(self.repo.get_auto_trigger_rule_run(int(run["id"]))["status"], "stopped")
+
     def test_manual_restart_unseals_cycle_stop(self):
         """开始新一轮是显式解封入口：周期回起始注、规则当日解封、轮次重新 active。"""
         rule, run, subscription = self._create_rule()

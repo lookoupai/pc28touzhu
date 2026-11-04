@@ -4536,6 +4536,43 @@ class DatabaseRepository:
         )
         return [self._serialize_auto_trigger_rule_run_row(dict(row)) for row in rows]
 
+    def reopen_manual_stopped_rule_runs_for_subscription_date(
+        self, *, subscription_id: int, user_id: int, stat_date: str
+    ) -> list[int]:
+        """把当天因手动停轮而停止的规则轮次重置为占位态（blocked），返回涉及的规则 id。
+
+        定时窗口对（规则 + 订阅 + 日期 + 窗口 id）当天只开一轮；手动停掉后当天就没有
+        入口再开，这里把轮次退回 blocked（窗口评估可重新 claim），供「开始新一轮」使用。
+        风控停轮（止盈/止损/命中率熔断）与玩法收工（cycle_*）都不在这里解封。
+        """
+        normalized_stat_date = str(stat_date or "").strip()
+        if not normalized_stat_date:
+            return []
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, rule_id FROM auto_trigger_rule_runs
+                WHERE subscription_id = ? AND user_id = ? AND stat_date = ?
+                  AND status = 'stopped'
+                  AND (stop_reason = '' OR stop_reason = 'manual_stop')
+                """,
+                (int(subscription_id), int(user_id), normalized_stat_date),
+            ).fetchall()
+            run_ids = [int(row["id"]) for row in rows]
+            rule_ids = sorted({int(row["rule_id"]) for row in rows})
+            if run_ids:
+                conn.execute(
+                    """
+                    UPDATE auto_trigger_rule_runs
+                    SET status = 'blocked', stop_reason = '', stopped_at = NULL,
+                        started_issue_no = '', updated_at = ?
+                    WHERE id IN (%s)
+                    """ % ",".join("?" for _ in run_ids),
+                    tuple([now] + run_ids),
+                )
+        return rule_ids
+
     def list_auto_trigger_rule_runs_stopped_for_subscription(
         self, *, subscription_id: int, user_id: int, stat_date: str
     ) -> list[Dict[str, Any]]:

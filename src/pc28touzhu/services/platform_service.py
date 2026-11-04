@@ -1938,6 +1938,18 @@ def reset_subscription_runtime(repository: Any, *, subscription_id: Any, user_id
     return result
 
 
+def reopen_today_manual_stopped_rule_runs(repository: Any, *, subscription_id: int, user_id: int) -> list[int]:
+    """把今天因手动停轮而停掉的规则轮次退回占位态，让当天窗口能重新开一轮。"""
+    from datetime import datetime, timedelta, timezone
+
+    if not hasattr(repository, "reopen_manual_stopped_rule_runs_for_subscription_date"):
+        return []
+    today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+    return repository.reopen_manual_stopped_rule_runs_for_subscription_date(
+        subscription_id=int(subscription_id), user_id=int(user_id), stat_date=today,
+    )
+
+
 def reset_win_streak_roll_cycle_for_restart(
     repository: Any,
     *,
@@ -2046,6 +2058,11 @@ def restart_subscription_cycle(repository: Any, *, subscription_id: Any, user_id
     # 过关玩法：开始新一轮同时重置过关周期并解封玩法当日收工
     result["cycle_reset"] = reset_win_streak_roll_cycle_for_restart(
         repository, subscription=item, user_id=normalized_user_id, note=note,
+    )
+    # 定时窗口当天只会开一轮：手动停掉后当天没法再开，这里把今天手工停掉的轮次退回占位态，
+    # 窗口评估下一次就能重新开一轮（风控停轮不动）
+    result["rule_runs_reopened"] = reopen_today_manual_stopped_rule_runs(
+        repository, subscription_id=normalized_subscription_id, user_id=normalized_user_id,
     )
     result["item"] = present_subscription_item(item)
     result["restarted"] = True

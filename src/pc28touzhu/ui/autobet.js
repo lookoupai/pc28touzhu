@@ -7871,9 +7871,9 @@
                 const isRollPlan = Boolean(currentSubscription && currentSubscription.strategy && currentSubscription.strategy.win_streak_roll);
                 const isRestartingCycle = isSubscriptionRiskBlocked(currentSubscription) || isRollPlan;
                 const confirmMessage = isRollPlan
-                    ? "开始新一轮会重置过关周期（回到每天起始注、连赢次数清零）、解除当天的过关收工，并跳过未执行的旧轮次任务。确认继续吗？"
+                    ? "开始新一轮会重置过关周期（回到每天起始注、连赢次数清零）、解除当天的过关收工，并让今天的定时窗口可以重开一轮。确认继续吗？"
                     : (isRestartingCycle
-                        ? "开始新一轮会清空当前轮次盈亏、回到第 1 手，并跳过未执行的旧轮次任务。确认继续吗？"
+                        ? "开始新一轮会清空当前轮次盈亏、回到第 1 手，并让今天手动停掉的轮次重新开放。确认继续吗？"
                         : "重置后会从新的盈亏基线重新计算，并跳过当前未执行的旧轮次任务。确认继续吗？");
                 if (!subscriptionId || !confirmDangerousAction(confirmMessage)) {
                     return;
@@ -7889,7 +7889,7 @@
                     await refreshAll();
                     setStatus(
                         isRollPlan
-                            ? "新一轮已开始：过关周期已重置回起始注，当天的过关收工已解除（日风控的止盈止损不受影响）。"
+                            ? "新一轮已开始：过关周期已重置回起始注，当天的过关收工已解除，今天的定时窗口也可以重开一轮（日风控的止盈止损不受影响）。"
                             : (isRestartingCycle
                                 ? "新一轮已开始，当前盈亏和手数已回到新基线。"
                                 : "跟单策略已重置，当前盈亏和手数已回到新基线。"),
