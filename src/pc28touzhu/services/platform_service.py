@@ -1939,7 +1939,11 @@ def reset_subscription_runtime(repository: Any, *, subscription_id: Any, user_id
 
 
 def reopen_today_manual_stopped_rule_runs(repository: Any, *, subscription_id: int, user_id: int) -> list[int]:
-    """把今天因手动停轮而停掉的规则轮次退回占位态，让当天窗口能重新开一轮。"""
+    """把今天因手动停轮而停掉的规则轮次移出窗口槽位，让当天窗口能重新开一轮。
+
+    领取今日开轮的 SQL 只复用「没有任何历史」的占位行，所以不能靠改状态来复用已有轮次，
+    必须把旧轮次挪出（订阅 + 日期 + 窗口）这个槽位，见仓储方法里的说明。
+    """
     from datetime import datetime, timedelta, timezone
 
     if not hasattr(repository, "reopen_manual_stopped_rule_runs_for_subscription_date"):

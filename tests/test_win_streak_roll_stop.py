@@ -331,9 +331,14 @@ class CycleStopPolicyTests(CycleSettlementTimingTests):
             payload={"note": "测试重开今日窗口"},
         )
         self.assertIn(int(rule["id"]), result["rule_runs_reopened"])
+        # 旧轮次被挪出窗口槽位（历史保留），当期窗口可以重新插入一条全新轮次
         reopened = self.repo.get_auto_trigger_rule_run(int(run["id"]))
-        self.assertEqual(reopened["status"], "blocked")
-        self.assertEqual(reopened["stop_reason"], "")
+        self.assertEqual(reopened["status"], "stopped")
+        self.assertIn("#reopened-%d" % int(run["id"]), str(reopened["window_id"]))
+        self.assertIsNone(self.repo.get_auto_trigger_rule_run_for_subscription_date(
+            rule_id=int(rule["id"]), subscription_id=int(subscription["id"]),
+            stat_date=STAT_DATE, window_id="",
+        ))
 
     def test_manual_restart_does_not_reopen_risk_stopped_run(self):
         """风控停轮不能被开始新一轮解封：止盈止损/熔断停掉的轮次保持 stopped。"""
