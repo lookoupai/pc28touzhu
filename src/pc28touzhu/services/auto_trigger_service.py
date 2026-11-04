@@ -24,13 +24,15 @@ from pc28touzhu.domain.subscription_strategy import (
 )
 from pc28touzhu.domain.pc28_profit_rules import drop_matching_catalog_odds, normalize_odds_overrides
 from pc28touzhu.domain.pc28_issue_window import evaluate_pc28_issue_dispatch_window
+from pc28touzhu.domain.draw_streak import DRAW_VALUES_BY_METRIC, MAX_DRAW_STREAK, build_draw_streak_snapshot
 from pc28touzhu.domain.settlement_rules import get_settlement_rule, normalize_settlement_rule_id
 from pc28touzhu.domain.win_streak_roll import CYCLE_DAY_STOP_REASONS, normalize_win_streak_roll_policy
 from pc28touzhu.services.dispatch_service import dispatch_signal
+from pc28touzhu.services.pc28_draw_service import fetch_pc28_recent_draws_deep, get_pc28_draw_clock
 
 
 ALLOWED_METRICS = {"big_small", "odd_even", "combo"}
-ALLOWED_CONDITION_TYPES = {"hit_rate", "miss_streak"}
+ALLOWED_CONDITION_TYPES = {"hit_rate", "miss_streak", "draw_streak"}
 ALLOWED_OPERATORS = {"lt", "lte", "gt", "gte"}
 ALLOWED_SCOPE_MODES = {"all_subscriptions", "selected_subscriptions"}
 ALLOWED_TRIGGER_MODES = {"condition", "schedule"}
@@ -183,7 +185,7 @@ def _normalize_conditions(value: Any) -> list[dict]:
             raise ValueError("conditions[%s].metric 仅支持 big_small、odd_even、combo" % index)
         condition_type = str(item.get("type") or "hit_rate").strip() or "hit_rate"
         if condition_type not in ALLOWED_CONDITION_TYPES:
-            raise ValueError("conditions[%s].type 仅支持 hit_rate 或 miss_streak" % index)
+            raise ValueError("conditions[%s].type 仅支持 hit_rate、miss_streak 或 draw_streak" % index)
         operator = str(item.get("operator") or "").strip()
         if operator not in ALLOWED_OPERATORS:
             raise ValueError("conditions[%s].operator 仅支持 lt、lte、gt、gte" % index)
@@ -192,6 +194,12 @@ def _normalize_conditions(value: Any) -> list[dict]:
             raise ValueError("conditions[%s].threshold 必须在 0 到 100 之间" % index)
         if condition_type == "miss_streak" and threshold < 0:
             raise ValueError("conditions[%s].threshold 不能小于 0" % index)
+        draw_value = str(item.get("bet_value") or "").strip()
+        if condition_type == "draw_streak":
+            if draw_value not in DRAW_VALUES_BY_METRIC[metric]:
+                raise ValueError("conditions[%s].bet_value 必须是所选玩法的开奖结果" % index)
+            if not 1 <= threshold <= MAX_DRAW_STREAK or not threshold.is_integer():
+                raise ValueError("conditions[%s].threshold 必须为 1 到 %s 的整数" % (index, MAX_DRAW_STREAK))
         min_sample_count = int(item.get("min_sample_count") or 100)
         if min_sample_count < 1:
             raise ValueError("conditions[%s].min_sample_count 必须大于 0" % index)
@@ -214,8 +222,9 @@ def _normalize_conditions(value: Any) -> list[dict]:
                 "window": "recent_%s" % window_size if condition_type == "hit_rate" else "current",
                 "window_size": window_size if condition_type == "hit_rate" else 0,
                 "operator": operator,
-                "threshold": int(threshold) if condition_type == "miss_streak" else round(threshold, 2),
+                "threshold": int(threshold) if condition_type != "hit_rate" else round(threshold, 2),
                 "min_sample_count": min_sample_count,
+                **({"bet_value": draw_value} if condition_type == "draw_streak" else {}),
             }
         )
     return normalized
@@ -1176,6 +1185,23 @@ def _match_condition(condition: Dict[str, Any], performance: Dict[str, Any]) -> 
     metric_key = str(condition.get("metric") or "")
     metric_payload = metrics.get(metric_key) if isinstance(metrics.get(metric_key), dict) else {}
     condition_type = str(condition.get("type") or "hit_rate").strip() or "hit_rate"
+    if condition_type == "draw_streak":
+        draw_snapshot = performance.get("draw_streak") or {}
+        streak = draw_snapshot.get("metrics", {}).get(metric_key, {}).get(condition.get("bet_value"))
+        if not streak:
+            return None
+        operator = str(condition.get("operator") or "")
+        if not streak["complete"] and operator in {"lt", "lte"}:
+            return None
+        if _compare(streak["count"], operator, float(condition.get("threshold") or 0)):
+            return {
+                **condition,
+                "actual_draw_streak": streak["count"],
+                "streak_complete": streak["complete"],
+                "draw_issues": list(streak["issues"]),
+                "metric_label": METRIC_LABELS.get(metric_key, metric_key),
+            }
+        return None
     if condition_type == "miss_streak":
         streaks = metric_payload.get("streaks") if isinstance(metric_payload.get("streaks"), dict) else {}
         miss_streak = streaks.get("current_miss_streak")
@@ -2275,9 +2301,32 @@ def _evaluate_scheduled_auto_trigger_rule(
     return {"rule_id": int(rule["id"]), "summary": summary, "events": events}
 
 
+def _load_trigger_draw_data(cache: dict, *, draw_clock: Optional[dict], draw_fetcher=None) -> dict:
+    """同一轮检查中的规则/方案共用一份开奖证据；失败不回退到旧开奖缓存。"""
+    if "error" in cache:
+        raise cache["error"]
+    if "snapshot" not in cache:
+        try:
+            clock = draw_clock if draw_clock is not None else get_pc28_draw_clock(fetcher=draw_fetcher)
+            if not clock or clock.get("stale") or not str(clock.get("latest_issue_no") or "").isdigit():
+                raise ValueError("draw_clock_unavailable")
+            # 多取一期，阈值达到上限时也能判断严格大于与连续记录的边界。
+            result = fetch_pc28_recent_draws_deep(limit=MAX_DRAW_STREAK + 1, fetcher=draw_fetcher)
+            cache["snapshot"] = build_draw_streak_snapshot(
+                result.get("items") or [], latest_issue_no=str(clock["latest_issue_no"]),
+                source=str(result.get("source") or ""),
+            )
+            cache["clock"] = clock
+        except Exception as exc:
+            cache["error"] = exc
+            raise
+    return cache
+
+
 def evaluate_auto_trigger_rule(
     repository: Any, rule: Dict[str, Any], *, fetcher=None, now: Optional[datetime] = None,
     draw_clock: Optional[Dict[str, Any]] = None,
+    draw_fetcher=None, _draw_data_cache: Optional[dict] = None,
 ) -> Dict[str, Any]:
     if str(rule.get("trigger_mode") or "condition") == "schedule":
         return evaluate_scheduled_auto_trigger_rule(repository, rule, now=now, draw_clock=draw_clock)
@@ -2298,6 +2347,12 @@ def evaluate_auto_trigger_rule(
     summary = {"checked_count": 0, "triggered_count": 0, "skipped_count": 0, "failed_count": 0}
     events = []
     performance_results_by_url: Dict[str, tuple[dict, Dict[str, Any]]] = {}
+    draw_data_cache = _draw_data_cache if _draw_data_cache is not None else {}
+    all_conditions = list(rule.get("conditions") or [])
+    for group in rule.get("guard_groups") or []:
+        all_conditions.extend(group.get("conditions") or [])
+    has_draw_conditions = any(item.get("type") == "draw_streak" for item in all_conditions)
+    has_prediction_conditions = any(item.get("type") != "draw_streak" for item in all_conditions)
 
     for subscription in subscriptions:
         source = subscription.get("source") if isinstance(subscription.get("source"), dict) else {}
@@ -2371,17 +2426,47 @@ def evaluate_auto_trigger_rule(
                     summary["skipped_count"] += 1
                     continue
 
-            performance_url = _performance_url_from_source(source)
-            if performance_url in performance_results_by_url:
-                performance, performance_fetch = performance_results_by_url[performance_url]
+            performance = {"metrics": {}}
+            performance_fetch = {"source": "draw_history", "attempts": 0}
+            condition_draw_clock = draw_clock
+            if has_prediction_conditions:
+                try:
+                    performance_url = _performance_url_from_source(source)
+                    if performance_url in performance_results_by_url:
+                        performance, performance_fetch = performance_results_by_url[performance_url]
+                        performance = copy.deepcopy(performance)
+                        performance_fetch = {**performance_fetch, "source": "cycle_cache", "attempts": 0}
+                    else:
+                        performance, performance_fetch = _fetch_performance(performance_url, fetcher=fetcher)
+                        performance_results_by_url[performance_url] = (
+                            copy.deepcopy(performance), dict(performance_fetch),
+                        )
+                except Exception as exc:
+                    if not has_draw_conditions:
+                        raise
+                    # OR 中独立的开奖条件仍可判断；依赖预测的条件没有数据就不匹配。
+                    performance["prediction_error"] = str(exc)
+            if has_draw_conditions:
                 performance = copy.deepcopy(performance)
-                performance_fetch = {**performance_fetch, "source": "cycle_cache", "attempts": 0}
-            else:
-                performance, performance_fetch = _fetch_performance(performance_url, fetcher=fetcher)
-                performance_results_by_url[performance_url] = (
-                    copy.deepcopy(performance),
-                    dict(performance_fetch),
-                )
+                performance.pop("draw_streak", None)
+                try:
+                    draw_data = _load_trigger_draw_data(
+                        draw_data_cache, draw_clock=draw_clock, draw_fetcher=draw_fetcher,
+                    )
+                except Exception as exc:
+                    if not performance.get("latest_settled_issue"):
+                        raise
+                    performance["draw_streak_error"] = str(exc)
+                else:
+                    snapshot = draw_data["snapshot"]
+                    prediction_issue = str(performance.get("latest_settled_issue") or "")
+                    if has_prediction_conditions and prediction_issue != snapshot["latest_issue_no"]:
+                        # 混合条件只能使用同一期证据，不能把旧预测统计和新开奖拼接触发。
+                        performance["prediction_latest_settled_issue"] = prediction_issue
+                        performance["metrics"] = {}
+                    performance["latest_settled_issue"] = snapshot["latest_issue_no"]
+                    performance["draw_streak"] = snapshot
+                    condition_draw_clock = draw_data["clock"]
             latest_issue_no = str(performance.get("latest_settled_issue") or "")
             if not latest_issue_no:
                 events.append(
@@ -2450,6 +2535,12 @@ def evaluate_auto_trigger_rule(
                     stop_reason = "daily_risk_stopped"
                 elif current_run and current_run.get("status") == "stopped":
                     stop_reason = str(current_run.get("stop_reason") or "rule_run_stopped")
+                if not stop_reason and any(item.get("type") == "draw_streak" for item in matched):
+                    last_trigger = unit.get_latest_auto_trigger_event(
+                        rule_id=int(rule["id"]), subscription_id=int(subscription["id"]), status="triggered",
+                    )
+                    if last_trigger and str(last_trigger.get("latest_issue_no") or "") == latest_issue_no:
+                        stop_reason = "draw_issue_already_triggered"
                 if stop_reason:
                     events.append(_record_event(
                         unit, rule=rule, subscription=subscription, performance=performance,
@@ -2457,6 +2548,36 @@ def evaluate_auto_trigger_rule(
                     ))
                     summary["skipped_count"] += 1
                     continue
+                # 条件命中但“最新 ready 信号”当前已不可投（目标期已开奖/余量不足）时，
+                # 不激活待命方案、不建轮、不记 triggered、不进冷却，记 skipped 交给下个周期用新信号重试；
+                # 否则可投信号源的发布迟滞会把每一轮条件命中都烧成“永远在跑的空壳轮次”。
+                if bool(action.get("dispatch_latest_signal", True)):
+                    dispatch_gate = _condition_dispatch_gate(
+                        unit,
+                        rule=rule,
+                        subscription=subscription,
+                        latest_settled_issue_no=latest_issue_no,
+                        matched_conditions=matched,
+                        action=action,
+                        draw_clock=condition_draw_clock,
+                        now=now,
+                    )
+                    if not dispatch_gate.get("allowed"):
+                        events.append(_record_event(
+                            unit,
+                            rule=rule,
+                            subscription=subscription,
+                            performance=performance,
+                            status="skipped",
+                            reason=str(dispatch_gate.get("reason") or "signal_not_dispatchable"),
+                            matched_conditions=matched,
+                            trigger_match=trigger_match,
+                            dispatch_gate=dispatch_gate,
+                            performance_fetch=performance_fetch,
+                            stat_date=stat_date,
+                        ))
+                        summary["skipped_count"] += 1
+                        continue
                 if subscription_status == "standby" and not has_routes:
                     activated = unit.update_subscription_status(
                         subscription_id=int(subscription["id"]),
@@ -2483,37 +2604,6 @@ def evaluate_auto_trigger_rule(
                         subscription=subscription,
                         matched_conditions=matched,
                     )
-                # 条件命中但“最新 ready 信号”当前已不可投（目标期已开奖/余量不足）时，
-                # 不建轮、不记 triggered、不进冷却，记 skipped 交给下个周期用新信号重试；
-                # 否则可投信号源的发布迟滞会把每一轮条件命中都烧成“永远在跑的空壳轮次”。
-                if bool(action.get("dispatch_latest_signal", True)):
-                    dispatch_gate = _condition_dispatch_gate(
-                        unit,
-                        rule=rule,
-                        subscription=subscription,
-                        latest_settled_issue_no=latest_issue_no,
-                        matched_conditions=matched,
-                        action=action,
-                        draw_clock=draw_clock,
-                        now=now,
-                    )
-                    if not dispatch_gate.get("allowed"):
-                        events.append(_record_event(
-                            unit,
-                            rule=rule,
-                            subscription=subscription,
-                            performance=performance,
-                            status="skipped",
-                            reason=str(dispatch_gate.get("reason") or "signal_not_dispatchable"),
-                            matched_conditions=matched,
-                            trigger_match=trigger_match,
-                            dispatch_gate=dispatch_gate,
-                            play_filter_result=play_filter_result,
-                            performance_fetch=performance_fetch,
-                            stat_date=stat_date,
-                        ))
-                        summary["skipped_count"] += 1
-                        continue
                 if not has_routes:
                     rule_run = unit.ensure_auto_trigger_rule_run(
                         rule_id=int(rule["id"]),
@@ -2579,7 +2669,7 @@ def evaluate_auto_trigger_rule(
                         subscription=subscription,
                         latest_settled_issue_no=latest_issue_no,
                         auto_trigger_context=dispatch_context,
-                        draw_clock=draw_clock,
+                        draw_clock=condition_draw_clock,
                         rule=rule,
                     )
                 event = _record_event(
@@ -2630,6 +2720,7 @@ def run_auto_trigger_cycle(
     fetcher=None,
     now: Optional[datetime] = None,
     draw_clock: Optional[Dict[str, Any]] = None,
+    draw_fetcher=None,
 ) -> Dict[str, Any]:
     normalized_user_id = _to_positive_int(user_id, "user_id", allow_none=True)
     normalized_rule_id = _to_positive_int(rule_id, "rule_id", allow_none=True)
@@ -2645,8 +2736,12 @@ def run_auto_trigger_cycle(
         "summary": {"rule_count": len(rules), "checked_count": 0, "triggered_count": 0, "skipped_count": 0, "failed_count": 0},
         "rules": [],
     }
+    draw_data_cache: dict = {}
     for rule in rules:
-        item = evaluate_auto_trigger_rule(repository, rule, fetcher=fetcher, now=now, draw_clock=draw_clock)
+        item = evaluate_auto_trigger_rule(
+            repository, rule, fetcher=fetcher, now=now, draw_clock=draw_clock,
+            draw_fetcher=draw_fetcher, _draw_data_cache=draw_data_cache,
+        )
         summary = item.get("summary") or {}
         for key in ["checked_count", "triggered_count", "skipped_count", "failed_count"]:
             result["summary"][key] += int(summary.get(key) or 0)

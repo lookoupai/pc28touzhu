@@ -22,7 +22,13 @@
     const conditionTypeOptions = [
         ["hit_rate", "命中率"],
         ["miss_streak", "当前连挂"],
+        ["draw_streak", "指定结果连续开出"],
     ];
+    const drawValuesByMetric = {
+        big_small: ["大", "小"],
+        odd_even: ["单", "双"],
+        combo: ["大单", "大双", "小单", "小双"],
+    };
     const operatorOptions = [
         ["lt", "低于"],
         ["lte", "低于或等于"],
@@ -228,6 +234,9 @@
             return "因上一轮跨日延续被拦截，当天未新开轮次。";
         }
         const scheduleReasons = {
+            draw_clock_unavailable: "暂时无法确认最新开奖期号，等待下一次检查。",
+            draw_history_not_current: "开奖记录尚未同步到最新一期，等待下一次检查。",
+            draw_issue_already_triggered: "该期开奖已触发过此方案，不重复启动。",
             subscription_not_active: "跟单方案已停用，规则未触发。",
             source_not_active: "信号来源已停用，规则未触发。",
             outside_schedule_window: "当前不在定时窗口内。",
@@ -268,6 +277,10 @@
         const type = condition.type || "hit_rate";
         const metric = metricOptions.find(function (item) { return item[0] === condition.metric; });
         const operator = operatorOptions.find(function (item) { return item[0] === condition.operator; });
+        if (type === "draw_streak") {
+            const actual = condition.actual_draw_streak == null ? "" : ("（当前" + (condition.streak_complete === false ? "至少" : "") + String(condition.actual_draw_streak) + "期）");
+            return String(condition.bet_value || "") + "连续开出" + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "期" + actual;
+        }
         if (type === "miss_streak") {
             return (metric ? metric[1] : condition.metric) + "当前连挂" + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "期";
         }
@@ -518,6 +531,7 @@
             '<div class="condition-row">' +
                 '<label class="field"><span>条件</span><select class="text-input condition-type">' + options(conditionTypeOptions, conditionType) + '</select></label>' +
                 '<label class="field"><span>玩法</span><select class="text-input condition-metric">' + options(metricOptions, item.metric) + '</select></label>' +
+                '<label class="field condition-draw-value-field"><span>开奖结果</span><select class="text-input condition-draw-value">' + options((drawValuesByMetric[item.metric] || drawValuesByMetric.big_small).map(function (value) { return [value, value]; }), item.bet_value) + '</select></label>' +
                 '<label class="field condition-window-field"><span>统计期数</span><select class="text-input condition-window">' + options(hitRateWindowOptions, windowSize) + '</select></label>' +
                 '<label class="field"><span>比较</span><select class="text-input condition-operator">' + options(operatorOptions, item.operator) + '</select></label>' +
                 '<label class="field condition-threshold-field"><span class="condition-threshold-label">' + escapeHtml(thresholdLabel) + '</span><input class="text-input condition-threshold" type="number" min="0" max="100" step="0.01" value="' + escapeHtml(item.threshold) + '"></label>' +
@@ -735,24 +749,32 @@
 
     function updateConditionRowVisibility(row, preferDefaultOperator) {
         const type = row.querySelector(".condition-type").value || "hit_rate";
+        row.dataset.conditionType = type;
         const isMissStreak = type === "miss_streak";
+        const isDrawStreak = type === "draw_streak";
+        const isStreak = isMissStreak || isDrawStreak;
         const threshold = row.querySelector(".condition-threshold");
         const operator = row.querySelector(".condition-operator");
         const windowInput = row.querySelector(".condition-window");
         const sampleInput = row.querySelector(".condition-sample");
-        row.querySelector(".condition-threshold-label").textContent = isMissStreak ? "连挂期数" : "阈值 %";
+        row.querySelector(".condition-threshold-label").textContent = isDrawStreak ? "连续期数" : (isMissStreak ? "连挂期数" : "阈值 %");
+        threshold.min = isDrawStreak ? "1" : "0";
         threshold.max = isMissStreak ? "" : "100";
-        threshold.step = isMissStreak ? "1" : "0.01";
-        row.querySelector(".condition-window-field").hidden = isMissStreak;
-        row.querySelector(".condition-sample-field").hidden = isMissStreak;
-        if (!isMissStreak && Number(sampleInput.value || 0) > Number(windowInput.value || 100)) {
+        threshold.step = isStreak ? "1" : "0.01";
+        row.querySelector(".condition-window-field").hidden = isStreak;
+        row.querySelector(".condition-sample-field").hidden = isStreak;
+        row.querySelector(".condition-draw-value-field").hidden = !isDrawStreak;
+        const drawValue = row.querySelector(".condition-draw-value");
+        const drawValues = drawValuesByMetric[row.querySelector(".condition-metric").value] || [];
+        drawValue.innerHTML = options(drawValues.map(function (value) { return [value, value]; }), drawValue.value);
+        if (!isStreak && Number(sampleInput.value || 0) > Number(windowInput.value || 100)) {
             sampleInput.value = String(windowInput.value || 100);
         }
-        if (preferDefaultOperator && isMissStreak && operator.value === "lt") {
+        if (preferDefaultOperator === true && isStreak && operator.value === "lt") {
             operator.value = "gte";
         }
-        if (preferDefaultOperator && isMissStreak) {
-            threshold.value = "5";
+        if (preferDefaultOperator === true && isStreak) {
+            threshold.value = isDrawStreak ? "2" : "5";
         }
         if (isMissStreak && !Number(threshold.value || 0)) {
             threshold.value = "5";
@@ -876,6 +898,7 @@
                 window_size: type === "hit_rate" ? windowSize : 0,
                 window: type === "hit_rate" ? ("recent_" + String(windowSize)) : "current",
                 min_sample_count: Number(row.querySelector(".condition-sample").value || 100),
+                ...(type === "draw_streak" ? {bet_value: row.querySelector(".condition-draw-value").value} : {}),
             };
         });
     }
@@ -1163,19 +1186,19 @@
         });
         $("conditionRows").addEventListener("change", function (event) {
             const target = event.target;
-            if (target instanceof HTMLElement && (target.classList.contains("condition-type") || target.classList.contains("condition-window"))) {
+            if (target instanceof HTMLElement && (target.classList.contains("condition-type") || target.classList.contains("condition-window") || target.classList.contains("condition-metric"))) {
                 const row = target.closest(".condition-row");
                 if (row) {
-                    updateConditionRowVisibility(row, true);
+                    updateConditionRowVisibility(row, target.classList.contains("condition-type"));
                 }
             }
         });
         $("guardGroupRows").addEventListener("change", function (event) {
             const target = event.target;
-            if (target instanceof HTMLElement && (target.classList.contains("condition-type") || target.classList.contains("condition-window"))) {
+            if (target instanceof HTMLElement && (target.classList.contains("condition-type") || target.classList.contains("condition-window") || target.classList.contains("condition-metric"))) {
                 const row = target.closest(".condition-row");
                 if (row) {
-                    updateConditionRowVisibility(row, true);
+                    updateConditionRowVisibility(row, target.classList.contains("condition-type"));
                 }
             }
         });
