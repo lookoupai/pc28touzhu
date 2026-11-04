@@ -1723,19 +1723,23 @@ def resolve_subscription_progression(repository: Any, *, subscription_id: Any, u
         draw_context=draw_context,
         rule=frozen_rule,
     )
+    settle_context = {
+        "resolution_mode": "auto",
+        "refund_reason": resolved.get("refund_reason"),
+        "metric": resolved.get("metric"),
+        "predicted_value": resolved.get("predicted_value"),
+        "actual_value": resolved.get("actual_value"),
+        "draw_snapshot": resolved.get("draw_snapshot"),
+    }
+    if leg_bet.get("bet_type") and leg_bet.get("bet_value"):
+        # 过关玩法要留住每条腿的押法：算钱、复盘、下一期对账都靠它
+        settle_context["leg"] = dict(leg_bet)
     result = repository.settle_progression_event(
         subscription_id=normalized_subscription_id,
         user_id=normalized_user_id,
         result_type=resolved["result_type"],
         progression_event_id=progression_event_id,
-        result_context={
-            "resolution_mode": "auto",
-            "refund_reason": resolved.get("refund_reason"),
-            "metric": resolved.get("metric"),
-            "predicted_value": resolved.get("predicted_value"),
-            "actual_value": resolved.get("actual_value"),
-            "draw_snapshot": resolved.get("draw_snapshot"),
-        },
+        result_context=settle_context,
     )
     item = present_subscription_item(result.get("subscription") or repository.get_subscription(normalized_subscription_id))
     return {

@@ -260,6 +260,30 @@ def _event_settlement_context(
     }
 
 
+def _leg_aware_signal(
+    signal: Optional[Dict[str, Any]],
+    result_context: Optional[dict],
+    event_context: Optional[dict] = None,
+) -> Optional[Dict[str, Any]]:
+    """过关玩法每条腿有各自的押法（主注单双 / 辅助组合），盈亏必须按腿的玩法算。
+
+    派单时事件会写入 result_context.leg；这里用腿的 bet_type/bet_value 覆盖信号原始玩法，
+    否则组合信号触发的过关期会把主注（单双）按组合赔率入账——满赔2.8 下 2.84 倍被算成 6.79 倍。
+    """
+    leg: Dict[str, Any] = {}
+    for context in (result_context, event_context):
+        if isinstance(context, dict) and isinstance(context.get("leg"), dict):
+            leg = context["leg"]
+            break
+    if not isinstance(signal, dict):
+        return signal
+    bet_type = str(leg.get("bet_type") or "").strip()
+    bet_value = str(leg.get("bet_value") or "").strip()
+    if not bet_type or not bet_value:
+        return signal
+    return {**signal, "bet_type": bet_type, "bet_value": bet_value}
+
+
 def _progression_hit_profit_delta(
     *,
     settlement_context: Dict[str, Any],
@@ -7794,7 +7818,7 @@ class DatabaseRepository:
             if normalized_result == "hit":
                 profit_delta = _progression_hit_profit_delta(
                     settlement_context=settlement_context,
-                    signal=signal,
+                    signal=_leg_aware_signal(signal, result_context, current_event.get("result_context")),
                     stake_amount=stake_amount,
                     result_context=result_context,
                 )
@@ -8238,7 +8262,7 @@ class DatabaseRepository:
             if normalized_result == "hit":
                 profit_delta = _progression_hit_profit_delta(
                     settlement_context=settlement_context,
-                    signal=signal,
+                    signal=_leg_aware_signal(signal, result_context, current_event.get("result_context")),
                     stake_amount=stake_amount,
                     result_context=result_context,
                 )

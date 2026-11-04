@@ -212,6 +212,43 @@ class WinStreakRollDispatchTests(unittest.TestCase):
                                                            "stat_date": run_b["stat_date"], "routes": rule_b["routes"]})
         self.assertEqual(result_a["created_count"], 2)  # 过关滚仓两腿
         self.assertEqual(result_b["created_count"], 1)  # 普通跟单单注
+    def test_combo_signal_prices_each_leg_with_its_own_play(self):
+        """组合信号触发的过关期：两条腿各自按自己的玩法算钱，不能按信号原始组合赔率算。
+
+        满赔2.8 规则：单双 2.84，小单/大双 6.79，大单/小双 6.33。
+        跟随信号取 小单 -> 结构 A（主注单 + 辅助小双）；15 大单 时主注中、辅助未中：
+        主注应为 70 × (2.84 - 1) = 128.80，而不是 70 × (6.79 - 1) = 405.30。
+        """
+        strategy = {
+            "play_filter": {
+                "mode": "selected",
+                "selected_keys": ["combo:大单", "combo:大双", "combo:小单", "combo:小双"],
+            },
+            "staking_policy": {**STRATEGY["staking_policy"], "structure": "follow_signal"},
+            "settlement_policy": {
+                "rule_source": "subscription_fixed",
+                "settlement_rule_id": "pc28_fullpay_2_8_regular",
+            },
+        }
+        subscription = self.repo.create_subscription_record(
+            user_id=self.user_id, source_id=self.source["id"], strategy=strategy, name="过三关 跟随信号",
+        )
+        signal = self._signal(bet_type="combo", bet_value="小单")
+        result = dispatch_signal(self.repo, signal["id"], subscription_id=subscription["id"])
+        self.assertEqual(result["created_count"], 2)
+        self.assertEqual({job["stake_plan"]["structure"] for job in result["jobs"]}, {"A"})
+
+        self._deliver_and_settle(result, triplet=[5, 8, 2])
+        legs = {}
+        for job in result["jobs"]:
+            legs[job["stake_plan"]["leg"]] = self.repo.get_progression_event(int(job["progression_event_id"]))
+        self.assertEqual(legs["main"]["resolved_result_type"], "hit")
+        self.assertEqual(legs["aux"]["resolved_result_type"], "miss")
+        self.assertAlmostEqual(legs["main"]["net_delta"], 128.80)
+        self.assertAlmostEqual(legs["aux"]["net_delta"], -30.0)
+        state = self.repo.get_subscription_cycle_state(subscription_id=subscription["id"])
+        self.assertAlmostEqual(state["balance"], 198.80)
+
     def test_old_fixed_mode_still_single_job(self):
         fixed_strategy = {
             "play_filter": {"mode": "all"},
