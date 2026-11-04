@@ -578,6 +578,7 @@ class FakeRepository:
             "id": len(self.subscriptions) + 1,
             "user_id": kwargs["user_id"],
             "source_id": kwargs["source_id"],
+            "name": kwargs.get("name") or "",
             "status": kwargs.get("status", "active"),
             "strategy": kwargs.get("strategy") or {},
             "created_at": "2026-04-07T12:00:00Z",
@@ -689,11 +690,12 @@ class FakeRepository:
                 return data
         return None
 
-    def update_subscription_record(self, *, subscription_id, user_id, source_id, strategy=None, status=None):
+    def update_subscription_record(self, *, subscription_id, user_id, source_id, strategy=None, status=None, name=None):
         for item in self.subscriptions:
             if item["id"] == int(subscription_id) and item["user_id"] == int(user_id):
                 item["source_id"] = int(source_id)
                 item["strategy"] = strategy or {}
+                item["name"] = name if name is not None else item.get("name", "")
                 if status is not None:
                     item["status"] = status
                 item["updated_at"] = "2026-04-07T12:00:00Z"
@@ -707,11 +709,12 @@ class FakeRepository:
                 return True
         return False
 
-    def update_subscription_record(self, *, subscription_id, user_id, source_id, strategy=None, status=None):
+    def update_subscription_record(self, *, subscription_id, user_id, source_id, strategy=None, status=None, name=None):
         for item in self.subscriptions:
             if item["id"] == int(subscription_id) and item["user_id"] == int(user_id):
                 item["source_id"] = int(source_id)
                 item["strategy"] = strategy or {}
+                item["name"] = name if name is not None else item.get("name", "")
                 if status is not None:
                     item["status"] = status
                 item["updated_at"] = "2026-04-07T12:00:00Z"

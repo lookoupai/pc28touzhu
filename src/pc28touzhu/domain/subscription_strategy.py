@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 
 from pc28touzhu.domain.pc28_play_filter import normalize_play_filter_keys, normalize_play_filter_mode
 from pc28touzhu.domain.pc28_profit_rules import coerce_odds_overrides, drop_matching_catalog_odds, normalize_odds_overrides
+from pc28touzhu.domain.win_streak_roll import normalize_stop_policy, normalize_win_streak_roll_policy
 from pc28touzhu.domain.settlement_rules import (
     ALLOWED_SETTLEMENT_RULE_IDS,
     DEFAULT_SETTLEMENT_RULE_ID,
@@ -15,7 +16,7 @@ from pc28touzhu.domain.settlement_rules import (
 )
 
 
-ALLOWED_STAKING_POLICY_MODES = {"fixed", "follow_source", "martingale"}
+ALLOWED_STAKING_POLICY_MODES = {"fixed", "follow_source", "martingale", "win_streak_roll"}
 ALLOWED_SETTLEMENT_RULE_SOURCES = {"follow_signal", "subscription_fixed"}
 ALLOWED_RISK_PLAY_KEYS = ("big_small", "odd_even", "combo")
 DEFAULT_EXPIRE_AFTER_SECONDS = 120
@@ -181,7 +182,20 @@ def _normalize_staking_policy_v2(payload: Any) -> Dict[str, Any]:
     data = _to_object(payload)
     mode = str(data.get("mode") or "follow_source").strip() or "follow_source"
     if mode not in ALLOWED_STAKING_POLICY_MODES:
-        raise ValueError("strategy.staking_policy.mode 仅支持 fixed、follow_source 或 martingale")
+        raise ValueError("strategy.staking_policy.mode 仅支持 fixed、follow_source、martingale 或 win_streak_roll")
+
+    if mode == "win_streak_roll":
+        roll_policy = normalize_win_streak_roll_policy(data, field_prefix="strategy.staking_policy")
+        return {
+            "mode": mode,
+            "fixed_amount": None,
+            "base_stake": None,
+            "multiplier": 2.0,
+            "max_steps": 1,
+            "refund_action": _normalize_refund_action(data.get("refund_action"), "strategy.staking_policy.refund_action"),
+            "cap_action": _normalize_cap_action(data.get("cap_action"), "strategy.staking_policy.cap_action"),
+            **roll_policy,
+        }
 
     fixed_amount = _to_optional_positive_float(data.get("fixed_amount"), "strategy.staking_policy.fixed_amount")
     base_stake = _to_optional_positive_float(data.get("base_stake"), "strategy.staking_policy.base_stake")
@@ -435,6 +449,22 @@ def project_subscription_strategy_v1(value: Any) -> Dict[str, Any]:
     }
     if str(staking_policy.get("mode") or "") == "fixed":
         projected["stake_amount"] = round(float(staking_policy.get("fixed_amount") or 0), 2)
+    if str(staking_policy.get("mode") or "") == "win_streak_roll":
+        # 旧版消费方按 follow 处理；附带玩法摘要供前端展示，金额按每天起始注预览
+        projected["mode"] = "follow"
+        projected["stake_amount"] = round(float(staking_policy.get("base_amount") or 0), 2)
+        projected["win_streak_roll"] = {
+            "base_amount": round(float(staking_policy.get("base_amount") or 0), 2),
+            "main_share": round(float(staking_policy.get("main_share") or 0.70), 4),
+            "aux_share": round(float(staking_policy.get("aux_share") or 0.30), 4),
+            "target_streak": int(staking_policy.get("target_streak") or 3),
+            "structure": str(staking_policy.get("structure") or "A"),
+            "roll_mode": str(staking_policy.get("roll_mode") or "chain"),
+            "reset_scope": str(staking_policy.get("reset_scope") or "daily"),
+            "stop_policy": normalize_stop_policy(
+                staking_policy.get("stop_policy"), field_prefix="strategy.staking_policy.stop_policy"
+            ),
+        }
     if str(staking_policy.get("mode") or "") == "martingale":
         projected["base_stake"] = round(float(staking_policy.get("base_stake") or 0), 2)
         projected["multiplier"] = round(float(staking_policy.get("multiplier") or 2.0), 4)
@@ -578,6 +608,22 @@ def resolve_staking_runtime_policy(strategy: Any, signal_payload: Any) -> Dict[s
             "fixed_amount": None,
             "multiplier": round(float(policy.get("multiplier") or 2.0), 4),
             "max_steps": int(policy.get("max_steps") or 1),
+            "refund_action": _normalize_refund_action(policy.get("refund_action"), "strategy.staking_policy.refund_action"),
+            "cap_action": _normalize_cap_action(policy.get("cap_action"), "strategy.staking_policy.cap_action"),
+        }
+    if mode == "win_streak_roll":
+        return {
+            "mode": "win_streak_roll",
+            "base_amount": round(float(policy.get("base_amount") or 100.0), 2),
+            "main_share": round(float(policy.get("main_share") or 0.70), 4),
+            "aux_share": round(float(policy.get("aux_share") or 0.30), 4),
+            "target_streak": int(policy.get("target_streak") or 3),
+            "structure": str(policy.get("structure") or "A"),
+            "roll_mode": str(policy.get("roll_mode") or "chain"),
+            "reset_scope": str(policy.get("reset_scope") or "daily"),
+            "stop_policy": normalize_stop_policy(
+                policy.get("stop_policy"), field_prefix="strategy.staking_policy.stop_policy"
+            ),
             "refund_action": _normalize_refund_action(policy.get("refund_action"), "strategy.staking_policy.refund_action"),
             "cap_action": _normalize_cap_action(policy.get("cap_action"), "strategy.staking_policy.cap_action"),
         }

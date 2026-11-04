@@ -169,7 +169,7 @@
 
     function subscriptionLabel(item) {
         const source = sourceById(item.source_id);
-        const name = source ? source.name : ("来源 #" + String(item.source_id));
+        const name = (item.name && String(item.name).trim()) || (source ? source.name : ("来源 #" + String(item.source_id)));
         return "#" + String(item.id) + " " + name + " / " + subscriptionStatusText(item.status);
     }
 

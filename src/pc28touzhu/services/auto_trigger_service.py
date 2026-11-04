@@ -25,6 +25,7 @@ from pc28touzhu.domain.subscription_strategy import (
 from pc28touzhu.domain.pc28_profit_rules import drop_matching_catalog_odds, normalize_odds_overrides
 from pc28touzhu.domain.pc28_issue_window import evaluate_pc28_issue_dispatch_window
 from pc28touzhu.domain.settlement_rules import get_settlement_rule, normalize_settlement_rule_id
+from pc28touzhu.domain.win_streak_roll import CYCLE_DAY_STOP_REASONS, normalize_win_streak_roll_policy
 from pc28touzhu.services.dispatch_service import dispatch_signal
 
 
@@ -376,8 +377,20 @@ def _normalize_route_settlement_policy(value: Any) -> dict:
 def _normalize_route_staking_policy(value: Any) -> dict:
     payload = value if isinstance(value, dict) else {}
     mode = str(payload.get("mode") or "fixed").strip() or "fixed"
-    if mode not in {"fixed", "follow_source", "martingale"}:
-        raise ValueError("routes[].staking_policy.mode 仅支持 fixed、follow_source 或 martingale")
+    if mode not in {"fixed", "follow_source", "martingale", "win_streak_roll"}:
+        raise ValueError("routes[].staking_policy.mode 仅支持 fixed、follow_source、martingale 或 win_streak_roll")
+    if mode == "win_streak_roll":
+        roll_policy = normalize_win_streak_roll_policy(payload, field_prefix="routes[].staking_policy")
+        return {
+            "mode": mode,
+            "fixed_amount": None,
+            "base_stake": None,
+            "multiplier": 2.0,
+            "max_steps": 1,
+            "refund_action": "hold",
+            "cap_action": "reset",
+            **roll_policy,
+        }
     fixed_amount = _round_money(payload.get("fixed_amount"))
     base_stake = _round_money(payload.get("base_stake"))
     multiplier = float(payload.get("multiplier") or 2)
@@ -571,7 +584,14 @@ def _daily_risk_stop_reason(daily_risk_control: Dict[str, Any], *, net_profit: A
 
 
 def _rule_day_stop_reason(daily_risk_control: Dict[str, Any], *, stat: Dict[str, Any]) -> str:
-    """规则日是否仍触发风控：止盈止损 + 命中率熔断共用同一恢复闸。"""
+    """规则日是否仍触发风控：止盈止损 + 命中率熔断共用同一恢复闸。
+
+    过关玩法的收工（cycle_target_hit / cycle_balance_depleted）也走同一个闸门：
+    这类停止当天只能等下一天自然翻页，保存一次规则配置不该把它解掉。
+    """
+    sticky_reason = str((stat or {}).get("stopped_reason") or "")
+    if sticky_reason in CYCLE_DAY_STOP_REASONS:
+        return sticky_reason
     reason = _daily_risk_stop_reason(daily_risk_control, net_profit=(stat or {}).get("net_profit"))
     if reason:
         return reason
@@ -717,6 +737,10 @@ def resume_auto_trigger_rule_day(repository: Any, *, rule_id: Any, user_id: Any,
     if not stop_reason:
         stop_reason = _route_day_gate_stop_reason(repository, rule=rule, stat_date=resolved_stat_date)
     if stop_reason:
+        if stop_reason in CYCLE_DAY_STOP_REASONS:
+            raise ValueError(
+                "当天已由过关玩法收工（%s），只能等下一交易日或调整过关收工设置" % stop_reason
+            )
         raise ValueError("当前当日风控条件仍触发（%s），请先调整阈值或关闭对应风控开关" % stop_reason)
     # 路由级当日停止（含路由独立风控先触顶）同样需要恢复；仓库方法幂等，非 stopped 行不受影响。
     rule_day_stopped = str(stat.get("status") or "") == "stopped"
@@ -1670,8 +1694,8 @@ def _pick_signal_for_subscription_on_rule(
 
 def _is_rule_day_stopped(repository: Any, rule: Dict[str, Any], *, stat_date: str) -> Dict[str, Any]:
     daily_risk_control = rule.get("daily_risk_control") if isinstance(rule.get("daily_risk_control"), dict) else {}
-    if not bool(daily_risk_control.get("enabled")):
-        return {"stopped": False, "stat": None}
+    # 当日 stopped 标记优先于风控开关：过关玩法收工、日风控止盈止损都落这个标记，
+    # 关掉风控开关的规则同样要被挡住，否则定时窗口 / 条件命中还会新开一轮。
     stat = repository.get_auto_trigger_rule_daily_stat(
         rule_id=int(rule["id"]),
         user_id=int(rule["user_id"]),
@@ -1679,6 +1703,8 @@ def _is_rule_day_stopped(repository: Any, rule: Dict[str, Any], *, stat_date: st
     )
     if str(stat.get("status") or "") == "stopped":
         return {"stopped": True, "stat": stat}
+    if not bool(daily_risk_control.get("enabled")):
+        return {"stopped": False, "stat": stat}
     # 只读兜底：结算钩子尚未落下 stopped 标记（如当天中途才开启熔断/调低阈值）时，
     # 触发评估这一刻也按当日账本实时判定，不达标即视为当日已停止。
     if hit_rate_gate_stop_reason(

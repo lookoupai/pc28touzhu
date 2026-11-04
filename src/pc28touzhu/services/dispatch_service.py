@@ -8,6 +8,11 @@ from typing import Any, Dict
 from pc28touzhu.domain.pc28_play_filter import strategy_matches_signal
 from pc28touzhu.domain.pc28_issue_window import evaluate_pc28_issue_dispatch_window
 from pc28touzhu.domain.settlement_rules import build_settlement_snapshot
+from pc28touzhu.domain.win_streak_roll import (
+    MODE_WIN_STREAK_ROLL,
+    build_period_plan,
+    ensure_daily_state,
+)
 from pc28touzhu.domain.subscription_strategy import (
     hit_rate_gate_stop_reason,
     resolve_dispatch_policy,
@@ -27,6 +32,16 @@ PLAY_FILTER_KEYS_BY_METRIC = {
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
+
+
+def _shanghai_today() -> str:
+    """过关滚仓按北京时间自然日重置。"""
+    return datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+
+
+def _staking_policy_mode(strategy: Dict[str, Any], signal: Dict[str, Any]) -> str:
+    runtime = resolve_staking_runtime_policy(strategy, signal.get("normalized_payload"))
+    return str(runtime.get("mode") or "follow_source")
 
 
 def _parse_iso_z(value: str | None) -> datetime:
@@ -506,6 +521,39 @@ def _dispatch_signal_for_auto_trigger_routes(
             _skip_route(route, "target_already_dispatched", signal_id=int(route_signal["id"]))
             continue
 
+        if _staking_policy_mode(strategy, route_signal.get("normalized_payload")) == MODE_WIN_STREAK_ROLL:
+            # 过关滚仓玩法：同期派两腿（主注+辅助），注码由玩法周期状态决定。
+            template = None
+            template_id = _route_template_id(route)
+            if template_id is not None and hasattr(repository, "get_message_template"):
+                template = repository.get_message_template(template_id)
+            outcome = _dispatch_win_streak_roll_legs(
+                repository,
+                subscription_id=int(subscription_id),
+                user_id=user_id,
+                delivery_target_id=delivery_target_id,
+                telegram_account_id=(
+                    int(route["telegram_account_id"]) if route.get("telegram_account_id") is not None else None
+                ),
+                executor_type=str(route.get("executor_type") or "telegram_group"),
+                strategy=strategy,
+                signal=route_signal,
+                template=template,
+                issue_window=issue_window,
+                auto_trigger_context=auto_trigger_context,
+                route_id=route_id,
+                route_rule_id=int(auto_trigger_context.get("rule_id") or 0) or None,
+                route_rule_run_id=route_rule_run_id,
+                route_stat_date=route_stat_date,
+            )
+            created_count += int(outcome.get("created_count") or 0)
+            existing_count += int(outcome.get("existing_count") or 0)
+            if int(outcome.get("skipped_count") or 0):
+                _skip_route(route, str(outcome.get("skip_reason") or "cycle_skipped"))
+            skipped_count += int(outcome.get("skipped_count") or 0)
+            jobs.extend(outcome.get("jobs") or [])
+            continue
+
         progression_event = repository.get_progression_event_by_signal(
             subscription_id=int(subscription_id),
             signal_id=int(route_signal["id"]),
@@ -738,6 +786,223 @@ def _candidate_matches_subscription_targets(candidate: Dict[str, Any]) -> bool:
     return delivery_target_id in normalized_ids
 
 
+def _dispatch_win_streak_roll_legs(
+    repository: Any,
+    *,
+    subscription_id: int,
+    user_id: int,
+    delivery_target_id: int,
+    telegram_account_id: int | None,
+    executor_type: str,
+    strategy: Dict[str, Any],
+    signal: Dict[str, Any],
+    template: Dict[str, Any] | None,
+    issue_window: Dict[str, Any] | None = None,
+    auto_trigger_context: Dict[str, Any] | None = None,
+    route_id: int | None = None,
+    route_rule_id: int | None = None,
+    route_rule_run_id: int | None = None,
+    route_stat_date: str = "",
+) -> Dict[str, Any]:
+    """过关滚仓玩法派单：同期派两腿（主注单双 70% + 辅助组合 30%），共享一个玩法周期状态。
+
+    - 每个订阅每天一个周期；止盈/止损后当天跳过（skip_reason=cycle_stopped）
+    - 上一期未结算前不再派新周期（skip_reason=cycle_pending_settlement），防止同订阅并发双周期
+    - 两腿各建一条 progression_event（leg_key 区分），结算完全复用现有 progression 财务/日报链路
+    """
+    today = _shanghai_today()
+    state_row = (
+        repository.get_subscription_cycle_state(subscription_id=subscription_id)
+        if hasattr(repository, "get_subscription_cycle_state")
+        else None
+    )
+    policy = dict((state_row or {}).get("policy") or {})
+    if not policy:
+        runtime = resolve_staking_runtime_policy(strategy, signal.get("normalized_payload"))
+        policy = {
+            key: runtime[key]
+            for key in ("base_amount", "main_share", "aux_share", "target_streak", "structure", "roll_mode", "reset_scope", "stop_policy")
+            if key in runtime
+        }
+    previous_state = None
+    if state_row:
+        previous_state = {
+            key: state_row[key]
+            for key in (
+                "stat_date", "balance", "cycle_stake", "day_pnl", "win_streak", "target_streak",
+                "status", "stop_reason", "periods",
+                "cycles_today", "day_closed", "day_close_scope", "last_cycle_stop_reason",
+            )
+        }
+    state = ensure_daily_state(policy, previous_state, today)
+    if str(state.get("status") or "running") == "stopped":
+        return {"created_count": 0, "existing_count": 0, "skipped_count": 1, "skip_reason": "cycle_stopped", "jobs": []}
+    pending = (state_row or {}).get("pending_plan")
+    if pending:
+        return {"created_count": 0, "existing_count": 0, "skipped_count": 1, "skip_reason": "cycle_pending_settlement", "jobs": []}
+
+    plan = build_period_plan(policy, state, signal, stat_date=today)
+    settlement_policy = resolve_settlement_runtime_policy(strategy, signal.get("normalized_payload"))
+    settlement_rule_id = str(settlement_policy.get("settlement_rule_id") or "")
+
+    now = _utc_now()
+    base_execute_after = max(_parse_iso_z(signal.get("published_at")), now)
+    execute_after = base_execute_after
+
+    legs = [
+        {"leg_key": "main", "bet_type": "odd_even", "bet_value": plan["main"]["bet_value"], "stake": plan["main"]["stake"]},
+        {"leg_key": "aux", "bet_type": "combo", "bet_value": plan["aux"]["bet_value"], "stake": plan["aux"]["stake"]},
+    ]
+    leg_event_ids: list[int] = []
+    jobs = []
+    created_count = 0
+    existing_count = 0
+    for leg in legs:
+        leg_signal = dict(signal)
+        leg_signal["bet_type"] = leg["bet_type"]
+        leg_signal["bet_value"] = leg["bet_value"]
+        leg_signal["normalized_payload"] = {
+            **(signal.get("normalized_payload") or {}),
+            "bet_type": leg["bet_type"],
+            "bet_value": leg["bet_value"],
+        }
+        settlement_snapshot = build_settlement_snapshot(
+            rule_source=str(settlement_policy.get("rule_source") or ""),
+            settlement_rule_id=settlement_policy.get("settlement_rule_id"),
+            fallback_profit_ratio=float(settlement_policy.get("fallback_profit_ratio") or 1.0),
+            resolved_from=str(settlement_policy.get("resolved_from") or ""),
+            signal=leg_signal,
+            odds_overrides=settlement_policy.get("odds_overrides"),
+        )
+        progression_event = repository.create_progression_event_record(
+            subscription_id=subscription_id,
+            user_id=user_id,
+            signal_id=int(signal["id"]),
+            issue_no=str(signal.get("issue_no") or ""),
+            progression_step=1,
+            stake_amount=float(leg["stake"]),
+            base_stake=float(leg["stake"]),
+            multiplier=2.0,
+            max_steps=1,
+            refund_action="hold",
+            cap_action="reset",
+            settlement_rule_id=settlement_rule_id,
+            settlement_snapshot=settlement_snapshot,
+            auto_trigger_rule_id=(
+                int(auto_trigger_context["rule_id"])
+                if auto_trigger_context and auto_trigger_context.get("rule_id")
+                else route_rule_id
+            ),
+            auto_trigger_rule_run_id=(
+                int(auto_trigger_context["rule_run_id"])
+                if auto_trigger_context and auto_trigger_context.get("rule_run_id")
+                else route_rule_run_id
+            ),
+            auto_trigger_route_id=route_id,
+            auto_trigger_stat_date=route_stat_date or "",
+            runtime_strategy=strategy,
+            status="pending",
+            leg_key=leg["leg_key"],
+            result_context={
+                "leg": {
+                    "bet_type": leg["bet_type"],
+                    "bet_value": leg["bet_value"],
+                    "stake": float(leg["stake"]),
+                },
+                "cycle": {
+                    "stat_date": today,
+                    "base_amount": policy.get("base_amount"),
+                    "target_streak": policy.get("target_streak"),
+                    "structure": plan["structure"],
+                    "roll_mode": plan["roll_mode"],
+                },
+            },
+        )
+        leg_event_ids.append(int(progression_event["id"]))
+        stake_plan = {
+            "mode": MODE_WIN_STREAK_ROLL,
+            "leg": leg["leg_key"],
+            "amount": float(leg["stake"]),
+            "base_amount": policy.get("base_amount"),
+            "target_streak": policy.get("target_streak"),
+            "structure": plan["structure"],
+            "roll_mode": plan["roll_mode"],
+            "meta": {
+                "progression_event_id": int(progression_event["id"]),
+                "cycle_stat_date": today,
+            },
+        }
+        if route_id is not None:
+            stake_plan["meta"]["auto_trigger_route_id"] = int(route_id)
+        planned_message_text = _message_text_from_template(leg_signal, float(leg["stake"]), template)
+        if route_id is not None:
+            idempotency_key = "signal:%s:rule:%s:route:%s:target:%s:leg:%s" % (
+                signal["id"], auto_trigger_context.get("rule_id") or "", route_id, delivery_target_id, leg["leg_key"],
+            )
+        else:
+            idempotency_key = "signal:%s:target:%s:leg:%s" % (signal["id"], delivery_target_id, leg["leg_key"])
+        expire_at = _job_expire_at(execute_after, strategy, stake_plan, issue_window)
+        created = repository.create_execution_job_record(
+            user_id=user_id,
+            signal_id=int(signal["id"]),
+            subscription_id=subscription_id,
+            progression_event_id=int(progression_event["id"]),
+            auto_trigger_route_id=route_id,
+            delivery_target_id=delivery_target_id,
+            telegram_account_id=telegram_account_id,
+            executor_type=executor_type,
+            idempotency_key=idempotency_key,
+            planned_message_text=planned_message_text,
+            stake_plan=stake_plan,
+            execute_after=_iso_z(execute_after),
+            expire_at=_iso_z(expire_at),
+            leg_key=leg["leg_key"],
+        )
+        jobs.append(created["job"])
+        if created["created"]:
+            created_count += 1
+        else:
+            existing_count += 1
+
+    pending_plan = {
+        "signal_id": int(signal["id"]),
+        "issue_no": str(signal.get("issue_no") or ""),
+        "stat_date": today,
+        "stake_total": float(plan["stake_total"]),
+        "structure": plan["structure"],
+        "roll_mode": plan["roll_mode"],
+        "settlement_rule_id": settlement_rule_id,
+        "leg_event_ids": leg_event_ids,
+        "state": state,
+        "created_at": _iso_z(now),
+        # 收工时要写哪条规则的当日统计，这里先记下来，
+        # 免得结算进程再去反查（两条规则共用一个订阅时反查容易串）。
+        "rule_id": int(auto_trigger_context.get("rule_id") or 0) if auto_trigger_context else int(route_rule_id or 0),
+        "route_id": int(route_id) if route_id is not None else 0,
+        "rule_run_id": int(
+            route_rule_run_id
+            or (auto_trigger_context.get("rule_run_id") if auto_trigger_context else 0)
+            or 0
+        ) or None,
+        "rule_stat_date": str(route_stat_date or (auto_trigger_context.get("stat_date") if auto_trigger_context else "") or ""),
+        "user_id": int(user_id),
+    }
+    if hasattr(repository, "upsert_subscription_cycle_state"):
+        repository.upsert_subscription_cycle_state(
+            subscription_id=subscription_id,
+            user_id=user_id,
+            state=state,
+            policy=policy,
+            pending_plan=pending_plan,
+        )
+    return {
+        "created_count": created_count,
+        "existing_count": existing_count,
+        "skipped_count": 0,
+        "jobs": jobs,
+    }
+
+
 def dispatch_signal(
     repository: Any,
     signal_id: int,
@@ -866,6 +1131,31 @@ def _dispatch_signal(
         ):
             # 直派订阅当日命中率熔断：路由单有自己的规则/路由风控，不走这条闸。
             skipped_count += 1
+            continue
+        if _staking_policy_mode(strategy, signal.get("normalized_payload")) == MODE_WIN_STREAK_ROLL:
+            # 过关滚仓玩法：同期派两腿（主注+辅助），注码由玩法周期状态决定。
+            template = None
+            if candidate.get("template_id") is not None and hasattr(repository, "get_message_template"):
+                template = repository.get_message_template(int(candidate["template_id"]))
+            outcome = _dispatch_win_streak_roll_legs(
+                repository,
+                subscription_id=subscription_id,
+                user_id=int(candidate["user_id"]),
+                delivery_target_id=int(candidate["delivery_target_id"]),
+                telegram_account_id=(
+                    int(candidate["telegram_account_id"]) if candidate.get("telegram_account_id") is not None else None
+                ),
+                executor_type=str(candidate["executor_type"]),
+                strategy=strategy,
+                signal=signal,
+                template=template,
+                issue_window=issue_window,
+                auto_trigger_context=resolved_auto_trigger_context,
+            )
+            created_count += int(outcome.get("created_count") or 0)
+            existing_count += int(outcome.get("existing_count") or 0)
+            skipped_count += int(outcome.get("skipped_count") or 0)
+            jobs.extend(outcome.get("jobs") or [])
             continue
         if hasattr(repository, "execution_job_exists_for_target") and repository.execution_job_exists_for_target(
             signal_id=int(signal_id),

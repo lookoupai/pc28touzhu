@@ -415,13 +415,13 @@ class DatabaseRepository:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             source_id INTEGER NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'active',
             strategy_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
             FOREIGN KEY(user_id) REFERENCES users(id),
-            FOREIGN KEY(source_id) REFERENCES signal_sources(id),
-            UNIQUE(user_id, source_id)
+            FOREIGN KEY(source_id) REFERENCES signal_sources(id)
         )
         """,
         """
@@ -470,6 +470,7 @@ class DatabaseRepository:
             max_steps INTEGER NOT NULL DEFAULT 1,
             refund_action TEXT NOT NULL DEFAULT 'hold',
             cap_action TEXT NOT NULL DEFAULT 'reset',
+            leg_key TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'pending',
             resolved_result_type TEXT NOT NULL DEFAULT '',
             settlement_rule_id TEXT NOT NULL DEFAULT '',
@@ -490,6 +491,30 @@ class DatabaseRepository:
             FOREIGN KEY(user_id) REFERENCES users(id),
             FOREIGN KEY(signal_id) REFERENCES normalized_signals(id),
             FOREIGN KEY(auto_trigger_route_id) REFERENCES auto_trigger_rule_routes(id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS subscription_cycle_states (
+            subscription_id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            stat_date TEXT NOT NULL DEFAULT '',
+            balance REAL NOT NULL DEFAULT 0,
+            cycle_stake REAL,
+            day_pnl REAL,
+            win_streak INTEGER NOT NULL DEFAULT 0,
+            target_streak INTEGER NOT NULL DEFAULT 3,
+            status TEXT NOT NULL DEFAULT 'running',
+            stop_reason TEXT,
+            periods INTEGER NOT NULL DEFAULT 0,
+            pending_plan_json TEXT NOT NULL DEFAULT '',
+            policy_json TEXT NOT NULL DEFAULT '{}',
+            cycles_today INTEGER NOT NULL DEFAULT 0,
+            day_closed INTEGER NOT NULL DEFAULT 0,
+            day_close_scope TEXT,
+            last_cycle_stop_reason TEXT,
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id),
+            FOREIGN KEY(user_id) REFERENCES users(id)
         )
         """,
         """
@@ -519,6 +544,7 @@ class DatabaseRepository:
             telegram_account_id INTEGER,
             executor_type TEXT NOT NULL,
             idempotency_key TEXT NOT NULL,
+            leg_key TEXT NOT NULL DEFAULT '',
             planned_message_text TEXT NOT NULL DEFAULT '',
             stake_plan_json TEXT NOT NULL DEFAULT '{}',
             execute_after TEXT NOT NULL,
@@ -984,6 +1010,10 @@ class DatabaseRepository:
             self._ensure_progression_event_columns(conn)
             self._ensure_progression_event_route_indexes(conn)
             self._ensure_subscription_financial_state_columns(conn)
+            self._ensure_subscription_cycle_state_columns(conn)
+            self._ensure_progression_event_leg_column(conn)
+            self._ensure_user_subscription_columns(conn)
+            self._rebuild_user_subscriptions_without_source_unique(conn)
             self._ensure_subscription_runtime_run_columns(conn)
             self._ensure_auto_trigger_rule_columns(conn)
             self._ensure_auto_trigger_rule_run_columns(conn)
@@ -994,6 +1024,30 @@ class DatabaseRepository:
             self._ensure_user_telegram_indexes(conn)
             ensure_profit_reporting(conn)
             conn.commit()
+
+    def _ensure_subscription_cycle_state_columns(self, conn: sqlite3.Connection) -> None:
+        """过关玩法周期状态：补上收工开关需要的列（老库用 ALTER 添加）。"""
+        existing = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(subscription_cycle_states)").fetchall()
+        }
+        column_definitions = {
+            "cycles_today": "ALTER TABLE subscription_cycle_states ADD COLUMN cycles_today INTEGER NOT NULL DEFAULT 0",
+            "day_closed": "ALTER TABLE subscription_cycle_states ADD COLUMN day_closed INTEGER NOT NULL DEFAULT 0",
+            "day_close_scope": "ALTER TABLE subscription_cycle_states ADD COLUMN day_close_scope TEXT",
+            "last_cycle_stop_reason": "ALTER TABLE subscription_cycle_states ADD COLUMN last_cycle_stop_reason TEXT",
+        }
+        for column_name, ddl in column_definitions.items():
+            if column_name not in existing:
+                conn.execute(ddl)
+
+    def _normalize_cycle_state_row(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """把周期状态行里需要转换类型的字段补齐（兼容老库缺列的情况）。"""
+        state["pending_plan"] = _safe_json_loads(state.get("pending_plan_json")) or None
+        state["policy"] = _safe_json_loads(state.get("policy_json") or "{}")
+        state["cycles_today"] = int(state.get("cycles_today") or 0)
+        state["day_closed"] = bool(state.get("day_closed"))
+        return state
 
     def _ensure_normalized_signal_columns(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute("PRAGMA table_info(normalized_signals)").fetchall()
@@ -1018,10 +1072,13 @@ class DatabaseRepository:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_execution_jobs_signal ON execution_jobs(signal_id)"
         )
+        # 过关滚仓玩法同期同目标会有两笔任务（主注/辅助各一条，leg_key 区分），
+        # 唯一索引必须带上 leg_key；老库里的旧索引先删再建。
+        conn.execute("DROP INDEX IF EXISTS idx_execution_jobs_signal_subscription_target")
         conn.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_jobs_signal_subscription_target
-            ON execution_jobs(user_id, signal_id, subscription_id, delivery_target_id)
+            ON execution_jobs(user_id, signal_id, subscription_id, delivery_target_id, leg_key)
             WHERE subscription_id IS NOT NULL
             """
         )
@@ -1044,6 +1101,19 @@ class DatabaseRepository:
             conn.execute(
                 "ALTER TABLE subscription_financial_state ADD COLUMN threshold_scope TEXT NOT NULL DEFAULT 'subscription'"
             )
+
+    def _ensure_progression_event_leg_column(self, conn: sqlite3.Connection) -> None:
+        """存量库补齐两腿派单字段（过关滚仓玩法：同期主注/辅助注各一条事件）。"""
+        try:
+            columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(subscription_progression_events)").fetchall()
+            }
+            if "leg_key" not in columns:
+                conn.execute("ALTER TABLE subscription_progression_events ADD COLUMN leg_key TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc):
+                raise
 
     def _ensure_user_telegram_columns(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute("PRAGMA table_info(users)").fetchall()
@@ -1119,6 +1189,71 @@ class DatabaseRepository:
             if column_name not in existing_columns:
                 conn.execute(ddl)
 
+    def _ensure_user_subscription_columns(self, conn: sqlite3.Connection) -> None:
+        try:
+            columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(user_subscriptions)").fetchall()
+            }
+            if "name" not in columns:
+                conn.execute("ALTER TABLE user_subscriptions ADD COLUMN name TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError as exc:
+            # 并发初始化时另一进程可能已补列，忽略重复列错误
+            if "duplicate column name" not in str(exc):
+                raise
+
+    def _rebuild_user_subscriptions_without_source_unique(self, conn: sqlite3.Connection) -> None:
+        """同一个来源现在允许建多个不同玩法的跟单方案（如普通跟单 + 过关滚仓），
+        因此去掉老表的 UNIQUE(user_id, source_id) 表约束；老库通过整表重建迁移。
+
+        整个重建包在 BEGIN IMMEDIATE 里：多进程同时初始化时串行执行，
+        拿到锁后重新检测，避免「A 删旧表的瞬间 B 建空表顶替」导致数据被清空。
+        """
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            unique_constraints = [
+                index
+                for index in conn.execute("PRAGMA index_list(user_subscriptions)").fetchall()
+                if str(index["origin"] or "") == "u"
+            ]
+            if not unique_constraints:
+                conn.execute("COMMIT")
+                return
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.execute(
+                """
+                CREATE TABLE user_subscriptions_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    source_id INTEGER NOT NULL,
+                    name TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    strategy_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                    FOREIGN KEY(user_id) REFERENCES users(id),
+                    FOREIGN KEY(source_id) REFERENCES signal_sources(id)
+                )
+                """
+            )
+            source_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(user_subscriptions)").fetchall()}
+            target_columns = [str(row["name"]) for row in conn.execute("PRAGMA table_info(user_subscriptions_new)").fetchall()]
+            selected_columns = [column for column in target_columns if column in source_columns]
+            if selected_columns:
+                columns_sql = ", ".join(selected_columns)
+                conn.execute(
+                    "INSERT INTO user_subscriptions_new(%s) SELECT %s FROM user_subscriptions"
+                    % (columns_sql, columns_sql)
+                )
+            conn.execute("DROP TABLE user_subscriptions")
+            conn.execute("ALTER TABLE user_subscriptions_new RENAME TO user_subscriptions")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON")
+
     def _ensure_execution_job_columns(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute("PRAGMA table_info(execution_jobs)").fetchall()
         existing_columns = {str(row["name"]) for row in rows}
@@ -1126,6 +1261,7 @@ class DatabaseRepository:
             "subscription_id": "ALTER TABLE execution_jobs ADD COLUMN subscription_id INTEGER",
             "progression_event_id": "ALTER TABLE execution_jobs ADD COLUMN progression_event_id INTEGER",
             "auto_trigger_route_id": "ALTER TABLE execution_jobs ADD COLUMN auto_trigger_route_id INTEGER",
+            "leg_key": "ALTER TABLE execution_jobs ADD COLUMN leg_key TEXT NOT NULL DEFAULT ''",
         }
         for column_name, ddl in column_definitions.items():
             if column_name not in existing_columns:
@@ -1158,17 +1294,25 @@ class DatabaseRepository:
             if index_name.startswith("sqlite_autoindex_subscription_progression_events_"):
                 self._rebuild_progression_events_without_table_unique(conn)
                 break
+        # 过关滚仓玩法同一期同信号会有两条事件（主注/辅助各一条，leg_key 区分），
+        # 因此唯一索引必须带上 leg_key；老库里的旧索引先删再建。
+        conn.execute(
+            "DROP INDEX IF EXISTS idx_progression_events_subscription_signal_legacy"
+        )
+        conn.execute(
+            "DROP INDEX IF EXISTS idx_progression_events_subscription_signal_route"
+        )
         conn.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_progression_events_subscription_signal_legacy
-            ON subscription_progression_events(subscription_id, signal_id)
+            ON subscription_progression_events(subscription_id, signal_id, leg_key)
             WHERE auto_trigger_route_id IS NULL
             """
         )
         conn.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_progression_events_subscription_signal_route
-            ON subscription_progression_events(subscription_id, signal_id, auto_trigger_route_id)
+            ON subscription_progression_events(subscription_id, signal_id, auto_trigger_route_id, leg_key)
             WHERE auto_trigger_route_id IS NOT NULL
             """
         )
@@ -1468,6 +1612,7 @@ class DatabaseRepository:
             "id": int(row["id"]),
             "user_id": int(row["user_id"]),
             "source_id": int(row["source_id"]),
+            "name": str(row.get("name") or ""),
             "status": str(row["status"]),
             "strategy": _safe_json_loads(row.get("strategy_json")),
             "created_at": row.get("created_at"),
@@ -3345,16 +3490,17 @@ class DatabaseRepository:
         source_id: int,
         strategy: Optional[dict] = None,
         status: str = "active",
+        name: str = "",
     ) -> Dict[str, Any]:
         now = _utc_now_iso()
         with self._connect() as conn:
             cur = conn.execute(
                 """
                 INSERT INTO user_subscriptions(
-                    user_id, source_id, status, strategy_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    user_id, source_id, name, status, strategy_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (int(user_id), int(source_id), status, _safe_json_dumps(strategy or {}), now, now),
+                (int(user_id), int(source_id), str(name or ""), status, _safe_json_dumps(strategy or {}), now, now),
             )
             subscription_id = int(cur.lastrowid)
         return self.get_subscription(subscription_id) or {}
@@ -4366,6 +4512,25 @@ class DatabaseRepository:
         )
         return [self._serialize_auto_trigger_rule_run_row(dict(row)) for row in rows]
 
+    def list_auto_trigger_rule_runs_stopped_for_subscription(
+        self, *, subscription_id: int, user_id: int, stat_date: str
+    ) -> list[Dict[str, Any]]:
+        """当日该订阅下被停掉的规则轮次（去重到规则），供手动开始新一轮时判断解封哪些规则日。"""
+        rows = self._fetch_all(
+            """
+            SELECT rule_id, stop_reason, MAX(id) AS run_id
+            FROM auto_trigger_rule_runs
+            WHERE subscription_id = ? AND user_id = ? AND stat_date = ? AND status = 'stopped'
+            GROUP BY rule_id, stop_reason
+            ORDER BY rule_id ASC
+            """,
+            (int(subscription_id), int(user_id), str(stat_date or "").strip()),
+        )
+        return [
+            {"rule_id": int(row["rule_id"]), "stop_reason": str(row["stop_reason"] or ""), "run_id": int(row["run_id"])}
+            for row in rows
+        ]
+
     def get_latest_auto_trigger_rule_run_for_subscription(self, *, subscription_id: int, user_id: int) -> Optional[Dict[str, Any]]:
         row = self._fetch_one(
             """
@@ -4841,6 +5006,55 @@ class DatabaseRepository:
                 (str(reason or ""), now, now, int(rule_id), int(user_id), str(stat_date or "").strip()),
             )
         return self.get_auto_trigger_rule_daily_stat(rule_id=rule_id, user_id=user_id, stat_date=stat_date)
+
+    def stop_auto_trigger_rule_day_for_cycle(
+        self,
+        *,
+        rule_id: int,
+        user_id: int,
+        stat_date: str,
+        reason: str,
+    ) -> Dict[str, Any]:
+        """过关玩法达标 / 爆仓收工：写规则当日 stopped，并复用日风控的收口逻辑关掉当日轮次。
+
+        与 ``stop_auto_trigger_rule_day`` 的区别：原因来自玩法（cycle_target_hit /
+        cycle_balance_depleted），并且要把当日规则轮次与路由运行轮一起收口，
+        否则规则日虽然停了，页面上仍然是"在跑"状态。
+        """
+        normalized_stat_date = str(stat_date or "").strip()
+        if not normalized_stat_date:
+            raise ValueError("stat_date 不能为空")
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO auto_trigger_rule_daily_stats(
+                    rule_id, user_id, stat_date, status, stopped_reason, stopped_at, created_at, updated_at
+                ) VALUES (?, ?, ?, 'stopped', ?, ?, ?, ?)
+                ON CONFLICT(rule_id, stat_date) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    status = 'stopped',
+                    stopped_reason = CASE
+                        WHEN auto_trigger_rule_daily_stats.stopped_reason = '' THEN excluded.stopped_reason
+                        ELSE auto_trigger_rule_daily_stats.stopped_reason
+                    END,
+                    stopped_at = COALESCE(auto_trigger_rule_daily_stats.stopped_at, excluded.stopped_at),
+                    updated_at = excluded.updated_at
+                """,
+                (int(rule_id), int(user_id), normalized_stat_date, str(reason or ""), now, now, now),
+            )
+            # 传一个已停止的账本快照给日风控收口：它走 stopped 分支，用玩法给的原因
+            # 关闭当日规则轮次与路由运行轮（不做 pending job 取消，本周期单据都已结算）。
+            rule_stat = {"status": "stopped", "stopped_reason": str(reason or "")}
+            result = self._apply_auto_trigger_rule_daily_risk(
+                conn,
+                rule_id=int(rule_id),
+                user_id=int(user_id),
+                stat_date=normalized_stat_date,
+                rule_stat=rule_stat,
+                updated_at=now,
+            )
+        return result
 
     def resume_auto_trigger_rule_day(
         self,
@@ -5782,21 +5996,24 @@ class DatabaseRepository:
         source_id: int,
         strategy: Optional[dict] = None,
         status: Optional[str] = None,
+        name: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         now = _utc_now_iso()
         current = self.get_subscription(subscription_id)
         if not current or int(current["user_id"]) != int(user_id):
             return None
         next_status = status if status is not None else current["status"]
+        next_name = str(name) if name is not None else str(current.get("name") or "")
         with self._connect() as conn:
             cursor = conn.execute(
                 """
                 UPDATE user_subscriptions
-                SET source_id = ?, strategy_json = ?, status = ?, updated_at = ?
+                SET source_id = ?, name = ?, strategy_json = ?, status = ?, updated_at = ?
                 WHERE id = ? AND user_id = ?
                 """,
                 (
                     int(source_id),
+                    next_name,
                     _safe_json_dumps(strategy or {}),
                     next_status,
                     now,
@@ -7166,24 +7383,26 @@ class DatabaseRepository:
         subscription_id: int,
         signal_id: int,
         auto_trigger_route_id: Optional[int] = None,
+        leg_key: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
+        leg_value = str(leg_key or "")
         if auto_trigger_route_id is None:
             row = self._fetch_one(
                 """
                 SELECT * FROM subscription_progression_events
-                WHERE subscription_id = ? AND signal_id = ? AND auto_trigger_route_id IS NULL
+                WHERE subscription_id = ? AND signal_id = ? AND auto_trigger_route_id IS NULL AND leg_key = ?
                 LIMIT 1
                 """,
-                (int(subscription_id), int(signal_id)),
+                (int(subscription_id), int(signal_id), leg_value),
             )
         else:
             row = self._fetch_one(
                 """
                 SELECT * FROM subscription_progression_events
-                WHERE subscription_id = ? AND signal_id = ? AND auto_trigger_route_id = ?
+                WHERE subscription_id = ? AND signal_id = ? AND auto_trigger_route_id = ? AND leg_key = ?
                 LIMIT 1
                 """,
-                (int(subscription_id), int(signal_id), int(auto_trigger_route_id)),
+                (int(subscription_id), int(signal_id), int(auto_trigger_route_id), leg_value),
             )
         return self._serialize_progression_event_row(row) if row else None
 
@@ -7234,6 +7453,91 @@ class DatabaseRepository:
         )
         return [self._serialize_progression_event_row(row) for row in rows]
 
+    def get_subscription_cycle_state(self, *, subscription_id: int) -> Optional[Dict[str, Any]]:
+        """过关滚仓玩法状态（每个订阅一份；pending_plan_json 非空表示有一期待结算）。"""
+        row = self._fetch_one(
+            "SELECT * FROM subscription_cycle_states WHERE subscription_id = ? LIMIT 1",
+            (int(subscription_id),),
+        )
+        if not row:
+            return None
+        state = {key: row[key] for key in row.keys()}
+        return self._normalize_cycle_state_row(state)
+
+    def upsert_subscription_cycle_state(
+        self,
+        *,
+        subscription_id: int,
+        user_id: int,
+        state: Dict[str, Any],
+        policy: Optional[Dict[str, Any]] = None,
+        pending_plan: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        now = _utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO subscription_cycle_states(
+                    subscription_id, user_id, stat_date, balance, cycle_stake, day_pnl,
+                    win_streak, target_streak, status, stop_reason, periods,
+                    pending_plan_json, policy_json,
+                    cycles_today, day_closed, day_close_scope, last_cycle_stop_reason,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(subscription_id) DO UPDATE SET
+                    user_id=excluded.user_id,
+                    stat_date=excluded.stat_date,
+                    balance=excluded.balance,
+                    cycle_stake=excluded.cycle_stake,
+                    day_pnl=excluded.day_pnl,
+                    win_streak=excluded.win_streak,
+                    target_streak=excluded.target_streak,
+                    status=excluded.status,
+                    stop_reason=excluded.stop_reason,
+                    periods=excluded.periods,
+                    pending_plan_json=excluded.pending_plan_json,
+                    policy_json=excluded.policy_json,
+                    cycles_today=excluded.cycles_today,
+                    day_closed=excluded.day_closed,
+                    day_close_scope=excluded.day_close_scope,
+                    last_cycle_stop_reason=excluded.last_cycle_stop_reason,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    int(subscription_id),
+                    int(user_id),
+                    str(state.get("stat_date") or ""),
+                    _round_money(state.get("balance")),
+                    float(state["cycle_stake"]) if state.get("cycle_stake") is not None else None,
+                    float(state["day_pnl"]) if state.get("day_pnl") is not None else None,
+                    int(state.get("win_streak") or 0),
+                    int(state.get("target_streak") or 3),
+                    str(state.get("status") or "running"),
+                    state.get("stop_reason"),
+                    int(state.get("periods") or 0),
+                    _safe_json_dumps(pending_plan) if pending_plan else "",
+                    _safe_json_dumps(policy or {}),
+                    int(state.get("cycles_today") or 0),
+                    1 if state.get("day_closed") else 0,
+                    state.get("day_close_scope"),
+                    state.get("last_cycle_stop_reason"),
+                    now,
+                ),
+            )
+        return self.get_subscription_cycle_state(subscription_id=int(subscription_id)) or {}
+
+    def list_pending_win_streak_cycles(self, user_id: Optional[int] = None) -> list[Dict[str, Any]]:
+        query = "SELECT * FROM subscription_cycle_states WHERE pending_plan_json != ''"
+        params: tuple = ()
+        if user_id is not None:
+            query += " AND user_id = ?"
+            params = (int(user_id),)
+        rows = self._fetch_all(query, params)
+        states = []
+        for row in rows:
+            states.append(self._normalize_cycle_state_row({key: row[key] for key in row.keys()}))
+        return states
+
     def create_progression_event_record(
         self,
         *,
@@ -7256,11 +7560,14 @@ class DatabaseRepository:
         auto_trigger_stat_date: str = "",
         runtime_strategy: Optional[dict] = None,
         status: str = "pending",
+        leg_key: Optional[str] = None,
+        result_context: Optional[dict] = None,
     ) -> Dict[str, Any]:
         existing = self.get_progression_event_by_signal(
             subscription_id=subscription_id,
             signal_id=signal_id,
             auto_trigger_route_id=auto_trigger_route_id,
+            leg_key=leg_key,
         )
         if existing:
             return existing
@@ -7305,12 +7612,12 @@ class DatabaseRepository:
                 """
                 INSERT INTO subscription_progression_events(
                     subscription_id, user_id, signal_id, issue_no, progression_step, stake_amount,
-                    base_stake, multiplier, max_steps, refund_action, cap_action,
-                    settlement_rule_id, settlement_snapshot_json,
+                    base_stake, multiplier, max_steps, refund_action, cap_action, leg_key,
+                    settlement_rule_id, settlement_snapshot_json, result_context_json,
                     auto_trigger_rule_id, auto_trigger_rule_run_id, auto_trigger_route_id, auto_trigger_runtime_run_id,
                     auto_trigger_stat_date,
                     status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(subscription_id),
@@ -7324,8 +7631,10 @@ class DatabaseRepository:
                     max(1, int(max_steps or 1)),
                     str(refund_action or "hold"),
                     str(cap_action or "reset"),
+                    str(leg_key or ""),
                     str(settlement_rule_id or ""),
                     _safe_json_dumps(settlement_snapshot or {}),
+                    _safe_json_dumps(result_context or {}),
                     int(auto_trigger_rule_id) if auto_trigger_rule_id is not None else None,
                     int(auto_trigger_rule_run_id) if auto_trigger_rule_run_id is not None else None,
                     int(auto_trigger_route_id) if auto_trigger_route_id is not None else None,
@@ -7853,6 +8162,17 @@ class DatabaseRepository:
         auto_trigger_daily_risk: Dict[str, Any] = {}
         with self._connect() as conn:
             signal = self.get_signal(int(current_event["signal_id"])) if current_event.get("signal_id") is not None else None
+            # 过关滚仓玩法：事件带 leg（主注/辅助注各自的押法），盈亏按腿的玩法计算
+            event_context = current_event.get("result_context")
+            if not isinstance(event_context, dict):
+                event_context = _safe_json_loads(current_event.get("result_context_json"))
+            leg_bet = event_context.get("leg") if isinstance(event_context, dict) else {}
+            if isinstance(leg_bet, dict) and leg_bet.get("bet_type") and leg_bet.get("bet_value"):
+                signal = {
+                    **(signal or {}),
+                    "bet_type": str(leg_bet["bet_type"]),
+                    "bet_value": str(leg_bet["bet_value"]),
+                }
             conn.execute(
                 """
                 UPDATE subscription_progression_events
@@ -8307,15 +8627,16 @@ class DatabaseRepository:
         execute_after: str,
         expire_at: str,
         status: str = "pending",
+        leg_key: Optional[str] = None,
     ) -> int:
         with self._connect() as conn:
             cur = conn.execute(
                 """
                 INSERT INTO execution_jobs(
                     user_id, signal_id, subscription_id, progression_event_id, auto_trigger_route_id,
-                    delivery_target_id, telegram_account_id, executor_type, idempotency_key,
+                    delivery_target_id, telegram_account_id, executor_type, idempotency_key, leg_key,
                     planned_message_text, stake_plan_json, execute_after, expire_at, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(user_id),
@@ -8327,6 +8648,7 @@ class DatabaseRepository:
                     telegram_account_id,
                     executor_type,
                     idempotency_key,
+                    str(leg_key or ""),
                     planned_message_text,
                     _safe_json_dumps(stake_plan or {}),
                     execute_after,
@@ -9259,6 +9581,7 @@ class DatabaseRepository:
         execute_after: str,
         expire_at: str,
         status: str = "pending",
+        leg_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         existing = self._fetch_one(
             "SELECT * FROM execution_jobs WHERE user_id = ? AND idempotency_key = ?",
@@ -9282,6 +9605,7 @@ class DatabaseRepository:
             execute_after=execute_after,
             expire_at=expire_at,
             status=status,
+            leg_key=leg_key,
         )
         return {"created": True, "job": self.get_execution_job(job_id) or {}}
 

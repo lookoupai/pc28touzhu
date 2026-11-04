@@ -657,7 +657,7 @@
                             <p>选好来源后，设置均注、跟随来源金额或倍投，页面会直接显示会发到哪些群、用哪个模板，以及最终发单示例。</p>
                         </div>
                         <div id="subscriptionWorkspaceSummary" class="health-grid subscription-summary-grid"></div>
-                        <form id="subscriptionForm" class="autobet-form">
+                        <form id="subscriptionForm" class="autobet-form" novalidate>
                             <input name="edit_id" type="hidden">
                             <div class="autobet-form-grid">
                                 <label>
@@ -731,14 +731,79 @@
                                         </label>
                                     </div>
                                 </div>
+                                <label class="wide">
+                                    <span>策略名称</span>
+                                    <input class="text-input" name="subscription_name" type="text" maxlength="60" placeholder="例如：组合马尔可夫 过三关">
+                                    <small class="field-hint">给方案起个好认的名字；同一个来源可以建多个不同玩法的方案。</small>
+                                </label>
                                 <label class="wide subscription-strategy-mode-field">
                                     <span>下单方式</span>
                                     <select id="subscriptionStrategyModeSelect" class="text-input" name="strategy_mode">
                                         <option value="fixed">均注：每期都用固定金额</option>
                                         <option value="follow_source">跟随来源金额</option>
                                         <option value="martingale">倍投：未中后按倍数加注</option>
+                                        <option value="win_streak_roll">过关滚仓：连赢几关收工，盈利滚进去</option>
                                     </select>
                                     <small id="subscriptionStrategyModeHint" class="field-hint">均注最简单，适合先跑通整条链路。</small>
+                                </label>
+                                <label class="subscription-roll-field">
+                                    <span>过几关收工</span>
+                                    <input class="text-input" name="target_streak" type="number" min="1" step="1" value="3">
+                                    <small class="field-hint">连续赢够这个关数，当天就止盈收工；填 3 就是过三关，填 5 就是过五关。</small>
+                                </label>
+                                <label class="subscription-roll-field">
+                                    <span>每天起始注</span>
+                                    <input class="text-input" name="base_amount" type="number" min="0.01" step="0.01" value="100">
+                                    <small class="field-hint">每天从这里开始滚；过关收工或当天亏完就停，第二天自动重新开始。</small>
+                                </label>
+                                <label class="subscription-roll-field">
+                                    <span>押哪种组合</span>
+                                    <select class="text-input" name="roll_structure">
+                                        <option value="A">单 + 小双（放弃大双）</option>
+                                        <option value="B">单 + 大双（放弃小双）</option>
+                                        <option value="C">双 + 小单（放弃大单）</option>
+                                        <option value="D">双 + 大单（放弃小单）</option>
+                                        <option value="follow_signal">跟随信号自动选</option>
+                                    </select>
+                                    <small class="field-hint">每期总注 = 当前余额，主注押单双占 70%，辅助注押组合占 30%。</small>
+                                </label>
+                                <label class="subscription-roll-field">
+                                    <span>赢了怎么滚</span>
+                                    <select class="text-input" name="roll_mode">
+                                        <option value="chain">链条滚：下一注 = 上一期返还（实盘同款）</option>
+                                        <option value="all_in">全仓滚：每期押上全部余额</option>
+                                    </select>
+                                    <small class="field-hint">两种都是过关收工、当天亏完起始注就止损。</small>
+                                </label>
+                                <label class="subscription-roll-field">
+                                    <span>达标后</span>
+                                    <select class="text-input" name="roll_on_target">
+                                        <option value="close_day">当天收工（连赢够了就停一天）</option>
+                                        <option value="new_cycle">当天重开一轮（继续滚，受"一天最多几轮"限制）</option>
+                                        <option value="continue">不停，连赢次数清零继续滚</option>
+                                    </select>
+                                    <small class="field-hint">过关止盈的处理方式。想让过关玩法一天跑不止一次，就选"当天重开一轮"。</small>
+                                </label>
+                                <label class="subscription-roll-field">
+                                    <span>爆仓后</span>
+                                    <select class="text-input" name="roll_on_bust">
+                                        <option value="close_day">当天收工（本金亏光就停一天）</option>
+                                        <option value="new_cycle">补足起始注再开一轮</option>
+                                    </select>
+                                    <small class="field-hint">当天本金归零时的处理方式。</small>
+                                </label>
+                                <label class="subscription-roll-field">
+                                    <span>一天最多几轮</span>
+                                    <input class="text-input" name="roll_max_cycles" type="number" min="1" step="1" value="1">
+                                    <small class="field-hint">填 1 就是一天只跑一轮；重开轮数用满后自动当天收工。</small>
+                                </label>
+                                <label class="subscription-roll-field">
+                                    <span>收工停哪一层</span>
+                                    <select class="text-input" name="roll_close_scope">
+                                        <option value="rule">整条规则（这条规则当天不再下单）</option>
+                                        <option value="route">只停这个路由</option>
+                                    </select>
+                                    <small class="field-hint">默认整条规则一起收工，避免同一条规则的其他路由还在下。</small>
                                 </label>
                                 <label class="subscription-fixed-field">
                                     <span>每期固定金额</span>

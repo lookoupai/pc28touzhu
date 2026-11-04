@@ -1555,6 +1555,11 @@ def create_subscription(repository: Any, payload: Dict[str, Any]) -> Dict[str, A
     _ensure_user_exists(repository, user_id)
     _ensure_source_exists(repository, source_id)
     strategy = _normalize_subscription_strategy(_subscription_strategy_input_from_payload(payload))
+    strategy_v2_input = payload.get("strategy_v2") if isinstance(payload.get("strategy_v2"), dict) else {}
+    name = str(payload.get("name") or strategy_v2_input.get("name") or "").strip()[:60]
+    if not name:
+        source_row = repository.get_source(int(source_id)) or {}
+        name = ("%s 跟单" % str(source_row.get("name") or "")).strip()[:60]
     _ensure_subscription_delivery_targets(
         repository,
         user_id=user_id,
@@ -1566,7 +1571,22 @@ def create_subscription(repository: Any, payload: Dict[str, Any]) -> Dict[str, A
         source_id=source_id,
         status=_normalize_subscription_status(payload.get("status") or "active"),
         strategy=strategy,
+        name=name,
     )
+    # 过关滚仓玩法：创建即初始化周期状态，列表/详情马上能看到
+    staking_policy = strategy.get("staking_policy") if isinstance(strategy.get("staking_policy"), dict) else {}
+    if str(staking_policy.get("mode") or "") == "win_streak_roll" and hasattr(repository, "upsert_subscription_cycle_state"):
+        from pc28touzhu.domain.win_streak_roll import create_cycle_state
+        from datetime import datetime, timedelta, timezone
+        today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        cycle_state = create_cycle_state(staking_policy, stat_date=today)
+        repository.upsert_subscription_cycle_state(
+            subscription_id=int(item["id"]),
+            user_id=user_id,
+            state=cycle_state,
+            policy=staking_policy,
+            pending_plan=None,
+        )
     return {"item": present_subscription_item(item)}
 
 
@@ -1585,12 +1605,15 @@ def update_subscription(repository: Any, *, subscription_id: Any, user_id: Any, 
         strategy=strategy,
         require_explicit=bool(payload.get("require_delivery_targets")),
     )
+    strategy_v2_input = payload.get("strategy_v2") if isinstance(payload.get("strategy_v2"), dict) else {}
+    name = str(payload.get("name") or strategy_v2_input.get("name") or "").strip()[:60] or str(current.get("name") or "")
     item = repository.update_subscription_record(
         subscription_id=normalized_subscription_id,
         user_id=normalized_user_id,
         source_id=source_id,
         strategy=strategy,
         status=current["status"],
+        name=name,
     )
     if not item:
         raise ValueError("subscription_id 对应的订阅不存在")
@@ -1676,8 +1699,26 @@ def resolve_subscription_progression(repository: Any, *, subscription_id: Any, u
     settlement_rule_id = str(current_event.get("settlement_rule_id") or settlement_policy.get("settlement_rule_id") or "").strip()
     snapshot = current_event.get("settlement_snapshot") if isinstance(current_event.get("settlement_snapshot"), dict) else {}
     frozen_rule = snapshot.get("rule") if isinstance(snapshot.get("rule"), dict) else None
+    # 过关滚仓玩法：事件上带 leg（主注/辅助注各自的押法），结算按腿的玩法判定，而不是信号原始玩法
+    event_result_context = current_event.get("result_context")
+    if not isinstance(event_result_context, dict):
+        raw_result_context = current_event.get("result_context_json")
+        try:
+            event_result_context = json.loads(raw_result_context) if raw_result_context else {}
+        except (TypeError, ValueError):
+            event_result_context = {}
+    if not isinstance(event_result_context, dict):
+        event_result_context = {}
+    leg_bet = event_result_context.get("leg") if isinstance(event_result_context.get("leg"), dict) else {}
+    settle_signal = signal
+    if leg_bet.get("bet_type") and leg_bet.get("bet_value"):
+        settle_signal = {
+            **signal,
+            "bet_type": str(leg_bet["bet_type"]),
+            "bet_value": str(leg_bet["bet_value"]),
+        }
     resolved = resolve_pc28_result_for_signal(
-        signal=signal,
+        signal=settle_signal,
         settlement_rule_id=settlement_rule_id,
         draw_context=draw_context,
         rule=frozen_rule,
@@ -1877,15 +1918,101 @@ def reset_subscription_runtime(repository: Any, *, subscription_id: Any, user_id
     normalized_subscription_id = _to_positive_int(subscription_id, "subscription_id")
     normalized_user_id = _to_positive_int(user_id, "user_id")
     # 手动重置只清订阅直派轮次；route 跟单的 rule_run 与在途单归规则体系管，不得波及
+    note = str(payload.get("note") or "").strip()
     result = repository.reset_subscription_runtime(
         subscription_id=normalized_subscription_id,
         user_id=normalized_user_id,
-        note=str(payload.get("note") or "").strip(),
+        note=note,
         close_rule_runs=False,
     )
     if isinstance(result.get("item"), dict):
         result["item"] = present_subscription_item(result.get("item"))
+    # 过关玩法：重置盈亏也把周期基线清回每天起始注，但不解封当日停止（需要解封请用开始新一轮）
+    result["cycle_reset"] = reset_win_streak_roll_cycle_for_restart(
+        repository, subscription=result.get("item") or {}, user_id=normalized_user_id, note=note, unseal=False,
+    )
     return result
+
+
+def reset_win_streak_roll_cycle_for_restart(
+    repository: Any,
+    *,
+    subscription: Dict[str, Any],
+    user_id: int,
+    note: str = "",
+    unseal: bool = True,
+) -> Dict[str, Any]:
+    """过关玩法「开始新一轮」：重置周期状态；unseal=True 时一并解除玩法当日收工。
+
+    这是显式的解封入口（网页按钮 / Telegram /restart）：周期回到每天起始注、连赢计数清零，
+    同时把当天因过关收工而停止的规则当日一并解封，否则重置了周期仍然下不了单。
+    只解封 stop_reason 属于玩法收工（cycle_*）的规则日，日风控的止盈止损不受影响。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from pc28touzhu.domain.subscription_strategy import upgrade_subscription_strategy
+    from pc28touzhu.domain.win_streak_roll import (
+        CYCLE_DAY_STOP_REASONS,
+        create_cycle_state,
+        normalize_win_streak_roll_policy,
+    )
+
+    strategy = upgrade_subscription_strategy(
+        subscription.get("strategy_v2") or subscription.get("strategy") or {}
+    )
+    staking_policy = strategy.get("staking_policy") if isinstance(strategy.get("staking_policy"), dict) else {}
+    if str(staking_policy.get("mode") or "") != "win_streak_roll":
+        return {"applied": False, "resumed_rule_ids": []}
+    if not hasattr(repository, "upsert_subscription_cycle_state"):
+        return {"applied": False, "resumed_rule_ids": []}
+
+    subscription_id = int(subscription["id"])
+    policy = normalize_win_streak_roll_policy(staking_policy)
+    today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+    previous = (
+        repository.get_subscription_cycle_state(subscription_id=subscription_id)
+        if hasattr(repository, "get_subscription_cycle_state")
+        else None
+    ) or {}
+    same_day = str(previous.get("stat_date") or "") == today
+    state = create_cycle_state(policy, stat_date=today)
+    if same_day:
+        # 同一天再开一轮：当日盈亏账本继续累计，轮数 +1，保留上一次收工原因备查
+        state["cycles_today"] = int(previous.get("cycles_today") or 0) + 1
+        state["day_pnl"] = previous.get("day_pnl")
+        state["last_cycle_stop_reason"] = previous.get("last_cycle_stop_reason")
+    repository.upsert_subscription_cycle_state(
+        subscription_id=subscription_id,
+        user_id=int(user_id),
+        state=state,
+        policy=policy,
+        pending_plan=None,
+    )
+
+    resumed_rule_ids: list[int] = []
+    if unseal and hasattr(repository, "list_auto_trigger_rule_runs_stopped_for_subscription"):
+        for row in repository.list_auto_trigger_rule_runs_stopped_for_subscription(
+            subscription_id=subscription_id, user_id=int(user_id), stat_date=today,
+        ):
+            if str(row.get("stop_reason") or "") not in CYCLE_DAY_STOP_REASONS:
+                continue
+            rule_id = int(row.get("rule_id") or 0)
+            if rule_id <= 0:
+                continue
+            try:
+                repository.resume_auto_trigger_rule_day(
+                    rule_id=rule_id, user_id=int(user_id), stat_date=today,
+                )
+                resumed_rule_ids.append(rule_id)
+            except Exception:
+                continue
+    return {
+        "applied": True,
+        "stat_date": today,
+        "cycles_today": int(state.get("cycles_today") or 0),
+        "resumed_rule_ids": resumed_rule_ids,
+        "note": str(note or "").strip(),
+    }
 
 
 def restart_subscription_cycle(repository: Any, *, subscription_id: Any, user_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1898,10 +2025,11 @@ def restart_subscription_cycle(repository: Any, *, subscription_id: Any, user_id
         raise ValueError("已归档的跟单策略不能直接开始新一轮，请先恢复后再试")
 
     # 手动开始新一轮只重置订阅直派轮次；route 跟单的 rule_run 与在途单归规则体系管，不得波及
+    note = str(payload.get("note") or "").strip()
     result = repository.reset_subscription_runtime(
         subscription_id=normalized_subscription_id,
         user_id=normalized_user_id,
-        note=str(payload.get("note") or "").strip(),
+        note=note,
         close_rule_runs=False,
     )
     item = repository.update_subscription_status(
@@ -1911,6 +2039,10 @@ def restart_subscription_cycle(repository: Any, *, subscription_id: Any, user_id
     )
     if not item:
         raise ValueError("subscription_id 对应的订阅不存在")
+    # 过关玩法：开始新一轮同时重置过关周期并解封玩法当日收工
+    result["cycle_reset"] = reset_win_streak_roll_cycle_for_restart(
+        repository, subscription=item, user_id=normalized_user_id, note=note,
+    )
     result["item"] = present_subscription_item(item)
     result["restarted"] = True
     return result

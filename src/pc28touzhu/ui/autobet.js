@@ -2030,7 +2030,7 @@
 
     function normalizeSubscriptionStrategyMode(value) {
         const normalized = String(value || "fixed").trim() || "fixed";
-        if (normalized === "follow_source" || normalized === "martingale") {
+        if (normalized === "follow_source" || normalized === "martingale" || normalized === "win_streak_roll") {
             return normalized;
         }
         return "fixed";
@@ -2147,6 +2147,13 @@
         if (subscriptionBetFilterFields instanceof HTMLElement) {
             subscriptionBetFilterFields.hidden = !isSelectedMode;
         }
+        if (subscriptionBetFilterHint instanceof HTMLElement) {
+            if (currentSubscriptionStrategyMode() === "win_streak_roll") {
+                subscriptionBetFilterHint.textContent = "过关滚仓：这里决定每期用来源的哪条信号触发。「押哪种组合」选了跟随信号时，建议只勾 4 个组合玩法，触发最稳定。";
+            } else {
+                subscriptionBetFilterHint.textContent = "建议先用自选玩法，只勾你真正想下的内容。";
+            }
+        }
         Array.from(subscriptionForm.querySelectorAll("input[name='bet_filter_key']")).forEach(function (input) {
             if (!(input instanceof HTMLInputElement)) {
                 return;
@@ -2209,12 +2216,17 @@
         const showFixed = strategyMode === "fixed";
         const showFollowSource = strategyMode === "follow_source";
         const showMartingale = strategyMode === "martingale";
+        const showRoll = strategyMode === "win_streak_roll";
         const amountInput = subscriptionForm.elements.stake_amount;
         const baseStakeInput = subscriptionForm.elements.base_stake;
         const multiplierInput = subscriptionForm.elements.multiplier;
         const maxStepsInput = subscriptionForm.elements.max_steps;
         const refundActionInput = subscriptionForm.elements.refund_action;
         const capActionInput = subscriptionForm.elements.cap_action;
+        const targetStreakInput = subscriptionForm.elements.target_streak;
+        const baseAmountInput = subscriptionForm.elements.base_amount;
+        const rollStructureInput = subscriptionForm.elements.roll_structure;
+        const rollModeInput = subscriptionForm.elements.roll_mode;
 
         Array.from(subscriptionForm.querySelectorAll(".subscription-fixed-field")).forEach(function (field) {
             if (field instanceof HTMLElement) {
@@ -2224,6 +2236,11 @@
         Array.from(subscriptionForm.querySelectorAll(".subscription-follow-tip-field")).forEach(function (field) {
             if (field instanceof HTMLElement) {
                 field.hidden = !showFollowSource;
+            }
+        });
+        Array.from(subscriptionForm.querySelectorAll(".subscription-roll-field")).forEach(function (field) {
+            if (field instanceof HTMLElement) {
+                field.hidden = !showRoll;
             }
         });
         Array.from(subscriptionForm.querySelectorAll(".subscription-martingale-field")).forEach(function (field) {
@@ -2273,11 +2290,37 @@
                 capActionInput.value = "reset";
             }
         }
+        if (targetStreakInput instanceof HTMLInputElement) {
+            targetStreakInput.disabled = !showRoll;
+            if (showRoll && (!String(targetStreakInput.value || "").trim() || Number(targetStreakInput.value) < 1)) {
+                targetStreakInput.value = "3";
+            }
+        }
+        if (baseAmountInput instanceof HTMLInputElement) {
+            baseAmountInput.disabled = !showRoll;
+            if (showRoll && !String(baseAmountInput.value || "").trim()) {
+                baseAmountInput.value = "100";
+            }
+        }
+        if (rollStructureInput instanceof HTMLSelectElement) {
+            rollStructureInput.disabled = !showRoll;
+            if (showRoll && !String(rollStructureInput.value || "").trim()) {
+                rollStructureInput.value = "A";
+            }
+        }
+        if (rollModeInput instanceof HTMLSelectElement) {
+            rollModeInput.disabled = !showRoll;
+            if (showRoll && !String(rollModeInput.value || "").trim()) {
+                rollModeInput.value = "chain";
+            }
+        }
         if (subscriptionStrategyModeHint instanceof HTMLElement) {
             if (showFixed) {
                 subscriptionStrategyModeHint.textContent = "均注最简单，适合先跑通整条链路。";
             } else if (showFollowSource) {
                 subscriptionStrategyModeHint.textContent = "系统会直接使用来源信号里的金额，适合想完全照抄来源金额时使用。";
+            } else if (showRoll) {
+                subscriptionStrategyModeHint.textContent = "过关滚仓：连续赢够设定的关数就收工，盈利自动滚进下一注；当天亏完起始注就止损，第二天重新开始。";
             } else {
                 subscriptionStrategyModeHint.textContent = "倍投会按当前手数自动放大金额；更多设置里还能调整回本后和追顶后的处理方式。";
             }
@@ -2504,6 +2547,9 @@
 
     function subscriptionStrategyModeFromStrategy(strategy) {
         const payload = strategy && typeof strategy === "object" ? strategy : {};
+        if (payload.win_streak_roll && typeof payload.win_streak_roll === "object") {
+            return "win_streak_roll";
+        }
         if (String(payload.mode || "follow").trim() === "martingale") {
             return "martingale";
         }
@@ -2527,6 +2573,9 @@
         });
         if (subscriptionStrategyModeSelect instanceof HTMLSelectElement) {
             subscriptionStrategyModeSelect.value = "fixed";
+        }
+        if (subscriptionForm.elements.subscription_name instanceof HTMLInputElement) {
+            subscriptionForm.elements.subscription_name.value = "";
         }
         subscriptionForm.elements.stake_amount.value = "10";
         subscriptionForm.elements.base_stake.value = "10";
@@ -2937,6 +2986,10 @@
         if (mode === "martingale") {
             return "倍投";
         }
+        if (payload && payload.win_streak_roll && typeof payload.win_streak_roll === "object") {
+            const roll = payload.win_streak_roll;
+            return "过关滚仓（过 " + (roll.target_streak || 3) + " 关）";
+        }
         if (hasStakeAmount) {
             return "均注";
         }
@@ -3012,12 +3065,38 @@
         if (modeLabel) {
             parts.push("方式 " + modeLabel);
         }
+        if (payload.win_streak_roll && typeof payload.win_streak_roll === "object") {
+            const roll = payload.win_streak_roll;
+            parts.push("过 " + (roll.target_streak || 3) + " 关收工");
+            if (roll.base_amount != null) {
+                parts.push("每天起始注 " + roll.base_amount);
+            }
+            const structureLabels = { A: "单+小双", B: "单+大双", C: "双+小单", D: "双+大单", follow_signal: "跟随信号" };
+            if (roll.structure) {
+                parts.push("组合 " + (structureLabels[roll.structure] || roll.structure));
+            }
+            if (roll.roll_mode) {
+                parts.push(roll.roll_mode === "chain" ? "链条滚仓" : "全仓滚仓");
+            }
+            const rollStopPolicy = roll.stop_policy && typeof roll.stop_policy === "object" ? roll.stop_policy : {};
+            const onTargetLabels = { close_day: "达标当天收工", new_cycle: "达标当天重开一轮", continue: "达标继续滚" };
+            const onBustLabels = { close_day: "爆仓当天收工", new_cycle: "爆仓重开一轮" };
+            if (rollStopPolicy.on_target) {
+                parts.push(onTargetLabels[rollStopPolicy.on_target] || ("达标后 " + rollStopPolicy.on_target));
+            }
+            if (rollStopPolicy.on_bust) {
+                parts.push(onBustLabels[rollStopPolicy.on_bust] || ("爆仓后 " + rollStopPolicy.on_bust));
+            }
+            if (Number(rollStopPolicy.max_cycles_per_day || 0) > 1) {
+                parts.push("一天最多 " + rollStopPolicy.max_cycles_per_day + " 轮");
+            }
+        }
         if (payload.base_stake != null && String(payload.base_stake).trim() !== "") {
             parts.push("起始金额 " + payload.base_stake);
         }
         if (payload.stake_amount != null && String(payload.stake_amount).trim() !== "") {
             parts.push("每期 " + payload.stake_amount);
-        } else if (modeLabel !== "倍投") {
+        } else if (modeLabel !== "倍投" && !(payload.win_streak_roll && typeof payload.win_streak_roll === "object")) {
             parts.push("金额 跟随来源");
         }
         if (payload.multiplier != null && String(payload.multiplier).trim() !== "") {
@@ -5712,7 +5791,8 @@
                     '<button class="ghost-btn settle-progression-btn" type="button" data-subscription-id="' + item.id + '" data-progression-event-id="' + progression.pending_event_id + '" data-result-type="miss">未中</button>'
                 ].join("")
                 : "";
-            const resetActionText = isSubscriptionRiskBlocked(item) ? "开始新一轮" : "重置盈亏";
+            const isRollPlanRow = Boolean(item.strategy && item.strategy.win_streak_roll);
+            const resetActionText = (isSubscriptionRiskBlocked(item) || isRollPlanRow) ? "开始新一轮" : "重置盈亏";
             const resetAction = '<button class="ghost-btn reset-subscription-runtime-btn" type="button" data-subscription-id="' + item.id + '">' + resetActionText + '</button>';
             const stoppedReasonMarkup = financial && financial.stopped_reason
                 ? ('<div class="config-card-note subscription-runtime-note">' + escapeHtml(financial.stopped_reason) + '</div>')
@@ -5729,7 +5809,7 @@
                 })
                 : "";
             return renderConfigCardShell({
-                title: source ? source.name : ("#" + item.source_id),
+                title: (item.name && String(item.name).trim()) || (source ? source.name : ("#" + item.source_id)),
                 cardClassName: "subscription-card-item",
                 headerBadges: [
                     renderStatusPill(item.status),
@@ -7263,17 +7343,32 @@
             if (!state.currentUser) {
                 throw new Error("请先登录");
             }
+            // 必填预检：浏览器原生气泡不显眼，漏填时明确提示并滚动到对应字段
+            const firstInvalidField = form.querySelector(":invalid");
+            if (firstInvalidField instanceof HTMLElement) {
+                const labelElement = firstInvalidField.closest("label");
+                const labelText = labelElement
+                    ? ((labelElement.querySelector("span") || {}).textContent || "").trim()
+                    : "";
+                firstInvalidField.scrollIntoView({ behavior: "smooth", block: "center" });
+                try {
+                    firstInvalidField.focus({ preventScroll: true });
+                } catch (focusError) {
+                    // 部分控件不可聚焦，忽略
+                }
+                throw new Error(
+                    labelText
+                        ? "还有必填项未完成：「" + labelText + "」，请在表单中填写后再点新建。"
+                        : "还有必填项未完成，请在表单中检查后重试。"
+                );
+            }
             const sourceId = String(form.source_id.value || "").trim();
             if (!sourceId) {
                 throw new Error("请先选择方案来源");
             }
             const editId = String(form.elements.edit_id.value || "").trim();
-            const duplicated = state.subscriptions.find(function (item) {
-                return Number(item.source_id) === Number(sourceId) && String(item.id) !== editId;
-            });
-            if (duplicated) {
-                throw new Error("该来源已经存在跟单策略");
-            }
+            // 同一来源允许建多个不同玩法的方案（如普通跟单 + 过关滚仓），不再拦截；
+            // 同期同一群的双注由派单层的占位保护兜底。
 
             const betFilterMode = currentSubscriptionBetFilterMode();
             const selectedBetFilterKeys = selectedSubscriptionBetFilterKeys();
@@ -7281,10 +7376,31 @@
                 throw new Error("自选玩法模式下，请至少勾选一个玩法");
             }
             const strategyMode = currentSubscriptionStrategyMode();
+            const subscriptionName = String(form.subscription_name.value || "").trim();
             const stakeAmount = strategyMode === "fixed" ? Number(form.stake_amount.value || 0) : null;
             const baseStake = strategyMode === "martingale" ? Number(form.base_stake.value || 0) : null;
             const multiplier = strategyMode === "martingale" ? Number(form.multiplier.value || 0) : null;
             const maxSteps = strategyMode === "martingale" ? Number(form.max_steps.value || 0) : null;
+            const targetStreak = strategyMode === "win_streak_roll" ? Number(form.target_streak.value || 0) : null;
+            const baseAmount = strategyMode === "win_streak_roll" ? Number(form.base_amount.value || 0) : null;
+            const rollStructure = strategyMode === "win_streak_roll"
+                ? String(form.roll_structure.value || "A").trim()
+                : "A";
+            const rollMode = strategyMode === "win_streak_roll"
+                ? String(form.roll_mode.value || "chain").trim()
+                : "chain";
+            const rollOnTarget = strategyMode === "win_streak_roll"
+                ? String(form.roll_on_target.value || "close_day").trim()
+                : "close_day";
+            const rollOnBust = strategyMode === "win_streak_roll"
+                ? String(form.roll_on_bust.value || "close_day").trim()
+                : "close_day";
+            const rollCloseScope = strategyMode === "win_streak_roll"
+                ? String(form.roll_close_scope.value || "rule").trim()
+                : "rule";
+            const rollMaxCycles = strategyMode === "win_streak_roll"
+                ? Number(form.roll_max_cycles.value || 1)
+                : 1;
             const refundAction = strategyMode === "martingale"
                 ? String(form.refund_action.value || "hold").trim() || "hold"
                 : "hold";
@@ -7311,8 +7427,37 @@
             if (hitRateGateEnabled && !(hitRateThreshold > 0 && hitRateThreshold < 100)) {
                 throw new Error("启用当日命中率熔断时，阈值必须为 0~100 之间的百分比");
             }
+            if (!subscriptionName) {
+                throw new Error("请给跟单策略起个名称，方便在列表里区分不同方案");
+            }
             if (strategyMode === "fixed" && (!Number.isFinite(stakeAmount) || stakeAmount <= 0)) {
                 throw new Error("均注模式下，请填写大于 0 的固定金额");
+            }
+            if (strategyMode === "win_streak_roll") {
+                if (!Number.isInteger(targetStreak) || targetStreak < 1) {
+                    throw new Error("过关滚仓模式下，过几关收工必须是至少 1 的整数");
+                }
+                if (!Number.isFinite(baseAmount) || baseAmount <= 0) {
+                    throw new Error("过关滚仓模式下，请填写大于 0 的每天起始注");
+                }
+                if (!["A", "B", "C", "D", "follow_signal"].includes(rollStructure)) {
+                    throw new Error("过关滚仓模式下，请选择押哪种组合");
+                }
+                if (!["chain", "all_in"].includes(rollMode)) {
+                    throw new Error("过关滚仓模式下，滚仓方式不正确");
+                }
+                if (!["close_day", "new_cycle", "continue"].includes(rollOnTarget)) {
+                    throw new Error("过关滚仓模式下，达标后的处理方式不正确");
+                }
+                if (!["close_day", "new_cycle"].includes(rollOnBust)) {
+                    throw new Error("过关滚仓模式下，爆仓后的处理方式不正确");
+                }
+                if (!["rule", "route"].includes(rollCloseScope)) {
+                    throw new Error("过关滚仓模式下，收工停哪一层不正确");
+                }
+                if (!Number.isInteger(rollMaxCycles) || rollMaxCycles < 1) {
+                    throw new Error("过关滚仓模式下，一天最多几轮必须是至少 1 的整数");
+                }
             }
             if (strategyMode === "martingale") {
                 if (!Number.isFinite(baseStake) || baseStake <= 0) {
@@ -7343,6 +7488,7 @@
             const submitButton = document.getElementById("createSubscriptionBtn");
             setButtonBusy(submitButton, true, editId ? "保存中..." : "创建中...");
             const strategyPayload = {
+                name: subscriptionName,
                 play_filter: {
                     mode: betFilterMode,
                     selected_keys: selectedBetFilterKeys,
@@ -7355,6 +7501,21 @@
                     max_steps: maxSteps,
                     refund_action: refundAction,
                     cap_action: capAction,
+                    ...(strategyMode === "win_streak_roll" ? {
+                        base_amount: baseAmount,
+                        main_share: 0.70,
+                        aux_share: 0.30,
+                        target_streak: targetStreak,
+                        structure: rollStructure,
+                        roll_mode: rollMode,
+                        reset_scope: "daily",
+                        stop_policy: {
+                            on_target: rollOnTarget,
+                            on_bust: rollOnBust,
+                            close_scope: rollCloseScope,
+                            max_cycles_per_day: rollMaxCycles,
+                        },
+                    } : {}),
                 },
                 settlement_policy: {
                     rule_source: settlementRuleSource,
@@ -7503,10 +7664,41 @@
                 if (subscriptionStrategyModeSelect instanceof HTMLSelectElement) {
                     subscriptionStrategyModeSelect.value = strategyMode;
                 }
+                subscriptionForm.elements.subscription_name.value = String(item.name || "");
                 subscriptionForm.elements.stake_amount.value = hasStakeAmount ? String(item.strategy.stake_amount) : "";
                 subscriptionForm.elements.base_stake.value = item.strategy && item.strategy.base_stake != null && String(item.strategy.base_stake).trim() !== ""
                     ? String(item.strategy.base_stake)
                     : "10";
+                const rollSettings = item.strategy && item.strategy.win_streak_roll && typeof item.strategy.win_streak_roll === "object"
+                    ? item.strategy.win_streak_roll
+                    : null;
+                subscriptionForm.elements.target_streak.value = rollSettings && rollSettings.target_streak != null
+                    ? String(rollSettings.target_streak)
+                    : "3";
+                subscriptionForm.elements.base_amount.value = rollSettings && rollSettings.base_amount != null
+                    ? String(rollSettings.base_amount)
+                    : "100";
+                subscriptionForm.elements.roll_structure.value = rollSettings && rollSettings.structure
+                    ? String(rollSettings.structure)
+                    : "A";
+                subscriptionForm.elements.roll_mode.value = rollSettings && rollSettings.roll_mode
+                    ? String(rollSettings.roll_mode)
+                    : "chain";
+                const rollStopPolicy = rollSettings && rollSettings.stop_policy && typeof rollSettings.stop_policy === "object"
+                    ? rollSettings.stop_policy
+                    : {};
+                subscriptionForm.elements.roll_on_target.value = ["close_day", "new_cycle", "continue"].includes(rollStopPolicy.on_target)
+                    ? String(rollStopPolicy.on_target)
+                    : "close_day";
+                subscriptionForm.elements.roll_on_bust.value = ["close_day", "new_cycle"].includes(rollStopPolicy.on_bust)
+                    ? String(rollStopPolicy.on_bust)
+                    : "close_day";
+                subscriptionForm.elements.roll_close_scope.value = ["rule", "route"].includes(rollStopPolicy.close_scope)
+                    ? String(rollStopPolicy.close_scope)
+                    : "rule";
+                subscriptionForm.elements.roll_max_cycles.value = Number(rollStopPolicy.max_cycles_per_day || 0) >= 1
+                    ? String(rollStopPolicy.max_cycles_per_day)
+                    : "1";
                 subscriptionForm.elements.multiplier.value = item.strategy && item.strategy.multiplier != null && String(item.strategy.multiplier).trim() !== ""
                     ? String(item.strategy.multiplier)
                     : "2";
@@ -7676,16 +7868,19 @@
             if (target.classList.contains("reset-subscription-runtime-btn")) {
                 const subscriptionId = target.getAttribute("data-subscription-id");
                 const currentSubscription = subscriptionById(subscriptionId);
-                const isRestartingCycle = isSubscriptionRiskBlocked(currentSubscription);
-                const confirmMessage = isRestartingCycle
-                    ? "开始新一轮会清空当前轮次盈亏、回到第 1 手，并跳过未执行的旧轮次任务。确认继续吗？"
-                    : "重置后会从新的盈亏基线重新计算，并跳过当前未执行的旧轮次任务。确认继续吗？";
+                const isRollPlan = Boolean(currentSubscription && currentSubscription.strategy && currentSubscription.strategy.win_streak_roll);
+                const isRestartingCycle = isSubscriptionRiskBlocked(currentSubscription) || isRollPlan;
+                const confirmMessage = isRollPlan
+                    ? "开始新一轮会重置过关周期（回到每天起始注、连赢次数清零）、解除当天的过关收工，并跳过未执行的旧轮次任务。确认继续吗？"
+                    : (isRestartingCycle
+                        ? "开始新一轮会清空当前轮次盈亏、回到第 1 手，并跳过未执行的旧轮次任务。确认继续吗？"
+                        : "重置后会从新的盈亏基线重新计算，并跳过当前未执行的旧轮次任务。确认继续吗？");
                 if (!subscriptionId || !confirmDangerousAction(confirmMessage)) {
                     return;
                 }
                 try {
                     setButtonBusy(target, true, isRestartingCycle ? "处理中..." : "重置中...");
-                    await request("/api/platform/subscriptions/" + subscriptionId + "/reset", {
+                    await request("/api/platform/subscriptions/" + subscriptionId + (isRollPlan ? "/restart" : "/reset"), {
                         method: "POST",
                         body: {
                             note: isRestartingCycle ? "前端开始新一轮" : "前端手动重置",
@@ -7693,15 +7888,17 @@
                     });
                     await refreshAll();
                     setStatus(
-                        isRestartingCycle
-                            ? "新一轮已开始，当前盈亏和手数已回到新基线。"
-                            : "跟单策略已重置，当前盈亏和手数已回到新基线。",
+                        isRollPlan
+                            ? "新一轮已开始：过关周期已重置回起始注，当天的过关收工已解除（日风控的止盈止损不受影响）。"
+                            : (isRestartingCycle
+                                ? "新一轮已开始，当前盈亏和手数已回到新基线。"
+                                : "跟单策略已重置，当前盈亏和手数已回到新基线。"),
                         false
                     );
                 } catch (error) {
                     setStatus(error.message, true);
                 } finally {
-                    setButtonBusy(target, false, "重置盈亏");
+                    setButtonBusy(target, false, isRestartingCycle ? "开始新一轮" : "重置盈亏");
                 }
                 return;
             }
