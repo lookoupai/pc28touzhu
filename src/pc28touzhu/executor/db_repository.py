@@ -1171,6 +1171,11 @@ class DatabaseRepository:
                         events.append(dict(event))
                 latest_issue = str(events[0]['issue_no']) if events else ''
                 complete_evidence = bool(events) and {event['leg_key'] for event in events if str(event['issue_no']) == latest_issue} == {'main', 'aux'}
+                if len({(event.get('auto_trigger_rule_id'), event.get('auto_trigger_route_id')) for event in events}) > 1:
+                    proven = self._proven_closed_cycle_events(conn, original, candidates)
+                    if proven:
+                        events = proven
+                        complete_evidence = True
             valid_events = all(int(event['subscription_id']) == sub_id and int(event['user_id']) == user_id for event in events)
             owners = {(int(e.get('auto_trigger_rule_id') or 0), int(e.get('auto_trigger_route_id') or 0)) for e in events}
             expected = (int(pending.get('rule_id') or 0), int(pending.get('route_id') or 0)) if pending else None
@@ -1267,6 +1272,83 @@ class DatabaseRepository:
                 if not session or not session.get('legacy_policy'):
                     unit.upsert_auto_trigger_cycle_session(**owner,values={'legacy_policy': staking.get('stop_policy') or {
                         'on_target':'close_day','on_bust':'close_day','close_scope':'rule','max_cycles_per_day':1}})
+
+    def _proven_closed_cycle_events(self, conn: sqlite3.Connection, state: dict, candidates: list) -> list[dict]:
+        """同日早期旧轮不等于当前周期：只有闭轮时刻、完整腿和资金链全部吻合才收窄证据。
+
+        这不是“取最近owner”或忽略void。只处理没有内部重开的链条闭轮；早期事件必须
+        已终态且发生于该轮开始前，时间交叠、最新void或金额不符均返回空并保留blocked。
+        """
+        from pc28touzhu.domain.split_roll_strategy import split_integer_stakes
+
+        policy = _safe_json_loads(state.get('policy_json'))
+        if (state.get('status') != 'stopped' or not state.get('day_closed')
+                or int(state.get('cycles_today') or 0) != 0 or policy.get('roll_mode', 'chain') != 'chain'
+                or int(state.get('periods') or 0) < 1):
+            return []
+        expected_reason = state.get('last_cycle_stop_reason') or {
+            'balance_depleted': 'cycle_balance_depleted', 'win_streak_target': 'cycle_target_hit',
+        }.get(str(state.get('stop_reason') or ''))
+        if expected_reason not in {'cycle_balance_depleted', 'cycle_target_hit'}:
+            return []
+        latest_run = conn.execute('''SELECT * FROM auto_trigger_rule_runs
+            WHERE subscription_id=? AND user_id=? AND stat_date=? ORDER BY id DESC LIMIT 1''',
+            (int(state['subscription_id']), int(state['user_id']), str(state['stat_date']))).fetchone()
+        if (not latest_run or latest_run['status'] != 'stopped'
+                or latest_run['stop_reason'] != expected_reason or not latest_run['stopped_at']):
+            return []
+        try:
+            started = _parse_iso8601(latest_run['started_at'])
+            stopped = _parse_iso8601(latest_run['stopped_at'])
+            if stopped != _parse_iso8601(state['updated_at']) or started >= stopped:
+                return []
+            chosen = []
+            for raw_event in candidates:
+                event = dict(raw_event)
+                created = _parse_iso8601(event['created_at'])
+                settled = _parse_iso8601(event['settled_at']) if event.get('settled_at') else None
+                if int(event.get('auto_trigger_rule_run_id') or 0) == int(latest_run['id']):
+                    if (event['status'] != 'settled' or settled is None or created < started
+                            or created > stopped or settled < created or settled > stopped):
+                        return []
+                    chosen.append(event)
+                elif created >= started or (settled and settled >= started) or event['status'] not in {'settled', 'void'}:
+                    return []
+            if len(chosen) != 2 * int(state['periods']):
+                return []
+            owners = {(int(e.get('auto_trigger_rule_id') or 0), int(e.get('auto_trigger_route_id') or 0)) for e in chosen}
+            if len(owners) != 1 or next(iter(owners))[0] != int(latest_run['rule_id']):
+                return []
+            by_issue: dict[str, list[dict]] = {}
+            for event in chosen:
+                by_issue.setdefault(str(event['issue_no']), []).append(event)
+            if len(by_issue) != int(state['periods']):
+                return []
+            available = float(policy.get('base_amount') or 0)
+            net_total, win_streak = 0.0, 0
+            for issue in sorted(by_issue, key=int):
+                legs = by_issue[issue]
+                if len(legs) != 2 or {e['leg_key'] for e in legs} != {'main', 'aux'}:
+                    return []
+                expected = split_integer_stakes(available, policy.get('main_share', 0.7))
+                if any(_round_money(e['stake_amount']) != expected[e['leg_key']] for e in legs):
+                    return []
+                net = _round_money(sum(float(e['net_delta']) for e in legs))
+                available = _round_money(expected['total'] + net)
+                net_total = _round_money(net_total + net)
+                win_streak = win_streak + 1 if net > 0 else (0 if net < 0 else win_streak)
+            if (_round_money(state.get('day_pnl')) != net_total
+                    or _round_money(state.get('balance')) != _round_money(float(policy.get('base_amount') or 0) + net_total)
+                    or _round_money(state.get('cycle_stake')) != available
+                    or int(state.get('win_streak') or 0) != win_streak):
+                return []
+            if expected_reason == 'cycle_balance_depleted' and available >= 2:
+                return []
+            if expected_reason == 'cycle_target_hit' and win_streak < int(state.get('target_streak') or 3):
+                return []
+            return sorted(chosen, key=lambda event: int(event['id']), reverse=True)
+        except (TypeError, ValueError, OverflowError, KeyError):
+            return []
 
     def _validate_auto_cycle_owner(self, *, rule_id: int, subscription_id: int, user_id: int,
                                    route_id: Optional[int] = None, rule_run_id: Optional[int] = None) -> tuple[dict, dict]:

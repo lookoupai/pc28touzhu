@@ -251,6 +251,63 @@ class CycleRepositoryTests(unittest.TestCase):
         self.assertEqual(self.repo.get_auto_trigger_cycle_session(**self.session_owner())['status'],'day_closed')
         self.assertFalse(self.claim(issue='102')['claimed'])
 
+    def seed_nonoverlapping_closed_runs(self, *, overlap=False, latest_void=False, wrong_amount=False):
+        old=self.repo.ensure_auto_trigger_rule_run(**self.session_owner(self.rule_b),stat_date=DAY,started_issue_no='90')
+        new=self.repo.ensure_auto_trigger_rule_run(**self.session_owner(),stat_date=DAY,started_issue_no='100')
+        with self.repo._connect() as con:
+            con.execute("UPDATE auto_trigger_rule_runs SET status='stopped',started_at='2026-11-05T00:00:00Z',stopped_at='2026-11-05T00:02:00Z',stop_reason='manual_stop' WHERE id=?",(old['id'],))
+            con.execute("UPDATE auto_trigger_rule_runs SET status='stopped',started_at='2026-11-05T01:00:00Z',stopped_at='2026-11-05T01:10:00Z',stop_reason='cycle_balance_depleted' WHERE id=?",(new['id'],))
+        for run,rule,route,issue,created,settled,stakes,nets,status in [
+            (old,self.rule_b,self.route_b,'91','2026-11-05T01:01:00Z' if overlap else '2026-11-05T00:00:10Z',
+             '2026-11-05T01:02:00Z' if overlap else '2026-11-05T00:01:00Z',(7,3),(0,0),'void'),
+            (new,self.rule,self.route,'101','2026-11-05T01:00:00Z','2026-11-05T01:02:00Z',(7,3),(12.88,-3),'settled'),
+            (new,self.rule,self.route,'102','2026-11-05T01:03:00Z','2026-11-05T01:05:00Z',(13,6),(-13,34.74),'settled'),
+            (new,self.rule,self.route,'103','2026-11-05T01:06:00Z','2026-11-05T01:09:00Z',(28,12),(-28,-12),'void' if latest_void else 'settled'),
+        ]:
+            signal=self.repo.create_signal_record(source_id=self.source['id'],lottery_type='pc28',issue_no=issue,bet_type='combo',bet_value='大双')
+            for leg,amount,net in zip(('main','aux'),stakes,nets):
+                with self.repo._connect() as con:
+                    con.execute("""INSERT INTO subscription_progression_events(subscription_id,user_id,signal_id,issue_no,stake_amount,net_delta,status,leg_key,
+                        auto_trigger_rule_id,auto_trigger_rule_run_id,auto_trigger_route_id,auto_trigger_stat_date,result_context_json,created_at,settled_at,updated_at)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(self.sub['id'],self.user,signal['id'],issue,amount,net,status,leg,rule['id'],run['id'],route['id'],DAY,'{}',created,settled,settled))
+        policy={'base_amount':10,'main_share':0.7,'structure':'B','roll_mode':'chain','stop_policy':{'on_target':'close_day','on_bust':'close_day'}}
+        with self.repo._connect() as con:
+            con.execute("""INSERT OR REPLACE INTO subscription_cycle_states(subscription_id,user_id,stat_date,balance,cycle_stake,day_pnl,
+                win_streak,target_streak,status,periods,pending_plan_json,policy_json,day_closed,stop_reason,last_cycle_stop_reason,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(self.sub['id'],self.user,DAY,1.62,0,-8.38 if not wrong_amount else -8.37,
+                0,3,'stopped',3,'',json.dumps(policy),1,'balance_depleted','cycle_balance_depleted','2026-11-05T01:10:00Z'))
+        return new
+
+    def test_closed_cycle_can_prove_latest_nonoverlapping_run_without_reusing_old_void_history(self):
+        run=self.seed_nonoverlapping_closed_runs()
+        before=self.repo._fetch_all('SELECT * FROM subscription_progression_events ORDER BY id',())
+        self.repo.initialize_database()
+        migrated=self.repo.get_auto_trigger_cycle_state(**self.owner())
+        self.assertIsNotNone(migrated)
+        self.assertEqual(migrated['rule_run_id'],run['id'])
+        self.assertEqual(migrated['balance'],1.62)
+        self.assertTrue(migrated['day_closed'])
+        self.assertEqual(self.repo.get_auto_trigger_cycle_session(**self.session_owner())['status'],'day_closed')
+        self.assertEqual(self.repo._fetch_all('SELECT * FROM subscription_progression_events ORDER BY id',()),before)
+
+    def test_closed_cycle_with_overlapping_old_owner_stays_blocked(self):
+        self.seed_nonoverlapping_closed_runs(overlap=True)
+        self.repo.initialize_database()
+        self.assertEqual(self.repo._fetch_one('SELECT status FROM cycle_state_migrations WHERE subscription_id=?',(self.sub['id'],))['status'],'blocked')
+        self.assertIsNone(self.repo.get_auto_trigger_cycle_state(**self.owner()))
+
+    def test_closed_cycle_with_latest_void_or_money_mismatch_stays_blocked(self):
+        for option in ('latest_void','wrong_amount'):
+            with self.subTest(option=option):
+                self.seed_nonoverlapping_closed_runs(**{option:True})
+                self.repo.initialize_database()
+                self.assertEqual(self.repo._fetch_one('SELECT status FROM cycle_state_migrations WHERE subscription_id=?',(self.sub['id'],))['status'],'blocked')
+                with self.repo._connect() as con:
+                    con.execute('DELETE FROM cycle_state_migrations')
+                    con.execute('DELETE FROM subscription_progression_events')
+                    con.execute('DELETE FROM auto_trigger_cycle_sessions')
+                    con.execute('DELETE FROM auto_trigger_rule_runs')
+
     def test_old_no_route_pending_keeps_route_zero_until_settlement(self):
         ids,_=self.seed_old_cycle(route=0)
         self.repo.initialize_database()
