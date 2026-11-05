@@ -36,7 +36,7 @@ ALLOWED_METRICS = {"big_small", "odd_even", "combo"}
 ALLOWED_CONDITION_TYPES = {"hit_rate", "miss_streak", "draw_streak"}
 ALLOWED_OPERATORS = {"lt", "lte", "gt", "gte"}
 ALLOWED_SCOPE_MODES = {"all_subscriptions", "selected_subscriptions"}
-ALLOWED_TRIGGER_MODES = {"condition", "schedule"}
+ALLOWED_TRIGGER_MODES = {"condition", "schedule", "condition_schedule"}
 ALLOWED_WEEKDAYS = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
 DEFAULT_SCHEDULE_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 ALLOWED_PLAY_FILTER_ACTIONS = {"keep", "matched_metric", "fixed_metric"}
@@ -346,6 +346,8 @@ def _normalize_schedule(value: Any) -> dict:
         start = str(item.get("start") or "").strip()
         end = str(item.get("end") or "").strip()
         for field, value_text in (("start", start), ("end", end)):
+            if field == "end" and value_text == "24:00":
+                continue
             if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value_text):
                 raise ValueError("schedule.windows[%s].%s 必须为 HH:MM" % (index, field))
         if start >= end:
@@ -548,10 +550,10 @@ def normalize_rule_payload(payload: Dict[str, Any], *, current: Optional[Dict[st
         raise ValueError("cooldown_issues 不能小于 0")
     trigger_mode = str(payload.get("trigger_mode", source.get("trigger_mode") or "condition") or "condition").strip()
     if trigger_mode not in ALLOWED_TRIGGER_MODES:
-        raise ValueError("trigger_mode 仅支持 condition 或 schedule")
-    schedule = _normalize_schedule(payload.get("schedule", source.get("schedule") or {})) if trigger_mode == "schedule" else {}
+        raise ValueError("trigger_mode 仅支持 condition、schedule 或 condition_schedule")
+    schedule = _normalize_schedule(payload.get("schedule", source.get("schedule") or {})) if trigger_mode in {"schedule", "condition_schedule"} else {}
     conditions_payload = payload.get("conditions", source.get("conditions") or [])
-    conditions = _normalize_conditions(conditions_payload) if trigger_mode == "condition" else []
+    conditions = _normalize_conditions(conditions_payload) if trigger_mode != "schedule" else []
     guard_payload = payload.get("guard_groups", source.get("guard_groups") or [])
     return {
         "name": name,
@@ -563,7 +565,7 @@ def normalize_rule_payload(payload: Dict[str, Any], *, current: Optional[Dict[st
         "trigger_mode": trigger_mode,
         "schedule": schedule,
         "conditions": conditions,
-        "guard_groups": _normalize_guard_groups(guard_payload) if trigger_mode == "condition" else [],
+        "guard_groups": _normalize_guard_groups(guard_payload) if trigger_mode != "schedule" else [],
         "action": _normalize_action(payload.get("action", source.get("action") or {})),
         "daily_risk_control": _normalize_daily_risk_control(
             payload.get("daily_risk_control", source.get("daily_risk_control") or {})
@@ -946,6 +948,18 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = N
                     schedule_status = "今日窗口已结束"
                 else:
                     schedule_status = "未启动，等待定时窗口"
+        if rule.get("trigger_mode") == "condition_schedule":
+            gate = _rule_time_gate(rule)
+            if str(daily_stat.get("status") or "") == "stopped":
+                schedule_status = "今日被风控停止"
+            elif active_runs:
+                schedule_status = "已有轮次运行中"
+            elif gate["reason"] == "schedule_weekday_blocked":
+                schedule_status = "今天未启用触发"
+            elif not gate["allowed"]:
+                schedule_status = "当前不在允许时段内"
+            else:
+                schedule_status = "已到允许时段，等待条件满足"
         items.append(
             {
                 **rule,
@@ -1540,6 +1554,10 @@ def _condition_dispatch_gate(
             "bet_types": bet_types,
             "latest_settled_issue_no": str(latest_settled_issue_no or ""),
         }
+    if rule.get("trigger_mode") == "condition_schedule":
+        time_gate = _scheduled_signal_gate(rule, signal, now=now)
+        if not time_gate["allowed"]:
+            return time_gate
     verdict = evaluate_pc28_issue_dispatch_window(
         issue_no=str(signal.get("issue_no") or ""),
         draw_clock=draw_clock,
@@ -1764,6 +1782,37 @@ def _schedule_window(schedule: Dict[str, Any], local_now: datetime) -> tuple[Opt
         if str(window.get("start") or "") <= current_hm < str(window.get("end") or ""):
             return window, ""
     return None, "outside_schedule_window"
+
+
+def _rule_time_gate(rule: Dict[str, Any], *, now: Optional[datetime] = None) -> dict:
+    """时间只限制开新轮；开始时间包含，结束时间不包含。"""
+    if rule.get("trigger_mode") not in {"schedule", "condition_schedule"}:
+        return {"allowed": True, "reason": ""}
+    schedule = _normalize_schedule(rule.get("schedule") or {})
+    local_now = _schedule_now(now, schedule["timezone"])
+    window, reason = _schedule_window(schedule, local_now)
+    start_at = _schedule_window_start_at(window, local_now)
+    return {
+        "allowed": not reason, "reason": reason,
+        "stat_date": local_now.strftime("%Y-%m-%d"),
+        "window_id": str((window or {}).get("id") or ""),
+        "window_start_at": start_at.isoformat() if start_at else "",
+    }
+
+
+def _scheduled_signal_gate(rule: Dict[str, Any], signal: dict, *, now: Optional[datetime] = None) -> dict:
+    gate = _rule_time_gate(rule, now=now)
+    if not gate["allowed"]:
+        return gate
+    schedule = _normalize_schedule(rule.get("schedule") or {})
+    local_now = _schedule_now(now, schedule["timezone"])
+    age = _schedule_signal_age_seconds(signal, local_now)
+    if age is None or age > schedule["signal_max_age_seconds"]:
+        return {**gate, "allowed": False, "reason": "schedule_signal_stale"}
+    published = _parse_signal_published_at(signal)
+    if published is None or published < datetime.fromisoformat(gate["window_start_at"]):
+        return {**gate, "allowed": False, "reason": "schedule_signal_before_window"}
+    return gate
 
 
 def _parse_signal_published_at(signal: Dict[str, Any]) -> Optional[datetime]:
@@ -2386,6 +2435,14 @@ def evaluate_auto_trigger_rule(
         source = subscription.get("source") if isinstance(subscription.get("source"), dict) else {}
         summary["checked_count"] += 1
         try:
+            time_gate = _rule_time_gate(rule, now=now)
+            if not time_gate["allowed"]:
+                events.append(_record_event(
+                    repository, rule=rule, subscription=subscription, performance=None,
+                    status="skipped", reason=time_gate["reason"], schedule_snapshot=time_gate,
+                ))
+                summary["skipped_count"] += 1
+                continue
             if day_state.get("stopped"):
                 events.append(
                     _record_event(
@@ -2556,9 +2613,14 @@ def evaluate_auto_trigger_rule(
                     rule_id=int(rule["id"]), subscription_id=int(subscription["id"]), stat_date=stat_date,
                 )
                 current_day = _is_rule_day_stopped(unit, rule, stat_date=stat_date)
+                time_gate = _rule_time_gate(current_rule or {}, now=now)
                 stop_reason = ""
                 if not current_rule or current_rule.get("status") != "active":
                     stop_reason = "rule_not_active"
+                elif any(current_rule.get(key) != rule.get(key) for key in ("trigger_mode", "schedule", "conditions", "guard_groups")):
+                    stop_reason = "rule_configuration_changed"
+                elif not time_gate["allowed"]:
+                    stop_reason = time_gate["reason"]
                 elif current_day.get("stopped"):
                     stop_reason = "daily_risk_stopped"
                 elif current_run and current_run.get("status") == "stopped":
@@ -2712,6 +2774,7 @@ def evaluate_auto_trigger_rule(
                     dispatch_result=dispatch_result,
                     play_filter_result=play_filter_result,
                     performance_fetch=performance_fetch,
+                    schedule_snapshot=time_gate if rule.get("trigger_mode") == "condition_schedule" else None,
                 )
                 unit.mark_auto_trigger_rule_triggered(
                     rule_id=int(rule["id"]),

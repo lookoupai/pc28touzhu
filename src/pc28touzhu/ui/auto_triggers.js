@@ -439,7 +439,7 @@
         const summary = parts.join("，") + "。";
         const nextStep = rule && Array.isArray(rule.cycle_runtime) && rule.cycle_runtime.length
             ? "过关方案可在运行详情中恢复待命，已用次数和历史盈亏保留。"
-            : (rule && rule.trigger_mode === "schedule" ? "后续启动仍需满足允许的定时窗口和风控。" : "后续启动仍需满足新的触发条件和风控。");
+            : (rule && rule.trigger_mode === "condition_schedule" ? "后续启动仍需同时满足允许时段、触发条件和风控。" : (rule && rule.trigger_mode === "schedule" ? "后续启动仍需满足允许的定时窗口和风控。" : "后续启动仍需满足新的触发条件和风控。"));
         if (result.pending_settlement_count) {
             return summary + "仍有 " + String(result.pending_settlement_count) +
                 " 单已下注待结算，已发送单不会撤销。" + nextStep;
@@ -526,11 +526,13 @@
             const selected = String(rule.id) === String(state.editingRuleId) ? " is-active" : "";
             const scope = rule.scope_mode === "all_subscriptions" ? "全部跟单方案" : ("指定 " + String((rule.subscription_ids || []).length) + " 个方案");
             const isSchedule = String(rule.trigger_mode || "condition") === "schedule";
+            const isCombined = rule.trigger_mode === "condition_schedule";
+            const hasSchedule = isSchedule || isCombined;
             const conditions = (rule.conditions || []).map(conditionText).join("；") || "--";
             const schedule = rule.schedule || {};
-            const scheduleText = isSchedule ? ("定时触发：" + ((schedule.windows || []).map(function (item) {
+            const scheduleText = hasSchedule ? ((isCombined ? "条件检查时段：" : "定时触发：") + ((schedule.windows || []).map(function (item) {
                 return String(item.start || "") + "-" + String(item.end || "");
-            }).join(" / ") || "未配置") + ((rule.cycle_policy || {}).mode === "rule" ? "；过关轮次按每日上限控制" : "，每个窗口每天最多1轮")) : "";
+            }).join(" / ") || "未配置") + (isCombined ? "；时段内满足条件才开轮" : ((rule.cycle_policy || {}).mode === "rule" ? "；过关轮次按每日上限控制" : "，每个窗口每天最多1轮"))) : "";
             const guardGroups = (rule.guard_groups || []).map(function (group, index) {
                 const groupConditions = (group.conditions || []).map(conditionText).join("；") || "--";
                 return "条件区" + String(index + 1) + "：" + groupConditions;
@@ -549,9 +551,10 @@
             return '' +
                 '<article class="rule-card' + selected + '">' +
                     '<div class="rule-card-head"><div><strong>' + escapeHtml(rule.name) + '</strong><p class="meta-line">' + escapeHtml(scope) + '</p></div>' + statusPill(rule.status) + '</div>' +
-                    '<p class="meta-line">' + escapeHtml(isSchedule ? scheduleText : ("开始条件：" + conditions)) + '</p>' +
+                    (hasSchedule ? '<p class="meta-line">' + escapeHtml(scheduleText) + '</p>' : '') +
+                    (!isSchedule ? '<p class="meta-line">' + escapeHtml("开始条件：" + conditions) + '</p>' : '') +
                     (blockedSubscriptions.length ? '<p class="meta-line">未就绪：' + escapeHtml(blockedSubscriptions.join("；")) + '</p>' : '') +
-                    (isSchedule && rule.schedule_status ? '<p class="meta-line">' + escapeHtml(rule.stat_date || "当前统计日") + ' 定时状态：' + escapeHtml(rule.schedule_status) + '</p>' : '') +
+                    (hasSchedule && rule.schedule_status ? '<p class="meta-line">' + escapeHtml(isCombined ? "当前" : (rule.stat_date || "当前统计日")) + ' 定时状态：' + escapeHtml(rule.schedule_status) + '</p>' : '') +
                     (guardGroups ? '<p class="meta-line">同时达成：' + escapeHtml(guardGroups) + '</p>' : '') +
                     '<p class="meta-line">' + escapeHtml(actionText(rule.action)) + '</p>' +
                     (routeCount ? '<p class="meta-line">投注路由：' + escapeHtml(routeCount) + ' 条' + (stoppedRouteCount ? '，今日已停 ' + escapeHtml(stoppedRouteCount) + ' 条' : '') + '</p>' : '') +
@@ -886,7 +889,7 @@
             '<div class="schedule-window-row"' + (row.id ? ' data-window-id="' + escapeHtml(row.id) + '"' : '') + '>' +
                 '<input class="text-input schedule-window-start" type="time" value="' + escapeHtml(row.start || "18:00") + '" aria-label="窗口开始时间">' +
                 '<span>至</span>' +
-                '<input class="text-input schedule-window-end" type="time" value="' + escapeHtml(row.end || "18:30") + '" aria-label="窗口结束时间">' +
+                '<input class="text-input schedule-window-end" type="time" value="' + escapeHtml(row.end === "24:00" ? "" : (row.end || "18:30")) + '" aria-label="窗口结束时间，留空表示当天24点">' +
                 '<button class="ghost-btn remove-schedule-window-btn" type="button">删除</button>' +
             '</div>';
     }
@@ -915,7 +918,7 @@
             return {
                 id: id,
                 start: row.querySelector(".schedule-window-start").value,
-                end: row.querySelector(".schedule-window-end").value,
+                end: row.querySelector(".schedule-window-end").value || "24:00",
             };
         });
     }
@@ -976,7 +979,8 @@
 
     function updateTriggerModeVisibility() {
         const isSchedule = $("triggerModeSelect").value === "schedule";
-        $("scheduleFields").hidden = !isSchedule;
+        const isCombined = $("triggerModeSelect").value === "condition_schedule";
+        $("scheduleFields").hidden = !(isSchedule || isCombined);
         $("conditionPanel").hidden = isSchedule;
         $("guardPanel").hidden = isSchedule;
         updateCyclePolicyVisibility();
@@ -1008,11 +1012,12 @@
         const scoped = state.subscriptions.filter(function (item) { return form.elements.scope_mode.value === "all_subscriptions" || selectedIds.has(Number(item.id)); });
         $("cycleScopeHint").textContent = scoped.some(isRollSubscription) ? "" : "当前范围没有过关方案；这些设置将在选用过关方案时生效。";
         const isSchedule = form.elements.trigger_mode.value === "schedule";
+        const isCombined = form.elements.trigger_mode.value === "condition_schedule";
         const hints = {
             wait_condition: isSchedule
                 ? "本轮结束后等待新一期，且处于允许的定时窗口；同一窗口可再次启动。"
-                : "本轮结束后回到待命，使用结束后的新一期重新判断条件，仍受冷却期数限制。",
-            new_cycle: "不重新等待开始条件和触发冷却，按方案起始金额开启下一轮；仍计入每日上限并受日风控限制。",
+                : "本轮结束后回到待命，使用结束后的新一期重新判断条件，仍受冷却期数限制。" + (isCombined ? "只能在允许时段内重新开轮。" : ""),
+            new_cycle: "不重新等待开始条件和触发冷却，按方案起始金额开启下一轮；仍计入每日上限并受日风控限制。" + (isSchedule || isCombined ? "直接续开也必须处于允许时段。" : ""),
             close_day: "本轮结束后停止本规则下该方案当天的过关启动。",
         };
         [["cycle_on_target", "cycleOnTargetHint"], ["cycle_on_bust", "cycleOnBustHint"]].forEach(function (entry) {
@@ -1020,7 +1025,9 @@
             $(entry[1]).textContent = (hints[action] || "结束处理不可用，请重新选择。") +
                 (Number(form.elements.cycle_max_starts.value) === 1 && action !== "close_day" ? " 当前每天最多 1 轮，本轮结束后会因额度用完收工。" : "");
         });
-        $("scheduleModeHint").textContent = !legacy
+        $("scheduleModeHint").textContent = isCombined
+            ? "只有在所选星期和时段内才检查开始条件与附加条件区；到点后条件未满足会继续等待。时段仅限制开新轮，已开始的轮次继续按原停止条件运行。再次开轮仍受冷却、风控和过关每日次数限制，不额外限制每个窗口一轮；不会补发窗口外旧信号。"
+            : !legacy
             ? "过关方案在上轮结束后，可用新一期在同一允许窗口再次启动，受本规则每日次数限制。普通均注、倍投仍是每个窗口每天最多一轮。所有方案均不会补发窗口外旧信号。"
             : "每个定时任务在窗口开始后尝试启动一轮，每个窗口每天最多一轮；上一轮未结束时不重复开轮。窗口结束后不会补发旧信号。";
     }

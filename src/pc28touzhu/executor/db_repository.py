@@ -7386,7 +7386,7 @@ class DatabaseRepository:
               AND EXISTS (
                   SELECT 1 FROM auto_trigger_rules r
                   WHERE r.id = auto_trigger_rule_runs.rule_id
-                    AND COALESCE(NULLIF(r.trigger_mode, ''), 'condition') = 'condition'
+                    AND COALESCE(NULLIF(r.trigger_mode, ''), 'condition') IN ('condition', 'condition_schedule')
               )
               AND NOT EXISTS (
                   SELECT 1 FROM auto_trigger_route_subscription_runtime_runs child

@@ -902,4 +902,19 @@ select[multiple].text-input {
     .topbar-actions {
         width: 100%;
     }
+
+    .schedule-window-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    }
+
+    .schedule-window-row .text-input {
+        width: 100%;
+        min-width: 0;
+    }
+
+    .schedule-window-row .remove-schedule-window-btn {
+        grid-column: 1 / -1;
+        justify-self: end;
+    }
 }

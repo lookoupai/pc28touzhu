@@ -107,11 +107,7 @@ def evaluate_roll_rule(repository: Any, rule: dict, subscriptions: list[dict], *
     draw_cache = draw_cache if draw_cache is not None else {}
     performance_cache: dict = {}
     scheduled = rule.get('trigger_mode') == 'schedule'
-    window = None
-    schedule_reason = ''
-    if scheduled:
-        schedule = ats._normalize_schedule(rule.get('schedule') or {})
-        window, schedule_reason = ats._schedule_window(schedule, ats._schedule_now(reference, schedule['timezone']))
+    timed = rule.get('trigger_mode') in {'schedule', 'condition_schedule'}
     for sub in subscriptions:
         summary['checked_count'] += 1
         owner = _owner(rule, sub)
@@ -128,8 +124,9 @@ def evaluate_roll_rule(repository: Any, rule: dict, subscriptions: list[dict], *
             reason = _session_gate(repository, rule, sub, session, day)
             if reason:
                 raise StartSkipped(str(reason))
-            if schedule_reason:
-                raise StartSkipped(schedule_reason)
+            time_gate = ats._rule_time_gate(rule, now=now)
+            if not time_gate['allowed']:
+                raise StartSkipped(time_gate['reason'])
             continuation = session.get('status') == 'continuation'
             clock = draw_clock
             if scheduled or continuation:
@@ -174,6 +171,10 @@ def evaluate_roll_rule(repository: Any, rule: dict, subscriptions: list[dict], *
                 reason = _session_gate(unit, current_rule, current_sub, session, day)
                 if reason:
                     raise StartSkipped(reason)
+                time_gate = ats._rule_time_gate(current_rule, now=now)
+                if not time_gate['allowed']:
+                    raise StartSkipped(time_gate['reason'])
+                window_id = str(time_gate.get('window_id') or '')
                 if continuation != (session.get('status') == 'continuation'):
                     raise StartSkipped('cycle_session_changed')
                 if not continuation:
@@ -202,20 +203,15 @@ def evaluate_roll_rule(repository: Any, rule: dict, subscriptions: list[dict], *
                     verdict = evaluate_pc28_issue_dispatch_window(issue_no=signal['issue_no'], draw_clock=clock, now=reference)
                     if not verdict.get('allowed'):
                         raise StartSkipped(str(verdict.get('reason') or 'signal_not_dispatchable'))
-                    if scheduled:
-                        age = ats._schedule_signal_age_seconds(signal, reference)
-                        if age is None or age > int(current_rule.get('schedule', {}).get('signal_max_age_seconds') or 300):
-                            raise StartSkipped('schedule_signal_stale')
-                        published = ats._parse_signal_published_at(signal)
-                        window_start = ats._schedule_window_start_at(window, ats._schedule_now(reference, current_rule.get('schedule', {}).get('timezone') or 'Asia/Shanghai'))
-                        if published is None or (window_start and published < window_start):
-                            raise StartSkipped('schedule_signal_before_window')
+                    if timed:
+                        signal_gate = ats._scheduled_signal_gate(current_rule, signal, now=now)
+                        if not signal_gate['allowed']:
+                            raise StartSkipped(signal_gate['reason'])
                 cycle_policy = current_rule.get('cycle_policy') or {'mode': 'legacy'}
                 if scheduled and cycle_policy.get('mode') == 'legacy' and not continuation:
                     for previous_run in unit.list_auto_trigger_rule_runs_for_subscription_date(
                         rule_id=int(rule['id']), subscription_id=int(sub['id']), stat_date=day):
                         old_window = str(previous_run.get('window_id') or '')
-                        window_id = str((window or {}).get('id') or '')
                         if old_window == window_id or old_window.endswith(':' + window_id):
                             raise StartSkipped('schedule_day_already_started')
                 strategy = subscription_strategy(current_sub)
@@ -225,7 +221,7 @@ def evaluate_roll_rule(repository: Any, rule: dict, subscriptions: list[dict], *
                 limit = int(cycle_policy.get('max_starts_per_day') or 1000)
                 claim = unit.claim_auto_trigger_cycle_start(**owner, stat_date=day, started_issue_no=latest,
                     max_starts_per_day=limit, policy=cycle_policy, route_ids=[int(r['id']) for r in active_routes],
-                    window_id=str((window or {}).get('id') or ''))
+                    window_id=window_id)
                 if not claim['claimed']:
                     raise StartSkipped(claim['reason'])
                 run = claim['run']
@@ -259,7 +255,7 @@ def evaluate_roll_rule(repository: Any, rule: dict, subscriptions: list[dict], *
                 event = ats._record_event(unit, rule=current_rule, subscription=sub, performance=performance, status='triggered',
                     reason='cycle_continued' if continuation else ('schedule_started' if scheduled else 'conditions_matched'),
                     matched_conditions=matched, trigger_match=trigger_match, dispatch_result=dispatch_result,
-                    stat_date=day, schedule_snapshot={'window_id': str((window or {}).get('id') or ''), 'stat_date': day} if scheduled else None)
+                    stat_date=day, schedule_snapshot=time_gate if timed else None)
                 unit.mark_auto_trigger_rule_triggered(rule_id=int(rule['id']), user_id=int(rule['user_id']), issue_no=latest)
                 events.append(event)
                 summary['triggered_count'] += 1

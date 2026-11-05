@@ -96,6 +96,7 @@
                                 <select id="triggerModeSelect" class="text-input" name="trigger_mode">
                                     <option value="condition">条件触发</option>
                                     <option value="schedule">定时触发</option>
+                                    <option value="condition_schedule">条件 + 定时（时段内满足条件才触发）</option>
                                 </select>
                             </label>
                             <div id="scheduleFields" class="schedule-panel wide" hidden>
@@ -125,6 +126,7 @@
                                     <div class="field schedule-window-field">
                                         <span>定时任务（窗口）</span>
                                         <div id="scheduleWindowRows" class="schedule-window-rows"></div>
+                                        <small class="meta-line">开始时间包含，结束时间不包含；结束时间留空表示当天 24:00。例如每天 18:00 后才检查条件，可选择“条件 + 定时”，开始填 18:00、结束留空。</small>
                                         <button id="addScheduleWindowBtn" class="ghost-btn" type="button">添加定时任务</button>
                                     </div>
                                     <p id="scheduleModeHint" class="meta-line schedule-note">每个定时任务在窗口内尝试启动，上一轮未结束时不重复开轮。窗口结束后不会补发旧信号。</p>

@@ -46,6 +46,27 @@ class CycleApiTests(CycleFixture):
         payload['cycle_policy']={'mode':'legacy'}
         self.assertEqual(self.request('/api/platform/auto-trigger-rules',payload)[0],400)
 
+    def test_combined_trigger_round_trip_and_validation(self):
+        payload = self.payload()
+        payload.update(trigger_mode='condition_schedule', schedule={
+            'timezone': 'Asia/Shanghai', 'weekdays': ['Wed'],
+            'windows': [{'id': 'evening', 'start': '18:00', 'end': '24:00'}],
+        }, guard_groups=[{'name': '附加条件', 'conditions': payload['conditions']}])
+        code, result = self.request('/api/platform/auto-trigger-rules', payload)
+        self.assertEqual(code, 200, result)
+        rule = result['item']
+        self.assertTrue(rule['conditions'])
+        self.assertTrue(rule['guard_groups'])
+        code, result = self.request('/api/platform/auto-trigger-rules/%s' % rule['id'], {'name': '组合改名'})
+        self.assertEqual(code, 200, result)
+        self.assertEqual(result['item']['trigger_mode'], 'condition_schedule')
+        self.assertEqual(result['item']['schedule']['windows'], payload['schedule']['windows'])
+        self.assertEqual(result['item']['conditions'], rule['conditions'])
+        self.assertEqual(result['item']['guard_groups'], rule['guard_groups'])
+        for changes in [{'conditions': []}, {'schedule': {'windows': []}}]:
+            code, _ = self.request('/api/platform/auto-trigger-rules/%s' % rule['id'], changes)
+            self.assertEqual(code, 400)
+
     def test_summary_returns_manual_scope_and_resume_requires_auth(self):
         code,result=self.request('/api/platform/subscriptions/summary')
         self.assertEqual(code,200,result)
