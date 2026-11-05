@@ -23,7 +23,7 @@
     const conditionTypeOptions = [
         ["hit_rate", "命中率"],
         ["miss_streak", "当前连挂"],
-        ["draw_streak", "指定结果连续开出"],
+        ["draw_streak", "连续开出"],
     ];
     const drawValuesByMetric = {
         big_small: ["大", "小"],
