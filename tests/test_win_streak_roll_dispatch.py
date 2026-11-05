@@ -3,9 +3,12 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from pc28touzhu.executor.db_repository import DatabaseRepository
+from pc28touzhu.executor import ExecutorStateStore, run_executor_cycle_concurrent
+from pc28touzhu.services.job_service import pull_jobs, report_job
 from pc28touzhu.services.dispatch_service import dispatch_signal
 from pc28touzhu.services.pc28_auto_settlement_service import _resolve_pending_win_streak_cycles
 from pc28touzhu.services.platform_service import resolve_pending_pc28_progressions_from_draws
@@ -64,11 +67,11 @@ class WinStreakRollDispatchTests(unittest.TestCase):
         return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     def _deliver_and_settle(self, result, *, triplet):
-        """模拟执行器把两腿消息送达（事件进入 placed），再用真实开奖结算并推进玩法状态。"""
+        """一次合并发送回执令两腿进入 placed，再用真实开奖结算。"""
         issue_no = str(20261103000 + self.signal_no)
-        for job in result.get("jobs") or []:
+        for job in self.repo.pull_ready_jobs(executor_id="test-executor"):
             self.repo.report_job_result(
-                str(job["id"]), "test-executor", 1, "delivered", "message-1", self._iso_now(), {}, None,
+                str(job["job_id"]), "test-executor", 1, "delivered", "message-1", self._iso_now(), {}, None,
             )
         resolved = resolve_pending_pc28_progressions_from_draws(
             self.repo, user_id=self.user_id,
@@ -76,6 +79,166 @@ class WinStreakRollDispatchTests(unittest.TestCase):
         )
         cycle = _resolve_pending_win_streak_cycles(self.repo)
         return resolved, cycle
+
+    def _dispatch(self):
+        return dispatch_signal(self.repo, self._signal()["id"], subscription_id=self.subscription["id"])
+
+    def _report(self, job, status, *, executed_at=None):
+        return self.repo.report_job_result(str(job["id"]), "test-executor", 1, status,
+            "message-1" if status == "delivered" else None, executed_at or self._iso_now(), {}, None)
+
+    def test_all_structures_combine_correct_stakes_even_with_source_text_and_limit_one(self):
+        for structure, expected in {"A": "单70 小双30", "B": "单70 大双30", "C": "双70 小单30", "D": "双70 大单30"}.items():
+            with self.subTest(structure=structure):
+                strategy = {**STRATEGY, "staking_policy": {**STRATEGY["staking_policy"], "structure": structure}}
+                sub = self.repo.create_subscription_record(user_id=self.user_id, source_id=self.source["id"], strategy=strategy)
+                signal = self.repo.create_signal_record(source_id=self.source["id"], lottery_type="pc28", issue_no="4000001",
+                    bet_type="combo", bet_value="小单", normalized_payload={"message_text": "小单999"}, published_at=self._iso_now())
+                result = dispatch_signal(self.repo, signal["id"], subscription_id=sub["id"])
+                items = pull_jobs(self.repo, executor_id="test-executor", limit=1)["items"]
+                self.assertEqual(len(items), 1)
+                self.assertEqual(items[0]["message_text"], expected)
+                self.assertEqual(items[0]["stake_plan"]["amount"], 100)
+                self._report(result["jobs"][0], "delivered")
+                self.assertEqual(self.repo.pull_ready_jobs("test-executor"), [])
+                self.assertEqual({self.repo.get_progression_event(j["progression_event_id"])["status"] for j in result["jobs"]}, {"placed"})
+
+    def test_executor_replays_lost_report_without_resending_combined_message(self):
+        result = self._dispatch()
+        repository = self.repo
+        sent = []
+
+        class Api:
+            lost_report = True
+
+            def heartbeat(self, **kwargs):
+                return {}
+
+            def pull_jobs(self, *, limit):
+                return pull_jobs(repository, executor_id="test-executor", limit=limit)["items"]
+
+            def report_job(self, *, job_id, payload):
+                if self.lost_report:
+                    self.lost_report = False
+                    raise RuntimeError("report unavailable")
+                return report_job(repository, job_id, payload)
+
+        class Sender:
+            def send_text(self, job):
+                sent.append(job.message_text)
+                return {"message_id": "shared-123"}
+
+        args = dict(api_client=Api(), message_sender=Sender(), state_store=ExecutorStateStore(),
+            executor_id="test-executor", limit=1, version="test", capabilities={})
+        with self.assertRaisesRegex(RuntimeError, "report unavailable"):
+            run_executor_cycle_concurrent(**args)
+        replay = run_executor_cycle_concurrent(**args)
+        self.assertEqual(replay["replayed_count"], 1)
+        self.assertEqual(sent, ["单70 小双30"])
+        self.assertEqual(self.repo.pull_ready_jobs("test-executor"), [])
+        jobs = self.repo.list_execution_jobs(user_id=self.user_id)
+        self.assertEqual({j["last_remote_message_id"] for j in jobs}, {"shared-123"})
+        self.assertEqual({self.repo.get_progression_event(j["progression_event_id"])["status"] for j in result["jobs"]}, {"placed"})
+
+    def test_report_updates_both_legs_atomically(self):
+        result = self._dispatch()
+        original = self.repo._sync_progression_event_delivery_status
+        calls = []
+
+        def fail_second(conn, **kwargs):
+            calls.append(kwargs["progression_event_id"])
+            if len(calls) == 2:
+                raise RuntimeError("second leg failed")
+            original(conn, **kwargs)
+
+        with patch.object(self.repo, "_sync_progression_event_delivery_status", side_effect=fail_second):
+            with self.assertRaisesRegex(RuntimeError, "second leg failed"):
+                self._report(result["jobs"][0], "delivered")
+        self.assertEqual({j["status"] for j in self.repo.list_execution_jobs(user_id=self.user_id)}, {"pending"})
+        self.assertEqual({self.repo.get_progression_event(j["progression_event_id"])["status"] for j in result["jobs"]}, {"pending"})
+        self.assertEqual({j["attempt_count"] for j in self.repo.list_execution_jobs(user_id=self.user_id)}, {0})
+
+    def test_failed_combined_send_retries_once_and_keeps_original_deadline(self):
+        result = self._dispatch()
+        jobs = result["jobs"]
+        past = (datetime.now(timezone.utc) - timedelta(seconds=40)).isoformat()
+        self._report(jobs[0], "failed", executed_at=past)
+        self.assertEqual({self.repo.get_progression_event(j["progression_event_id"])["status"] for j in jobs}, {"pending"})
+        self.assertEqual(_resolve_pending_win_streak_cycles(self.repo)["resolved_count"], 0)
+        retried = self.repo.requeue_auto_retry_jobs(max_attempts=3, base_delay_seconds=5, limit=1)
+        self.assertEqual(len(retried), 1)
+        self.assertEqual({self.repo.get_execution_job(j["id"])["expire_at"] for j in jobs}, {jobs[0]["expire_at"]})
+        self.assertEqual([j["message_text"] for j in self.repo.pull_ready_jobs("test-executor", limit=1)], ["单70 小双30"])
+        self._report(jobs[0], "delivered")
+        self._report(jobs[0], "failed")
+        self.assertEqual(self.repo.requeue_auto_retry_jobs(max_attempts=3, base_delay_seconds=5), [])
+        self.assertEqual({self.repo.get_execution_job(j["id"])["status"] for j in jobs}, {"delivered"})
+        self.assertEqual({self.repo.get_progression_event(j["progression_event_id"])["status"] for j in jobs}, {"placed"})
+
+    def test_manual_retry_from_auxiliary_requeues_the_complete_message(self):
+        jobs = self._dispatch()["jobs"]
+        self._report(jobs[0], "failed")
+        self.repo.retry_execution_job(job_id=jobs[1]["id"], user_id=self.user_id)
+        self.assertEqual([j["message_text"] for j in self.repo.pull_ready_jobs("test-executor")], ["单70 小双30"])
+        self.assertEqual({self.repo.get_execution_job(j["id"])["expire_at"] for j in jobs}, {jobs[0]["expire_at"]})
+
+    def test_template_rules_render_each_leg_before_combining(self):
+        template = self.repo.create_message_template_record(user_id=self.user_id, name="自定义群模板",
+            lottery_type="pc28", bet_type="*", template_text="{{bet_value}}={{amount}}",
+            config={"bet_rules": {"odd_even": {"value_map": {"单": "单数"}}, "combo": {"format": "{{bet_value}}/{{amount}}"}}})
+        self.repo.update_delivery_target_record(delivery_target_id=self.target["id"], user_id=self.user_id,
+            telegram_account_id=None, executor_type="telegram_group", target_key=self.target["target_key"],
+            target_name="测试群", template_id=template["id"])
+        self._dispatch()
+        self.assertEqual([j["message_text"] for j in self.repo.pull_ready_jobs("test-executor")], ["单数=70 小双/30"])
+
+    def test_expired_or_unconfirmed_combined_message_cannot_be_manually_resent(self):
+        jobs = self._dispatch()["jobs"]
+        for status in ("expired", "skipped"):
+            with self.subTest(status=status):
+                self._report(jobs[0], status)
+                with self.assertRaisesRegex(ValueError, "合并投注只能"):
+                    self.repo.retry_execution_job(job_id=jobs[1]["id"], user_id=self.user_id)
+                self.assertEqual(self.repo.pull_ready_jobs("test-executor"), [])
+
+    def test_late_success_receipt_restores_both_expired_legs(self):
+        jobs = self._dispatch()["jobs"]
+        with patch("pc28touzhu.executor.db_repository._utc_now_iso", return_value=jobs[0]["expire_at"]):
+            self.assertEqual(self.repo.expire_due_jobs(), 2)
+            self._report(jobs[0], "delivered", executed_at=jobs[0]["execute_after"])
+        self.assertEqual({self.repo.get_progression_event(j["progression_event_id"])["status"] for j in jobs}, {"placed"})
+        self.assertEqual({self.repo.get_execution_job(j["id"])["status"] for j in jobs}, {"delivered"})
+
+    def test_failed_combined_send_expires_both_legs_without_extending_window(self):
+        jobs = self._dispatch()["jobs"]
+        self._report(jobs[0], "failed")
+        with patch("pc28touzhu.executor.db_repository._utc_now_iso", return_value=jobs[0]["expire_at"]):
+            self.assertEqual(self.repo.expire_due_jobs(), 2)
+            self.assertEqual(self.repo.pull_ready_jobs("test-executor"), [])
+            self.assertEqual(self.repo.requeue_auto_retry_jobs(max_attempts=3, base_delay_seconds=5), [])
+        self.assertEqual({self.repo.get_progression_event(j["progression_event_id"])["status"] for j in jobs}, {"void"})
+
+    def test_failed_message_cannot_retry_after_its_round_is_reset(self):
+        jobs = self._dispatch()["jobs"]
+        past = (datetime.now(timezone.utc) - timedelta(seconds=40)).isoformat()
+        self._report(jobs[0], "failed", executed_at=past)
+        self.repo.reset_subscription_runtime(subscription_id=self.subscription["id"], user_id=self.user_id)
+        self.assertEqual(self.repo.requeue_auto_retry_jobs(max_attempts=3, base_delay_seconds=5), [])
+        with self.assertRaisesRegex(ValueError, "合并投注只能"):
+            self.repo.retry_execution_job(job_id=jobs[1]["id"], user_id=self.user_id)
+        self.assertEqual(self.repo.pull_ready_jobs("test-executor"), [])
+
+    def test_old_separate_jobs_remain_separate_after_reinitialization(self):
+        jobs = self._dispatch()["jobs"]
+        with self.repo._connect() as conn:
+            conn.execute("UPDATE execution_jobs SET send_with_job_id = NULL")
+            conn.execute("DROP INDEX idx_execution_jobs_send_with")
+            conn.execute("ALTER TABLE execution_jobs DROP COLUMN send_with_job_id")
+        self.repo.initialize_database()
+        self.repo.initialize_database()
+        self.assertEqual([j["message_text"] for j in self.repo.pull_ready_jobs("test-executor")], ["单70", "小双30"])
+        self._report(jobs[0], "delivered")
+        self.assertEqual(self.repo.get_execution_job(jobs[1]["id"])["status"], "pending")
 
     def test_dispatch_creates_two_legs_with_policy_stakes(self):
         signal = self._signal(bet_type="big_small", bet_value="大")

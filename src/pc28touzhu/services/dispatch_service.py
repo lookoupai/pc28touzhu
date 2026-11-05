@@ -923,6 +923,8 @@ def _dispatch_win_streak_roll_legs(
             "bet_type": leg["bet_type"],
             "bet_value": leg["bet_value"],
         }
+        # 来源文案对应原始信号，不能覆盖过关重新计算出的玩法和注码。
+        leg_signal["normalized_payload"].pop("message_text", None)
         settlement_snapshot = build_settlement_snapshot(
             rule_source=str(settlement_policy.get("rule_source") or ""),
             settlement_rule_id=settlement_policy.get("settlement_rule_id"),
@@ -1020,6 +1022,10 @@ def _dispatch_win_streak_roll_legs(
             created_count += 1
         else:
             existing_count += 1
+
+    # 两笔账保持独立；执行器只领取主注，并携带完整的合并文案。
+    repository.combine_roll_execution_jobs([int(job["id"]) for job in jobs])
+    jobs[1]["send_with_job_id"] = int(jobs[0]["id"])
 
     pending_plan = {
         "signal_id": int(signal["id"]),

@@ -116,6 +116,15 @@ class CycleRuntimeTests(CycleFixture):
         self.signal()
         self.assertEqual(self.cycle(rule)['summary']['triggered_count'], 1)
         self.assertEqual(len(self.repo.list_execution_jobs(user_id=self.user_id)), 4)
+        messages = self.repo.pull_ready_jobs('test-executor')
+        self.assertEqual(len(messages), 2)
+        self.assertEqual({j['message_text'] for j in messages}, {'单7 大双3'})
+        self.assertEqual({j['target']['key'] for j in messages}, {t['target_key'] for t in self.targets[1:]})
+        first = messages[0]
+        self.repo.report_job_result(first['job_id'], 'test-executor', 1, 'delivered', 'shared-message', self.now.isoformat(), {}, None)
+        remaining = self.repo.pull_ready_jobs('test-executor', limit=1)
+        self.assertEqual(len(remaining), 1)
+        self.assertNotEqual(first['target']['key'], remaining[0]['target']['key'])
         self.assertEqual(self.repo.get_auto_trigger_cycle_daily_starts(rule_id=rule['id'], subscription_id=self.sub['id'], user_id=self.user_id, stat_date=self.day)['starts_count'], 1)
 
     def test_no_route_uses_auto_ledger_and_leaves_manual_standby(self):
@@ -126,6 +135,7 @@ class CycleRuntimeTests(CycleFixture):
         jobs = self.repo.list_execution_jobs(user_id=self.user_id)
         self.assertEqual(len(jobs), 2)
         self.assertTrue(all(j['auto_trigger_route_id'] for j in jobs))
+        self.assertEqual([j['message_text'] for j in self.repo.pull_ready_jobs('test-executor', limit=1)], ['单7 大双3'])
         self.assertIsNone(self.repo.get_subscription_cycle_state(subscription_id=self.sub['id']))
         self.assertEqual(self.repo.get_auto_trigger_rule(rule['id'])['routes'], [])
 

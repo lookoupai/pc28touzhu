@@ -569,6 +569,7 @@ class DatabaseRepository:
             executor_type TEXT NOT NULL,
             idempotency_key TEXT NOT NULL,
             leg_key TEXT NOT NULL DEFAULT '',
+            send_with_job_id INTEGER REFERENCES execution_jobs(id),
             planned_message_text TEXT NOT NULL DEFAULT '',
             stake_plan_json TEXT NOT NULL DEFAULT '{}',
             execute_after TEXT NOT NULL,
@@ -1878,10 +1879,14 @@ class DatabaseRepository:
             "progression_event_id": "ALTER TABLE execution_jobs ADD COLUMN progression_event_id INTEGER",
             "auto_trigger_route_id": "ALTER TABLE execution_jobs ADD COLUMN auto_trigger_route_id INTEGER",
             "leg_key": "ALTER TABLE execution_jobs ADD COLUMN leg_key TEXT NOT NULL DEFAULT ''",
+            "send_with_job_id": "ALTER TABLE execution_jobs ADD COLUMN send_with_job_id INTEGER REFERENCES execution_jobs(id)",
         }
         for column_name, ddl in column_definitions.items():
             if column_name not in existing_columns:
                 conn.execute(ddl)
+
+        conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_jobs_send_with
+                        ON execution_jobs(send_with_job_id) WHERE send_with_job_id IS NOT NULL""")
 
     def _ensure_progression_event_columns(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute("PRAGMA table_info(subscription_progression_events)").fetchall()
@@ -2634,6 +2639,7 @@ class DatabaseRepository:
             "telegram_account_id": int(row["telegram_account_id"]) if row["telegram_account_id"] is not None else None,
             "executor_type": str(row["executor_type"]),
             "idempotency_key": str(row["idempotency_key"]),
+            "send_with_job_id": int(row["send_with_job_id"]) if row.get("send_with_job_id") is not None else None,
             "planned_message_text": str(row.get("planned_message_text") or ""),
             "stake_plan": _safe_json_loads(row.get("stake_plan_json")),
             "execute_after": row.get("execute_after"),
@@ -9428,12 +9434,16 @@ class DatabaseRepository:
 
     def expire_due_jobs(self) -> int:
         now = _utc_now_iso()
+        # 合并发送失败时保留待结算状态供窗口内重试；窗口结束才统一作废。
+        due_condition = """status IN ('pending', 'failed') AND expire_at <= ?
+            AND (status = 'pending' OR send_with_job_id IS NOT NULL OR EXISTS (
+                SELECT 1 FROM execution_jobs companion WHERE companion.send_with_job_id = execution_jobs.id))"""
         with self._connect() as conn:
             events = conn.execute(
                 """
                 SELECT DISTINCT progression_event_id
                 FROM execution_jobs
-                WHERE status = 'pending' AND expire_at <= ?
+                WHERE """ + due_condition + """
                   AND progression_event_id IS NOT NULL
                 """,
                 (now,),
@@ -9447,9 +9457,7 @@ class DatabaseRepository:
                         ELSE error_message
                     END,
                     updated_at = ?
-                WHERE status = 'pending'
-                  AND expire_at <= ?
-                """,
+                WHERE """ + due_condition,
                 (now, now),
             )
             expired_count = int(cursor.rowcount or 0)
@@ -9492,6 +9500,14 @@ class DatabaseRepository:
                 (int(progression_event_id),),
             ).fetchone() is not None
         context = _safe_json_loads(event["result_context_json"])
+        retryable_combined = conn.execute(
+            """SELECT 1 FROM execution_jobs j
+               WHERE j.progression_event_id = ? AND j.status = 'failed' AND j.expire_at > ?
+                 AND (j.send_with_job_id IS NOT NULL OR EXISTS (
+                     SELECT 1 FROM execution_jobs companion WHERE companion.send_with_job_id = j.id))
+               LIMIT 1""",
+            (int(progression_event_id), now),
+        ).fetchone()
         if delivered:
             # 成功回执可能晚于自动过期；已发送流水仍需结算，人工取消的流水不在此恢复。
             if event["status"] == "pending" or (
@@ -9503,6 +9519,7 @@ class DatabaseRepository:
                 )
         elif (
             event["status"] == "pending"
+            and not retryable_combined
             and int(aggregate["total_count"] or 0) > 0
             and int(aggregate["terminal_count"] or 0) == int(aggregate["total_count"])
         ):
@@ -9918,6 +9935,7 @@ class DatabaseRepository:
             ) attempt_stats ON attempt_stats.job_id = j.id
             JOIN execution_attempts last_attempt ON last_attempt.id = attempt_stats.last_attempt_id
             WHERE j.status = 'failed'
+              AND j.send_with_job_id IS NULL
               AND last_attempt.delivery_status = 'failed'
             ORDER BY last_attempt.executed_at ASC, j.id ASC
             LIMIT ?
@@ -9927,8 +9945,10 @@ class DatabaseRepository:
         now_dt = datetime.now(timezone.utc).replace(microsecond=0)
         updated_at = _utc_now_iso()
         requeued: list[Dict[str, Any]] = []
-        with self._connect() as conn:
+        with self.transaction() as unit:
+            conn = unit._transaction_connection
             for row in rows:
+                delivery_job_ids = self._delivery_job_ids(conn, int(row["job_id"]))
                 attempt_count = int(row["attempt_count"] or 0)
                 if attempt_count >= bounded_max_attempts:
                     continue
@@ -9943,7 +9963,12 @@ class DatabaseRepository:
                 window_seconds = max(30, int((expire_at - execute_after).total_seconds() or 120))
                 next_execute_after = _format_iso8601(now_dt)
                 next_expire_at = _format_iso8601(now_dt + timedelta(seconds=window_seconds))
-                conn.execute(
+                if len(delivery_job_ids) > 1:
+                    # 合并投注使用原封盘时间；不会通过重试延长下注窗口。
+                    if now_dt >= expire_at or not self._combined_delivery_can_retry(conn, delivery_job_ids):
+                        continue
+                    next_expire_at = row["expire_at"]
+                conn.executemany(
                     """
                     UPDATE execution_jobs
                     SET status = 'pending',
@@ -9954,7 +9979,7 @@ class DatabaseRepository:
                     WHERE id = ?
                       AND status = 'failed'
                     """,
-                    (next_execute_after, next_expire_at, updated_at, int(row["job_id"])),
+                    [(next_execute_after, next_expire_at, updated_at, job_id) for job_id in delivery_job_ids],
                 )
                 requeued.append(
                     {
@@ -10375,6 +10400,52 @@ class DatabaseRepository:
         )
         return {"created": True, "job": self.get_execution_job(job_id) or {}}
 
+    def combine_roll_execution_jobs(self, job_ids: list[int]) -> None:
+        """绑定尚未发送的过关两腿；必须与派单处于同一事务。历史任务不自动合并。"""
+        if self._transaction_connection is None:
+            raise ValueError("合并过关任务必须在派单事务内完成")
+        conn = self._transaction_connection
+        if len(job_ids) != 2 or len(set(job_ids)) != 2:
+            raise ValueError("合并过关任务需要完整的主注和辅助注")
+        rows = conn.execute("SELECT * FROM execution_jobs WHERE id IN (?, ?)", tuple(job_ids)).fetchall()
+        legs = {row["leg_key"]: dict(row) for row in rows}
+        if set(legs) != {"main", "aux"}:
+            raise ValueError("合并过关任务需要完整的主注和辅助注")
+        main, aux = legs["main"], legs["aux"]
+        for key in ("user_id", "signal_id", "subscription_id", "auto_trigger_route_id",
+                    "delivery_target_id", "telegram_account_id", "executor_type", "execute_after", "expire_at"):
+            if main[key] != aux[key]:
+                raise ValueError("合并过关任务归属或发送窗口不一致")
+        if main["send_with_job_id"] is None and aux["send_with_job_id"] == main["id"]:
+            return
+        if any(row["status"] != "pending" or row["send_with_job_id"] is not None
+               or _safe_json_loads(row["stake_plan_json"]).get("mode") != "win_streak_roll" for row in rows):
+            raise ValueError("只能合并尚未发送的过关任务")
+        if conn.execute("SELECT 1 FROM execution_attempts WHERE job_id IN (?, ?) LIMIT 1", tuple(job_ids)).fetchone():
+            raise ValueError("已有发送记录的任务不能合并")
+        conn.execute("UPDATE execution_jobs SET send_with_job_id = ? WHERE id = ?", (main["id"], aux["id"]))
+
+    @staticmethod
+    def _combined_delivery_can_retry(conn: sqlite3.Connection, job_ids: list[int]) -> bool:
+        rows = conn.execute(
+            """SELECT j.status, e.status AS event_status FROM execution_jobs j
+               JOIN subscription_progression_events e ON e.id = j.progression_event_id
+               WHERE j.id IN (?, ?)""", tuple(job_ids),
+        ).fetchall()
+        # 结束、停止或重置轮次后不能再发送该轮的失败投注。
+        return len(rows) == 2 and all(row["status"] == "failed" and row["event_status"] == "pending" for row in rows)
+
+    @staticmethod
+    def _delivery_job_ids(conn: sqlite3.Connection, job_id: int) -> list[int]:
+        """一次 Telegram 发送对应的账务任务；从任意一腿都定位到同一组。"""
+        row = conn.execute("SELECT COALESCE(send_with_job_id, id) AS leader FROM execution_jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
+            return [job_id]
+        return [int(item["id"]) for item in conn.execute(
+            "SELECT id FROM execution_jobs WHERE id = ? OR send_with_job_id = ? ORDER BY id",
+            (row["leader"], row["leader"]),
+        ).fetchall()]
+
     # ====== Executor-facing APIs ======
 
     def pull_ready_jobs(self, executor_id: str, limit: int = 10) -> list[Dict[str, Any]]:
@@ -10389,8 +10460,10 @@ class DatabaseRepository:
                 s.issue_no,
                 s.bet_type,
                 s.bet_value,
-                j.planned_message_text AS message_text,
+                j.planned_message_text || CASE WHEN companion.id IS NOT NULL
+                    THEN ' ' || companion.planned_message_text ELSE '' END AS message_text,
                 j.stake_plan_json AS stake_plan_json,
+                companion.stake_plan_json AS companion_stake_plan_json,
                 j.idempotency_key,
                 j.execute_after,
                 j.expire_at,
@@ -10405,7 +10478,11 @@ class DatabaseRepository:
             JOIN normalized_signals s ON s.id = j.signal_id
             JOIN delivery_targets t ON t.id = j.delivery_target_id
             LEFT JOIN telegram_accounts a ON a.id = j.telegram_account_id
+            LEFT JOIN execution_jobs companion ON companion.send_with_job_id = j.id
             WHERE j.status = 'pending'
+              AND j.send_with_job_id IS NULL
+              AND (companion.id IS NULL OR (companion.status = 'pending'
+                   AND companion.execute_after <= ? AND companion.expire_at > ?))
               AND j.execute_after <= ?
               AND j.expire_at > ?
               AND t.status = 'active'
@@ -10414,9 +10491,13 @@ class DatabaseRepository:
             LIMIT ?
         """
         with self._connect() as conn:
-            rows = conn.execute(query, (now, now, limit)).fetchall()
+            rows = conn.execute(query, (now, now, now, now, limit)).fetchall()
             items: list[Dict[str, Any]] = []
             for row in rows:
+                stake_plan = _safe_json_loads(row["stake_plan_json"])
+                if row["companion_stake_plan_json"]:
+                    companion_stake = _safe_json_loads(row["companion_stake_plan_json"])
+                    stake_plan["amount"] = round(float(stake_plan.get("amount") or 0) + float(companion_stake.get("amount") or 0), 2)
                 items.append(
                     {
                         "job_id": str(row["job_id"]),
@@ -10426,7 +10507,7 @@ class DatabaseRepository:
                         "bet_type": str(row["bet_type"]),
                         "bet_value": str(row["bet_value"]),
                         "message_text": str(row["message_text"] or ""),
-                        "stake_plan": _safe_json_loads(row["stake_plan_json"]),
+                        "stake_plan": stake_plan,
                         "target": {
                             "type": str(row["target_type"]),
                             "key": str(row["target_key"]),
@@ -10450,6 +10531,10 @@ class DatabaseRepository:
             return items
 
     def retry_execution_job(self, *, job_id: int, user_id: int) -> Dict[str, Any]:
+        with self.transaction() as unit:
+            return unit._retry_execution_job(job_id=job_id, user_id=user_id)
+
+    def _retry_execution_job(self, *, job_id: int, user_id: int) -> Dict[str, Any]:
         self.expire_due_jobs()
         current = self._fetch_one(
             "SELECT * FROM execution_jobs WHERE id = ? AND user_id = ?",
@@ -10471,7 +10556,12 @@ class DatabaseRepository:
         updated_at = _utc_now_iso()
 
         with self._connect() as conn:
-            conn.execute(
+            delivery_job_ids = self._delivery_job_ids(conn, int(job_id))
+            if len(delivery_job_ids) > 1:
+                if current_status != "failed" or now_dt >= expire_at or not self._combined_delivery_can_retry(conn, delivery_job_ids):
+                    raise ValueError("合并投注只能在原发送窗口内重试明确失败的任务")
+                next_expire_at = current["expire_at"]
+            conn.executemany(
                 """
                 UPDATE execution_jobs
                 SET status = 'pending',
@@ -10482,7 +10572,7 @@ class DatabaseRepository:
                 WHERE id = ?
                   AND user_id = ?
                 """,
-                (next_execute_after, next_expire_at, updated_at, int(job_id), int(user_id)),
+                [(next_execute_after, next_expire_at, updated_at, member_id, int(user_id)) for member_id in delivery_job_ids],
             )
         return self.get_execution_job(int(job_id)) or {}
 
@@ -10503,47 +10593,56 @@ class DatabaseRepository:
 
         now = _utc_now_iso()
         raw_result_text = _safe_json_dumps(raw_result or {})
-        with self._connect() as conn:
-            conn.execute(
-                """
-                UPDATE execution_jobs
-                SET status = ?, error_message = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (delivery_status, error_message, now, int(normalized_job_id)),
-            )
-            conn.execute(
-                """
-                INSERT INTO execution_attempts (
-                    job_id, executor_instance_id, attempt_no,
-                    delivery_status, remote_message_id, raw_result,
-                    error_message, executed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    int(normalized_job_id),
-                    executor_id,
-                    int(attempt_no),
-                    delivery_status,
-                    remote_message_id,
-                    raw_result_text,
-                    error_message,
-                    executed_at,
-                ),
-            )
-            job_row = conn.execute(
-                """
-                SELECT id, user_id, signal_id, subscription_id, progression_event_id
-                FROM execution_jobs
-                WHERE id = ?
-                LIMIT 1
-                """,
-                (int(normalized_job_id),),
-            ).fetchone()
-            if job_row and job_row["progression_event_id"] is not None:
-                self._sync_progression_event_delivery_status(
-                    conn, progression_event_id=int(job_row["progression_event_id"]), now=now,
+        with self.transaction() as unit:
+            conn = unit._transaction_connection
+            delivery_job_ids = self._delivery_job_ids(conn, int(normalized_job_id))
+            for delivery_job_id in delivery_job_ids:
+                # 共享发送已确认后，迟到的失败回执不能将其重新置为可重试。
+                if len(delivery_job_ids) > 1 and delivery_status != "delivered" and conn.execute(
+                    "SELECT 1 FROM execution_attempts WHERE job_id = ? AND delivery_status = 'delivered' LIMIT 1",
+                    (delivery_job_id,),
+                ).fetchone():
+                    continue
+                conn.execute(
+                    """
+                    UPDATE execution_jobs
+                    SET status = ?, error_message = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (delivery_status, error_message, now, delivery_job_id),
                 )
+                conn.execute(
+                    """
+                    INSERT INTO execution_attempts (
+                        job_id, executor_instance_id, attempt_no,
+                        delivery_status, remote_message_id, raw_result,
+                        error_message, executed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        delivery_job_id,
+                        executor_id,
+                        int(attempt_no),
+                        delivery_status,
+                        remote_message_id,
+                        raw_result_text,
+                        error_message,
+                        executed_at,
+                    ),
+                )
+                job_row = conn.execute(
+                    """
+                    SELECT id, user_id, signal_id, subscription_id, progression_event_id
+                    FROM execution_jobs
+                    WHERE id = ?
+                    LIMIT 1
+                    """,
+                    (delivery_job_id,),
+                ).fetchone()
+                if job_row and job_row["progression_event_id"] is not None:
+                    self._sync_progression_event_delivery_status(
+                        conn, progression_event_id=int(job_row["progression_event_id"]), now=now,
+                    )
 
         return {
             "job_id": normalized_job_id,
