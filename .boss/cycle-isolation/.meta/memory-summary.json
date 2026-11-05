@@ -1,0 +1,91 @@
+{
+  "feature": "cycle-isolation",
+  "generatedAt": "2026-11-05T03:32:16.253Z",
+  "startupSummary": [
+    {
+      "category": "gate_failure_pattern",
+      "scope": "feature",
+      "summary": "Gate gate0 failed in stage 3"
+    },
+    {
+      "category": "gate_failure_pattern",
+      "scope": "feature",
+      "summary": "Gate owasp-scan failed in stage 3"
+    },
+    {
+      "category": "stable_decision",
+      "scope": "feature",
+      "summary": "Stable completion with roles=full pack=default"
+    }
+  ],
+  "agentSections": {
+    "boss-pm": [
+      {
+        "category": "stable_decision",
+        "summary": "Stable completion with roles=full pack=default"
+      }
+    ],
+    "boss-architect": [
+      {
+        "category": "stable_decision",
+        "summary": "Stable completion with roles=full pack=default"
+      }
+    ],
+    "boss-ui-designer": [
+      {
+        "category": "stable_decision",
+        "summary": "Stable completion with roles=full pack=default"
+      }
+    ],
+    "boss-tech-lead": [
+      {
+        "category": "stable_decision",
+        "summary": "Stable completion with roles=full pack=default"
+      }
+    ],
+    "boss-scrum-master": [
+      {
+        "category": "stable_decision",
+        "summary": "Stable completion with roles=full pack=default"
+      }
+    ],
+    "boss-frontend": [
+      {
+        "category": "gate_failure_pattern",
+        "summary": "Gate gate0 failed in stage 3"
+      },
+      {
+        "category": "gate_failure_pattern",
+        "summary": "Gate owasp-scan failed in stage 3"
+      }
+    ],
+    "boss-backend": [
+      {
+        "category": "gate_failure_pattern",
+        "summary": "Gate gate0 failed in stage 3"
+      },
+      {
+        "category": "gate_failure_pattern",
+        "summary": "Gate owasp-scan failed in stage 3"
+      }
+    ],
+    "boss-qa": [
+      {
+        "category": "gate_failure_pattern",
+        "summary": "Gate gate0 failed in stage 3"
+      },
+      {
+        "category": "gate_failure_pattern",
+        "summary": "Gate owasp-scan failed in stage 3"
+      }
+    ],
+    "boss-devops": [
+      {
+        "category": "stable_decision",
+        "summary": "Stable completion with roles=full pack=default"
+      }
+    ],
+    "conversation": []
+  },
+  "conversationSummary": []
+}

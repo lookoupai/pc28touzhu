@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>手动与自动过关周期隔离架构 - cycle-isolation</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f7f4;
+      --paper: #ffffff;
+      --ink: #202427;
+      --muted: #687076;
+      --line: #d7dadd;
+      --accent: #245c73;
+      --soft: #eef5f7;
+      --code: #182026;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.65;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+      gap: 28px;
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+    aside {
+      position: sticky;
+      top: 20px;
+      align-self: start;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    main {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 8px;
+      padding: 32px;
+      min-width: 0;
+    }
+    h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 1.4em 0 0.55em; }
+    h1 { margin-top: 0; font-size: 2rem; }
+    h2 { border-bottom: 1px solid var(--line); padding-bottom: 0.3em; }
+    p, ul, ol, table, pre, blockquote { margin: 0 0 1em; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      border-radius: 4px;
+      background: var(--soft);
+      padding: 0.1em 0.35em;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      overflow-x: auto;
+      border-radius: 8px;
+      background: var(--code);
+      color: #f3f7f8;
+      padding: 16px;
+    }
+    pre code { background: transparent; color: inherit; padding: 0; }
+    table { width: 100%; border-collapse: collapse; overflow-x: auto; display: block; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: var(--soft); }
+    blockquote { border-left: 4px solid var(--accent); margin-left: 0; padding: 8px 14px; color: var(--muted); background: var(--soft); }
+    .meta { color: var(--muted); font-size: 0.92rem; margin-bottom: 24px; }
+    .summary { border: 1px solid var(--line); background: var(--soft); border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+    .toc-title { font-weight: 700; margin-bottom: 8px; }
+    .toc ul, .summary ul { padding-left: 20px; }
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; }
+      aside { position: static; }
+      main { padding: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <div class="toc-title">目录</div>
+      <ul><li class="toc-level-2"><a href="#摘要">摘要</a></li><li class="toc-level-1"><a href="#手动与自动过关周期隔离架构">手动与自动过关周期隔离架构</a></li><li class="toc-level-2"><a href="#1-现状调研与选型">1. 现状调研与选型</a></li><li class="toc-level-3"><a href="#1-1-可验证事实">1.1 可验证事实</a></li><li class="toc-level-3"><a href="#1-2-候选方案比较">1.2 候选方案比较</a></li><li class="toc-level-2"><a href="#2-边界与职责">2. 边界与职责</a></li><li class="toc-level-3"><a href="#2-1-配置归属">2.1 配置归属</a></li><li class="toc-level-3"><a href="#2-2-状态归属">2.2 状态归属</a></li><li class="toc-level-2"><a href="#3-数据与内部契约">3. 数据与内部契约</a></li><li class="toc-level-3"><a href="#3-1-配置">3.1 配置</a></li><li class="toc-level-3"><a href="#3-2-自动周期表-auto-trigger-cycle-states">3.2 自动周期表 `auto_trigger_cycle_states`</a></li><li class="toc-level-3"><a href="#3-3-自动会话-auto-trigger-cycle-sessions">3.3 自动会话 `auto_trigger_cycle_sessions`</a></li><li class="toc-level-3"><a href="#3-4-每日启动-auto-trigger-cycle-daily-starts">3.4 每日启动 `auto_trigger_cycle_daily_starts`</a></li><li class="toc-level-3"><a href="#3-5-内部继承路由">3.5 内部继承路由</a></li><li class="toc-level-3"><a href="#3-6-迁移证据-cycle-state-migrations">3.6 迁移证据 `cycle_state_migrations`</a></li><li class="toc-level-3"><a href="#3-7-repository-方法签名">3.7 Repository 方法签名</a></li><li class="toc-level-2"><a href="#4-流程与状态机">4. 流程与状态机</a></li><li class="toc-level-3"><a href="#4-1-开新轮">4.1 开新轮</a></li><li class="toc-level-3"><a href="#4-2-每期结算">4.2 每期结算</a></li><li class="toc-level-3"><a href="#4-3-跨日">4.3 跨日</a></li><li class="toc-level-3"><a href="#4-4-恢复与修改">4.4 恢复与修改</a></li><li class="toc-level-2"><a href="#5-对外-api-契约">5. 对外 API 契约</a></li><li class="toc-level-2"><a href="#6-代码划分与写集建议">6. 代码划分与写集建议</a></li><li class="toc-level-2"><a href="#7-prd追溯-验收与风险">7. PRD追溯、验收与风险</a></li></ul>
+    </aside>
+    <main>
+      <h1>手动与自动过关周期隔离架构</h1>
+      <div class="meta">
+        <div>Feature: cycle-isolation</div>
+        <div>Source: architecture.md</div>
+        <div>Generated: 2026-11-04T16:52:30.072Z</div>
+      </div>
+      <section class="summary">
+        <h2>摘要</h2>
+        <ul><li>保留 Python WSGI、SQLite、原生 JS 表单和现有结算算法；本次增加的是运行归属与调度层，不改变赔率、已有盈亏账本或消息协议。</li><li>手动周期仅属于跟单方案；自动周期属于规则、方案、路由。规则与方案组成一次启动会话，多个同结构路由只消耗一次每日启动额度。</li><li>自动规则新增 <code>cycle_policy</code>；新规则默认每日 1 次、结束后等待条件，旧规则保持兼容策略快照。每轮参数固定，保存配置不解封当天、不修改在途计划。</li><li>真实派单与启动额度在同一事务内提交；没有新任务则不耗额度、不留下运行中空壳。跨日中的旧轮继续使用启动日，不被每日重置中断。</li><li>手动重置不再解封自动规则。新增规则内“恢复本方案待命”入口，仅恢复指定归属且仍受次数、风控和在途限制。</li></ul>
+      </section>
+      <h2 id="摘要">摘要</h2>
+<ul><li>保留 Python WSGI、SQLite、原生 JS 表单和现有结算算法；本次增加的是运行归属与调度层，不改变赔率、已有盈亏账本或消息协议。</li><li>手动周期仅属于跟单方案；自动周期属于规则、方案、路由。规则与方案组成一次启动会话，多个同结构路由只消耗一次每日启动额度。</li><li>自动规则新增 <code>cycle_policy</code>；新规则默认每日 1 次、结束后等待条件，旧规则保持兼容策略快照。每轮参数固定，保存配置不解封当天、不修改在途计划。</li><li>真实派单与启动额度在同一事务内提交；没有新任务则不耗额度、不留下运行中空壳。跨日中的旧轮继续使用启动日，不被每日重置中断。</li><li>手动重置不再解封自动规则。新增规则内“恢复本方案待命”入口，仅恢复指定归属且仍受次数、风控和在途限制。</li></ul>
+<h1 id="手动与自动过关周期隔离架构">手动与自动过关周期隔离架构</h1>
+<p>功能：<code>cycle-isolation</code>；基线：<code>5b37efa</code>；工作树：<code>/tmp/pc28-cycle-isolation</code>；部署前必须通过迁移与回归验证。</p>
+<h2 id="1-现状调研与选型">1. 现状调研与选型</h2>
+<h3 id="1-1-可验证事实">1.1 可验证事实</h3>
+<table><thead><tr><th>事实</th><th>代码证据与影响</th></tr></thead><tbody><tr><td>手动与自动都读取唯一的订阅周期</td><td><code>db_repository.py:get_subscription_cycle_state</code>、<code>dispatch_service.py:_dispatch_win_streak_roll_legs</code> 仅按 <code>subscription_id</code> 寻址；一方 pending/day_closed 会挡住另一方。</td></tr><tr><td>多路由第二条被第一条 pending 阻挡</td><td><code>_dispatch_signal_for_auto_trigger_routes</code> 每条路由调用同一周期入口；每个实际投递账户须独立结算。</td></tr><tr><td>自动无路由仍走订阅直派</td><td><code>_resolve_auto_trigger_context</code> 从手动 runtime 追溯规则；<code>create_progression_event_record</code> 在 route_id 为空时进入订阅财务与 runtime。只分周期表不能完整隔离。</td></tr><tr><td>停止和重开有跨归属副作用</td><td><code>platform_service.reset_win_streak_roll_cycle_for_restart</code> 会恢复该订阅的自动规则日；须删除此隐式关联。</td></tr><tr><td>日规则轮已有身份约束</td><td><code>auto_trigger_rule_runs</code> 唯一 <code>(rule_id,subscription_id,stat_date,window_id)</code>；同日新过关轮不能复用有历史的 run。</td></tr><tr><td>发送有既有防双注规则</td><td>同信号、同方案、同目标、同 leg 唯一；状态隔离不取消此限制。当前手动过关分支早于 route 占位检查，需移动检查。</td></tr><tr><td>测试与部署</td><td>Python unittest；CI 仅 Docker 构建推送，没有现成前端测试依赖；schema 迁移在 <code>initialize_database</code> 内。</td></tr></tbody></table>
+<h3 id="1-2-候选方案比较">1.2 候选方案比较</h3>
+<table><thead><tr><th>方案</th><th>优点</th><th>代价／风险</th><th>结论</th></tr></thead><tbody><tr><td>改现有 <code>subscription_cycle_states</code> 为所有归属复合主键</td><td>一个 CRUD 模型</td><td>需重建现表并修改所有旧调用；旧归属缺字段，迁移与回滚面较大</td><td>不选</td></tr><tr><td>保留手动表，新增自动周期与会话控制表</td><td>老手动 API 保留；自动归属显式；可加性迁移与保留原始迁移证据</td><td>多出自动 CRUD 和联合 pending 枚举</td><td>采用</td></tr><tr><td>为每条规则复制跟单方案</td><td>可暂时绕开共享状态</td><td>用户会看到重复方案、报告身份混乱，无法解决原方案的手动与自动共存</td><td>不选</td></tr></tbody></table>
+<p>自动无路由的两种做法：新增整套无路由自动财务表需要侵入盈亏报表；使用内部继承路由可以复用现有自动财务/续派链。采用后者，明确隐藏标记与更新隔离，不改用户可见投递选择。代码调研已足以完成此局部选型，不增加框架、中间件或部署依赖。</p>
+<h2 id="2-边界与职责">2. 边界与职责</h2>
+<h3 id="2-1-配置归属">2.1 配置归属</h3>
+<p>跟单方案保留结构 A/B/C/D/follow_signal、base_amount、main_share、roll_mode、target_streak、结算配置和手动 stop_policy。自动规则启动时继承这些下注参数并生成本轮快照；后续修改只影响下一轮。</p>
+<p>规则 <code>cycle_policy.mode=rule</code> 时，由自动调度处理轮结束、每日次数与再次启动；手动 stop_policy 对该规则不起作用。普通 fixed/martingale/follow_source 仍走现有路径，不受该新策略改变。</p>
+<h3 id="2-2-状态归属">2.2 状态归属</h3>
+<ul><li>手动：<code>manual(subscription_id)</code>，继续使用手动周期表。</li><li>自动派单与余额：<code>auto(rule_id, subscription_id, route_id)</code>。</li><li>自动一次启动/日额度：<code>session(rule_id, subscription_id)</code>，相同启动扇出的多个路由共享一次额度。</li><li>历史盈亏归属不迁移、不重算；仍依 progression_event 的 rule/route/run 归属结算与汇总。</li><li>同群去重保持现有规则：两个归属选择同一信号、同一方案、同一目标时只能一个占位成功；另一方等待，不能消费额度或把别人的 leg 引入自己的 pending。</li></ul>
+<pre><code class="language-mermaid">flowchart LR
+  M[手动开始] --&gt; MS[手动周期]
+  T[条件或定时窗口] --&gt; C[规则与方案会话/日次数]
+  C --&gt; R1[路由1自动周期]
+  C --&gt; R2[路由2自动周期]
+  MS --&gt; E[共用过关与结算算法]
+  R1 --&gt; E
+  R2 --&gt; E
+  E --&gt; O[按事件归属写账本和周期]
+  O --&gt; C</code></pre>
+<h2 id="3-数据与内部契约">3. 数据与内部契约</h2>
+<p>新增 DDL、向前兼容字段与迁移由 repository owner 独占。表名与公开方法如下；实现可将内部 SQL 拆为辅助函数，但不得改变外部语义。</p>
+<h3 id="3-1-配置">3.1 配置</h3>
+<p><code>auto_trigger_rules.cycle_policy_json TEXT NOT NULL DEFAULT '{}'</code>。</p>
+<pre><code class="language-json">{
+  &quot;mode&quot;: &quot;rule&quot;,
+  &quot;max_starts_per_day&quot;: 1,
+  &quot;on_target&quot;: &quot;wait_condition&quot;,
+  &quot;on_bust&quot;: &quot;wait_condition&quot;
+}</code></pre>
+<ul><li>mode：<code>rule</code> 或 <code>legacy</code>；创建只能为 rule，缺省如示例；读取旧 <code>{}</code> 为 legacy，更新旧规则未提供该字段保持原值。</li><li>max_starts_per_day：严格整数 <code>1..1000</code>，不接受布尔、小数、无限或 NaN。</li><li>on_target/on_bust：<code>wait_condition | new_cycle | close_day</code>。</li><li>legacy 仅供已有规则兼容，不能新建或从 rule 切回 legacy。</li><li>既有 legacy 首次迁移时按关联方案保存原 stop_policy 快照（见 session），之后手动设置变化不改变该自动规则的旧生命周期。尚未关联的 all_subscriptions 新方案在首次自动使用时冻结一次。</li><li>rule 配置保存不改变活跃周期的下注或生命周期快照，不清次数、不解封 stopped。</li></ul>
+<h3 id="3-2-自动周期表-auto-trigger-cycle-states">3.2 自动周期表 <code>auto_trigger_cycle_states</code></h3>
+<p>复用手动表中的 state/policy/pending 列，增加显式归属：</p>
+<table><thead><tr><th>字段</th><th>类型／约束</th></tr></thead><tbody><tr><td>rule_id, subscription_id, route_id</td><td>INTEGER，复合主键；route_id=0 仅用于迁移中的旧无路由归属，不允许新轮使用</td></tr><tr><td>user_id</td><td>INTEGER，同规则、方案、路由 owner 一致</td></tr><tr><td>rule_run_id</td><td>INTEGER，可空，仅迁移时空；本轮已认领后必填</td></tr><tr><td>stat_date</td><td>TEXT，本轮启动交易日，北京时间</td></tr><tr><td>balance, cycle_stake, day_pnl, win_streak, target_streak, status, stop_reason, periods</td><td>沿用现有周期语义</td></tr><tr><td>pending_plan_json, policy_json</td><td>TEXT，快照；pending 包含 owner、rule_run_id、issue、leg_event_ids</td></tr><tr><td>cycles_today, day_closed, day_close_scope, last_cycle_stop_reason, updated_at</td><td>沿用基础状态类型；自动 mode=rule 的每日新开次数以 session/day 表为准</td></tr></tbody></table>
+<p>route=0 的旧在途周期保留原事件归属及旧无路由结算路径，不能把历史 leg 改成内部路由。其结算完成前，该 rule+subscription 不得创建新轮；完成后下一次启动才使用内部继承路由。</p>
+<h3 id="3-3-自动会话-auto-trigger-cycle-sessions">3.3 自动会话 <code>auto_trigger_cycle_sessions</code></h3>
+<p>主键 <code>(rule_id,subscription_id)</code>；列：<code>user_id</code>、<code>status</code>、<code>active_run_id</code>、<code>start_stat_date</code>、<code>last_start_issue</code>、<code>last_completed_issue</code>、<code>stop_reason</code>、<code>policy_json</code>（本轮生命周期快照）、<code>legacy_policy_json</code>（首次冻结的旧生命周期）、<code>participating_route_ids_json</code>、<code>updated_at</code>。</p>
+<p>status 枚举：<code>waiting</code>、<code>running</code>、<code>continuation</code>、<code>day_closed</code>、<code>blocked</code>。</p>
+<ul><li>waiting：下一新开奖/新鲜信号上的条件可再判。</li><li>continuation：结束配置为 new_cycle，等待下一可投注信号，不要求触发条件。</li><li>day_closed：本交易日收工；下一交易日进入 waiting。保存配置不解封。</li><li>blocked：归属无法确认、人工停轮或迁移需检查；不会自动跨日解封不明归属。</li></ul>
+<h3 id="3-4-每日启动-auto-trigger-cycle-daily-starts">3.4 每日启动 <code>auto_trigger_cycle_daily_starts</code></h3>
+<p>主键 <code>(rule_id,subscription_id,stat_date)</code>；列 <code>user_id, starts_count, last_start_issue, updated_at</code>。只记录成功开轮数；清空盈亏、修改阈值、恢复待命均不能减少它。旧自动轮迁移按已有 run / old cycles_today 证据初始化，不重复累计。</p>
+<h3 id="3-5-内部继承路由">3.5 内部继承路由</h3>
+<p><code>auto_trigger_rule_routes</code> 加 <code>is_implicit INTEGER NOT NULL DEFAULT 0</code>。</p>
+<ul><li>无显式路由的自动过关方案在启动事务内，从方案 <code>dispatch.delivery_target_ids</code> 解析目标，未指定则取该用户当前有效默认目标。</li><li>校验 owner、target/account/source/subscription status、dispatch_mode（规则不得投 direct_only）。</li><li>按 <code>(rule_id,delivery_target_id,is_implicit=1)</code> 幂等建立 route，参数固定继承方案/规则，无新 UI 功能。</li><li>真实查询与续派可取 implicit route；用户列表 <code>rule.routes</code> 与保存 route 同步只操作 <code>is_implicit=0</code>。用户保存空 routes 不得删除内部路由；切换显式路由也不取消已有内部在途，下一轮按新设置选择。</li><li>全部方案范围：每个方案独立解析自己的有效目标，不把另一个方案的目标带入。</li><li>内部 route 可复用既有自动账本，其身份不含 subscription，因为已有 route runtime/财务本身按 route+subscription 区分。</li></ul>
+<h3 id="3-6-迁移证据-cycle-state-migrations">3.6 迁移证据 <code>cycle_state_migrations</code></h3>
+<p>按 subscription_id 唯一保存原始 state JSON、识别 owner JSON、迁移状态/原因/时间，重复初始化不重复迁移。</p>
+<ol><li>原表 pending_plan 的 rule/route/run 归属与 leg_event_ids 一致：迁移为对应自动周期；无规则且 leg 均手动则留手动。</li><li>已清 pending 的周期，按最近同一周期的 progression_event.result_context.cycle、rule_run、时序共同确认归属。只有唯一可信 owner 才迁移。</li><li>找不到历史或 periods=0 的未使用基线可保留手动基线，自动需要时独立初始化。</li><li>存量自动已收工：迁移其 balance/day_closed/stop_reason 和规则日 stopped 原样保留，不能因分表重开。</li><li>证据冲突、同时归属多个 owner 或在途归属不完整：原数据归档，并将相关 owner 标记 blocked；提供可读原因。禁止猜测复制成多个可运行账户。</li><li>确认自动的原手动表状态移出后，不把自动余额/待结算复制成新的手动基线。手动随后由明确手动启动建立初始状态。</li><li>不更改既有 progression_events、execution_jobs、financial_state、report_daily_stats 金额和已结算归属。旧无route在途可原路径结算；禁止以迁移为由回放派单。</li></ol>
+<h3 id="3-7-repository-方法签名">3.7 Repository 方法签名</h3>
+<p>所有写方法复用 <code>repository.transaction()</code> 的 <code>BEGIN IMMEDIATE</code>，不得内部提交外层事务；owner 参数必须核对。</p>
+<pre><code class="language-python">get_auto_trigger_cycle_state(*, rule_id: int, subscription_id: int,
+    route_id: int, user_id: int) -&gt; dict | None
+upsert_auto_trigger_cycle_state(*, rule_id: int, subscription_id: int,
+    route_id: int, user_id: int, rule_run_id: int | None,
+    state: dict, policy: dict | None = None, pending_plan: dict | None = None) -&gt; dict
+list_pending_win_streak_cycles(user_id: int | None = None) -&gt; list[dict]
+# 联合manual+auto，返回显式scope、rule/route/run，不允许结算调用者猜归属。
+get_auto_trigger_cycle_session(*, rule_id: int, subscription_id: int, user_id: int) -&gt; dict | None
+upsert_auto_trigger_cycle_session(*, rule_id: int, subscription_id: int,
+    user_id: int, values: dict) -&gt; dict
+get_auto_trigger_cycle_daily_starts(*, rule_id: int, subscription_id: int,
+    user_id: int, stat_date: str) -&gt; dict
+claim_auto_trigger_cycle_start(*, rule_id: int, subscription_id: int,
+    user_id: int, stat_date: str, started_issue_no: str,
+    max_starts_per_day: int, policy: dict, route_ids: list[int],
+    window_id: str = '') -&gt; dict
+# {claimed: bool, reason: str, run: dict, starts_count: int}
+# 在已有外层启动事务中调用：新run唯一window key为roll:&lt;ordinal&gt;[:&lt;schedule_window&gt;]。
+# claim将session设running并计数；若派单为0，外层必须整体ROLLBACK，不允许单独留下额度。
+complete_auto_trigger_cycle_session(*, rule_id: int, subscription_id: int,
+    user_id: int, rule_run_id: int, completed_issue_no: str,
+    status: str, stop_reason: str = '') -&gt; dict
+# 所有参与route均完成才结束session；仍有pending不接受正常结束。
+ensure_implicit_auto_trigger_route(*, rule_id: int, user_id: int,
+    delivery_target_id: int) -&gt; dict
+list_auto_trigger_cycle_runtime(*, rule_id: int, user_id: int,
+    stat_date: str) -&gt; list[dict]</code></pre>
+<p>会话完成要关闭该 run 的 route runtime 并保留其已结算统计；原 <code>reset_auto_trigger_route_subscription_runtime(force=True)</code> 会产生人工停止标签，不应拿来冒充正常轮终结。新增辅助 SQL 只关闭指定 rule_run 的运行态，不清历史钱。</p>
+<h2 id="4-流程与状态机">4. 流程与状态机</h2>
+<h3 id="4-1-开新轮">4.1 开新轮</h3>
+<ol><li>识别方案是否过关，非过关走旧路径。读取规则归属的 session；跨日运行中的旧 session 仍算 active，不新开。</li><li>waiting 走原条件/定时窗口判定；continuation 可跳过条件，但仍要求下一未投注信号及当前规则、来源、方案、目标有效。</li><li>waiting 的证据期必须 <code>latest_settled_issue &gt; last_completed_issue</code>，不能用完成那一期重新触发。首次启动仍使用现有条件含义。</li><li>原 <code>cooldown_issues</code> 从上次启动期算，仅约束 waiting 的条件重触发；new_cycle 不等条件/冷却，但必须下一可投注期。定时触发仍需有效窗口与星期限制；窗口内可多次开过关轮，受每日额度约束。非过关定时窗口原语义不变。</li><li>用 fresh signal 做封盘预判；无信号或不可投仍 waiting/continuation，不切 manual active。</li><li>开事务：重读所有状态、日风控、owner 与当前配置，检查无 pending/active session、quota、同一期已消费与目标占位。解析内部路由或显式路由，建立本轮快照，claim 一次规则方案启动。</li><li>每个实际参与 route 建自己的 cycle，使用同一继承结构。派单生成双 leg；任何复用旧 job/event 都不能当成本轮成功。全部零创建则回滚整个 claim；成功路径至少一条 route 两腿已新建，已参与集合只能包含真正起轮的 route。</li><li>多目标有部分不可用时，其余目标按现有路由规则可启动；在触发事件中列清 skipped_routes，不把未启动 route 当作已参与并永久等待。无故 second-route pending 阻挡必须消除。</li><li><code>dispatch_latest_signal=false</code> 的旧“仅开轮”语义保留，可成功认领一次；后续首个新信号继续该 session，不再扣次数。</li></ol>
+<h3 id="4-2-每期结算">4.2 每期结算</h3>
+<p>结算按 pending owner 找回状态，只有本期两腿终态才推进。dispatch/settlement 对同一owner采用事务与pending issue/run比较，重复回执或重复settlement不得推进两次、清掉新pending。</p>
+<p>手动仍用原 stop_policy。自动 mode=rule 使用本轮 policy 快照，仅运行“一轮连赢/资金耗尽”算法；不在纯算法内部补仓或直接改 running。自动调度收到达标/爆仓结果后才决定下步：</p>
+<table><thead><tr><th>配置</th><th>行为</th></tr></thead><tbody><tr><td>wait_condition</td><td>本route轮结束；所有参与route完成后关闭本run，session waiting，记录完成期号</td></tr><tr><td>new_cycle</td><td>本route轮结束；所有参与route完成后关闭本run，session continuation，下一可投注信号认领新轮，从base_amount起注</td></tr><tr><td>close_day</td><td>仅停当前 rule+subscription 当天会话，剩余已发送单正常结算，后续不派新期；不得停止本规则其他方案</td></tr><tr><td>今日额度已满</td><td>当前轮仍正常完成；完成后 day_closed，不截断已经开始的一轮</td></tr><tr><td>规则日风控、停用或人工停轮</td><td>优先于任何续开策略；不自动恢复，不重新补仓</td></tr></tbody></table>
+<p>多个route结局不同：全部终结是进入下一轮的屏障；只要任一路由要求 close_day，就停止该会话当天；否则若全部要求 new_cycle 则 continuation；其他情况 waiting。这里不提供路由独立结构配置。</p>
+<p>legacy 使用首次冻结的手动 stop_policy 的旧语义（包括continue保持原链和new_cycle），但状态、财务、重置已隔离。legacy结束行为不能从用户之后的手动设置动态读取。</p>
+<h3 id="4-3-跨日">4.3 跨日</h3>
+<p>正在运行的自动周期不调用 <code>ensure_daily_state(today)</code> 重置中途进度；始终传本轮 start_stat_date。旧轮在新一天结算完，额度仍记启动日，完成后可按新一天计数再触发。日盈亏继续按既有北京时间结算日账本计算，不随启动日重写。日风控派单前同时检查当前日与旧run已被停止状态，避免通过旧日期绕过新日限额。</p>
+<h3 id="4-4-恢复与修改">4.4 恢复与修改</h3>
+<p>独立 mode 的 <code>close_day</code> / 每日次数用尽只关闭 rule+subscription 会话，不调用 <code>stop_auto_trigger_rule_day_for_cycle</code> 全规则闸。只有既有规则级日止盈止损才停止整规则；legacy 仍保留原 close_scope 语义。</p>
+<ul><li>手动 restart/reset 只访问manual周期与manual runtime，不调用恢复规则日/释放规则窗口的旧辅助函数。</li><li>自动恢复入口指定 rule+subscription，只恢复等待，不派单、不清次数、不清盈亏。</li><li>若日次数已满，需用户先显式提高规则额度；恢复入口本身不能突破上限。若日风险仍触发或有在途/运行中，拒绝恢复。</li><li>恢复不影响其他规则和manual；使用新规则run ID，不能复用有结算历史的旧run。</li><li>调整目标结构、金额、收工策略只影响下一轮；当前pending与会话快照保持。</li><li>既有 update-rule 的自动恢复辅助逻辑、<code>/resume-day</code> 与启停规则入口均不能绕过该会话收工或quota限制；显式 <code>/resume-cycle</code> 才能按上述条件恢复指定会话。</li></ul>
+<h2 id="5-对外-api-契约">5. 对外 API 契约</h2>
+<p>沿用 Cookie 认证和现有响应形状，不新引统一 envelope。</p>
+<table><thead><tr><th>方法</th><th>路径</th><th>请求／响应</th><th>认证</th></tr></thead><tbody><tr><td>POST</td><td><code>/api/platform/auto-trigger-rules</code></td><td>原字段加可选cycle_policy；200 <code>{item: rule}</code></td><td>Cookie，当前用户</td></tr><tr><td>POST</td><td><code>/api/platform/auto-trigger-rules/{id}</code></td><td>部分更新cycle_policy；200 <code>{item: rule, ...原字段}</code></td><td>同owner</td></tr><tr><td>GET</td><td><code>/api/platform/auto-trigger-rules?stat_date=YYYY-MM-DD</code></td><td>200 <code>{items: rule[]}</code>；rule新增cycle_policy、cycle_runtime</td><td>同owner</td></tr><tr><td>POST</td><td><code>/api/platform/auto-trigger-rules/{id}/resume-cycle</code></td><td><code>{subscription_id:int}</code>；200 <code>{resumed:bool,item:rule,cycle_runtime:object}</code></td><td>rule与sub同owner且仍在作用范围</td></tr><tr><td>GET</td><td><code>/api/platform/subscriptions/summary</code></td><td>原items每项增加manual_cycle_state或null</td><td>同owner</td></tr><tr><td>POST</td><td>既有订阅restart/reset端点</td><td>兼容原请求／响应，副作用限manual</td><td>同owner</td></tr></tbody></table>
+<p><code>cycle_runtime</code> 的数组项：</p>
+<pre><code class="language-json">{
+  &quot;subscription_id&quot;: 18,
+  &quot;subscription_name&quot;: &quot;过三关&quot;,
+  &quot;stat_date&quot;: &quot;2026-11-05&quot;,
+  &quot;starts_today&quot;: 1,
+  &quot;max_starts_per_day&quot;: 3,
+  &quot;status&quot;: &quot;waiting&quot;,
+  &quot;active_run_id&quot;: null,
+  &quot;start_stat_date&quot;: &quot;2026-11-05&quot;,
+  &quot;last_completed_issue&quot;: &quot;3502506&quot;,
+  &quot;stop_reason&quot;: &quot;cycle_balance_depleted&quot;,
+  &quot;routes&quot;: [{&quot;route_id&quot;:11,&quot;route_name&quot;:&quot;测试群&quot;,&quot;status&quot;:&quot;stopped&quot;,&quot;balance&quot;:2.35,&quot;cycle_stake&quot;:0,&quot;win_streak&quot;:0,&quot;target_streak&quot;:3,&quot;pending_issue&quot;:&quot;&quot;}]
+}</code></pre>
+<p><code>stat_date</code> 对应用户所选计数日；<code>start_stat_date</code> 是当前或最近一轮的启动日。内部路由的名称可回显目标名称，但不能变成可编辑route表单行。</p>
+<p><code>manual_cycle_state</code>：<code>{stat_date,status,balance,cycle_stake,day_pnl,win_streak,target_streak,periods,cycles_today,day_closed,stop_reason,pending_issue}</code>；仅手动状态，未开始可null。</p>
+<p>错误保持 <code>{error: 中文说明}</code>：非法字段/范围/在途/次数满/规则停用/风险未解除均400；未登录401；其他用户资源不泄露，沿用现有不可见资源错误约定。服务端是唯一校验来源，前端禁用仅做提示。</p>
+<h2 id="6-代码划分与写集建议">6. 代码划分与写集建议</h2>
+<ul><li>repository owner：<code>executor/db_repository.py</code> 全部DDL、migration、owner CRUD、atomic claim、internal routes、runtime查询、同目标占位/账本归属、repository测试。</li><li>orchestration owner：<code>domain/auto_trigger_cycle.py</code>（新增政策/状态转换纯逻辑）；<code>services/auto_trigger_service.py</code>、<code>dispatch_service.py</code>、<code>pc28_auto_settlement_service.py</code>、<code>platform_service.py</code>、<code>api/app.py</code>；必要的<code>domain/win_streak_roll.py</code>最小接口；跨层业务测试。</li><li>frontend owner：<code>ui/auto_triggers.html/js/css</code>、<code>ui/autobet.html/js</code>；仅使用以上契约，保持现有视觉风格。</li><li>QA：新增迁移/跨日/并发/真实API+UI提交测试，禁止对线上运行run-once、发送消息、重置真实账户。</li><li>不增加运行依赖，不改CI/部署配置；部署先备份SQLite，暂停全部访问repository的worker，统一升级后恢复，避免新旧代码混写。</li></ul>
+<h2 id="7-prd追溯-验收与风险">7. PRD追溯、验收与风险</h2>
+<p>PRD FR-001/002 对应§2、§3.2、§4.4；FR-003/004对应§3.1与§5；FR-005/006/007/008对应§4.1/4.2及日计数；FR-009/010对应事务/同目标去重及归属恢复；FR-011对应§4.3；FR-012对应§3.6；FR-013对应§5 runtime/manual 状态回显。</p>
+<table><thead><tr><th>验收</th><th>必须验证</th></tr></thead><tbody><tr><td>手动/自动并存</td><td>手动余额/计数/停止不影响rule A；rule A不影响rule B；相同目标冲突不重复发送、不耗另一方额度</td></tr><tr><td>一天多次等待条件</td><td>连大双启动→结束→同一期不重开→新一期再次达条件→第2轮；上限后不再开</td></tr><tr><td>直接续开</td><td>下一可投注信号新run、count+1、base_amount起步；inactive/日风控/在途禁止</td></tr><tr><td>多路由</td><td>两route都派双腿；各自结算；会话日额度只+1；最慢route未结束前不新起</td></tr><tr><td>零派单</td><td>没信号、已开奖、目标被占、已禁用均不认领；重试成功只+1</td></tr><tr><td>跨日</td><td>23:59旧轮到次日继续进度；完成不消耗新日quota；日盈亏仍归实际结算日</td></tr><tr><td>迁移</td><td>manual、auto pending、auto已收工、旧无route在途、混合不明归属，重复initialize均幂等；钱与历史归属不变</td></tr><tr><td>重置</td><td>手动restart不解封auto；规则恢复只影响指定sub，拒绝quota满与pending</td></tr><tr><td>表单/API</td><td>新建默认rule；legacy旧规则保存保留；严整数；未授权不能修改；保存不解封</td></tr></tbody></table>
+<p>高风险项是存量归属与实际下注次数。未通过迁移快照对账或同目标冲突红测，不允许部署。baseline全套582项中两条既有手动restart解封自动测试失败/依赖北京日期，须改为新的隔离预期并固定日期；其余580项作为回归基线。</p>
+<p>部署策略：本工作树仅实现与验证，不触碰线上数据或自动发送。待完整测试和独立review通过后给出确切迁移结果与发布步骤。备份回滚只能整体代码+数据库版本配对，不允许运行新DDL后直接混用旧worker。</p>
+    </main>
+  </div>
+</body>
+</html>

@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>手动与自动过关隔离 UI 规范 - cycle-isolation</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f7f4;
+      --paper: #ffffff;
+      --ink: #202427;
+      --muted: #687076;
+      --line: #d7dadd;
+      --accent: #245c73;
+      --soft: #eef5f7;
+      --code: #182026;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.65;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+      gap: 28px;
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+    aside {
+      position: sticky;
+      top: 20px;
+      align-self: start;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    main {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 8px;
+      padding: 32px;
+      min-width: 0;
+    }
+    h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 1.4em 0 0.55em; }
+    h1 { margin-top: 0; font-size: 2rem; }
+    h2 { border-bottom: 1px solid var(--line); padding-bottom: 0.3em; }
+    p, ul, ol, table, pre, blockquote { margin: 0 0 1em; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      border-radius: 4px;
+      background: var(--soft);
+      padding: 0.1em 0.35em;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      overflow-x: auto;
+      border-radius: 8px;
+      background: var(--code);
+      color: #f3f7f8;
+      padding: 16px;
+    }
+    pre code { background: transparent; color: inherit; padding: 0; }
+    table { width: 100%; border-collapse: collapse; overflow-x: auto; display: block; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: var(--soft); }
+    blockquote { border-left: 4px solid var(--accent); margin-left: 0; padding: 8px 14px; color: var(--muted); background: var(--soft); }
+    .meta { color: var(--muted); font-size: 0.92rem; margin-bottom: 24px; }
+    .summary { border: 1px solid var(--line); background: var(--soft); border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+    .toc-title { font-weight: 700; margin-bottom: 8px; }
+    .toc ul, .summary ul { padding-left: 20px; }
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; }
+      aside { position: static; }
+      main { padding: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <div class="toc-title">目录</div>
+      <ul><li class="toc-level-2"><a href="#摘要">摘要</a></li><li class="toc-level-1"><a href="#手动与自动过关隔离-ui-规范">手动与自动过关隔离 UI 规范</a></li><li class="toc-level-2"><a href="#1-设计概述">1. 设计概述</a></li><li class="toc-level-2"><a href="#2-用户流程">2. 用户流程</a></li><li class="toc-level-2"><a href="#3-设计令牌">3. 设计令牌</a></li><li class="toc-level-2"><a href="#4-自动规则编辑区">4. 自动规则编辑区</a></li><li class="toc-level-3"><a href="#4-1-位置与作用范围">4.1 位置与作用范围</a></li><li class="toc-level-3"><a href="#4-2-表单契约">4.2 表单契约</a></li><li class="toc-level-3"><a href="#4-3-旧规则兼容与编辑">4.3 旧规则兼容与编辑</a></li><li class="toc-level-2"><a href="#5-自动规则运行详情">5. 自动规则运行详情</a></li><li class="toc-level-3"><a href="#5-1-数据契约与呈现">5.1 数据契约与呈现</a></li><li class="toc-level-3"><a href="#5-2-状态文案">5.2 状态文案</a></li><li class="toc-level-3"><a href="#5-3-操作与范围">5.3 操作与范围</a></li><li class="toc-level-2"><a href="#6-手动方案页面">6. 手动方案页面</a></li><li class="toc-level-3"><a href="#6-1-配置归属">6.1 配置归属</a></li><li class="toc-level-3"><a href="#6-2-手动运行展示">6.2 手动运行展示</a></li><li class="toc-level-2"><a href="#7-组件状态-反馈与无障碍">7. 组件状态、反馈与无障碍</a></li><li class="toc-level-2"><a href="#8-响应式与边界数据">8. 响应式与边界数据</a></li><li class="toc-level-2"><a href="#9-需求追溯与写集">9. 需求追溯与写集</a></li><li class="toc-level-2"><a href="#10-验证清单">10. 验证清单</a></li><li class="toc-level-2"><a href="#11-设计资源">11. 设计资源</a></li></ul>
+    </aside>
+    <main>
+      <h1>手动与自动过关隔离 UI 规范</h1>
+      <div class="meta">
+        <div>Feature: cycle-isolation</div>
+        <div>Source: ui-spec.md</div>
+        <div>Generated: 2026-11-04T16:53:48.079Z</div>
+      </div>
+      <section class="summary">
+        <h2>摘要</h2>
+        <ul><li>沿用自动触发规则与跟单方案现有表单、卡片、按钮及颜色，不新增导航页或组件库。</li><li>自动规则新增“过关轮次管理”：每个方案每日启动上限、过关成功后及本轮资金耗尽后的处理；只影响过关方案，普通均注/倍投保持原行为。</li><li>新规则默认“由本规则控制、每天 1 轮、结束后等待条件”；旧规则显示“沿用原有结束设置”，显式切换才使用规则配置，保存不会解除已收工状态。</li><li>自动规则详情展示本规则各方案的次数和各投递的过关进度；手动方案只展示手动状态，两处操作明确各自作用范围。</li><li>恢复待命不立即派单，不清空日次数或历史盈亏；当前有待结算任务、日额度用完或风控仍阻止时给出具体原因。</li></ul>
+      </section>
+      <h2 id="摘要">摘要</h2>
+<ul><li>沿用自动触发规则与跟单方案现有表单、卡片、按钮及颜色，不新增导航页或组件库。</li><li>自动规则新增“过关轮次管理”：每个方案每日启动上限、过关成功后及本轮资金耗尽后的处理；只影响过关方案，普通均注/倍投保持原行为。</li><li>新规则默认“由本规则控制、每天 1 轮、结束后等待条件”；旧规则显示“沿用原有结束设置”，显式切换才使用规则配置，保存不会解除已收工状态。</li><li>自动规则详情展示本规则各方案的次数和各投递的过关进度；手动方案只展示手动状态，两处操作明确各自作用范围。</li><li>恢复待命不立即派单，不清空日次数或历史盈亏；当前有待结算任务、日额度用完或风控仍阻止时给出具体原因。</li></ul>
+<h1 id="手动与自动过关隔离-ui-规范">手动与自动过关隔离 UI 规范</h1>
+<h2 id="1-设计概述">1. 设计概述</h2>
+<p>功能名称：cycle-isolation。目标是让用户能明确区分“这条自动规则今天还可以启动几轮”和“手动跟单的过关状态”。本次扩展现有 <code>/auto-triggers</code>、<code>/autobet/subscriptions</code>；不做不同路由独立结构设置、不更换页面风格、不增加图表或复杂动效。</p>
+<p>单轮投注参数仍在跟单方案维护，自动规则负责该规则启动的轮次生命周期。页面不向用户展示数据库主键、scope key 或迁移表名。</p>
+<h2 id="2-用户流程">2. 用户流程</h2>
+<pre><code class="language-mermaid">flowchart TD
+    A[选择已有过关跟单方案] --&gt; B[规则配置每日启动上限与结束后处理]
+    B --&gt; C[保存规则]
+    C --&gt; D[等待条件满足]
+    D --&gt; E[启动一轮并记录当日次数]
+    E --&gt; F[达标或本轮资金耗尽]
+    F --&gt; G{所选结束后处理}
+    G --&gt;|等待条件| D
+    G --&gt;|直接续开且还有额度| E
+    G --&gt;|当天收工或额度已满| H[当天收工]
+    H --&gt; I[规则内明确恢复待命操作]
+    I --&gt;|额度或风控仍阻止| J[显示原因，保持停止]
+    I --&gt;|允许恢复| D</code></pre>
+<p>“等待条件”要求使用本轮结束之后的新一期判断，不复用刚结束那轮之前的开奖证据；“直接续开”仍等待下一可投注信号，受规则启用状态、每日额度和日风控约束。</p>
+<h2 id="3-设计令牌">3. 设计令牌</h2>
+<p>本次所有新增组件使用下列语义别名，别名绑定现有页面样式；无需为全站重建 tokens。令牌定义是唯一允许出现样式值的位置，其余章节引用名称。</p>
+<table><thead><tr><th>令牌</th><th>绑定或定义</th><th>用途</th></tr></thead><tbody><tr><td>color.page</td><td>现有 <code>--bg</code></td><td>页面背景</td></tr><tr><td>color.surface</td><td>现有 <code>--surface</code>；手动页卡片沿用现有实色面板</td><td>卡片背景</td></tr><tr><td>color.subtle</td><td>自动页 <code>--surface-subtle</code></td><td>设置区浅背景</td></tr><tr><td>color.text</td><td>现有 <code>--text</code></td><td>标题与正文</td></tr><tr><td>color.muted</td><td>现有 <code>--muted</code></td><td>辅助说明</td></tr><tr><td>color.border</td><td>现有 <code>--line</code></td><td>分组与输入框边框</td></tr><tr><td>color.action</td><td>自动页 <code>--accent</code>；手动页 <code>--primary</code></td><td>操作与焦点</td></tr><tr><td>color.actionStrong</td><td>自动页 <code>--accent-strong</code>；手动页 <code>--primary-strong</code></td><td>激活操作</td></tr><tr><td>color.error</td><td>现有 <code>--danger</code></td><td>错误消息</td></tr><tr><td>color.warning</td><td>自动页 <code>--warning</code>；手动页状态沿用现有告警样式</td><td>收工/待核对提示</td></tr><tr><td>color.success</td><td>自动页 <code>--ok</code>；手动页沿用现有成功状态样式</td><td>运行或保存成功</td></tr><tr><td>type.heading</td><td>现有 <code>.section-head h3</code></td><td>新增分组标题</td></tr><tr><td>type.label</td><td>现有 <code>.field span</code></td><td>控件标签</td></tr><tr><td>type.body</td><td>继承页面 <code>font</code></td><td>选项与正文</td></tr><tr><td>type.note</td><td>现有 <code>.meta-line</code> / <code>.field-hint</code></td><td>说明与状态</td></tr><tr><td>type.numeric</td><td>现有 <code>.mono</code></td><td>期号、次数和金额</td></tr><tr><td>space.label</td><td>现有 <code>.field</code> 的 gap</td><td>标签到控件</td></tr><tr><td>space.form</td><td>现有 <code>.form-grid</code> 的 gap</td><td>表单间距</td></tr><tr><td>space.section</td><td>现有 <code>.condition-panel</code> 的 padding / margin</td><td>设置区内外距</td></tr><tr><td>space.card</td><td>现有 <code>.rule-card</code> 的 padding</td><td>状态块内距</td></tr><tr><td>radius.control</td><td>现有 <code>.text-input</code></td><td>控件圆角</td></tr><tr><td>radius.panel</td><td>现有 <code>.condition-panel</code></td><td>设置区圆角</td></tr><tr><td>shadow.panel</td><td>现有 <code>.rule-card</code>（无新增阴影）</td><td>保持现有层级</td></tr><tr><td>target.touch</td><td><code>44px</code> 最小可点击区域</td><td>移动端操作目标</td></tr><tr><td>breakpoint.ruleTablet</td><td><code>1080px</code></td><td>自动页改单栏布局</td></tr><tr><td>breakpoint.ruleMobile</td><td><code>720px</code></td><td>自动页控件单列</td></tr><tr><td>breakpoint.manualTablet</td><td><code>1180px</code></td><td>手动页沿用现有布局断点</td></tr><tr><td>breakpoint.manualMobile</td><td><code>900px</code></td><td>手动页详情与表单单列</td></tr></tbody></table>
+<p>状态必须同时有文字，不能仅依赖颜色。新增文字的实测对比度至少 4.5:1；现有样式不满足时仅对新增块采用 color.text，不以低透明度表达说明。沿用现有亮色模式，本次不新增主题切换。内容显示/隐藏即时完成，避免轮次状态跳动动画；不添加装饰阴影或渐变。</p>
+<h2 id="4-自动规则编辑区">4. 自动规则编辑区</h2>
+<h3 id="4-1-位置与作用范围">4.1 位置与作用范围</h3>
+<p>在跟单方案选择区域之后、开始条件之前增加“过关轮次管理”分组。组头固定说明：</p>
+<blockquote><p>这里只管理本规则启动的过关轮次。投注结构、起始金额和过几关继承跟单方案；普通均注、倍投不受本区设置影响。</p></blockquote>
+<p>即使选择“全部跟单方案”，此说明也保留。当前选择范围没有过关方案时，显示“当前范围没有过关方案；这些设置将在选用过关方案时生效”，允许保存规则，不能误将普通方案计入过关额度。</p>
+<h3 id="4-2-表单契约">4.2 表单契约</h3>
+<p><code>cycle_policy</code> 由规则创建/更新 API 收发。字段值与文案如下：</p>
+<table><thead><tr><th>表单标签</th><th>payload 字段</th><th>取值与显示</th><th>初始值 / 校验</th></tr></thead><tbody><tr><td>轮次管理方式</td><td><code>cycle_policy.mode</code></td><td><code>rule</code>：由本规则控制；<code>legacy</code>：沿用原有结束设置</td><td>新建固定 <code>rule</code>；仅返回 legacy 的旧规则显示兼容选项</td></tr><tr><td>每个方案每天最多启动</td><td><code>cycle_policy.max_starts_per_day</code></td><td>正整数，单位“轮”</td><td>新建 1；范围 1–1000，拒绝空白、小数、NaN、越界</td></tr><tr><td>过关成功后</td><td><code>cycle_policy.on_target</code></td><td>见处理选项表</td><td>新建 <code>wait_condition</code></td></tr><tr><td>本轮资金耗尽后</td><td><code>cycle_policy.on_bust</code></td><td>见处理选项表</td><td>新建 <code>wait_condition</code></td></tr></tbody></table>
+<table><thead><tr><th>枚举</th><th>下拉选项</th><th>选中后说明</th></tr></thead><tbody><tr><td><code>wait_condition</code></td><td>等待下次条件满足</td><td>本轮结束后回到待命，使用结束后的新一期重新判断条件；仍受冷却期数限制。定时规则显示“等待新一期且处于允许的定时窗口”，同一窗口内允许在上轮结束后再次启动。</td></tr><tr><td><code>new_cycle</code></td><td>下一可投注期直接续开</td><td>不重新等待开始条件，按方案起始金额开启下一轮；仍计入每日上限并受日风控限制。</td></tr><tr><td><code>close_day</code></td><td>当天收工</td><td>本轮结束后停止本规则该方案当日的过关启动。</td></tr></tbody></table>
+<p>额度说明固定为：</p>
+<blockquote><p>按北京时间的启动日期计数，首次启动也计 1 轮；跨日继续运行的旧轮不占今天的新开额度。两个投递使用同一轮时只计一次。</p></blockquote>
+<p>上限为 1 且任一处理选择等待/续开时，在处理说明后补充“当前每天最多 1 轮，本轮结束后仍会因额度用完收工”。不要强制改掉用户的处理选择，避免之后调大上限时丢失配置。</p>
+<p>现有冷却控件增加说明：</p>
+<blockquote><p>冷却限制再次按条件触发的间隔，不影响本轮继续投注；选择直接续开时不重新等待条件。</p></blockquote>
+<h3 id="4-3-旧规则兼容与编辑">4.3 旧规则兼容与编辑</h3>
+<ul><li><code>mode=legacy</code> 显示紧凑状态条：“沿用原有结束设置。切换为由本规则控制后，新的轮次将使用本区设置。”</li><li>legacy 状态下隐藏或禁用独立上限/结束处理控件，并展示从服务端读取的原有模式摘要；不能提交未展示的默认值覆盖旧设置。</li><li>新建规则不提供 legacy 入口。已经独立控制的规则不允许通过 UI 回切 legacy。</li><li>旧规则显式切换 rule 时，预填 1 / wait_condition / wait_condition，显示这组实际值供用户编辑。切换不调用恢复、启动或重置 API。</li><li>保存后只按服务端成功结果回显；失败保留输入。修改名称、条件、路由或配置不能清空日计数、解封当天收工或重置待结算周期。</li><li>在跑轮次沿用开轮快照，新设置用于下一轮；保留一句“正在运行的轮次按开轮时设置完成”。</li></ul>
+<h2 id="5-自动规则运行详情">5. 自动规则运行详情</h2>
+<p>规则卡片保留现有条件、盈亏、状态、编辑与检查入口，新增可折叠“过关运行”区域。不把摘要数字或状态整行做成操作按钮。</p>
+<h3 id="5-1-数据契约与呈现">5.1 数据契约与呈现</h3>
+<p>规则列表项增加 <code>cycle_runtime[]</code>，每项代表本规则下一个过关方案：</p>
+<pre><code class="language-json">{
+  &quot;subscription_id&quot;: 18,
+  &quot;subscription_name&quot;: &quot;jnd28波动反弹模型 过三关&quot;,
+  &quot;stat_date&quot;: &quot;2026-11-05&quot;,
+  &quot;starts_today&quot;: 1,
+  &quot;max_starts_per_day&quot;: 3,
+  &quot;status&quot;: &quot;waiting&quot;,
+  &quot;active_run_id&quot;: null,
+  &quot;start_stat_date&quot;: &quot;2026-11-05&quot;,
+  &quot;last_completed_issue&quot;: &quot;3502506&quot;,
+  &quot;stop_reason&quot;: &quot;&quot;,
+  &quot;routes&quot;: [{
+    &quot;route_id&quot;: 11,
+    &quot;route_name&quot;: &quot;测试群&quot;,
+    &quot;status&quot;: &quot;waiting&quot;,
+    &quot;balance&quot;: 2.35,
+    &quot;cycle_stake&quot;: 0,
+    &quot;win_streak&quot;: 0,
+    &quot;target_streak&quot;: 3,
+    &quot;pending_issue&quot;: &quot;&quot;
+  }]
+}</code></pre>
+<p>每方案按以下顺序展示：方案名称、语义状态、<code>所选日已启动 1 / 3 轮</code>、当前轮次启动日（存在时）、各投递余额/本期滚仓注额/连续盈利关数/待结算期号。数字零正常显示，缺值显示“—”，不能将未知状态显示成已停止或可启动。</p>
+<p>不配置路由时，投递行标题为“继承方案投递”，不用暴露 route_id=0。多个路由可以展开查看状态，均继承方案同一结构；本次不出现路由结构下拉。</p>
+<p><code>stat_date</code> 与页面所选统计日期一致；<code>start_stat_date</code> 是实际运行轮次启动日。跨日时显示“上一日启动，当前仍在运行”，删除旧文案“会占用今天的开轮额度”。不把 <code>starts_today</code> 与历史余额强行合并成当日账本。</p>
+<h3 id="5-2-状态文案">5.2 状态文案</h3>
+<table><thead><tr><th>status</th><th>显示</th><th>补充说明</th></tr></thead><tbody><tr><td><code>waiting</code></td><td>等待触发</td><td>条件/定时窗口满足、冷却结束且仍有额度时开启下一轮。</td></tr><tr><td><code>running</code></td><td>进行中</td><td>有 <code>pending_issue</code> 时显示“第 X 期待结算”；无待结算时显示“等待下一期信号”。</td></tr><tr><td><code>continuation</code></td><td>等待直接续开</td><td>本轮结束，等待下一可投注信号；不重新等待条件。</td></tr><tr><td><code>day_closed</code></td><td>当天收工</td><td>本方案的行显示“本方案今日收工”，根据 <code>stop_reason</code> 说明达标、资金耗尽或今日次数已满；规则日风控在规则卡片另显示“规则日风控停止”，不把单方案收工说成整条规则停用。</td></tr><tr><td><code>blocked</code></td><td>暂停，需核对</td><td>归属/历史状态无法确认时显示“历史过关状态需核对，自动续投已暂停”，不提供忽略按钮。</td></tr></tbody></table>
+<p>规则本身停用/归档、来源停用等现有状态继续展示，并且优先限制动作。状态文字不使用原始英文原因码。未知原因码用“当前暂不可启动”，在事件详情中保留服务端错误文案。</p>
+<h3 id="5-3-操作与范围">5.3 操作与范围</h3>
+<ul><li><strong>检查</strong>：沿用现有 run-once。只调用现有评估流程，不绕过额度、冷却、已有轮次或日风控。</li><li><strong>结束当前轮次</strong>：作用域在文案中写明“本规则”。有待结算单时说明“已发送单仍会结算”；不能承诺立刻开始下一轮。条件规则与定时规则的成功文案分别对应等待新条件、等待新一期且处于允许窗口，不能一律显示“下一个时间窗口”。</li><li><strong>恢复本方案待命</strong>：位于每个方案详情的独立操作区，调用 <code>POST /api/platform/auto-trigger-rules/{id}/resume-cycle</code>，body 为 <code>{subscription_id: 整数}</code>。按钮 accessible name 包含规则及方案名称，视觉文案保持简短。</li><li>恢复成功：<code>{resumed:true,item:rule,cycle_runtime:object}</code>，重新读取规则列表；提示“已恢复本规则下该方案的待命状态，仍需满足触发条件。日次数和历史盈亏已保留”。不调用 run-once，不立即派单。</li><li>若已运行、有待结算单、今日额度已满、风险仍触发、规则未启用，操作禁用并显示原因；服务端返回 <code>{error:string}</code> 时在状态区域完整显示并保留原状态。服务端必须再次校验，不能仅依赖前端禁用。</li><li>恢复不返还已用次数。额度用完时可编辑提高上限，但保存本身不会解封，仍由明确恢复操作执行。</li><li>查看历史日期时，运行操作仅作用当前日期；为避免误解，“恢复本方案待命”在历史日期视图隐藏，保留“切回今天操作”的普通链接。</li><li>原有“继续今日触发”是规则日风控恢复入口；保留其原职责，不能借此清除单方案次数。过关状态的恢复使用新的 scoped 操作。</li></ul>
+<h2 id="6-手动方案页面">6. 手动方案页面</h2>
+<h3 id="6-1-配置归属">6.1 配置归属</h3>
+<p>投注结构、起始金额、滚仓方式与过关目标维持原字段与交互。“达标后/爆仓后/一天最多几轮”组标题改为“手动过关结束设置”，说明“以下设置管理手动启动的轮次。自动规则的轮数与结束处理在规则中设置”。兼容旧自动规则显示的原有设置由旧规则摘要说明，不在此宣称编辑会重置自动状态。</p>
+<ul><li>“过几关收工”调整为“每轮过几关”，防止与自动规则的当天收工动作混淆。</li><li>“每天起始注”说明当前为每轮起始注，同时保留服务端原字段 <code>base_amount</code>。</li><li><code>roll_close_scope</code> 不再向手动用户显示“整条规则/只停路由”的误导选项；已有字段可在兼容序列化中保留，但独立手动行为只作用手动运行。</li><li>“开始新一轮”按钮改为“手动开始新一轮”，确认/成功消息只提手动周期，不再声称恢复自动规则或释放定时窗口。</li><li>“重置盈亏”明确为手动盈亏基线操作，自动账本和日计数不会被该操作清空。</li></ul>
+<h3 id="6-2-手动运行展示">6.2 手动运行展示</h3>
+<p>手动卡片显示“手动过关状态”，至少包含余额、当前关数、当天轮数、待结算期号和停止原因。只使用服务端提供的手动周期数据；自动规则正在投注但手动从未启动时，手动显示“尚未手动开始”，并提供普通导航链接“查看自动规则”。不读取自动 cycle_runtime 回填手动卡片。</p>
+<p>列表及详情使用 <code>subscription.manual_cycle_state</code>（可为 null）：</p>
+<pre><code class="language-json">{
+  &quot;stat_date&quot;: &quot;2026-11-05&quot;, &quot;status&quot;: &quot;running&quot;, &quot;balance&quot;: 10.0,
+  &quot;cycle_stake&quot;: 10.0, &quot;day_pnl&quot;: 0.0, &quot;win_streak&quot;: 0,
+  &quot;target_streak&quot;: 3, &quot;periods&quot;: 0, &quot;cycles_today&quot;: 0,
+  &quot;day_closed&quot;: false, &quot;stop_reason&quot;: null, &quot;pending_issue&quot;: &quot;&quot;
+}</code></pre>
+<p><code>cycles_today</code> 沿用手动引擎计数口径，展示文案为“当天已重开 X 次”，不能直接当作自动的 <code>starts_today</code>。<code>manual_cycle_state=null</code> 显示“尚未手动开始”。UI 不从财务汇总或最近自动事件推断手动过关状态。手动继续滚的旧行为保留；自动规则只支持等待条件、下一期另开新轮、当天收工三种动作，不提供不计次数的原地继续滚旁路。</p>
+<h2 id="7-组件状态-反馈与无障碍">7. 组件状态、反馈与无障碍</h2>
+<table><thead><tr><th>组件</th><th>默认</th><th>悬停</th><th>聚焦</th><th>激活</th><th>禁用</th><th>加载</th><th>错误</th><th>空</th></tr></thead><tbody><tr><td>轮次上限输入</td><td>展示持久化值</td><td>沿用输入边框</td><td>color.action 可见焦点</td><td>输入原生行为</td><td>legacy时不提交隐藏值</td><td>随详情载入禁用保存</td><td>字段下报“请输入1–1000的整数”，aria-invalid</td><td>空值不默认为1，提交时报错</td></tr><tr><td>处理方式选择器</td><td>展示当前选项及说明</td><td>沿用现有控件</td><td>可键盘选择、焦点可见</td><td>选后同步说明</td><td>legacy时禁用</td><td>随详情载入保留位置</td><td>非法服务端值阻止覆盖保存</td><td>新建使用显式默认</td></tr><tr><td>管理方式选择器</td><td>新规则显示固定说明、旧legacy显示选项</td><td>沿用选择器</td><td>可键盘操作</td><td>仅改变草稿不发请求</td><td>保存中禁用</td><td>保存文字“保存中…”</td><td>保存失败保留草稿</td><td>无配置按服务端识别，不能前端猜旧新</td></tr><tr><td>保存按钮</td><td>现有 primary</td><td>color.actionStrong</td><td>可见焦点</td><td>单次提交</td><td>请求中不可重复提交</td><td>“保存中…”并aria-busy</td><td>页面status区域aria-live</td><td>不适用</td></tr><tr><td>恢复待命按钮</td><td>允许恢复时显示次操作</td><td>沿用secondary/ghost</td><td>键盘可操作且名称含方案</td><td>单次POST</td><td>具体限制原因可见</td><td>“恢复中…”</td><td>显示服务端error，不改变本地进度</td><td>无周期时不显示</td></tr><tr><td>运行状态块</td><td>名称、次数、进度文字</td><td>非交互不改变指针</td><td>块本身不抢焦点</td><td>不适用</td><td>不适用</td><td>“正在读取过关状态”</td><td>“过关状态读取失败”，保留已知值并标旧</td><td>“尚无过关运行记录”</td></tr><tr><td>展开详情</td><td>显示方案数和摘要</td><td>沿用ghost</td><td>使用原生details/summary或等价键盘语义</td><td>展开收起、不跳页</td><td>请求中可保留已加载内容</td><td>不新增整页遮罩</td><td>不适用</td><td>不渲染空折叠按钮</td></tr></tbody></table>
+<p>新增字段均有 label 和关联说明，保存错误将焦点定位第一个错误字段。成功状态使用现有 <code>role=status</code> 区域；错误声明 <code>aria-live</code>，不得只toast一闪消失。恢复请求完成后焦点留在该方案操作区，列表重绘不丢到页面顶部。金额与关数用文字，不引入只有颜色的进度条。触控操作至少满足 target.touch。</p>
+<h2 id="8-响应式与边界数据">8. 响应式与边界数据</h2>
+<ul><li>桌面（自动页超过 breakpoint.ruleTablet）：沿用左规则列表、右编辑器；新增分组两列，说明跨整行。过关运行卡片逐方案纵向排布。</li><li>平板（breakpoint.ruleMobile 至 breakpoint.ruleTablet）：页面单栏，表单仍可两列；每个方案的数字摘要自动换行，操作区换行，页面不横向溢出。</li><li>手机（不超过 breakpoint.ruleMobile）：新增控件和方案状态单列；按钮占足触控宽度、状态说明可换行，期号保留完整，不横向滚动主页面。手动页按现有 breakpoint.manualMobile 单列。</li><li>长规则/方案/路由名称允许换行，桌面摘要可省略但详情必须完整可读；不得把不同方案截成无法区分的同名。</li><li>超长列表默认显示方案数量与前3项摘要，展开能看到服务端返回的全部项，明确“展开其余 N 项”；不在客户端静默截断。路由也采用同样规则。</li><li>零次数展示 <code>0 / N</code>；零余额展示 <code>0.00</code>；0关展示 <code>0 / 3</code>。没有运行对象显示“尚未启动”，不虚构余额。</li><li>请求失败保留旧数据并标注“状态未更新”，提供现有刷新操作。服务端返回字段缺失显示“过关状态不可用”，不启用恢复按钮。</li></ul>
+<h2 id="9-需求追溯与写集">9. 需求追溯与写集</h2>
+<table><thead><tr><th>元素 / 行为</th><th>PRD</th></tr></thead><tbody><tr><td>手动卡片只显示 manual_cycle_state、自动rule显示cycle_runtime</td><td>FR-001、FR-002、FR-013</td></tr><tr><td>自动每日上限/达标后/资金耗尽后配置</td><td>FR-003、FR-007</td></tr><tr><td>参数继承说明与在跑轮次快照提示</td><td>FR-004</td></tr><tr><td>等待条件文案、直接续开文案、冷却说明</td><td>FR-005、FR-006、FR-008</td></tr><tr><td>手动原有配置与专属重启/重置操作</td><td>FR-009、FR-010</td></tr><tr><td>明确启动日期与统计日期、跨日不占今天额度</td><td>FR-011</td></tr><tr><td>legacy兼容模式、存量已收工不被保存解封</td><td>FR-012</td></tr></tbody></table>
+<p>前端计划写集为 <code>src/pc28touzhu/ui/auto_triggers.html</code>、<code>auto_triggers.js</code>、<code>auto_triggers.css</code>、<code>autobet.html</code>、<code>autobet.js</code>，必要时仅对新增手动进度块补充 <code>autobet.css</code>；不改共享鉴权/菜单或其他页面。前端测试单独文件，由实施计划指定单一owner。</p>
+<h2 id="10-验证清单">10. 验证清单</h2>
+<ol><li>新建默认rule/1/wait_condition/wait_condition，编辑旧legacy不触发隐式迁移；名称-only保存保留模式。</li><li>保存合法上限与两种结束动作，再加载准确回显；非法值在UI及真实API双重拒绝。</li><li>当前1/3轮、状态waiting时恢复待命不会派单；3/3轮按钮禁用且API同样拒绝。</li><li>手动新一轮只改变手动状态，规则进度/次数/账本保持；规则恢复不改变手动状态。</li><li>历史统计日与跨日当前run明确分开；上一日run不显示占用今日额度。</li><li>条件规则结束文案不说“下个窗口”；定时独立模式可以在允许窗口内按新一期重新启动，不错误要求等下一个窗口。</li><li>多路由只显示同一结构的投递状态；无路由显示“继承方案投递”。</li><li>桌面/平板/手机均可键盘或触控完成编辑、保存、展开详情；恢复按钮说明错误与禁用原因。</li></ol>
+<h2 id="11-设计资源">11. 设计资源</h2>
+<ul><li><code>ui-design.json</code> 与本文件使用同一字段、状态及操作语义；其frames是现有页面的局部结构图，不要求整页重做。</li><li>预览入口：<code>node /root/.agents/skills/boss/cli/bin/boss.mts design preview cycle-isolation</code>。</li></ul>
+    </main>
+  </div>
+</body>
+</html>

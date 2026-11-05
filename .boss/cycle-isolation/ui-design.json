@@ -1,0 +1,847 @@
+{
+  "schemaVersion": "1.0.0",
+  "artifact": "ui-design",
+  "mode": "wireframe",
+  "feature": "cycle-isolation",
+  "updatedAt": "2026-11-04T00:00:00Z",
+  "tokens": {
+    "colors": {
+      "page": "var(--bg)",
+      "surface": "var(--surface)",
+      "subtle": "var(--surface-subtle)",
+      "text": "var(--text)",
+      "muted": "var(--muted)",
+      "border": "var(--line)",
+      "action": "var(--accent) on rules; var(--primary) on manual",
+      "actionStrong": "var(--accent-strong) on rules; var(--primary-strong) on manual",
+      "error": "var(--danger)",
+      "warning": "var(--warning) on rules",
+      "success": "var(--ok) on rules"
+    },
+    "typography": {
+      "heading": "existing .section-head h3",
+      "label": "existing .field span",
+      "body": "inherited page font",
+      "note": "existing .meta-line or .field-hint",
+      "numeric": "existing .mono"
+    },
+    "spacing": {
+      "label": "existing .field gap",
+      "form": "existing .form-grid gap",
+      "section": "existing .condition-panel padding and margin",
+      "card": "existing .rule-card padding",
+      "touchTarget": "44px"
+    },
+    "radius": {
+      "control": "existing .text-input radius",
+      "panel": "existing .condition-panel radius"
+    },
+    "shadow": {
+      "panel": "existing .rule-card, no additional shadow"
+    },
+    "breakpoints": {
+      "ruleTablet": "1080px",
+      "ruleMobile": "720px",
+      "manualTablet": "1180px",
+      "manualMobile": "900px"
+    },
+    "motion": {
+      "stateChange": "instant; no added decorative animation"
+    }
+  },
+  "pages": [
+    {
+      "id": "rule-settings",
+      "name": "自动规则 · 过关轮次管理",
+      "route": "/auto-triggers",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "frames": [
+        {
+          "id": "rule-settings-page",
+          "type": "page",
+          "name": "沿用现有自动规则编辑器",
+          "layout": "vertical",
+          "children": [
+            {
+              "id": "existing-rule-fields",
+              "type": "existing",
+              "name": "现有名称、条件、冷却、作用范围与日风控保持原位置",
+              "layout": "vertical",
+              "children": []
+            },
+            {
+              "id": "cycle-policy-panel",
+              "type": "panel",
+              "name": "过关轮次管理",
+              "layout": "vertical",
+              "children": [
+                {
+                  "id": "cycle-policy-intro",
+                  "type": "text",
+                  "name": "只管理本规则启动的过关轮次；投注参数继承方案，普通均注/倍投不受影响",
+                  "layout": "vertical",
+                  "children": []
+                },
+                {
+                  "id": "cycle-policy-mode",
+                  "type": "field",
+                  "name": "轮次管理方式",
+                  "layout": "vertical",
+                  "children": [],
+                  "binding": "cycle_policy.mode",
+                  "componentId": "policy-mode",
+                  "enumLabels": {
+                    "rule": "由本规则控制",
+                    "legacy": "沿用原有结束设置"
+                  },
+                  "default": "rule",
+                  "legacyOption": "仅编辑服务端返回mode=legacy的旧规则时可见；新建与已rule模式不可回切legacy"
+                },
+                {
+                  "id": "cycle-policy-grid",
+                  "type": "group",
+                  "name": "规则独立轮次设置",
+                  "layout": "grid",
+                  "children": [
+                    {
+                      "id": "cycle-policy-limit",
+                      "type": "field",
+                      "name": "每个方案每天最多启动（轮）",
+                      "layout": "vertical",
+                      "children": [],
+                      "binding": "cycle_policy.max_starts_per_day",
+                      "componentId": "start-limit",
+                      "default": 1,
+                      "validation": {
+                        "type": "integer",
+                        "min": 1,
+                        "max": 1000,
+                        "required": true
+                      }
+                    },
+                    {
+                      "id": "cycle-policy-target",
+                      "type": "field",
+                      "name": "过关成功后",
+                      "layout": "vertical",
+                      "children": [],
+                      "binding": "cycle_policy.on_target",
+                      "componentId": "end-action",
+                      "default": "wait_condition"
+                    },
+                    {
+                      "id": "cycle-policy-bust",
+                      "type": "field",
+                      "name": "本轮资金耗尽后",
+                      "layout": "vertical",
+                      "children": [],
+                      "binding": "cycle_policy.on_bust",
+                      "componentId": "end-action",
+                      "default": "wait_condition"
+                    }
+                  ],
+                  "visibleWhen": "cycle_policy.mode == 'rule'"
+                },
+                {
+                  "id": "cycle-limit-help",
+                  "type": "text",
+                  "name": "首次计1轮；按北京时间启动日期计次；多个路由同轮只计一次；旧轮跨日不占今天额度",
+                  "layout": "vertical",
+                  "children": []
+                },
+                {
+                  "id": "cycle-immediate-help",
+                  "type": "text",
+                  "name": "直接续开不重新等待条件或触发冷却；下一可投注期按起始金额另开一轮，仍守每日上限和日风控",
+                  "layout": "vertical",
+                  "children": [],
+                  "visibleWhen": "on_target == 'new_cycle' or on_bust == 'new_cycle'"
+                },
+                {
+                  "id": "cycle-active-help",
+                  "type": "text",
+                  "name": "当前在跑轮次沿用开轮时设置；保存不清次数、不解封、不重置在途周期",
+                  "layout": "vertical",
+                  "children": []
+                },
+                {
+                  "id": "cycle-legacy-help",
+                  "type": "text",
+                  "name": "沿用原有结束设置。显式切换后新的轮次才使用本规则设置。",
+                  "layout": "vertical",
+                  "children": [],
+                  "visibleWhen": "cycle_policy.mode == 'legacy'"
+                }
+              ],
+              "componentId": "policy-panel"
+            },
+            {
+              "id": "rule-save",
+              "type": "button",
+              "name": "保存规则（单次请求、错误保留输入）",
+              "layout": "vertical",
+              "children": [],
+              "componentId": "save-rule"
+            }
+          ]
+        }
+      ],
+      "states": [
+        "新建默认rule/1/wait_condition/wait_condition",
+        "编辑legacy",
+        "编辑独立rule",
+        "在跑轮次配置变更",
+        "无过关方案",
+        "保存中",
+        "字段校验错误",
+        "保存失败保留草稿"
+      ],
+      "responsive": {
+        "desktop": "沿用双栏页面，新设置区两列表单",
+        "tablet": "页面单栏，组内字段可两列",
+        "mobile": "字段与按钮单列，完整说明换行"
+      }
+    },
+    {
+      "id": "rule-runtime",
+      "name": "自动规则 · 过关运行",
+      "route": "/auto-triggers",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "frames": [
+        {
+          "id": "rule-runtime-page",
+          "type": "page",
+          "name": "现有规则卡片与可折叠过关运行",
+          "layout": "vertical",
+          "children": [
+            {
+              "id": "rule-runtime-summary",
+              "type": "existing",
+              "name": "规则名、启用状态、条件、现有每日盈亏",
+              "layout": "vertical",
+              "children": []
+            },
+            {
+              "id": "rule-cycle-details",
+              "type": "details",
+              "name": "过关运行（按方案展开）",
+              "layout": "vertical",
+              "children": [
+                {
+                  "id": "subscription-runtime-row",
+                  "type": "runtime",
+                  "name": "jnd28波动反弹模型 过三关",
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "id": "runtime-status",
+                      "type": "field",
+                      "name": "等待触发",
+                      "layout": "vertical",
+                      "children": [],
+                      "binding": "cycle_runtime[].status",
+                      "componentId": "cycle-status"
+                    },
+                    {
+                      "id": "runtime-start-count",
+                      "type": "field",
+                      "name": "所选日已启动 1 / 3 轮",
+                      "layout": "vertical",
+                      "children": [],
+                      "binding": "cycle_runtime[].starts_today + max_starts_per_day"
+                    },
+                    {
+                      "id": "runtime-start-date",
+                      "type": "field",
+                      "name": "当前轮次启动日：2026-11-05",
+                      "layout": "vertical",
+                      "children": [],
+                      "binding": "cycle_runtime[].start_stat_date"
+                    },
+                    {
+                      "id": "route-runtime-row",
+                      "type": "group",
+                      "name": "测试群 / 无路由时显示“继承方案投递”",
+                      "layout": "grid",
+                      "children": [
+                        {
+                          "id": "runtime-balance",
+                          "type": "field",
+                          "name": "余额 2.35",
+                          "layout": "vertical",
+                          "children": [],
+                          "binding": "cycle_runtime[].routes[].balance"
+                        },
+                        {
+                          "id": "runtime-stake",
+                          "type": "field",
+                          "name": "本期滚仓注额 0",
+                          "layout": "vertical",
+                          "children": [],
+                          "binding": "cycle_runtime[].routes[].cycle_stake"
+                        },
+                        {
+                          "id": "runtime-streak",
+                          "type": "field",
+                          "name": "连续盈利 0 / 3 关",
+                          "layout": "vertical",
+                          "children": [],
+                          "binding": "cycle_runtime[].routes[].win_streak + target_streak"
+                        },
+                        {
+                          "id": "runtime-pending",
+                          "type": "field",
+                          "name": "待结算期号 —",
+                          "layout": "vertical",
+                          "children": [],
+                          "binding": "cycle_runtime[].routes[].pending_issue"
+                        }
+                      ]
+                    },
+                    {
+                      "id": "runtime-operations",
+                      "type": "group",
+                      "name": "本规则下该方案操作区",
+                      "layout": "horizontal",
+                      "children": [
+                        {
+                          "id": "resume-cycle-action",
+                          "type": "button",
+                          "name": "恢复本方案待命",
+                          "layout": "vertical",
+                          "children": [],
+                          "componentId": "resume-cycle"
+                        },
+                        {
+                          "id": "runtime-manual-link",
+                          "type": "link",
+                          "name": "查看手动方案",
+                          "layout": "vertical",
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "componentId": "cycle-runtime",
+              "collection": "rule.cycle_runtime",
+              "overflow": "展示前3项摘要，可展开其余全部；不静默截断"
+            },
+            {
+              "id": "rule-existing-operations",
+              "type": "existing",
+              "name": "编辑 / 检查 / 结束本规则当前轮次 / 停用",
+              "layout": "vertical",
+              "children": []
+            },
+            {
+              "id": "rule-runtime-feedback",
+              "type": "status",
+              "name": "恢复成功或服务端拒绝原因",
+              "layout": "vertical",
+              "children": [],
+              "componentId": "operation-feedback"
+            }
+          ]
+        }
+      ],
+      "states": [
+        "waiting",
+        "running",
+        "continuation",
+        "day_closed",
+        "blocked",
+        "无运行记录",
+        "跨日旧轮",
+        "历史统计日",
+        "加载失败",
+        "恢复请求中",
+        "额度用完"
+      ],
+      "responsive": {
+        "desktop": "逐方案纵向卡片，数据项横排换行",
+        "tablet": "状态数字自动换行，操作另起一行",
+        "mobile": "每个状态和路由单列，名称与期号完整显示"
+      }
+    },
+    {
+      "id": "manual-plan",
+      "name": "跟单方案 · 手动过关",
+      "route": "/autobet/subscriptions",
+      "viewport": {
+        "width": 1440,
+        "height": 960
+      },
+      "frames": [
+        {
+          "id": "manual-plan-page",
+          "type": "page",
+          "name": "现有跟单方案卡片与编辑器",
+          "layout": "vertical",
+          "children": [
+            {
+              "id": "manual-bet-settings",
+              "type": "existing",
+              "name": "共用投注参数：结构、每轮起始注、每轮过几关、滚仓方式",
+              "layout": "vertical",
+              "children": []
+            },
+            {
+              "id": "manual-end-settings",
+              "type": "panel",
+              "name": "手动过关结束设置",
+              "layout": "vertical",
+              "children": [
+                {
+                  "id": "manual-end-help",
+                  "type": "text",
+                  "name": "这些结束设置只管理手动轮次；自动轮次在自动规则中设置。",
+                  "layout": "vertical",
+                  "children": []
+                },
+                {
+                  "id": "manual-target-action",
+                  "type": "field",
+                  "name": "手动达标后",
+                  "layout": "vertical",
+                  "children": [],
+                  "binding": "strategy.staking_policy.stop_policy.on_target"
+                },
+                {
+                  "id": "manual-bust-action",
+                  "type": "field",
+                  "name": "手动本轮资金耗尽后",
+                  "layout": "vertical",
+                  "children": [],
+                  "binding": "strategy.staking_policy.stop_policy.on_bust"
+                },
+                {
+                  "id": "manual-day-cycles",
+                  "type": "field",
+                  "name": "手动一天最多几轮",
+                  "layout": "vertical",
+                  "children": [],
+                  "binding": "strategy.staking_policy.stop_policy.max_cycles_per_day"
+                }
+              ]
+            },
+            {
+              "id": "manual-cycle-state",
+              "type": "panel",
+              "name": "手动过关状态",
+              "layout": "vertical",
+              "children": [
+                {
+                  "id": "manual-state-status",
+                  "type": "field",
+                  "name": "尚未手动开始 / 进行中 / 当天收工",
+                  "layout": "vertical",
+                  "children": [],
+                  "binding": "manual_cycle_state.status",
+                  "componentId": "manual-runtime"
+                },
+                {
+                  "id": "manual-state-balance",
+                  "type": "field",
+                  "name": "手动余额",
+                  "layout": "vertical",
+                  "children": [],
+                  "binding": "manual_cycle_state.balance"
+                },
+                {
+                  "id": "manual-state-streak",
+                  "type": "field",
+                  "name": "手动连续盈利关数",
+                  "layout": "vertical",
+                  "children": [],
+                  "binding": "manual_cycle_state.win_streak + target_streak"
+                },
+                {
+                  "id": "manual-state-restarts",
+                  "type": "field",
+                  "name": "当天已重开 X 次",
+                  "layout": "vertical",
+                  "children": [],
+                  "binding": "manual_cycle_state.cycles_today"
+                },
+                {
+                  "id": "manual-state-pending",
+                  "type": "field",
+                  "name": "手动待结算期号",
+                  "layout": "vertical",
+                  "children": [],
+                  "binding": "manual_cycle_state.pending_issue"
+                }
+              ]
+            },
+            {
+              "id": "manual-operations",
+              "type": "group",
+              "name": "手动操作区",
+              "layout": "horizontal",
+              "children": [
+                {
+                  "id": "manual-restart-action",
+                  "type": "button",
+                  "name": "手动开始新一轮",
+                  "layout": "vertical",
+                  "children": [],
+                  "componentId": "manual-restart"
+                },
+                {
+                  "id": "manual-reset-action",
+                  "type": "button",
+                  "name": "重置手动盈亏",
+                  "layout": "vertical",
+                  "children": []
+                },
+                {
+                  "id": "manual-rule-link",
+                  "type": "link",
+                  "name": "查看自动规则",
+                  "layout": "vertical",
+                  "children": []
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "states": [
+        "无手动运行",
+        "手动运行与自动运行并存",
+        "手动待结算",
+        "手动当天收工",
+        "重启请求中",
+        "重启被拒绝",
+        "自动运行不回填手动卡片"
+      ],
+      "responsive": {
+        "desktop": "沿用手动页现有卡片/详情结构",
+        "tablet": "遵守manualTablet断点",
+        "mobile": "遵守manualMobile断点，数据项单列"
+      }
+    }
+  ],
+  "components": [
+    {
+      "id": "policy-panel",
+      "name": "过关轮次管理分组",
+      "type": "form-section",
+      "requirements": [
+        "FR-003",
+        "FR-004",
+        "FR-007",
+        "FR-008"
+      ],
+      "tokens": [
+        "color.subtle",
+        "space.section",
+        "radius.panel"
+      ],
+      "scope": "仅win_streak_roll"
+    },
+    {
+      "id": "policy-mode",
+      "name": "轮次管理方式",
+      "type": "select",
+      "requirements": [
+        "FR-012"
+      ],
+      "states": {
+        "default": "新建固定rule；旧legacy保留",
+        "hover": "沿用控件",
+        "focus": "可见焦点",
+        "active": "仅改变草稿",
+        "disabled": "保存时禁用",
+        "loading": "保持布局",
+        "error": "保留草稿与server error",
+        "empty": "采用服务端mode，不靠缺值猜旧新"
+      }
+    },
+    {
+      "id": "start-limit",
+      "name": "每天启动上限",
+      "type": "number",
+      "requirements": [
+        "FR-007"
+      ],
+      "states": {
+        "default": "持久化整数",
+        "hover": "沿用边框",
+        "focus": "可见焦点",
+        "active": "原生输入",
+        "disabled": "legacy不提交",
+        "loading": "载入时禁用保存",
+        "error": "请输入1–1000的整数",
+        "empty": "提交报必填，不默认为1"
+      }
+    },
+    {
+      "id": "end-action",
+      "name": "结束后处理",
+      "type": "select",
+      "requirements": [
+        "FR-005",
+        "FR-006",
+        "FR-008"
+      ],
+      "enumLabels": {
+        "wait_condition": "等待下次条件满足",
+        "new_cycle": "下一可投注期直接续开",
+        "close_day": "当天收工"
+      },
+      "states": {
+        "default": "当前选项与说明",
+        "hover": "沿用控件",
+        "focus": "键盘可选",
+        "active": "同步说明",
+        "disabled": "legacy禁用",
+        "loading": "载入保留位置",
+        "error": "非法值不覆盖保存",
+        "empty": "新建wait_condition"
+      }
+    },
+    {
+      "id": "save-rule",
+      "name": "保存规则",
+      "type": "button",
+      "requirements": [
+        "FR-003",
+        "FR-012"
+      ],
+      "states": {
+        "default": "primary",
+        "hover": "color.actionStrong",
+        "focus": "可见焦点",
+        "active": "单次提交",
+        "disabled": "重复请求禁止",
+        "loading": "保存中…",
+        "error": "status显示错误且保留草稿",
+        "empty": "不适用"
+      }
+    },
+    {
+      "id": "cycle-runtime",
+      "name": "本规则各方案过关详情",
+      "type": "details",
+      "requirements": [
+        "FR-001",
+        "FR-002",
+        "FR-011",
+        "FR-013"
+      ],
+      "binding": "rule.cycle_runtime",
+      "states": {
+        "default": "逐方案显示次数、进度、待结算",
+        "hover": "非操作行不改变指针",
+        "focus": "展开控件可聚焦，统计不抢焦点",
+        "active": "展开/收起",
+        "disabled": "不适用",
+        "loading": "正在读取过关状态",
+        "error": "过关状态读取失败；保留旧值并标旧",
+        "empty": "尚无过关运行记录"
+      }
+    },
+    {
+      "id": "cycle-status",
+      "name": "过关状态文案",
+      "type": "status",
+      "requirements": [
+        "FR-013"
+      ],
+      "enumLabels": {
+        "waiting": "等待触发",
+        "running": "进行中",
+        "continuation": "等待直接续开",
+        "day_closed": "本方案今日收工",
+        "blocked": "暂停，需核对"
+      },
+      "colorOnly": false,
+      "ruleRiskNote": "规则日风控停止在规则卡片单独显示，不影响对单方案收工范围的说明"
+    },
+    {
+      "id": "resume-cycle",
+      "name": "恢复本规则下方案待命",
+      "type": "button",
+      "requirements": [
+        "FR-010"
+      ],
+      "method": "POST",
+      "endpoint": "/api/platform/auto-trigger-rules/{id}/resume-cycle",
+      "request": {
+        "subscription_id": "integer"
+      },
+      "response": {
+        "resumed": "boolean",
+        "item": "rule",
+        "cycle_runtime": "object"
+      },
+      "states": {
+        "default": "可恢复时的次操作",
+        "hover": "沿用ghost/secondary",
+        "focus": "accessible name含规则及方案",
+        "active": "单次POST，无run-once",
+        "disabled": "pending/running、日额度用满、风控仍阻止、规则未active；显示原因",
+        "loading": "恢复中…",
+        "error": "显示服务端error，保留原状态",
+        "empty": "无周期或历史日期不提供动作"
+      },
+      "preserves": [
+        "starts_today",
+        "历史盈亏",
+        "手动状态",
+        "其他规则状态"
+      ]
+    },
+    {
+      "id": "operation-feedback",
+      "name": "保存与恢复反馈",
+      "type": "status",
+      "requirements": [
+        "FR-010",
+        "FR-013"
+      ],
+      "ariaLive": "polite",
+      "errorsPersistent": true
+    },
+    {
+      "id": "manual-runtime",
+      "name": "手动过关状态",
+      "type": "runtime",
+      "requirements": [
+        "FR-001",
+        "FR-009",
+        "FR-013"
+      ],
+      "binding": "subscription.manual_cycle_state",
+      "nullLabel": "尚未手动开始",
+      "automaticFallback": false
+    },
+    {
+      "id": "manual-restart",
+      "name": "手动开始新一轮",
+      "type": "button",
+      "requirements": [
+        "FR-009",
+        "FR-010"
+      ],
+      "method": "POST",
+      "endpoint": "/api/platform/subscriptions/{id}/restart",
+      "scope": "manual only",
+      "states": {
+        "default": "ghost/secondary",
+        "hover": "沿用按钮",
+        "focus": "可见焦点",
+        "active": "沿用手动确认流程，文案仅手动",
+        "disabled": "请求中禁用",
+        "loading": "处理中…",
+        "error": "服务端错误保留状态",
+        "empty": "不适用"
+      }
+    }
+  ],
+  "prototype": {
+    "startPageId": "rule-settings",
+    "links": [
+      {
+        "sourceId": "rule-save",
+        "targetPageId": "rule-runtime",
+        "interaction": "保存成功后的列表回显"
+      },
+      {
+        "sourceId": "runtime-manual-link",
+        "targetPageId": "manual-plan",
+        "interaction": "查看手动方案"
+      },
+      {
+        "sourceId": "manual-rule-link",
+        "targetPageId": "rule-runtime",
+        "interaction": "查看自动规则"
+      }
+    ]
+  },
+  "implementationHints": {
+    "preferredFramework": "沿用现有页面实现，不新增框架",
+    "requiredComponents": [
+      "policy-panel",
+      "policy-mode",
+      "start-limit",
+      "end-action",
+      "cycle-runtime",
+      "cycle-status",
+      "resume-cycle",
+      "operation-feedback",
+      "manual-runtime",
+      "manual-restart"
+    ],
+    "accessibilityNotes": [
+      "全部字段有label与关联说明",
+      "新增正文对比度至少4.5:1；状态同时有文字",
+      "新增操作触控区域至少tokens.spacing.touchTarget",
+      "展开详情键盘可用；统计行不可成为危险操作按钮",
+      "请求错误持久显示；成功反馈使用role=status",
+      "保存错误聚焦首个非法字段；状态刷新保留操作焦点"
+    ],
+    "apiContract": "architecture.md §5 与 ui-spec.md §4–6",
+    "manualCycleStateFields": [
+      "stat_date",
+      "status",
+      "balance",
+      "cycle_stake",
+      "day_pnl",
+      "win_streak",
+      "target_streak",
+      "periods",
+      "cycles_today",
+      "day_closed",
+      "stop_reason",
+      "pending_issue"
+    ],
+    "ruleRuntimeFields": [
+      "subscription_id",
+      "subscription_name",
+      "stat_date",
+      "starts_today",
+      "max_starts_per_day",
+      "status",
+      "active_run_id",
+      "start_stat_date",
+      "last_completed_issue",
+      "stop_reason",
+      "routes"
+    ],
+    "dateSemantics": [
+      "stat_date为所选统计日的启动次数",
+      "start_stat_date为当前run实际启动日",
+      "跨日旧轮不消耗今日新开额度"
+    ],
+    "compatibility": [
+      "新建禁止legacy，独立rule不可退legacy",
+      "旧legacy显式切rule才启用规则控制",
+      "保存不解封旧收工、不重置在途状态",
+      "普通fixed/martingale忽略cycle_policy"
+    ],
+    "nonGoals": [
+      "不同路由使用不同过关结构",
+      "新页面导航",
+      "全站主题改造",
+      "手动入口隐式恢复自动规则"
+    ],
+    "validation": [
+      "真实API创建/保存/加载cycle_policy",
+      "两处状态及操作隔离",
+      "额度满/有待结算/停用/风控拒绝恢复",
+      "历史日/跨日显示正确",
+      "手机和平板不横向溢出"
+    ],
+    "scheduleSemantics": "独立规则等待新一期且处于允许窗口；同一窗口内上一轮结束后可再次启动，不强制等待下一个窗口"
+  }
+}

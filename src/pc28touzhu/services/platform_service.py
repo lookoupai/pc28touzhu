@@ -1454,6 +1454,38 @@ def normalize_raw_item(repository: Any, raw_item_id: Any, *, owner_user_id: Opti
     return normalize_raw_item_to_signals(repository, raw_item_id=normalized_raw_item_id)
 
 
+def _manual_cycle_view(repository: Any, subscription_id: int) -> Optional[dict]:
+    if not hasattr(repository, "get_subscription_cycle_state"):
+        return None
+    state = repository.get_subscription_cycle_state(subscription_id=subscription_id)
+    if not state:
+        return None
+    fields = ("stat_date", "status", "balance", "cycle_stake", "day_pnl", "win_streak", "target_streak",
+              "periods", "cycles_today", "day_closed", "stop_reason")
+    return {**{key: state.get(key) for key in fields}, "pending_issue": str((state.get("pending_plan") or {}).get("issue_no") or "")}
+
+
+def _guard_manual_cycle_reset(repository: Any, *, subscription_id: int, user_id: int) -> None:
+    if hasattr(repository, "get_subscription_cycle_state"):
+        state = repository.get_subscription_cycle_state(subscription_id=subscription_id) or {}
+        if str(state.get("stop_reason") or "").startswith("migration_"):
+            raise ValueError("迁移归属需要核查，不能重置手动周期")
+    if hasattr(repository, "get_subscription_runtime_rule_run"):
+        old_auto_run = repository.get_subscription_runtime_rule_run(subscription_id=subscription_id, user_id=user_id)
+        if old_auto_run and old_auto_run.get("status") == "active":
+            raise ValueError("旧无路由自动轮次仍在运行，暂不能重置手动方案")
+    if not hasattr(repository, "list_pending_win_streak_cycles"):
+        return
+    for cycle in repository.list_pending_win_streak_cycles(user_id=user_id):
+        if int(cycle.get("subscription_id") or 0) != subscription_id:
+            continue
+        # 迁移中的旧无路由自动事件仍沿用旧账本，先结算完再允许手动重置。
+        if cycle.get("scope") == "auto" and int(cycle.get("route_id") or 0) == 0:
+            raise ValueError("旧自动轮次仍有待结算任务，暂不能重置手动方案")
+        if cycle.get("scope") != "auto":
+            raise ValueError("手动过关仍有待结算任务，暂不能重置")
+
+
 def list_subscriptions(repository: Any, user_id: Any, stat_date: Any = None) -> Dict[str, Any]:
     normalized_user_id = _to_positive_int(user_id, "user_id")
     resolved_stat_date = _normalize_stat_date(stat_date)
@@ -1468,6 +1500,7 @@ def list_subscriptions(repository: Any, user_id: Any, stat_date: Any = None) -> 
         {
             **item,
             "stat_date": resolved_stat_date,
+            "manual_cycle_state": _manual_cycle_view(repository, int(item["id"])),
             "daily_stat": daily_stats_by_subscription.get(int(item["id"])) or _default_subscription_daily_stat(item, stat_date=resolved_stat_date),
             "daily_history": repository.list_subscription_daily_stats(
                 subscription_id=int(item["id"]),
@@ -1505,6 +1538,7 @@ def list_subscription_summaries(repository: Any, user_id: Any, stat_date: Any = 
             {
                 **item,
                 "stat_date": resolved_stat_date,
+                "manual_cycle_state": _manual_cycle_view(repository, int(item["id"])),
                 "daily_stat": daily_stats_by_subscription.get(int(item["id"])) or _default_subscription_daily_stat(item, stat_date=resolved_stat_date),
             }
             for item in items
@@ -1921,6 +1955,7 @@ def resolve_pending_subscription_progressions(repository: Any, *, user_id: Any, 
 def reset_subscription_runtime(repository: Any, *, subscription_id: Any, user_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     normalized_subscription_id = _to_positive_int(subscription_id, "subscription_id")
     normalized_user_id = _to_positive_int(user_id, "user_id")
+    _guard_manual_cycle_reset(repository, subscription_id=normalized_subscription_id, user_id=normalized_user_id)
     # 手动重置只清订阅直派轮次；route 跟单的 rule_run 与在途单归规则体系管，不得波及
     note = str(payload.get("note") or "").strip()
     result = repository.reset_subscription_runtime(
@@ -1964,9 +1999,8 @@ def reset_win_streak_roll_cycle_for_restart(
 ) -> Dict[str, Any]:
     """过关玩法「开始新一轮」：重置周期状态；unseal=True 时一并解除玩法当日收工。
 
-    这是显式的解封入口（网页按钮 / Telegram /restart）：周期回到每天起始注、连赢计数清零，
-    同时把当天因过关收工而停止的规则当日一并解封，否则重置了周期仍然下不了单。
-    只解封 stop_reason 属于玩法收工（cycle_*）的规则日，日风控的止盈止损不受影响。
+    仅处理手动周期：起始注和关数重置；自动规则的状态、日次数及收工不受影响。
+    unseal=False 保留手动已收工标记。
     """
     from datetime import datetime, timedelta, timezone
 
@@ -2001,6 +2035,9 @@ def reset_win_streak_roll_cycle_for_restart(
         state["cycles_today"] = int(previous.get("cycles_today") or 0) + 1
         state["day_pnl"] = previous.get("day_pnl")
         state["last_cycle_stop_reason"] = previous.get("last_cycle_stop_reason")
+        if not unseal and previous.get("day_closed"):
+            for key in ("status", "stop_reason", "day_closed", "day_close_scope"):
+                state[key] = previous.get(key)
     repository.upsert_subscription_cycle_state(
         subscription_id=subscription_id,
         user_id=int(user_id),
@@ -2009,23 +2046,7 @@ def reset_win_streak_roll_cycle_for_restart(
         pending_plan=None,
     )
 
-    resumed_rule_ids: list[int] = []
-    if unseal and hasattr(repository, "list_auto_trigger_rule_runs_stopped_for_subscription"):
-        for row in repository.list_auto_trigger_rule_runs_stopped_for_subscription(
-            subscription_id=subscription_id, user_id=int(user_id), stat_date=today,
-        ):
-            if str(row.get("stop_reason") or "") not in CYCLE_DAY_STOP_REASONS:
-                continue
-            rule_id = int(row.get("rule_id") or 0)
-            if rule_id <= 0:
-                continue
-            try:
-                repository.resume_auto_trigger_rule_day(
-                    rule_id=rule_id, user_id=int(user_id), stat_date=today,
-                )
-                resumed_rule_ids.append(rule_id)
-            except Exception:
-                continue
+    resumed_rule_ids: list[int] = []  # 手动入口不解封任何自动规则。
     return {
         "applied": True,
         "stat_date": today,
@@ -2038,6 +2059,7 @@ def reset_win_streak_roll_cycle_for_restart(
 def restart_subscription_cycle(repository: Any, *, subscription_id: Any, user_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     normalized_subscription_id = _to_positive_int(subscription_id, "subscription_id")
     normalized_user_id = _to_positive_int(user_id, "user_id")
+    _guard_manual_cycle_reset(repository, subscription_id=normalized_subscription_id, user_id=normalized_user_id)
     current = repository.get_subscription(normalized_subscription_id)
     if not current or int(current.get("user_id") or 0) != normalized_user_id:
         raise ValueError("subscription_id 对应的订阅不存在")
@@ -2063,11 +2085,7 @@ def restart_subscription_cycle(repository: Any, *, subscription_id: Any, user_id
     result["cycle_reset"] = reset_win_streak_roll_cycle_for_restart(
         repository, subscription=item, user_id=normalized_user_id, note=note,
     )
-    # 定时窗口当天只会开一轮：手动停掉后当天没法再开，这里把今天手工停掉的轮次退回占位态，
-    # 窗口评估下一次就能重新开一轮（风控停轮不动）
-    result["rule_runs_reopened"] = reopen_today_manual_stopped_rule_runs(
-        repository, subscription_id=normalized_subscription_id, user_id=normalized_user_id,
-    )
+    result["rule_runs_reopened"] = []
     result["item"] = present_subscription_item(item)
     result["restarted"] = True
     return result

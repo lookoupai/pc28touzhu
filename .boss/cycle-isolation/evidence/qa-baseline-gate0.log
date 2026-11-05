@@ -1,0 +1,5 @@
+Baseline commit: 5b37efa
+Temporary copy: /tmp/pc28-cycle-gate-baseline-vvc7k2ef
+Exit code: 1
+{"feature":"cycle-baseline","gate":"gate0","passed":false,"checks":[{"name":"typescript-compile","passed":true,"detail":"跳过：无 tsconfig.json"},{"name":"lint","passed":true,"detail":"跳过：无 Lint 配置"},{"name":"dependency-audit","passed":true,"detail":"跳过：无 package.json"},{"name":"secrets-scan","passed":true},{"name":"unsafe-patterns","passed":false,"detail":"发现 1 类不安全模式"}],"skipped":false}
+[GATE0] Gate 0: 代码质量检查

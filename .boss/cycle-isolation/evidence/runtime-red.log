@@ -1,0 +1,100 @@
+FEEEFFFFFF
+======================================================================
+ERROR: test_manual_restart_does_not_resume_stopped_auto_rule (tests.test_cycle_runtime.CycleRuntimeTests.test_manual_restart_does_not_resume_stopped_auto_rule)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/pc28-cycle-red-baseline/tests/test_cycle_runtime.py", line 147, in test_manual_restart_does_not_resume_stopped_auto_rule
+    before=copy.deepcopy(self.session(rule))
+                         ^^^^^^^^^^^^^^^^^^
+  File "/tmp/pc28-cycle-red-baseline/tests/test_cycle_runtime.py", line 58, in session
+    return self.repo.get_auto_trigger_cycle_session(rule_id=rule['id'], subscription_id=self.sub['id'], user_id=self.user_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DatabaseRepository' object has no attribute 'get_auto_trigger_cycle_session'. Did you mean: 'get_auto_trigger_rule_run'?
+
+======================================================================
+ERROR: test_new_cycle_bypasses_condition_and_trigger_cooldown (tests.test_cycle_runtime.CycleRuntimeTests.test_new_cycle_bypasses_condition_and_trigger_cooldown)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/pc28-cycle-red-baseline/tests/test_cycle_runtime.py", line 107, in test_new_cycle_bypasses_condition_and_trigger_cooldown
+    self.assertEqual(self.session(rule)['status'], 'continuation')
+                     ^^^^^^^^^^^^^^^^^^
+  File "/tmp/pc28-cycle-red-baseline/tests/test_cycle_runtime.py", line 58, in session
+    return self.repo.get_auto_trigger_cycle_session(rule_id=rule['id'], subscription_id=self.sub['id'], user_id=self.user_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DatabaseRepository' object has no attribute 'get_auto_trigger_cycle_session'. Did you mean: 'get_auto_trigger_rule_run'?
+
+======================================================================
+ERROR: test_new_round_waits_for_new_evidence_and_daily_quota (tests.test_cycle_runtime.CycleRuntimeTests.test_new_round_waits_for_new_evidence_and_daily_quota)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/pc28-cycle-red-baseline/tests/test_cycle_runtime.py", line 87, in test_new_round_waits_for_new_evidence_and_daily_quota
+    self.assertEqual(self.session(rule)['status'], 'waiting')
+                     ^^^^^^^^^^^^^^^^^^
+  File "/tmp/pc28-cycle-red-baseline/tests/test_cycle_runtime.py", line 58, in session
+    return self.repo.get_auto_trigger_cycle_session(rule_id=rule['id'], subscription_id=self.sub['id'], user_id=self.user_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'DatabaseRepository' object has no attribute 'get_auto_trigger_cycle_session'. Did you mean: 'get_auto_trigger_rule_run'?
+
+======================================================================
+FAIL: test_manual_and_two_rule_states_are_independent (tests.test_cycle_runtime.CycleRuntimeTests.test_manual_and_two_rule_states_are_independent)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/pc28-cycle-red-baseline/tests/test_cycle_runtime.py", line 76, in test_manual_and_two_rule_states_are_independent
+    self.assertEqual(len(self.repo.list_execution_jobs(user_id=self.user_id)), 6)
+AssertionError: 2 != 6
+
+======================================================================
+FAIL: test_no_route_uses_auto_ledger_and_leaves_manual_standby (tests.test_cycle_runtime.CycleRuntimeTests.test_no_route_uses_auto_ledger_and_leaves_manual_standby)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/pc28-cycle-red-baseline/tests/test_cycle_runtime.py", line 125, in test_no_route_uses_auto_ledger_and_leaves_manual_standby
+    self.assertEqual(self.repo.get_subscription(self.sub['id'])['status'], 'standby')
+AssertionError: 'active' != 'standby'
+- active
++ standby
+
+
+======================================================================
+FAIL: test_target_conflict_does_not_consume_quota_or_claim_run (tests.test_cycle_runtime.CycleRuntimeTests.test_target_conflict_does_not_consume_quota_or_claim_run)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/pc28-cycle-red-baseline/tests/test_cycle_runtime.py", line 138, in test_target_conflict_does_not_consume_quota_or_claim_run
+    self.assertEqual(result['summary']['triggered_count'],0)
+AssertionError: 1 != 0
+
+======================================================================
+FAIL: test_two_routes_start_together_but_count_once (tests.test_cycle_runtime.CycleRuntimeTests.test_two_routes_start_together_but_count_once)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/pc28-cycle-red-baseline/tests/test_cycle_runtime.py", line 118, in test_two_routes_start_together_but_count_once
+    self.assertEqual(len(self.repo.list_execution_jobs(user_id=self.user_id)), 4)
+AssertionError: 2 != 4
+
+======================================================================
+FAIL: test_invalid_quota_and_legacy_creation_rejected (tests.test_cycle_api.CycleApiTests.test_invalid_quota_and_legacy_creation_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/pc28-cycle-red-baseline/tests/test_cycle_api.py", line 44, in test_invalid_quota_and_legacy_creation_rejected
+    self.assertEqual(code,400,(value,result))
+AssertionError: 200 != 400 : (True, {'item': {'id': 1, 'user_id': 1, 'name': '周期规则', 'status': 'active', 'scope_mode': 'selected_subscriptions', 'subscription_ids': [1], 'condition_mode': 'any', 'conditions': [{'type': 'miss_streak', 'metric': 'combo', 'window': 'current', 'window_size': 0, 'operator': 'gte', 'threshold': 2, 'min_sample_count': 100}], 'guard_groups': [], 'action': {'type': 'restart_cycle', 'dispatch_latest_signal': True, 'play_filter_action': 'keep', 'fixed_metric': '', 'skip_multiple_metrics_matched': False}, 'daily_risk_control': {'enabled': False, 'profit_target': 0.0, 'loss_limit': 0.0, 'hit_rate_gate': {'enabled': False, 'threshold': 0.0, 'min_settled_count': 20}, 'timezone': 'Asia/Shanghai', 'cancel_pending_jobs': True}, 'cooldown_issues': 10, 'trigger_mode': 'condition', 'schedule': {}, 'last_triggered_issue_no': '', 'last_triggered_at': None, 'created_at': '2026-11-04T10:00:00Z', 'updated_at': '2026-11-04T10:00:00Z', 'routes': []}})
+
+======================================================================
+FAIL: test_new_rule_defaults_and_edit_round_trip (tests.test_cycle_api.CycleApiTests.test_new_rule_defaults_and_edit_round_trip)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/pc28-cycle-red-baseline/tests/test_cycle_api.py", line 31, in test_new_rule_defaults_and_edit_round_trip
+    self.assertEqual(rule.get('cycle_policy'),{'mode':'rule','max_starts_per_day':1,'on_target':'wait_condition','on_bust':'wait_condition'})
+AssertionError: None != {'mode': 'rule', 'max_starts_per_day': 1,[55 chars]ion'}
+
+======================================================================
+FAIL: test_summary_returns_manual_scope_and_resume_requires_auth (tests.test_cycle_api.CycleApiTests.test_summary_returns_manual_scope_and_resume_requires_auth)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/pc28-cycle-red-baseline/tests/test_cycle_api.py", line 52, in test_summary_returns_manual_scope_and_resume_requires_auth
+    self.assertIn('manual_cycle_state',result['items'][0])
+AssertionError: 'manual_cycle_state' not found in {'id': 1, 'user_id': 1, 'source_id': 1, 'name': '过关方案', 'status': 'standby', 'strategy': {'mode': 'follow', 'bet_filter': {'mode': 'all', 'selected_keys': []}, 'expire_after_seconds': 120, 'delivery_target_ids': [1], 'risk_control': {'enabled': False, 'profit_target': 0.0, 'loss_limit': 0.0, 'play_limits': {'big_small': {'profit_target': 0.0, 'loss_limit': 0.0}, 'odd_even': {'profit_target': 0.0, 'loss_limit': 0.0}, 'combo': {'profit_target': 0.0, 'loss_limit': 0.0}}, 'win_profit_ratio': 1.0}, 'stake_amount': 10.0, 'win_streak_roll': {'base_amount': 10.0, 'main_share': 0.7, 'aux_share': 0.3, 'target_streak': 1, 'structure': 'B', 'roll_mode': 'chain', 'reset_scope': 'daily', 'stop_policy': {'on_target': 'close_day', 'on_bust': 'close_day', 'close_scope': 'rule', 'max_cycles_per_day': 1}}}, 'created_at': '2026-11-04T17:08:26Z', 'updated_at': '2026-11-04T17:08:26Z', 'strategy_v2': {'play_filter': {'mode': 'all', 'selected_keys': []}, 'staking_policy': {'mode': 'win_streak_roll', 'fixed_amount': None, 'base_stake': None, 'multiplier': 2.0, 'max_steps': 1, 'refund_action': 'hold', 'cap_action': 'reset', 'base_amount': 10.0, 'main_share': 0.7, 'aux_share': 0.3, 'target_streak': 1, 'structure': 'B', 'roll_mode': 'chain', 'reset_scope': 'daily', 'stop_policy': {'on_target': 'close_day', 'on_bust': 'close_day', 'close_scope': 'rule', 'max_cycles_per_day': 1}}, 'settlement_policy': {'rule_source': 'subscription_fixed', 'settlement_rule_id': 'pc28_fullpay_netdisk_regular', 'fallback_profit_ratio': 1.0, 'odds_overrides': {}}, 'risk_control': {'enabled': False, 'profit_target': 0.0, 'loss_limit': 0.0, 'play_limits': {'big_small': {'profit_target': 0.0, 'loss_limit': 0.0}, 'odd_even': {'profit_target': 0.0, 'loss_limit': 0.0}, 'combo': {'profit_target': 0.0, 'loss_limit': 0.0}}, 'hit_rate_gate': {'enabled': False, 'threshold': 0.0, 'min_settled_count': 20}}, 'dispatch': {'expire_after_seconds': 120, 'delivery_target_ids': [1]}}, 'strategy_schema_version': 2, 'financial': {'subscription_id': 1, 'user_id': None, 'realized_profit': 0.0, 'realized_loss': 0.0, 'net_profit': 0.0, 'threshold_status': '', 'threshold_scope': 'subscription', 'stopped_reason': '', 'baseline_reset_at': None, 'baseline_reset_note': '', 'last_settled_event_id': None, 'last_settled_at': None, 'updated_at': None}, 'stat_date': '2026-11-05', 'daily_stat': {'id': None, 'stat_date': '2026-11-05', 'user_id': 1, 'subscription_id': 1, 'source_id': 1, 'source_name': '', 'profit_amount': 0.0, 'loss_amount': 0.0, 'net_profit': 0.0, 'settled_event_count': 0, 'hit_count': 0, 'miss_count': 0, 'refund_count': 0, 'updated_at': None}}
+
+----------------------------------------------------------------------
+Ran 10 tests in 2.973s
+
+FAILED (failures=7, errors=3)

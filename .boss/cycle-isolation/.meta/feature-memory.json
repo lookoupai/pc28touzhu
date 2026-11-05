@@ -1,0 +1,150 @@
+{
+  "feature": "cycle-isolation",
+  "records": [
+    {
+      "influence": "preference",
+      "tags": [
+        "full"
+      ],
+      "id": "stable-29",
+      "scope": "feature",
+      "kind": "long_term",
+      "category": "stable_decision",
+      "feature": "cycle-isolation",
+      "stage": 1,
+      "agent": null,
+      "summary": "Stable completion with roles=full pack=default",
+      "source": {
+        "type": "execution-parameters",
+        "window": "latest"
+      },
+      "evidence": [
+        {
+          "type": "event",
+          "ref": "29"
+        }
+      ],
+      "confidence": 0.7,
+      "createdAt": "2026-11-04T16:53:48.939Z",
+      "lastSeenAt": "2026-11-04T16:53:48.939Z",
+      "expiresAt": null,
+      "decayScore": 7
+    },
+    {
+      "influence": "preference",
+      "tags": [
+        "full"
+      ],
+      "id": "stable-34",
+      "scope": "feature",
+      "kind": "long_term",
+      "category": "stable_decision",
+      "feature": "cycle-isolation",
+      "stage": 2,
+      "agent": null,
+      "summary": "Stable completion with roles=full pack=default",
+      "source": {
+        "type": "execution-parameters",
+        "window": "latest"
+      },
+      "evidence": [
+        {
+          "type": "event",
+          "ref": "34"
+        }
+      ],
+      "confidence": 0.7,
+      "createdAt": "2026-11-04T16:57:42.126Z",
+      "lastSeenAt": "2026-11-04T16:57:42.126Z",
+      "expiresAt": null,
+      "decayScore": 7
+    },
+    {
+      "influence": "preference",
+      "tags": [
+        "gate0"
+      ],
+      "id": "gate-46",
+      "scope": "feature",
+      "kind": "execution",
+      "category": "gate_failure_pattern",
+      "feature": "cycle-isolation",
+      "stage": 3,
+      "agent": null,
+      "summary": "Gate gate0 failed in stage 3",
+      "source": {
+        "type": "events",
+        "window": "latest"
+      },
+      "evidence": [
+        {
+          "type": "event",
+          "ref": "46"
+        }
+      ],
+      "confidence": 0.8,
+      "createdAt": "2026-11-05T03:08:04.224Z",
+      "lastSeenAt": "2026-11-05T03:08:04.224Z",
+      "expiresAt": null,
+      "decayScore": 10
+    },
+    {
+      "influence": "preference",
+      "tags": [
+        "owasp-scan"
+      ],
+      "id": "gate-59",
+      "scope": "feature",
+      "kind": "execution",
+      "category": "gate_failure_pattern",
+      "feature": "cycle-isolation",
+      "stage": 3,
+      "agent": null,
+      "summary": "Gate owasp-scan failed in stage 3",
+      "source": {
+        "type": "events",
+        "window": "latest"
+      },
+      "evidence": [
+        {
+          "type": "event",
+          "ref": "59"
+        }
+      ],
+      "confidence": 0.8,
+      "createdAt": "2026-11-05T03:19:23.765Z",
+      "lastSeenAt": "2026-11-05T03:19:23.765Z",
+      "expiresAt": null,
+      "decayScore": 10
+    },
+    {
+      "influence": "preference",
+      "tags": [
+        "full"
+      ],
+      "id": "stable-70",
+      "scope": "feature",
+      "kind": "long_term",
+      "category": "stable_decision",
+      "feature": "cycle-isolation",
+      "stage": 4,
+      "agent": null,
+      "summary": "Stable completion with roles=full pack=default",
+      "source": {
+        "type": "execution-parameters",
+        "window": "latest"
+      },
+      "evidence": [
+        {
+          "type": "event",
+          "ref": "70"
+        }
+      ],
+      "confidence": 0.7,
+      "createdAt": "2026-11-05T03:31:05.432Z",
+      "lastSeenAt": "2026-11-05T03:31:05.432Z",
+      "expiresAt": null,
+      "decayScore": 7
+    }
+  ]
+}

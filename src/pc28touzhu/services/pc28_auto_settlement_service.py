@@ -67,57 +67,69 @@ def _resolve_pending_win_streak_cycles(repository: Any) -> Dict[str, Any]:
     items: List[Dict[str, Any]] = []
     waiting_count = 0
     closed_day_count = 0
-    for row in repository.list_pending_win_streak_cycles():
-        pending = row.get("pending_plan") or {}
-        leg_event_ids = [int(i) for i in (pending.get("leg_event_ids") or [])]
-        if not leg_event_ids:
-            continue
-        leg_events = [repository.get_progression_event(event_id) for event_id in leg_event_ids]
-        if any(event is None for event in leg_events):
+    for candidate in repository.list_pending_win_streak_cycles():
+        if candidate.get("scope") == "blocked":
             waiting_count += 1
-            continue
-        if any(str(event.get("status") or "pending") not in TERMINAL_CYCLE_LEG_STATUSES for event in leg_events):
-            waiting_count += 1
-            continue
-        policy = row.get("policy") or {}
-        snapshot_state = pending.get("state") or {}
-        stake_total = float(pending.get("stake_total") or 0)
-        # net_delta 对 hit/miss/refund 都满足：返还额 = 注码 + 净盈亏；
-        # void（消息过期未发出）净盈亏为 0，等于该腿退本、没有真正上注。
-        payout_total = round(sum(
-            float(event.get("stake_amount") or 0) + float(event.get("net_delta") or 0)
-            for event in leg_events
-        ), 2)
-        new_state = apply_period_outcome(policy, snapshot_state, stake_total=stake_total, payout_total=payout_total)
-        day_close = resolve_day_close_action(policy, new_state)
-        close_result: Dict[str, Any] = {"closed": False}
-        if day_close.get("close_day"):
-            payload = dict(pending)
-            payload.setdefault("user_id", int(row["user_id"]))
-            close_result = _close_cycle_day(
-                repository, action=day_close, leg_events=leg_events, pending=payload,
-            )
-            if close_result.get("closed"):
-                closed_day_count += 1
-        repository.upsert_subscription_cycle_state(
-            subscription_id=int(row["subscription_id"]),
-            user_id=int(row["user_id"]),
-            state=new_state,
-            policy=policy,
-            pending_plan=None,
-        )
-        items.append({
-            "subscription_id": int(row["subscription_id"]),
-            "issue_no": str(pending.get("issue_no") or ""),
-            "net_pnl": round(payout_total - stake_total, 2),
-            "balance": new_state.get("balance"),
-            "win_streak": new_state.get("win_streak"),
-            "status": new_state.get("status"),
-            "stop_reason": new_state.get("stop_reason"),
-            "cycles_today": new_state.get("cycles_today"),
-            "day_closed": bool(new_state.get("day_closed")),
-            "day_close": close_result,
-        })
+            continue  # 迁移归属不明的原始快照不能被当作手动周期结算覆盖。
+        with repository.transaction() as unit:
+            automatic = candidate.get("scope") == "auto"
+            owner = {key: int(candidate[key]) for key in ("rule_id", "subscription_id", "user_id", "route_id")} if automatic else {}
+            row = unit.get_auto_trigger_cycle_state(**owner) if automatic else unit.get_subscription_cycle_state(subscription_id=int(candidate["subscription_id"]))
+            if not row or not row.get("pending_plan"):
+                continue
+            pending = row.get("pending_plan") or {}
+            leg_event_ids = [int(i) for i in (pending.get("leg_event_ids") or [])]
+            if not leg_event_ids:
+                continue
+            leg_events = [unit.get_progression_event(event_id) for event_id in leg_event_ids]
+            if any(event is None for event in leg_events):
+                waiting_count += 1
+                continue
+            if any(str(event.get("status") or "pending") not in TERMINAL_CYCLE_LEG_STATUSES for event in leg_events):
+                waiting_count += 1
+                continue
+            policy = row.get("policy") or {}
+            snapshot_state = pending.get("state") or {}
+            stake_total = float(pending.get("stake_total") or 0)
+            # net_delta 对 hit/miss/refund 都满足：返还额 = 注码 + 净盈亏；
+            # void（消息过期未发出）净盈亏为 0，等于该腿退本、没有真正上注。
+            payout_total = round(sum(
+                float(event.get("stake_amount") or 0) + float(event.get("net_delta") or 0)
+                for event in leg_events
+            ), 2)
+            new_state = apply_period_outcome(policy, snapshot_state, stake_total=stake_total, payout_total=payout_total)
+            day_close = resolve_day_close_action(policy, new_state)
+            close_result: Dict[str, Any] = {"closed": False}
+            if day_close.get("close_day") and (not automatic or (policy.get("_cycle_policy") or {}).get("mode", "legacy") == "legacy"):
+                payload = dict(pending)
+                payload.setdefault("user_id", int(row["user_id"]))
+                close_result = _close_cycle_day(
+                    unit, action=day_close, leg_events=leg_events, pending=payload,
+                )
+                if close_result.get("closed"):
+                    closed_day_count += 1
+            if automatic:
+                unit.upsert_auto_trigger_cycle_state(**owner, rule_run_id=row.get("rule_run_id"),
+                    state=new_state, policy=policy, pending_plan=None)
+                from pc28touzhu.services.auto_trigger_cycle_service import finish_roll_session
+                close_result = finish_roll_session(unit, {**row, **new_state}, completed_issue_no=str(pending.get("issue_no") or ""))
+            else:
+                unit.upsert_subscription_cycle_state(
+                    subscription_id=int(row["subscription_id"]), user_id=int(row["user_id"]),
+                    state=new_state, policy=policy, pending_plan=None,
+                )
+            items.append({
+                "subscription_id": int(row["subscription_id"]),
+                "issue_no": str(pending.get("issue_no") or ""),
+                "net_pnl": round(payout_total - stake_total, 2),
+                "balance": new_state.get("balance"),
+                "win_streak": new_state.get("win_streak"),
+                "status": new_state.get("status"),
+                "stop_reason": new_state.get("stop_reason"),
+                "cycles_today": new_state.get("cycles_today"),
+                "day_closed": bool(new_state.get("day_closed")),
+                "day_close": close_result,
+            })
     return {
         "resolved_count": len(items),
         "waiting_count": waiting_count,

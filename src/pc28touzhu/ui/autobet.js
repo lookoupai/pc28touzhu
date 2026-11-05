@@ -3069,7 +3069,7 @@
             const roll = payload.win_streak_roll;
             parts.push("过 " + (roll.target_streak || 3) + " 关收工");
             if (roll.base_amount != null) {
-                parts.push("每天起始注 " + roll.base_amount);
+                parts.push("每轮起始注 " + roll.base_amount);
             }
             const structureLabels = { A: "单+小双", B: "单+大双", C: "双+小单", D: "双+大单", follow_signal: "跟随信号" };
             if (roll.structure) {
@@ -3079,8 +3079,8 @@
                 parts.push(roll.roll_mode === "chain" ? "链条滚仓" : "全仓滚仓");
             }
             const rollStopPolicy = roll.stop_policy && typeof roll.stop_policy === "object" ? roll.stop_policy : {};
-            const onTargetLabels = { close_day: "达标当天收工", new_cycle: "达标当天重开一轮", continue: "达标继续滚" };
-            const onBustLabels = { close_day: "爆仓当天收工", new_cycle: "爆仓重开一轮" };
+            const onTargetLabels = { close_day: "手动达标当天收工", new_cycle: "手动达标重开一轮", continue: "手动达标继续滚" };
+            const onBustLabels = { close_day: "手动资金耗尽当天收工", new_cycle: "手动资金耗尽重开一轮" };
             if (rollStopPolicy.on_target) {
                 parts.push(onTargetLabels[rollStopPolicy.on_target] || ("达标后 " + rollStopPolicy.on_target));
             }
@@ -3088,7 +3088,7 @@
                 parts.push(onBustLabels[rollStopPolicy.on_bust] || ("爆仓后 " + rollStopPolicy.on_bust));
             }
             if (Number(rollStopPolicy.max_cycles_per_day || 0) > 1) {
-                parts.push("一天最多 " + rollStopPolicy.max_cycles_per_day + " 轮");
+                parts.push("手动一天最多 " + rollStopPolicy.max_cycles_per_day + " 轮");
             }
         }
         if (payload.base_stake != null && String(payload.base_stake).trim() !== "") {
@@ -5697,6 +5697,37 @@
         renderTargetWorkspaceSummary();
     }
 
+    function isWinStreakRollSubscription(subscription) {
+        return Boolean(subscription && ((subscription.strategy && subscription.strategy.win_streak_roll) ||
+            ((subscription.strategy_v2 || {}).staking_policy || {}).mode === "win_streak_roll"));
+    }
+
+    function renderManualCycleState(subscription) {
+        if (!isWinStreakRollSubscription(subscription)) return "";
+        const cycle = subscription.manual_cycle_state;
+        let content;
+        if (cycle === null) {
+            content = '<p>尚未手动开始。</p>';
+        } else if (!cycle || typeof cycle !== "object") {
+            content = '<p>手动过关状态暂不可用，请刷新后重试。</p>';
+        } else {
+            const number = function (value, money) {
+                return value == null || value === "" || !Number.isFinite(Number(value)) ? "—" : (money ? Number(value).toFixed(2) : String(value));
+            };
+            const reason = {
+                balance_depleted: "本轮资金耗尽", win_streak_target: "达到过关目标",
+                cycle_balance_depleted: "本轮资金耗尽", cycle_target_hit: "达到过关目标", manual_stop: "手动停止",
+            }[String(cycle.stop_reason || "")] || (cycle.stop_reason ? "已停止，详见运行记录" : "");
+            const status = cycle.day_closed ? "手动当天收工" : ({running: "手动进行中", stopped: "手动已停止", waiting: "手动待命", blocked: "手动状态需核对"}[cycle.status] || "手动状态未知");
+            content = '<p>' + escapeHtml(status) + (reason ? ' · ' + escapeHtml(reason) : '') + '</p>' +
+                '<p>余额 ' + escapeHtml(number(cycle.balance, true)) + ' · 当前关数 ' + escapeHtml(number(cycle.win_streak)) + ' / ' + escapeHtml(number(cycle.target_streak)) + '</p>' +
+                '<p>' + escapeHtml(cycle.stat_date || "—") + ' · 当天已重开 ' + escapeHtml(number(cycle.cycles_today)) + ' 次</p>' +
+                (cycle.pending_issue ? '<p>第 <span class="mono-text">' + escapeHtml(cycle.pending_issue) + '</span> 期待结算</p>' : '');
+        }
+        return '<section class="manual-cycle-state" aria-label="手动过关状态"><strong>手动过关状态</strong>' + content +
+            '<a href="/auto-triggers">查看自动规则</a></section>';
+    }
+
     function renderSubscriptionCards() {
         if (!(subscriptionCards instanceof HTMLElement)) {
             return;
@@ -5791,8 +5822,8 @@
                     '<button class="ghost-btn settle-progression-btn" type="button" data-subscription-id="' + item.id + '" data-progression-event-id="' + progression.pending_event_id + '" data-result-type="miss">未中</button>'
                 ].join("")
                 : "";
-            const isRollPlanRow = Boolean(item.strategy && item.strategy.win_streak_roll);
-            const resetActionText = (isSubscriptionRiskBlocked(item) || isRollPlanRow) ? "开始新一轮" : "重置盈亏";
+            const isRollPlanRow = isWinStreakRollSubscription(item);
+            const resetActionText = (isSubscriptionRiskBlocked(item) || isRollPlanRow) ? "手动开始新一轮" : "重置手动盈亏";
             const resetAction = '<button class="ghost-btn reset-subscription-runtime-btn" type="button" data-subscription-id="' + item.id + '">' + resetActionText + '</button>';
             const stoppedReasonMarkup = financial && financial.stopped_reason
                 ? ('<div class="config-card-note subscription-runtime-note">' + escapeHtml(financial.stopped_reason) + '</div>')
@@ -5827,6 +5858,7 @@
                         renderConfigDetailRow("投递概况", "命中 " + String(chainState.effectiveTargets.length) + " 个群组 · 已配置 " + String(chainState.configuredTargets.length) + " 个群组"),
                     ]),
                     stoppedReasonMarkup,
+                    renderManualCycleState(item),
                     settlementPanelMarkup,
                     expandedDetailMarkup,
                 ].join(""),
@@ -7438,7 +7470,7 @@
                     throw new Error("过关滚仓模式下，过几关收工必须是至少 1 的整数");
                 }
                 if (!Number.isFinite(baseAmount) || baseAmount <= 0) {
-                    throw new Error("过关滚仓模式下，请填写大于 0 的每天起始注");
+                    throw new Error("过关滚仓模式下，请填写大于 0 的每轮起始注");
                 }
                 if (!["A", "B", "C", "D", "follow_signal"].includes(rollStructure)) {
                     throw new Error("过关滚仓模式下，请选择押哪种组合");
@@ -7868,13 +7900,13 @@
             if (target.classList.contains("reset-subscription-runtime-btn")) {
                 const subscriptionId = target.getAttribute("data-subscription-id");
                 const currentSubscription = subscriptionById(subscriptionId);
-                const isRollPlan = Boolean(currentSubscription && currentSubscription.strategy && currentSubscription.strategy.win_streak_roll);
+                const isRollPlan = isWinStreakRollSubscription(currentSubscription);
                 const isRestartingCycle = isSubscriptionRiskBlocked(currentSubscription) || isRollPlan;
                 const confirmMessage = isRollPlan
-                    ? "开始新一轮会重置过关周期（回到每天起始注、连赢次数清零）、解除当天的过关收工，并让今天的定时窗口可以重开一轮。确认继续吗？"
+                    ? "手动开始新一轮会重置手动过关周期（回到起始注、连赢次数清零），解除手动当天收工。自动规则的过关状态、日次数和历史盈亏保持不变。确认继续吗？"
                     : (isRestartingCycle
-                        ? "开始新一轮会清空当前轮次盈亏、回到第 1 手，并让今天手动停掉的轮次重新开放。确认继续吗？"
-                        : "重置后会从新的盈亏基线重新计算，并跳过当前未执行的旧轮次任务。确认继续吗？");
+                        ? "手动开始新一轮会重置手动轮次盈亏基线、回到第 1 手。自动规则的状态和次数保持不变。确认继续吗？"
+                        : "重置手动盈亏后会从新的手动基线重新计算，并跳过未执行的手动旧任务。自动账本和日次数保持不变。确认继续吗？");
                 if (!subscriptionId || !confirmDangerousAction(confirmMessage)) {
                     return;
                 }
@@ -7889,16 +7921,16 @@
                     await refreshAll();
                     setStatus(
                         isRollPlan
-                            ? "新一轮已开始：过关周期已重置回起始注，当天的过关收工已解除，今天的定时窗口也可以重开一轮（日风控的止盈止损不受影响）。"
+                            ? "手动新一轮已开始：手动过关周期已重置，手动当天收工已解除。自动规则的过关状态、日次数和历史盈亏保持不变。"
                             : (isRestartingCycle
-                                ? "新一轮已开始，当前盈亏和手数已回到新基线。"
-                                : "跟单策略已重置，当前盈亏和手数已回到新基线。"),
+                                ? "手动新一轮已开始，手动盈亏和手数已回到新基线；自动规则不受影响。"
+                                : "手动盈亏和手数已重置到新基线；自动账本和日次数保持不变。"),
                         false
                     );
                 } catch (error) {
                     setStatus(error.message, true);
                 } finally {
-                    setButtonBusy(target, false, isRestartingCycle ? "开始新一轮" : "重置盈亏");
+                    setButtonBusy(target, false, isRestartingCycle ? "手动开始新一轮" : "重置手动盈亏");
                 }
                 return;
             }

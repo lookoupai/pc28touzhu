@@ -11,6 +11,7 @@
         statDate: "",
         eventLimit: 30,
         eventStatusFilter: "all",
+        editingCyclePolicy: null,
     };
     let currentUserLoadToken = 0;
 
@@ -28,6 +29,24 @@
         big_small: ["大", "小"],
         odd_even: ["单", "双"],
         combo: ["大单", "大双", "小单", "小双"],
+    };
+    const cycleActionLabels = {
+        wait_condition: "等待下次条件满足",
+        new_cycle: "下一可投注期直接续开",
+        close_day: "当天收工",
+    };
+    const cycleStatusLabels = {
+        waiting: "等待触发", running: "进行中", continuation: "等待直接续开",
+        day_closed: "当天收工", blocked: "暂停，需核对",
+    };
+    const cycleReasonLabels = {
+        cycle_balance_depleted: "本轮资金耗尽", balance_depleted: "本轮资金耗尽",
+        cycle_target_hit: "已达到本轮过关目标", win_streak_target: "已达到本轮过关目标",
+        cycle_daily_limit: "今日启动次数已满", daily_start_limit: "今日启动次数已满",
+        daily_limit_reached: "今日启动次数已满", cycle_start_limit_reached: "今日启动次数已满",
+        max_starts_per_day: "今日启动次数已满", manual_stop: "已人工结束本轮",
+        profit_target_hit: "规则日止盈已触发", loss_limit_hit: "规则日止损已触发",
+        daily_hit_rate_low: "规则日命中率熔断已触发",
     };
     const operatorOptions = [
         ["lt", "低于"],
@@ -234,6 +253,19 @@
             return "因上一轮跨日延续被拦截，当天未新开轮次。";
         }
         const scheduleReasons = {
+            cycle_continued: "按本规则设置开启下一轮过关，已计入每日启动次数。",
+            cycle_daily_limit: "本规则下该方案今日启动次数已满。",
+            cycle_day_closed: "本规则下该方案今日已收工。",
+            cycle_balance_depleted: "本轮滚仓资金耗尽，按规则结束设置处理。",
+            cycle_target_hit: "已达到本轮过关目标，按规则结束设置处理。",
+            cycle_running: "本规则下该方案的过关轮次仍在运行，不重复启动。",
+            cycle_has_open_run: "本规则下该方案的过关轮次仍在运行，不重复启动。",
+            cycle_blocked: "本规则下该方案暂停，需核对状态后恢复待命。",
+            cycle_needs_new_issue: "等待本轮结束之后的新一期重新判断条件。",
+            cycle_waiting_new_issue: "等待本轮结束之后的新一期重新判断条件。",
+            cycle_signal_not_dispatched: "尚未创建新的投注任务，本次未消耗启动次数。",
+            cycle_no_jobs_created: "尚未创建新的投注任务，本次未消耗启动次数。",
+            manual_stop: "本规则的当前轮次已人工结束，需恢复该方案待命后再判断条件。",
             draw_clock_unavailable: "暂时无法确认最新开奖期号，等待下一次检查。",
             draw_history_not_current: "开奖记录尚未同步到最新一期，等待下一次检查。",
             draw_issue_already_triggered: "该期开奖已触发过此方案，不重复启动。",
@@ -386,36 +418,102 @@
         const head = "在跑轮次 " + String(dates.length) + " 个：" + shown.join("、");
         const staleCount = dates.filter(function (date) { return date < today; }).length;
         // 每日开轮额度只对定时触发生效，条件触发不受跨日闸约束，别在那边报警
-        if (String(rule.trigger_mode || "condition") === "schedule" && staleCount) {
-            return head + "（已跨日延续到今天，会占用今天的开轮额度）";
-        }
         if (staleCount) {
-            return head + "（其中 " + String(staleCount) + " 个是往日未收口的轮次）";
+            return head + "（其中 " + String(staleCount) + " 个是上一日启动，当前仍在运行；不占今天的新开额度）";
         }
         return head;
     }
 
-    function stopCurrentRunText(result) {
+    function stopCurrentRunText(result, rule) {
         if (!result || !result.stopped) {
             return "这条规则当前没有在跑的轮次。";
         }
-        const runCount = Array.isArray(result.stopped_runs) ? result.stopped_runs.length : 0;
-        const parts = ["已结束 " + String(runCount) + " 个在跑轮次"];
+        const runCount = Array.isArray(result.stopped_runs) ? result.stopped_runs.length : (Array.isArray(result.runs) ? result.runs.length : 0);
+        const parts = ["已结束本规则 " + String(runCount) + " 个在跑轮次"];
         if (result.cancelled_event_count) {
             parts.push("取消排队 " + String(result.cancelled_event_count) + " 单");
         }
         if (result.expired_job_count) {
             parts.push("跳过未执行任务 " + String(result.expired_job_count) + " 个");
         }
-        if (result.released_blocked_day_count) {
-            parts.push("释放被占用的开轮额度 " + String(result.released_blocked_day_count) + " 天");
-        }
         const summary = parts.join("，") + "。";
+        const nextStep = rule && Array.isArray(rule.cycle_runtime) && rule.cycle_runtime.length
+            ? "过关方案可在运行详情中恢复待命，已用次数和历史盈亏保留。"
+            : (rule && rule.trigger_mode === "schedule" ? "后续启动仍需满足允许的定时窗口和风控。" : "后续启动仍需满足新的触发条件和风控。");
         if (result.pending_settlement_count) {
             return summary + "仍有 " + String(result.pending_settlement_count) +
-                " 单已下注待结算，结算完成后下一个时间窗口才会开新一轮。";
+                " 单已下注待结算，已发送单不会撤销。" + nextStep;
         }
-        return summary + "规则保持启用，下一个时间窗口会开新一轮。";
+        return summary + nextStep;
+    }
+
+    function isRollSubscription(item) {
+        const strategy = item.strategy_v2 || item.strategy || {};
+        return Boolean((strategy.staking_policy || {}).mode === "win_streak_roll" ||
+            (item.strategy && item.strategy.win_streak_roll));
+    }
+
+    function cycleNumber(value, money) {
+        if (value === null || value === undefined || value === "" || !Number.isFinite(Number(value))) return "—";
+        return money ? Number(value).toFixed(2) : String(value);
+    }
+
+    function cycleResumeBlock(rule, runtime) {
+        if (runtime.outside_scope) return "已移出规则范围，仅保留运行记录";
+        if (rule.status !== "active") return "规则未启用";
+        const canResumeLegacyCycle = (rule.cycle_policy || {}).mode === "rule" &&
+            ["cycle_target_hit", "cycle_balance_depleted"].includes(String((ruleDailyStat(rule) || {}).stopped_reason || ""));
+        if (isDailyRiskStopped(rule) && !canResumeLegacyCycle) return "规则当天仍处于停止状态，请先处理规则日风控";
+        if (!Array.isArray(runtime.routes) || !Object.hasOwn(runtime, "starts_today")) return "过关状态不可用";
+        if (runtime.routes.some(function (route) { return Boolean(route.pending_issue); })) return "还有已发送单待结算";
+        if (["running", "continuation"].includes(runtime.status)) return "当前仍在运行或等待续开";
+        if (runtime.status === "waiting") return "已经处于等待触发状态";
+        if (!Object.hasOwn(cycleStatusLabels, runtime.status)) return "过关状态不可用";
+        if (runtime.status === "blocked" && runtime.stop_reason !== "manual_stop") return "历史过关状态需核对，自动续投已暂停";
+        const starts = Number(runtime.starts_today);
+        const limit = Number(runtime.max_starts_per_day);
+        if (Number.isFinite(limit) && limit > 0 && starts >= limit) return "今日启动次数已满，调整上限后再恢复待命";
+        const item = state.subscriptions.find(function (sub) { return Number(sub.id) === Number(runtime.subscription_id); });
+        if (!item || !isTriggerableSubscription(item)) return "关联跟单方案未就绪";
+        const source = sourceById(item.source_id);
+        if (!source || source.status !== "active") return "信号来源未启用";
+        return "";
+    }
+
+    function cycleRuntimeHtml(rule) {
+        if (!Array.isArray(rule.cycle_runtime)) {
+            return '<p class="meta-line">过关状态不可用，请刷新后重试。</p>';
+        }
+        if (!rule.cycle_runtime.length) return '';
+        const historical = state.statDate !== todayDateString();
+        const cards = rule.cycle_runtime.map(function (runtime) {
+            const routes = Array.isArray(runtime.routes) ? runtime.routes : [];
+            const blockReason = cycleResumeBlock(rule, runtime);
+            const name = runtime.subscription_name || ("方案 " + runtime.subscription_id);
+            const routeMarkup = routes.map(function (route) {
+                const inherited = !(rule.routes || []).length;
+                const routeName = inherited ? ("继承方案投递" + (route.route_name ? " · " + route.route_name : "")) : (route.route_name || "投递群组");
+                return '<li><strong>' + escapeHtml(routeName) + '</strong><p class="meta-line">余额 ' + escapeHtml(cycleNumber(route.balance, true)) +
+                    ' · 滚仓注额 ' + escapeHtml(cycleNumber(route.cycle_stake, true)) + ' · 连续盈利 ' +
+                    escapeHtml(cycleNumber(route.win_streak)) + ' / ' + escapeHtml(cycleNumber(route.target_streak)) + ' 关</p>' +
+                    (route.pending_issue ? '<p class="meta-line">第 <span class="mono">' + escapeHtml(route.pending_issue) + '</span> 期待结算</p>' : '') + '</li>';
+            }).join("");
+            const startDate = runtime.start_stat_date;
+            const reason = runtime.stop_reason ? (cycleReasonLabels[runtime.stop_reason] || (runtime.status === "blocked" ? "历史过关状态需核对，自动续投已暂停" : "当前暂不可启动")) : "";
+            return '<section class="cycle-runtime-card" tabindex="-1" data-cycle-subscription="' + escapeHtml(runtime.subscription_id) + '">' +
+                '<div class="cycle-runtime-head"><strong>' + escapeHtml(name) + '</strong><span class="cycle-state">' + escapeHtml(cycleStatusLabels[runtime.status] || "状态未知") + '</span></div>' +
+                (runtime.outside_scope ? '<p class="meta-line">已移出规则范围，仅保留运行记录</p>' : '') +
+                '<p class="meta-line">' + escapeHtml(runtime.stat_date || state.statDate) + ' · 所选日已启动 ' + escapeHtml(cycleNumber(runtime.starts_today)) + ' / ' + escapeHtml(cycleNumber(runtime.max_starts_per_day)) + ' 轮</p>' +
+                (startDate ? '<p class="meta-line">当前或最近一轮启动日：' + escapeHtml(startDate) + (runtime.status === "running" && startDate < todayDateString() ? ' · 上一日启动，当前仍在运行' : '') + '</p>' : '') +
+                (reason ? '<p class="meta-line">' + escapeHtml(reason) + '</p>' : '') +
+                (routes.length ? '<ul class="cycle-route-states">' + routeMarkup + '</ul>' : '<p class="meta-line">尚未启动过关轮次。</p>') +
+                (runtime.status === "running" && !routes.some(function (route) { return route.pending_issue; }) ? '<p class="meta-line">等待下一期信号。</p>' : '') +
+                (runtime.status === "continuation" ? '<p class="meta-line">等待下一可投注信号，不重新等待触发条件。</p>' : '') +
+                (!historical && ["day_closed", "blocked"].includes(runtime.status) ? '<div class="cycle-runtime-actions"><button class="tiny-btn resume-cycle-btn" type="button" data-id="' + escapeHtml(rule.id) + '" data-subscription-id="' + escapeHtml(runtime.subscription_id) + '" aria-label="' + escapeHtml('恢复规则“' + rule.name + '”下方案“' + name + '”待命') + '"' + (blockReason ? ' disabled' : '') + '>恢复本方案待命</button>' + (blockReason ? '<p class="meta-line">' + escapeHtml(blockReason) + '</p>' : '') + '</div>' : '') + '</section>';
+        });
+        const content = cards.slice(0, 3).join("") + (cards.length > 3 ? '<details class="cycle-runtime-more"><summary>展开其余 ' + (cards.length - 3) + ' 个方案</summary>' + cards.slice(3).join("") + '</details>' : '');
+        return '<details class="cycle-runtime" data-cycle-rule="' + escapeHtml(rule.id) + '"><summary>过关运行 · ' + cards.length + ' 个方案</summary>' + content +
+            (historical ? '<button class="ghost-btn cycle-today-btn" type="button">切回今天操作</button>' : '') + '</details>';
     }
 
     function renderRuleList() {
@@ -432,7 +530,7 @@
             const schedule = rule.schedule || {};
             const scheduleText = isSchedule ? ("定时触发：" + ((schedule.windows || []).map(function (item) {
                 return String(item.start || "") + "-" + String(item.end || "");
-            }).join(" / ") || "未配置") + "，每个窗口每天最多1轮") : "";
+            }).join(" / ") || "未配置") + ((rule.cycle_policy || {}).mode === "rule" ? "；过关轮次按每日上限控制" : "，每个窗口每天最多1轮")) : "";
             const guardGroups = (rule.guard_groups || []).map(function (group, index) {
                 const groupConditions = (group.conditions || []).map(conditionText).join("；") || "--";
                 return "条件区" + String(index + 1) + "：" + groupConditions;
@@ -463,11 +561,12 @@
                     (dailyStatusText(rule) ? '<p class="meta-line">' + escapeHtml(dailyStatusText(rule)) + '</p>' : '') +
                     (activeRunText(rule) ? '<p class="meta-line">' + escapeHtml(activeRunText(rule)) + '</p>' : '') +
                     '<p class="meta-line">冷却 <span class="mono">' + escapeHtml(rule.cooldown_issues) + '</span> 期，上次触发 <span class="mono">' + escapeHtml(rule.last_triggered_issue_no || "--") + '</span></p>' +
+                    cycleRuntimeHtml(rule) +
                     '<div class="rule-actions">' +
                         '<button class="tiny-btn edit-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">编辑</button>' +
                         '<button class="tiny-btn run-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">检查</button>' +
-                        (isDailyRiskStopped(rule) || stoppedRouteCount ? '<button class="tiny-btn resume-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">继续今日触发</button>' : '') +
-                        (ruleActiveRuns(rule).length ? '<button class="tiny-btn stop-run-btn" type="button" data-id="' + escapeHtml(rule.id) + '">结束当前轮次</button>' : '') +
+                        (isDailyRiskStopped(rule) || stoppedRouteCount ? '<button class="tiny-btn resume-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">恢复规则日风控</button>' : '') +
+                        (ruleActiveRuns(rule).length ? '<button class="tiny-btn stop-run-btn" type="button" data-id="' + escapeHtml(rule.id) + '">结束本规则当前轮次</button>' : '') +
                         '<button class="tiny-btn status-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '" data-status="' + (rule.status === "active" ? "inactive" : "active") + '">' + (rule.status === "active" ? "停用" : "启用") + '</button>' +
                         (rule.status === "archived" ? '' : '<button class="tiny-btn status-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '" data-status="archived">归档</button>') +
                         (rule.status === "archived" ? '<button class="tiny-btn danger-btn delete-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">删除</button>' : '') +
@@ -831,6 +930,14 @@
         form.elements.scope_mode.value = item.scope_mode || "selected_subscriptions";
         form.elements.cooldown_issues.value = String(item.cooldown_issues == null ? 10 : item.cooldown_issues);
         form.elements.trigger_mode.value = item.trigger_mode || "condition";
+        const cyclePolicy = item.cycle_policy && typeof item.cycle_policy === "object" ? item.cycle_policy : (item.id ? {mode: "legacy"} : {mode: "rule"});
+        state.editingCyclePolicy = cyclePolicy;
+        form.elements.cycle_mode.innerHTML = options(cyclePolicy.mode === "legacy" ? [["legacy", "沿用原有结束设置"], ["rule", "由本规则控制"]] : [["rule", "由本规则控制"]], cyclePolicy.mode || "rule");
+        form.elements.cycle_max_starts.value = String(cyclePolicy.max_starts_per_day == null ? 1 : cyclePolicy.max_starts_per_day);
+        form.elements.cycle_on_target.value = cyclePolicy.on_target || "wait_condition";
+        form.elements.cycle_on_bust.value = cyclePolicy.on_bust || "wait_condition";
+        form.elements.cycle_max_starts.removeAttribute("aria-invalid");
+        $("cyclePolicyError").hidden = true;
         const schedule = item.schedule || {};
         form.elements.schedule_timezone.value = schedule.timezone || "Asia/Shanghai";
         form.elements.schedule_signal_max_age_seconds.value = String(schedule.signal_max_age_seconds || 300);
@@ -862,6 +969,7 @@
         updateTriggerModeVisibility();
         updateActionVisibility();
         updateDailyRiskVisibility();
+        updateCyclePolicyVisibility();
         renderRuleList();
         setStatus("", false);
     }
@@ -871,11 +979,13 @@
         $("scheduleFields").hidden = !isSchedule;
         $("conditionPanel").hidden = isSchedule;
         $("guardPanel").hidden = isSchedule;
+        updateCyclePolicyVisibility();
     }
 
     function updateScopeVisibility() {
         const isAll = $("scopeModeSelect").value === "all_subscriptions";
         $("subscriptionSelectField").hidden = isAll;
+        updateCyclePolicyVisibility();
     }
 
     function updateActionVisibility() {
@@ -884,6 +994,60 @@
 
     function updateDailyRiskVisibility() {
         $("dailyRiskFields").hidden = !Boolean($("dailyRiskEnabledInput").checked);
+    }
+
+    function updateCyclePolicyVisibility() {
+        const form = $("ruleForm");
+        const legacy = form.elements.cycle_mode.value === "legacy";
+        $("cyclePolicyPanel").querySelectorAll(".cycle-rule-field").forEach(function (field) { field.hidden = legacy; });
+        ["cycle_max_starts", "cycle_on_target", "cycle_on_bust"].forEach(function (name) { form.elements[name].disabled = legacy; });
+        $("cyclePolicyHint").textContent = legacy
+            ? "沿用原有结束设置。切换为由本规则控制后，新的轮次将使用本区设置；保存不会解除已收工状态。"
+            : "本规则的每日次数与结束处理独立管理，不影响手动方案或其他规则。";
+        const selectedIds = new Set(Array.from($("subscriptionSelect").selectedOptions).map(function (option) { return Number(option.value); }));
+        const scoped = state.subscriptions.filter(function (item) { return form.elements.scope_mode.value === "all_subscriptions" || selectedIds.has(Number(item.id)); });
+        $("cycleScopeHint").textContent = scoped.some(isRollSubscription) ? "" : "当前范围没有过关方案；这些设置将在选用过关方案时生效。";
+        const isSchedule = form.elements.trigger_mode.value === "schedule";
+        const hints = {
+            wait_condition: isSchedule
+                ? "本轮结束后等待新一期，且处于允许的定时窗口；同一窗口可再次启动。"
+                : "本轮结束后回到待命，使用结束后的新一期重新判断条件，仍受冷却期数限制。",
+            new_cycle: "不重新等待开始条件和触发冷却，按方案起始金额开启下一轮；仍计入每日上限并受日风控限制。",
+            close_day: "本轮结束后停止本规则下该方案当天的过关启动。",
+        };
+        [["cycle_on_target", "cycleOnTargetHint"], ["cycle_on_bust", "cycleOnBustHint"]].forEach(function (entry) {
+            const action = form.elements[entry[0]].value;
+            $(entry[1]).textContent = (hints[action] || "结束处理不可用，请重新选择。") +
+                (Number(form.elements.cycle_max_starts.value) === 1 && action !== "close_day" ? " 当前每天最多 1 轮，本轮结束后会因额度用完收工。" : "");
+        });
+        $("scheduleModeHint").textContent = !legacy
+            ? "过关方案在上轮结束后，可用新一期在同一允许窗口再次启动，受本规则每日次数限制。普通均注、倍投仍是每个窗口每天最多一轮。所有方案均不会补发窗口外旧信号。"
+            : "每个定时任务在窗口开始后尝试启动一轮，每个窗口每天最多一轮；上一轮未结束时不重复开轮。窗口结束后不会补发旧信号。";
+    }
+
+    function collectCyclePolicy() {
+        const form = $("ruleForm");
+        if (form.elements.cycle_mode.value === "legacy") {
+            return {...(state.editingCyclePolicy || {}), mode: "legacy"};
+        }
+        const input = form.elements.cycle_max_starts;
+        const value = String(input.value).trim();
+        const limit = Number(value);
+        if (!/^\d+$/.test(value) || !Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
+            input.setAttribute("aria-invalid", "true");
+            $("cyclePolicyError").textContent = "每日启动轮数请输入 1–1000 的整数。";
+            $("cyclePolicyError").hidden = false;
+            input.focus();
+            throw new Error("每日启动轮数请输入 1–1000 的整数。");
+        }
+        const onTarget = form.elements.cycle_on_target.value;
+        const onBust = form.elements.cycle_on_bust.value;
+        if (!cycleActionLabels[onTarget] || !cycleActionLabels[onBust]) {
+            throw new Error("请选择有效的过关结束处理方式。");
+        }
+        input.removeAttribute("aria-invalid");
+        $("cyclePolicyError").hidden = true;
+        return {mode: "rule", max_starts_per_day: limit, on_target: onTarget, on_bust: onBust};
     }
 
     function collectConditions(container) {
@@ -1001,6 +1165,7 @@
                 signal_max_age_seconds: Number(form.elements.schedule_signal_max_age_seconds.value || 300),
             },
             condition_mode: "any",
+            cycle_policy: collectCyclePolicy(),
             conditions: collectConditions($("conditionRows")),
             guard_groups: collectGuardGroups(),
             action: {
@@ -1090,19 +1255,23 @@
         const ruleId = String(form.elements.rule_id.value || "").trim();
         const button = $("saveRuleBtn");
         button.disabled = true;
+        button.textContent = "保存中…";
+        button.setAttribute("aria-busy", "true");
         try {
             const payload = collectPayload();
-            await request(ruleId ? ("/api/platform/auto-trigger-rules/" + ruleId) : "/api/platform/auto-trigger-rules", {
+            const saved = await request(ruleId ? ("/api/platform/auto-trigger-rules/" + ruleId) : "/api/platform/auto-trigger-rules", {
                 method: "POST",
                 body: payload,
             });
-            setStatus("规则已保存。", false);
-            state.editingRuleId = ruleId;
+            state.editingRuleId = String((saved.item || {}).id || ruleId);
             await loadData();
+            setStatus("规则已保存。正在运行的轮次保持原设置。", false);
         } catch (error) {
             setStatus(error.message, true);
         } finally {
             button.disabled = false;
+            button.textContent = "保存规则";
+            button.removeAttribute("aria-busy");
         }
     }
 
@@ -1113,6 +1282,18 @@
     }
 
     function attachEvents() {
+        $("cycleModeSelect").addEventListener("change", function () {
+            if (this.value === "rule" && (state.editingCyclePolicy || {}).mode === "legacy") {
+                const form = $("ruleForm");
+                form.elements.cycle_max_starts.value = "1";
+                form.elements.cycle_on_target.value = "wait_condition";
+                form.elements.cycle_on_bust.value = "wait_condition";
+            }
+            updateCyclePolicyVisibility();
+        });
+        ["cycleMaxStartsInput", "cycleOnTargetSelect", "cycleOnBustSelect", "subscriptionSelect"].forEach(function (id) {
+            $(id).addEventListener("change", updateCyclePolicyVisibility);
+        });
         $("ruleForm").addEventListener("submit", saveRule);
         $("scopeModeSelect").addEventListener("change", updateScopeVisibility);
         $("triggerModeSelect").addEventListener("change", updateTriggerModeVisibility);
@@ -1289,7 +1470,7 @@
                         body: {stat_date: state.statDate || todayDateString()},
                     });
                     await loadData();
-                    setStatus("已恢复今日自动触发。", false);
+                    setStatus("已处理规则日风控恢复。过关方案的每日次数与收工状态仍按各自设置检查。", false);
                 } catch (error) {
                     setStatus(error.message, true);
                 } finally {
@@ -1297,8 +1478,40 @@
                 }
                 return;
             }
+            if (target.classList.contains("cycle-today-btn")) {
+                $("statDateTodayBtn").click();
+                return;
+            }
+            if (target.classList.contains("resume-cycle-btn")) {
+                const ruleId = target.dataset.id;
+                const subscriptionId = target.dataset.subscriptionId;
+                try {
+                    target.disabled = true;
+                    target.textContent = "恢复中…";
+                    target.setAttribute("aria-busy", "true");
+                    await request("/api/platform/auto-trigger-rules/" + ruleId + "/resume-cycle", {
+                        method: "POST", body: {subscription_id: Number(subscriptionId)},
+                    });
+                    await loadData();
+                    const detail = document.querySelector('.cycle-runtime[data-cycle-rule="' + ruleId + '"]');
+                    if (detail) {
+                        detail.open = true;
+                        const card = detail.querySelector('[data-cycle-subscription="' + subscriptionId + '"]');
+                        if (card) card.focus({preventScroll: true});
+                    }
+                    setStatus("已恢复本规则下该方案的待命状态，仍需满足触发条件。日次数和历史盈亏已保留。", false);
+                } catch (error) {
+                    setStatus(error.message, true);
+                } finally {
+                    target.disabled = false;
+                    target.textContent = "恢复本方案待命";
+                    target.removeAttribute("aria-busy");
+                }
+                return;
+            }
             if (target.classList.contains("stop-run-btn")) {
-                if (!window.confirm("结束当前在跑的轮次？规则保持启用，下一个时间窗口会开新一轮。已下注待结算的单不会撤销。")) {
+                const rule = state.rules.find(function (item) { return String(item.id) === target.dataset.id; });
+                if (!window.confirm("结束本规则当前在跑的轮次？已发送的单仍会结算。此操作不清空已用次数或历史盈亏；后续需按本规则的待命、条件和风控限制重新启动。")) {
                     return;
                 }
                 try {
@@ -1308,7 +1521,7 @@
                         body: {note: "前端手动结束当前轮次"},
                     });
                     await loadData();
-                    setStatus(stopCurrentRunText(result), false);
+                    setStatus(stopCurrentRunText(result, rule), false);
                 } catch (error) {
                     setStatus(error.message, true);
                 } finally {

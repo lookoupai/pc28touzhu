@@ -11,6 +11,7 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from pc28touzhu.domain.win_streak_roll import (
     CYCLE_STOP_REASON_BUST,
@@ -90,6 +91,9 @@ class CycleSettlementTimingTests(unittest.TestCase):
         self.addCleanup(self.tmpdir.cleanup)
         self.repo = DatabaseRepository(os.path.join(self.tmpdir.name, "stop.db"))
         self.repo.initialize_database()
+        clock = patch("pc28touzhu.services.dispatch_service._shanghai_today", return_value=STAT_DATE)
+        clock.start()
+        self.addCleanup(clock.stop)
         self.user_id = self.repo.create_user("stop-user")
         self.source = self.repo.create_source_record(
             owner_user_id=self.user_id, source_type="internal_ai", name="过关来源",
@@ -199,6 +203,9 @@ class CycleStopPolicyTests(CycleSettlementTimingTests):
                              "route_risk_mode": "disabled", "subscription_risk_mode": "disabled"}],
             },
         )["item"]
+        with self.repo._connect() as conn:
+            conn.execute("UPDATE auto_trigger_rules SET cycle_policy_json='{}' WHERE id=?", (rule["id"],))
+        rule = self.repo.get_auto_trigger_rule(rule["id"])
         run = self.repo.ensure_auto_trigger_rule_run(
             rule_id=rule["id"], user_id=self.user_id,
             subscription_id=roll_subscription["id"], stat_date=STAT_DATE,
@@ -218,6 +225,10 @@ class CycleStopPolicyTests(CycleSettlementTimingTests):
         self._settle_draws(issue_no, triplet)
         return _resolve_pending_win_streak_cycles(self.repo)
 
+    def _auto_state(self, rule, subscription):
+        return self.repo.get_auto_trigger_cycle_state(rule_id=rule["id"], subscription_id=subscription["id"],
+            route_id=rule["routes"][0]["id"], user_id=self.user_id)
+
     def _rule_day(self, rule, stat_date=STAT_DATE):
         return self.repo.get_auto_trigger_rule_daily_stat(
             rule_id=int(rule["id"]), user_id=self.user_id, stat_date=stat_date,
@@ -228,10 +239,10 @@ class CycleStopPolicyTests(CycleSettlementTimingTests):
         # 主注「单」中：15 大单命中单；辅助「小双」未中
         for index, issue_no in enumerate(["20261104501", "20261104502", "20261104503"], start=1):
             self._dispatch_period(rule, run, subscription, issue_no=issue_no, triplet=[5, 8, 2])
-            state = self.repo.get_subscription_cycle_state(subscription_id=subscription["id"])
+            state = self._auto_state(rule, subscription)
             self.assertEqual(state["win_streak"], index)
 
-        state = self.repo.get_subscription_cycle_state(subscription_id=subscription["id"])
+        state = self._auto_state(rule, subscription)
         self.assertEqual(state["status"], "stopped")
         self.assertEqual(state["stop_reason"], "win_streak_target")
         self.assertTrue(state["day_closed"])
@@ -244,6 +255,7 @@ class CycleStopPolicyTests(CycleSettlementTimingTests):
         # 收工之后不再派单
         blocked = dispatch_signal(
             self.repo, self._signal(issue_no="20261104504")["id"], subscription_id=subscription["id"],
+            auto_trigger_context={"rule_id": rule["id"], "rule_run_id": run["id"], "stat_date": STAT_DATE, "routes": rule["routes"]},
         )
         self.assertEqual(blocked["created_count"], 0)
 
@@ -290,7 +302,7 @@ class CycleStopPolicyTests(CycleSettlementTimingTests):
         for issue_no in ["20261104531", "20261104532", "20261104533"]:
             self._dispatch_period(rule, run, subscription, issue_no=issue_no, triplet=[5, 8, 2])
 
-        state = self.repo.get_subscription_cycle_state(subscription_id=subscription["id"])
+        state = self._auto_state(rule, subscription)
         self.assertEqual(state["status"], "running")
         self.assertEqual(state["win_streak"], 0)
         self.assertEqual(state["cycles_today"], 1)
@@ -300,7 +312,7 @@ class CycleStopPolicyTests(CycleSettlementTimingTests):
         # 第二轮同样连赢三次：轮数用满，转为当天收工
         for issue_no in ["20261104534", "20261104535", "20261104536"]:
             self._dispatch_period(rule, run, subscription, issue_no=issue_no, triplet=[5, 8, 2])
-        state = self.repo.get_subscription_cycle_state(subscription_id=subscription["id"])
+        state = self._auto_state(rule, subscription)
         self.assertEqual(state["status"], "stopped")
         self.assertEqual(self._rule_day(rule)["status"], "stopped")
 
@@ -311,34 +323,20 @@ class CycleStopPolicyTests(CycleSettlementTimingTests):
         for issue_no in ["20261104541", "20261104542", "20261104543"]:
             self._dispatch_period(rule, run, subscription, issue_no=issue_no, triplet=[5, 8, 2])
 
-        state = self.repo.get_subscription_cycle_state(subscription_id=subscription["id"])
+        state = self._auto_state(rule, subscription)
         self.assertEqual(state["status"], "running")
         self.assertEqual(state["win_streak"], 0)
         self.assertEqual(state["cycles_today"], 0)
         self.assertEqual(self._rule_day(rule)["status"], "active")
 
-    def test_manual_restart_reopens_todays_stopped_run(self):
-        """开始新一轮要把今天手动停掉的轮次退回占位态，否则当天窗口再也开不起来。"""
+    def test_manual_restart_keeps_auto_stopped_run(self):
+        """手动重开仅重置手动进度，不移动/解封自动规则窗口。"""
         rule, run, subscription = self._create_rule()
-        stopped = self.repo.stop_auto_trigger_rule_current_run(
-            rule_id=int(rule["id"]), user_id=self.user_id, subscription_id=int(subscription["id"]),
-        )
-        self.assertTrue(stopped["stopped"])
-        self.assertEqual(self.repo.get_auto_trigger_rule_run(int(run["id"]))["status"], "stopped")
-
-        result = restart_subscription_cycle(
-            self.repo, subscription_id=subscription["id"], user_id=self.user_id,
-            payload={"note": "测试重开今日窗口"},
-        )
-        self.assertIn(int(rule["id"]), result["rule_runs_reopened"])
-        # 旧轮次被挪出窗口槽位（历史保留），当期窗口可以重新插入一条全新轮次
-        reopened = self.repo.get_auto_trigger_rule_run(int(run["id"]))
-        self.assertEqual(reopened["status"], "stopped")
-        self.assertIn("#reopened-%d" % int(run["id"]), str(reopened["window_id"]))
-        self.assertIsNone(self.repo.get_auto_trigger_rule_run_for_subscription_date(
-            rule_id=int(rule["id"]), subscription_id=int(subscription["id"]),
-            stat_date=STAT_DATE, window_id="",
-        ))
+        self.repo.stop_auto_trigger_rule_current_run(rule_id=rule["id"], user_id=self.user_id, subscription_id=subscription["id"])
+        before = self.repo.get_auto_trigger_rule_run(run["id"])
+        result = restart_subscription_cycle(self.repo, subscription_id=subscription["id"], user_id=self.user_id, payload={})
+        self.assertEqual(result["rule_runs_reopened"], [])
+        self.assertEqual(self.repo.get_auto_trigger_rule_run(run["id"]), before)
 
     def test_manual_restart_does_not_reopen_risk_stopped_run(self):
         """风控停轮不能被开始新一轮解封：止盈止损/熔断停掉的轮次保持 stopped。"""
@@ -355,28 +353,19 @@ class CycleStopPolicyTests(CycleSettlementTimingTests):
         self.assertEqual(result["rule_runs_reopened"], [])
         self.assertEqual(self.repo.get_auto_trigger_rule_run(int(run["id"]))["status"], "stopped")
 
-    def test_manual_restart_unseals_cycle_stop(self):
-        """开始新一轮是显式解封入口：周期回起始注、规则当日解封、轮次重新 active。"""
+    def test_manual_restart_preserves_auto_cycle_stop(self):
         rule, run, subscription = self._create_rule()
         for issue_no in ["20261104601", "20261104602", "20261104603"]:
             self._dispatch_period(rule, run, subscription, issue_no=issue_no, triplet=[5, 8, 2])
+        before = self._auto_state(rule, subscription)
         self.assertEqual(self._rule_day(rule)["status"], "stopped")
-
-        result = restart_subscription_cycle(
-            self.repo, subscription_id=subscription["id"], user_id=self.user_id,
-            payload={"note": "测试开始新一轮"},
-        )
-        self.assertTrue(result["cycle_reset"]["applied"])
-        self.assertIn(int(rule["id"]), result["cycle_reset"]["resumed_rule_ids"])
-
-        state = self.repo.get_subscription_cycle_state(subscription_id=subscription["id"])
-        self.assertEqual(state["status"], "running")
-        self.assertEqual(state["win_streak"], 0)
-        self.assertAlmostEqual(state["cycle_stake"], 100.0)
-        self.assertFalse(state["day_closed"])
-        self.assertEqual(state["cycles_today"], 1)
-        self.assertEqual(self._rule_day(rule)["status"], "active")
-        self.assertEqual(self.repo.get_auto_trigger_rule_run(run["id"])["status"], "active")
+        result = restart_subscription_cycle(self.repo, subscription_id=subscription["id"], user_id=self.user_id, payload={})
+        self.assertEqual(result["cycle_reset"]["resumed_rule_ids"], [])
+        self.assertEqual(self._auto_state(rule, subscription), before)
+        self.assertEqual(self._rule_day(rule)["status"], "stopped")
+        manual = self.repo.get_subscription_cycle_state(subscription_id=subscription["id"])
+        self.assertEqual(manual["status"], "running")
+        self.assertEqual(manual["cycle_stake"], 100)
 
     def test_manual_profit_reset_keeps_the_day_closed(self):
         """重置盈亏只清周期基线，不解封玩法当日收工。"""
@@ -397,7 +386,7 @@ class CycleStopPolicyTests(CycleSettlementTimingTests):
         rule, run, subscription = self._create_rule()
         # 14 大双：主注「单」与辅助「小双」同时未中，整期返还 0
         self._dispatch_period(rule, run, subscription, issue_no="20261104551", triplet=[5, 5, 4])
-        state = self.repo.get_subscription_cycle_state(subscription_id=subscription["id"])
+        state = self._auto_state(rule, subscription)
         self.assertEqual(state["status"], "stopped")
         self.assertEqual(state["stop_reason"], "balance_depleted")
         self.assertAlmostEqual(state["balance"], 0.0)

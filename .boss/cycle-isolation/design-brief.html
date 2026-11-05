@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>设计简报 - cycle-isolation</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f7f4;
+      --paper: #ffffff;
+      --ink: #202427;
+      --muted: #687076;
+      --line: #d7dadd;
+      --accent: #245c73;
+      --soft: #eef5f7;
+      --code: #182026;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.65;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+      gap: 28px;
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+    aside {
+      position: sticky;
+      top: 20px;
+      align-self: start;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    main {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 8px;
+      padding: 32px;
+      min-width: 0;
+    }
+    h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 1.4em 0 0.55em; }
+    h1 { margin-top: 0; font-size: 2rem; }
+    h2 { border-bottom: 1px solid var(--line); padding-bottom: 0.3em; }
+    p, ul, ol, table, pre, blockquote { margin: 0 0 1em; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      border-radius: 4px;
+      background: var(--soft);
+      padding: 0.1em 0.35em;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      overflow-x: auto;
+      border-radius: 8px;
+      background: var(--code);
+      color: #f3f7f8;
+      padding: 16px;
+    }
+    pre code { background: transparent; color: inherit; padding: 0; }
+    table { width: 100%; border-collapse: collapse; overflow-x: auto; display: block; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: var(--soft); }
+    blockquote { border-left: 4px solid var(--accent); margin-left: 0; padding: 8px 14px; color: var(--muted); background: var(--soft); }
+    .meta { color: var(--muted); font-size: 0.92rem; margin-bottom: 24px; }
+    .summary { border: 1px solid var(--line); background: var(--soft); border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+    .toc-title { font-weight: 700; margin-bottom: 8px; }
+    .toc ul, .summary ul { padding-left: 20px; }
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; }
+      aside { position: static; }
+      main { padding: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <div class="toc-title">目录</div>
+      <ul><li class="toc-level-2"><a href="#摘要">摘要</a></li><li class="toc-level-1"><a href="#设计简报">设计简报</a></li><li class="toc-level-2"><a href="#文档信息">文档信息</a></li><li class="toc-level-2"><a href="#1-需求背景">1. 需求背景</a></li><li class="toc-level-2"><a href="#2-目标用户">2. 目标用户</a></li><li class="toc-level-2"><a href="#3-核心场景">3. 核心场景</a></li><li class="toc-level-2"><a href="#4-约束与偏好">4. 约束与偏好</a></li><li class="toc-level-2"><a href="#5-已定口径与开放问题">5. 已定口径与开放问题</a></li></ul>
+    </aside>
+    <main>
+      <h1>设计简报</h1>
+      <div class="meta">
+        <div>Feature: cycle-isolation</div>
+        <div>Source: design-brief.md</div>
+        <div>Generated: 2026-11-04T16:49:40.032Z</div>
+      </div>
+      <section class="summary">
+        <h2>摘要</h2>
+        <ul><li>核心目标：延续手动与自动盈亏分开计算的既有原则，使过关进度、滚仓金额、当日次数和停止状态同样按运行归属独立管理。</li><li>目标用户：同时使用手动跟单与自动触发规则的现有用户；主要场景为连续两期大双触发固定结构的过三关策略。</li><li>自动规则负责条件、冷却、每日启动上限及一轮结束后的调度；跟单方案提供结构、金额和过关参数。</li><li>手动跟单保留手动启动、直接续开和当天收工选项；不同自动规则也独立运行。</li><li>本次在隔离工作区设计并实现，不修改线上规则和资金状态；不同路由独立选择结构留到后续。</li></ul>
+      </section>
+      <h2 id="摘要">摘要</h2>
+<ul><li>核心目标：延续手动与自动盈亏分开计算的既有原则，使过关进度、滚仓金额、当日次数和停止状态同样按运行归属独立管理。</li><li>目标用户：同时使用手动跟单与自动触发规则的现有用户；主要场景为连续两期大双触发固定结构的过三关策略。</li><li>自动规则负责条件、冷却、每日启动上限及一轮结束后的调度；跟单方案提供结构、金额和过关参数。</li><li>手动跟单保留手动启动、直接续开和当天收工选项；不同自动规则也独立运行。</li><li>本次在隔离工作区设计并实现，不修改线上规则和资金状态；不同路由独立选择结构留到后续。</li></ul>
+<h1 id="设计简报">设计简报</h1>
+<h2 id="文档信息">文档信息</h2>
+<ul><li>功能名称：cycle-isolation / 手动与自动过关运行隔离</li><li>创建日期：2026-11-04</li><li>需求来源：用户运行复盘与“那你开始设计方案开工吧”的明确授权</li></ul>
+<h2 id="1-需求背景">1. 需求背景</h2>
+<p>用户已将手动跟单与自动规则的盈亏计算分开。新增过关玩法把每日轮数、达标与爆仓处理放在跟单策略中；自动规则首次启动后又沿用策略的当天收工状态。这使用户无法表达“每轮结束后等待下一次条件，每天最多启动 N 次”；同一方案的手动与自动过关状态仍可能相互影响。</p>
+<p>已观察到的实例：规则“jnd28波动反弹模型 过三关 连出2次大双”以单＋大双结构启动，第三关失败后按方案的爆仓当天收工设置停止，自动规则不能独立决定等待新条件。本期不改变该已停止实例的设置和账本。</p>
+<h2 id="2-目标用户">2. 目标用户</h2>
+<p>现有用户会复用同一来源和投注方案，分别手动运行或由多条自动规则启动。他们需要在各自入口查看该归属的关数、滚仓金额、次数及停止原因；操作其中一方不得隐式改变另一方。</p>
+<h2 id="3-核心场景">3. 核心场景</h2>
+<ol><li>连续两期大双启动“单＋大双、起始 10、过三关”，结束后等待新的条件，当日最多启动 3 次。</li><li>自动规则也能选择直接续开；该模式免重新满足条件和再次触发冷却，但仍检查日额度、日风控和可投信号。</li><li>同方案手动运行与多个自动规则分别推进和结算，继续遵守既有目标冲突与防重复投递约束。</li><li>手动停止/重置只改变手动状态，自动入口操作只改变明确选定的规则范围。</li><li>升级保留在途单、账本、次数和当天停止，不重复发送、不自动补仓、不解除收工。</li></ol>
+<h2 id="4-约束与偏好">4. 约束与偏好</h2>
+<ul><li>复用现有页面、权限、派单、结算与统计口径，不引入新框架或运行依赖。</li><li>新规则默认每日 1 轮、结束后等待条件；日额度用尽后停止新增轮次。</li><li>存量规则默认保留旧行为，以明确兼容配置呈现，普通改名或保存不得采用新默认改变行为。</li><li>每日次数按“自动规则＋跟单方案”统计；同规则多个路由不重复扣次，不增加路由独立结构设置。</li><li>跨日未结束的轮次保持金额、进度和任务到终态；计次归启动日，不因午夜另开重叠轮次。</li><li>本任务不修改线上数据库、不重启服务、不发 Telegram 消息。</li></ul>
+<h2 id="5-已定口径与开放问题">5. 已定口径与开放问题</h2>
+<p>无阻塞性业务问题。赔率、退本、整数下注、两腿合计净利等口径维持现有算法。存储结构、迁移方式和 API 字段由架构文档定义，并满足 PRD 的隔离与兼容验收。</p>
+    </main>
+  </div>
+</body>
+</html>

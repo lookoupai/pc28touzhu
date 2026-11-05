@@ -1,0 +1,56 @@
+{
+  "source": "synthetic anonymous temporary SQLite only",
+  "passed": 4,
+  "failed": 0,
+  "skipped": 0,
+  "cases": [
+    {
+      "case": "auto_pending",
+      "migration": [
+        {
+          "status": "migrated_auto",
+          "reason": "unique_event_owner"
+        }
+      ],
+      "ledger_and_job_rows_unchanged": true,
+      "original_event_count": 2,
+      "repeat_initialize": "idempotent"
+    },
+    {
+      "case": "auto_closed",
+      "migration": [
+        {
+          "status": "migrated_auto",
+          "reason": "unique_event_owner"
+        }
+      ],
+      "ledger_and_job_rows_unchanged": true,
+      "original_event_count": 2,
+      "repeat_initialize": "idempotent"
+    },
+    {
+      "case": "legacy_no_route",
+      "migration": [
+        {
+          "status": "migrated_auto",
+          "reason": "unique_event_owner"
+        }
+      ],
+      "ledger_and_job_rows_unchanged": true,
+      "original_event_count": 2,
+      "repeat_initialize": "idempotent"
+    },
+    {
+      "case": "ambiguous",
+      "migration": [
+        {
+          "status": "blocked",
+          "reason": "migration_owner_ambiguous"
+        }
+      ],
+      "ledger_and_job_rows_unchanged": true,
+      "original_event_count": 2,
+      "repeat_initialize": "idempotent"
+    }
+  ]
+}

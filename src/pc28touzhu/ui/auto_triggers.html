@@ -89,6 +89,7 @@
                             <label class="field">
                                 <span>冷却期数</span>
                                 <input class="text-input" name="cooldown_issues" type="number" min="0" step="1" value="10">
+                                <small class="meta-line">冷却限制再次按条件触发的间隔，不影响本轮继续投注；直接续开不重新等待触发冷却。</small>
                             </label>
                             <label class="field wide">
                                 <span>触发方式</span>
@@ -126,7 +127,7 @@
                                         <div id="scheduleWindowRows" class="schedule-window-rows"></div>
                                         <button id="addScheduleWindowBtn" class="ghost-btn" type="button">添加定时任务</button>
                                     </div>
-                                    <p class="meta-line schedule-note">每个定时任务在窗口开始后尝试启动一轮，每个窗口每天最多启动一轮。上一轮（任意窗口启动）还没达到停止条件时，后续窗口不会重复触发；上一轮结束后，下一个窗口会开新一轮。窗口结束后不会补发旧信号。</p>
+                                    <p id="scheduleModeHint" class="meta-line schedule-note">每个定时任务在窗口内尝试启动，上一轮未结束时不重复开轮。窗口结束后不会补发旧信号。</p>
                                 </div>
                             </div>
                             <label class="check-row wide">
@@ -175,6 +176,51 @@
                                 <select id="subscriptionSelect" class="text-input" name="subscription_ids" multiple size="7"></select>
                             </label>
                         </div>
+
+                        <section id="cyclePolicyPanel" class="condition-panel" aria-labelledby="cyclePolicyTitle">
+                            <div class="section-head">
+                                <div>
+                                    <p class="panel-kicker">过关轮次管理</p>
+                                    <h3 id="cyclePolicyTitle">单独控制本规则启动的过关轮次</h3>
+                                    <p class="meta-line">投注结构、每轮起始金额和过几关继承跟单方案；普通均注、倍投不受本区设置影响。</p>
+                                </div>
+                            </div>
+                            <p id="cycleScopeHint" class="meta-line"></p>
+                            <div class="form-grid cycle-policy-grid">
+                                <label class="field wide" id="cycleModeField">
+                                    <span>轮次管理方式</span>
+                                    <select id="cycleModeSelect" name="cycle_mode" class="text-input" aria-describedby="cyclePolicyHint">
+                                        <option value="rule">由本规则控制</option>
+                                    </select>
+                                </label>
+                                <p id="cyclePolicyHint" class="meta-line wide"></p>
+                                <label class="field cycle-rule-field">
+                                    <span>每个方案每天最多启动（轮）</span>
+                                    <input id="cycleMaxStartsInput" name="cycle_max_starts" class="text-input" type="number" min="1" max="1000" step="1" value="1" required aria-describedby="cycleQuotaHint cyclePolicyError">
+                                </label>
+                                <p id="cycleQuotaHint" class="meta-line cycle-rule-field">按北京时间启动日计数，首次启动也计 1 轮；跨日继续运行的旧轮不占今天新开额度。同一轮投递到多个群只计一次。</p>
+                                <label class="field cycle-rule-field">
+                                    <span>过关成功后</span>
+                                    <select id="cycleOnTargetSelect" name="cycle_on_target" class="text-input" aria-label="过关成功后" aria-describedby="cycleOnTargetHint">
+                                        <option value="wait_condition">等待下次条件满足</option>
+                                        <option value="new_cycle">下一可投注期直接续开</option>
+                                        <option value="close_day">当天收工</option>
+                                    </select>
+                                    <small id="cycleOnTargetHint" class="meta-line"></small>
+                                </label>
+                                <label class="field cycle-rule-field">
+                                    <span>本轮资金耗尽后</span>
+                                    <select id="cycleOnBustSelect" name="cycle_on_bust" class="text-input" aria-label="本轮资金耗尽后" aria-describedby="cycleOnBustHint">
+                                        <option value="wait_condition">等待下次条件满足</option>
+                                        <option value="new_cycle">下一可投注期直接续开</option>
+                                        <option value="close_day">当天收工</option>
+                                    </select>
+                                    <small id="cycleOnBustHint" class="meta-line"></small>
+                                </label>
+                                <p id="cyclePolicyError" class="cycle-policy-error wide" role="alert" hidden></p>
+                            </div>
+                            <p class="meta-line">正在运行的轮次按开轮时设置完成。保存配置不会解除当天收工，也不会清空已用次数和历史盈亏。</p>
+                        </section>
 
                         <div id="conditionPanel" class="condition-panel">
                             <div class="section-head">

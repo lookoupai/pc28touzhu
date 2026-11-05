@@ -1,0 +1,215 @@
+{
+  "waves": [
+    {
+      "id": "wave-1-data",
+      "title": "数据隔离、存量迁移与原子额度",
+      "scope": "T-001/T-002：repository owner，manual与auto独立持久化，保持账本与在途",
+      "writeSet": [
+        "src/pc28touzhu/executor/db_repository.py",
+        "tests/test_cycle_repository.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_cycle_repository"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_cycle_repository",
+          "tests.test_repository"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "CM-001",
+        "CM-002",
+        "CM-004",
+        "CM-007",
+        "CM-008"
+      ],
+      "stopCondition": "迁移金额/任务对账不平、含糊归属仍可派单、并发多claim或外层回滚失效时停止，不进入业务集成。",
+      "rollbackRisk": "只临时SQLite迁移；线上未执行。保留原状态证据，禁止直接新旧worker混用。",
+      "pausePolicy": "失败回派repository owner，root复验后继续。",
+      "status": "pending"
+    },
+    {
+      "id": "wave-2-runtime",
+      "title": "规则调度、派单结算、作用域API与双端界面",
+      "scope": "T-003至T-007：orchestration/frontend按冻结契约与仓储互斥文件并行实现；Wave1绿前不得集成验收或标记Wave2绿",
+      "writeSet": [
+        "src/pc28touzhu/domain/auto_trigger_cycle.py",
+        "src/pc28touzhu/domain/win_streak_roll.py",
+        "src/pc28touzhu/services/auto_trigger_service.py",
+        "src/pc28touzhu/services/auto_trigger_cycle_service.py",
+        "src/pc28touzhu/services/dispatch_service.py",
+        "src/pc28touzhu/services/pc28_auto_settlement_service.py",
+        "src/pc28touzhu/services/platform_service.py",
+        "src/pc28touzhu/api/app.py",
+        "src/pc28touzhu/ui/auto_triggers.html",
+        "src/pc28touzhu/ui/auto_triggers.js",
+        "src/pc28touzhu/ui/auto_triggers.css",
+        "src/pc28touzhu/ui/autobet.html",
+        "src/pc28touzhu/ui/autobet.js",
+        "src/pc28touzhu/ui/autobet.css",
+        "tests/test_cycle_runtime.py",
+        "tests/test_cycle_api.py",
+        "tests/test_cycle_ui.cjs",
+        "tests/cycle_ui_server.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_cycle_runtime"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_cycle_api"
+        ],
+        [
+          "node",
+          "tests/test_cycle_ui.cjs"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_cycle_runtime",
+          "tests.test_cycle_api"
+        ],
+        [
+          "node",
+          "tests/test_cycle_ui.cjs"
+        ],
+        [
+          "node",
+          "--check",
+          "src/pc28touzhu/ui/auto_triggers.js"
+        ],
+        [
+          "node",
+          "--check",
+          "src/pc28touzhu/ui/autobet.js"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "CM-003",
+        "CM-004",
+        "CM-005",
+        "CM-006",
+        "CM-007",
+        "CM-008",
+        "CM-009",
+        "CM-010"
+      ],
+      "stopCondition": "Wave1未绿色不得集成验收或标绿；零派单耗额度、跨scope修改、未等所有参与route终结、旧接口解封旁路或真实UI/API契约不一致时停止。",
+      "rollbackRisk": "只工作树与临时测试数据；不操作线上worker。",
+      "pausePolicy": "对应owner修复，root复验，禁止跳过失败。",
+      "status": "pending",
+      "redEvidence": {
+        "runtime": ".boss/cycle-isolation/evidence/runtime-red.log",
+        "ui": ".boss/cycle-isolation/evidence/ui-red.log",
+        "note": "在干净基线和真实DOM上获得的行为红；并发仓储编辑导致setup/schema错误与规划时缺模块dry-run不计有效红。root记录后续真实红绿。"
+      }
+    },
+    {
+      "id": "wave-3-regression",
+      "title": "全套回归与迁移/API/UI交叉验收",
+      "scope": "T-008/T-009与qa_review独占test_cycle_qa.py的独立QA，复用前两波红证据，不新增生产行为",
+      "writeSet": [
+        "tests/test_auto_trigger_service.py",
+        "tests/test_draw_streak_trigger.py",
+        "tests/test_win_streak_roll_dispatch.py",
+        "tests/test_win_streak_roll_stop.py",
+        "tests/test_api.py",
+        "tests/test_cycle_qa.py",
+        "README.md"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_cycle_repository"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_cycle_runtime"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tests"
+        ],
+        [
+          "node",
+          "tests/test_cycle_ui.cjs"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "CM-001",
+        "CM-002",
+        "CM-003",
+        "CM-004",
+        "CM-005",
+        "CM-006",
+        "CM-007",
+        "CM-008",
+        "CM-009",
+        "CM-010"
+      ],
+      "stopCondition": "任一回归失败、迁移不幂等、账本不平、未验证同目标冲突/午夜/真实API提交则不交付。红阶段沿用Wave1/2的实现前记录，不能人为制造红。",
+      "rollbackRisk": "未部署；发布必须所有repository worker同版本和数据库备份配对。",
+      "pausePolicy": "QA回派owner修复并复验；不要求重复用户已授权实施确认。",
+      "status": "pending"
+    }
+  ]
+}

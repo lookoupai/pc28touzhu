@@ -1,0 +1,211 @@
+## 摘要
+
+- 共 9 个任务：后端 5、前端 2、集成 QA 1、交付说明 1；分为数据隔离、业务与界面、最终回归三个 Evidence Wave。
+- 关键路径：仓储 Wave1 绿门禁 → 业务/API/UI 契约集成 → T-008 跨层验收；repository、orchestration、frontend 在冻结契约和各自真实红测后可按互斥写集并行开发，Wave1 绿色前不得集成验收或标记 Wave2 绿色。
+- Blast Radius：高；计划最多 27 个代码/测试/README 文件（含可选文件），涉及模型、迁移、队列与调度；无运行依赖、认证方案、CI 或部署配置变更。
+- 风险确认触发项：文件数 ≥10、数据模型/迁移/队列核心模块。用户已明确授权“开始设计方案开工”及手动/自动隔离范围；仅隔离工作树实施，不再重复确认，不操作线上数据或发送消息。
+- Owner：repository 独占仓储，orchestration 独占业务/API/领域，frontend 独占两组 UI 与 JS 测试；qa_review 独占 tests/test_cycle_qa.py 和独立 QA 报告，不修改其他 owner 文件。中央文件禁止并发多人修改。
+
+# 开发任务规格
+
+## 0. Repo Preflight
+
+| 事实 | 结果 | 证据 |
+|---|---|---|
+| 默认分支/基线 | origin/main，5b37efa | `git symbolic-ref refs/remotes/origin/HEAD`、`git log -1` |
+| 当前分支/隔离 | feat/cycle-isolation；/tmp/pc28-cycle-isolation；开工前生产代码干净 | `git branch --show-current`、`git status --short`；.boss 文档为本次新增 |
+| CI | 仅构建/推送 Docker，多架构；没有测试命令 | `.github/workflows/docker-image.yml`；未发现 .gitlab-ci/.circleci/vercel/netlify |
+| 包管理 | setuptools pyproject；stdlib Python，Telegram 可选依赖 | `pyproject.toml`；本次不修改依赖清单或安装运行依赖 |
+| 后端测试 | `env PYTHONPATH=src python3 -m unittest discover -s tests` | 582 项基线 /tmp/pc28-cycle-baseline.log；约81秒 |
+| 基线失败 | 2条手动restart解封自动测试日期敏感；其余580通过 | `tests/test_win_streak_roll_stop.py` 中 test_manual_restart_reopens_todays_stopped_run、test_manual_restart_unseals_cycle_stop；使用固定时钟更新为新scope行为 |
+| Integration/E2E | 真实 SQLite+WSGI 测试已有，浏览器 suite 未配置 | tests/test_api.py、test_draw_streak_trigger.py、test_dispatch_isolation.py；无 package.json/Playwright 配置 |
+| UI 验证工具 | Node 可用；临时jsdom已安装；Chromium缓存可用 | /tmp/pc28-draw-trigger-ui-check/node_modules/jsdom；/root/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome |
+| schema/enum | Python domain/service 校验、SQLite DDL；API无外部OpenAPI文件 | domain/win_streak_roll.py、services/auto_trigger_service.py、executor/db_repository.py |
+| 新常量 | cycle_policy.mode=rule/legacy；max_starts_per_day 严格1..1000；on_target/on_bust=wait_condition/new_cycle/close_day | architecture §3.1，ui-spec §4.2 |
+| 权限入口 | WSGI Cookie auth后按当前user限定rule/sub/target | api/app.py；服务和repository需再次校验owner |
+| 路由约定 | `/api/platform/auto-trigger-rules/{id}/resume-cycle`，其余沿用现有端点 | architecture §5；UI只传subscription_id |
+| migration | initialize_database内加性DDL；旧周期归属需证据识别、保留原快照 | db_repository.py；architecture §3.6；禁止在生产DB执行测试 |
+| 性能基线 | unknown：没有现成此功能P99/吞吐基线 | 检查pyproject、CI、tests；不虚构指标，关注索引和单轮查询次数 |
+
+## 1. 固定契约
+
+架构 §3.7 的 repository 方法名/参数是任务间契约。`rule.cycle_policy`、`rule.cycle_runtime[]`、`subscription.manual_cycle_state` 与 `POST .../resume-cycle` 按架构 §5 和 ui-spec 实现。改变契约需向 root/架构报告并同步所有消费者，不能让前端猜字段。
+
+默认新建为 rule/每天1轮/结束等待条件。旧缺字段为legacy，保留冻结旧行为；创建legacy、rule切回legacy拒绝。mode=rule 的每日次数按 rule+subscription，同一启动多个route计一次；正常close_day与上限仅关闭当前方案会话。规则日风控继续是整规则范围。
+
+## 2. 任务与完整写集
+
+“共享文件”表示其内有多职责，但仍由指定 owner 唯一写入。以下同 owner 任务按顺序完成，其他 owner 只能读。
+
+### T-001 [BE] 自动周期与保守迁移
+
+| 文件 | 操作 | 写集风险 | owner | 说明 |
+|---|---|---|---|---|
+| src/pc28touzhu/executor/db_repository.py | 修改 | 共享文件 | repository | 加cycle_policy、auto周期/session/daily starts、implicit route标记、迁移证据；manual表保持调用兼容 |
+| tests/test_cycle_repository.py | 新建 | 独占 | repository | 迁移与scope CRUD红绿测试 |
+
+步骤：先写真实临时SQLite红测；增加owner校验CRUD、联合pending枚举；pending与历史证据唯一归属才迁移，歧义blocked且保留原行；旧无route在途留route=0原账本结算；重复initialize幂等。迁移不复制资金、不重算事件/任务/财务、不解封旧day。
+
+验证：manual/auto A/auto B独立；auto pending、已收工、未使用基线、无route pending、冲突归属；migration前后账本金额及任务数相同，原始快照可查。复杂度高，依赖无；约8–12次工具调用。
+
+### T-002 [BE] 原子额度、会话与内部继承路由
+
+| 文件 | 操作 | 写集风险 | owner | 说明 |
+|---|---|---|---|---|
+| src/pc28touzhu/executor/db_repository.py | 修改 | 共享文件 | repository | architecture §3.7 claim/complete/runtime查询与implicit路由，唯一run身份 |
+| tests/test_cycle_repository.py | 修改 | 共享文件 | repository | 并发、回滚、权限、内部route可见性与跨日计次 |
+
+步骤：BEGIN IMMEDIATE内claim额度+session+新run；外层rollback能全部撤销；complete只关指定run的route runtimes不清账本。implicit route按用户/规则/有效目标创建，UI routes读写排除implicit，已发送旧隐式任务不能因保存而丢失。查询按rule+sub归属与日期隔离。
+
+验证：并发两连接同一期只一次；配额满拒绝；同rule不同sub独立；route扇出只加1；失败回滚；其他用户写失败；旧run历史不可被覆写；次数/索引健全。依赖T-001，复杂度高，约8–12次调用。
+
+### T-003 [BE] 单轮领域与scope派单
+
+| 文件 | 操作 | 写集风险 | owner | 说明 |
+|---|---|---|---|---|
+| src/pc28touzhu/domain/auto_trigger_cycle.py | 新建 | 独占 | orchestration | 配置归一化、单轮结束/会话决策，严格整数与legacy规则 |
+| src/pc28touzhu/domain/win_streak_roll.py | 修改（必要时） | 共享文件 | orchestration | 最小接口支持自动单轮结果；保持手动旧结束动作 |
+| src/pc28touzhu/services/dispatch_service.py | 修改 | 共享文件 | orchestration | 显式scope读取周期、pending归属、同目标claim、跨日周期快照 |
+| tests/test_cycle_runtime.py | 新建 | 独占 | orchestration | 隔离/多route/重复派单/原子性红绿测试 |
+
+步骤：根据manual或rule/route归属取状态；manual early-roll分支也先做同群占位检查。两腿创建与pending、claim同事务；不能把别的scope的existing job/event绑定为本轮。自动进行中的周期禁止日期切换重置，修改配置只下一轮生效。
+
+验证：manual与两个rule分别派到不同目标可以并存；同目标冲突方不耗额度/不留孤儿event；两route各两腿，互不pending阻挡；double dispatch不重复。实现可按冻结仓储契约与 Wave1 并行，集成验收依赖 Wave1 绿门禁；复杂度高，约8–14次调用。
+
+### T-004 [BE] 自动启动、结束屏障与再次启动
+
+| 文件 | 操作 | 写集风险 | owner | 说明 |
+|---|---|---|---|---|
+| src/pc28touzhu/services/auto_trigger_service.py | 修改 | 共享文件 | orchestration | cycle_policy创建/更新、专用调度入口接入、runtime回显 |
+| src/pc28touzhu/services/auto_trigger_cycle_service.py | 新建 | 独占 | orchestration | 过关专用调度、quota/session与隐式目标编排；避免继续扩张旧评估大函数 |
+| src/pc28touzhu/services/pc28_auto_settlement_service.py | 修改 | 共享文件 | orchestration | owner结算、pending CAS/事务、参与route终态屏障与结束调度 |
+| tests/test_cycle_runtime.py | 修改 | 共享文件 | orchestration | wait/new_cycle/close_day、cross-day、风控、零派单 |
+
+步骤：新轮统一claim，waiting按新证据期>last_completed_issue及冷却，continuation免条件/冷却但守可投窗、日额/风险/停用。无route新自动轮走implicit route。全部参与route完结后关run；quota已满只在当前轮结束后关闭session。已发腿仍结算，重复settlement不推进两次或覆盖下一pending。
+
+验证：第1轮→结束→同证据不重开→新期条件第2轮→达到N；new_cycle下一信号从base起步；stop/保存/日风控不绕过；某sub收工另一sub可开；23:59轮跨日连赢保留且quota归旧日；无信号、已开奖、已占用不烧额度。依赖T-003，复杂度高，约10–16次调用。
+
+### T-005 [BE] 明确恢复API与手动重置范围
+
+| 文件 | 操作 | 写集风险 | owner | 说明 |
+|---|---|---|---|---|
+| src/pc28touzhu/api/app.py | 修改 | 共享文件 | orchestration | scoped resume-cycle端点及原有认证响应风格 |
+| src/pc28touzhu/services/platform_service.py | 修改 | 共享文件 | orchestration | manual_cycle_state、手动重开/重置仅本scope |
+| src/pc28touzhu/services/auto_trigger_service.py | 修改 | 共享文件 | orchestration | 恢复指定rule+sub，旧resume-day/update不绕过 |
+| tests/test_cycle_api.py | 新建 | 独占 | orchestration | 真实WSGI+SQLite创建编辑恢复/拒绝/owner/返回字段 |
+
+验证：恢复不派单、不清次数或财务；运行/在途/额度满/风险/停用/不在作用范围/他人owner拒绝；手动restart/reset不改变自动pending、停止、次数和钱；合法保存回显1..1000枚举，legacy改名不改变默认，rule不能回legacy。依赖T-004，复杂度高，约8–12次调用。
+
+### T-006 [FE] 自动规则配置与状态
+
+| 文件 | 操作 | 写集风险 | owner | 说明 |
+|---|---|---|---|---|
+| src/pc28touzhu/ui/auto_triggers.html | 修改 | 独占 | frontend | 过关轮次管理表单、准确作用域/冷却说明 |
+| src/pc28touzhu/ui/auto_triggers.js | 修改 | 共享文件 | frontend | collect/reset/legacy、cycle_runtime、scoped恢复动作 |
+| src/pc28touzhu/ui/auto_triggers.css | 修改 | 独占 | frontend | 新块响应式和现有风格 |
+| tests/test_cycle_ui.cjs | 新建 | 独占 | frontend | 真实DOM加载/编辑/保存payload/状态与操作回归 |
+| tests/cycle_ui_server.py | 新建 | 独占 | frontend | 临时SQLite与仅localhost WSGI测试服务，供UI真实提交；不得连接线上数据库或Telegram |
+
+验证：新建rule默认；legacy只旧规则可选，隐藏字段不覆盖旧配置；非法次数拒绝；0/N、跨日、pending/blocked原因准确；历史日期不提供当前日恢复按钮；结束操作不一律误报下个窗口；keyboard与手机布局可用。字段契约冻结后可与Wave1并行，绿集成需T-005。复杂度中高，约6–10次调用。
+
+### T-007 [FE] 手动界面独立状态和操作文案
+
+| 文件 | 操作 | 写集风险 | owner | 说明 |
+|---|---|---|---|---|
+| src/pc28touzhu/ui/autobet.html | 修改 | 独占 | frontend | 手动结束设置、每轮目标/起始注、去掉误导rule/route scope选项 |
+| src/pc28touzhu/ui/autobet.js | 修改 | 共享文件 | frontend | 只读manual_cycle_state，手动重开提示与payload兼容 |
+| src/pc28touzhu/ui/autobet.css | 修改（必要时） | 独占 | frontend | 仅新增手动状态块样式 |
+| tests/test_cycle_ui.cjs | 修改 | 共享文件 | frontend | manual null/0/停止及自动不被回填 |
+
+验证：manual_cycle_state=null时尚未手动开始；不能用自动余额回填；手动重开不承诺解封规则；cycles_today标当天已重开次数，不冒充自动已启动数。依赖T-006顺序实施，可与后端同波并行。复杂度中，约4–8次调用。
+
+### T-008 [QA/BE] 旧测试适配与独立集成验收
+
+| 文件 | 操作 | 写集风险 | owner | 说明 |
+|---|---|---|---|---|
+| tests/test_auto_trigger_service.py | 修改 | 共享文件 | orchestration | 明确旧用例legacy与新默认，保持原非过关断言 |
+| tests/test_draw_streak_trigger.py | 修改 | 共享文件 | orchestration | 新自动scope对应状态查询，不再assert共享manual |
+| tests/test_win_streak_roll_dispatch.py | 修改 | 共享文件 | orchestration | 手动不退化，auto owner断言 |
+| tests/test_win_streak_roll_stop.py | 修改 | 共享文件 | orchestration | 固定时钟，旧手动解封auto断言改为隔离和scoped恢复 |
+| tests/test_api.py | 修改（必要时） | 共享文件 | orchestration | 原UI文案/字段变更回归 |
+| tests/test_cycle_qa.py | 新建 | 独占 | qa_review | 独立QA对抗/边界用例；真实临时SQLite与API，禁止改其他owner实现或测试 |
+
+qa_review 只写自己的 test_cycle_qa.py，不与其他owner同时改其测试；发现失败回派对应owner。独立QA执行新tests、全套582基线加新增、迁移快照重放；UI提交payload必须经真实WSGI schema及SQLite持久化验证，mock-only不够。可在/tmp启动临时WSGI+fake executor，使用已缓存Chromium或jsdom验证；任何工具依赖安装只/tmp，不能改变项目依赖/CI。最终结果写qa-report.md，命令真实运行且日志可回查。
+
+依赖Wave2绿门禁，复杂度高，约6–12次调用。失败不得skip；若发现基线问题则固定时钟/修复适当行为后重跑相关与全套。
+
+### T-009 [DOC] 使用与部署说明
+
+| 文件 | 操作 | 写集风险 | owner | 说明 |
+|---|---|---|---|---|
+| README.md | 修改 | 独占 | orchestration | 配置职责、legacy、新结束动作/次数、手动恢复范围、日归属 |
+
+QA/DevOps另写.boss/cycle-isolation/qa-report.md、deploy-report.md，需说明尚未部署以及全部repository worker统一切换步骤、SQLite备份回滚边界。依赖T-008；不运行生产发布。复杂度低，约2–4次调用。
+
+## 3. 并行安全组与依赖
+
+| Group | 任务 | 前置 | 写集约束 |
+|---|---|---|---|
+| A | repository:T-001→T-002；orchestration:T-003→T-004→T-005；frontend:T-006→T-007；qa_review独立QA测试准备 | PRD/架构/UI契约冻结，各owner已有真实行为红证据 | 四个owner写集互斥；允许独立文件并行实现；仓储未绿时不做业务集成验收 |
+| B | 仓储/业务/API/UI契约集成与Wave2绿门禁 | Wave1绿色；对应实现完成 | orchestration不得写db_repository.py，集成问题由原owner修复；通过后才可标记Wave2绿色 |
+| C | orchestration:T-008→T-009；qa_review独立执行 | Wave2绿色 | qa_review只写自己的QA测试和报告，其他代码只读；问题回派owner |
+
+```mermaid
+flowchart LR
+  R[T-001迁移] --> Q[T-002额度与会话]
+  D[T-003派单] --> S[T-004调度结算]
+  S --> A[T-005 API与恢复]
+  F[T-006规则UI] --> M[T-007手动UI]
+  Q --> I[仓储业务UI契约集成/Wave2绿]
+  A --> I
+  M --> I
+  I --> V[T-008最终验收]
+  V --> N[T-009说明]
+```
+
+## 4. Evidence Waves
+
+机器执行命令以 `waves.json` 为准，均argv数组，无shell拼接，单条目标<120秒。先写行为测试并通知root执行red；不得把测试模块/依赖未安装误当作有效红。root记录runtime事件，不直接编辑execution.json。
+
+| Wave | 范围/owner | 红测 | 绿门禁 | Contract | Stop Condition |
+|---|---|---|---|---|---|
+| wave-1-data | T-001/T-002 repository | test_cycle_repository在新API缺失/旧错误scope上断言失败 | 同套通过；既有test_repository通过；diff检查 | CM-001/002/007/008 | 迁移改变账本/在途归属不明仍可跑/并发多claim/外层回滚失效则停止 |
+| wave-2-runtime | T-003至T-007 orchestration+frontend | test_cycle_runtime、test_cycle_api、test_cycle_ui行为断言失败 | 三套通过、两JS语法通过、diff检查 | CM-003/004/005/006/009/010 | 无真实API提交证据/零派单耗额/任意跨scope副作用/前后端enum不一致则停止 |
+| wave-3-regression | T-008/T-009+QA | 复用前两波已记录red，不伪造第二次红 | 全套unittest、UI场景重放、diff检查 | CM-001至CM-010 | 任一测试失败、迁移对账不平、未验证同群冲突或跨日则不可交付/发布 |
+
+Wave3不新增生产行为；其redTests仍指向前两波行为测试，red证据沿用实现前runtime记录，不要求实现完成后制造失败。
+
+证据勘误：规划期间曾执行 `verify-wave wave-1-data --phase red --dry-run`，工具仍运行了尚不存在的 `tests.test_cycle_repository` 并返回 ModuleNotFoundError。该记录仅说明测试尚未落盘，不是行为红测，不计入任何验收；不编辑或删除runtime事件。有效红绿证据以测试文件准备后由root执行并记录的结果为准。
+
+已确认的实现前红证据：orchestration在干净基线完成真实行为红测，日志 `/tmp/pc28-cycle-runtime-red.log`，已复制到 `.boss/cycle-isolation/evidence/runtime-red.log`；frontend真实DOM红测见 `.boss/cycle-isolation/evidence/ui-red.log`。仓储正在编辑时引起的 setup/schema 错误不算行为红。后续真正的红/绿 runtime 记录由 root 负责；并行开发不改变 Wave1 绿后才能集成及 Wave2 标绿的验收依赖。
+
+## 5. Contract Matrix
+
+| ID | Contract / PRD | UI / Copy | Client Payload | Server Schema | Persistence | Business Rule | Test Evidence |
+|---|---|---|---|---|---|---|---|
+| CM-001 | 手动/自动/各rule隔离 FR001/002 | 手动状态与规则状态分别显示 | 原subscription与rule id | owner校验 | manual表与auto(rule,sub,route) | 结算/重置只写归属 | test_cycle_repository、test_cycle_runtime |
+| CM-002 | 迁移保守幂等 FR012 | 历史需核对/旧设置 | 旧缺字段不补新默认 | legacy只旧数据 | migrations原始快照/blocked | 不改钱/不复发/不解封 | test_cycle_repository迁移组 |
+| CM-003 | 配置枚举与默认 FR003/004 | 等待条件/直接续开/收工 | cycle_policy | rule/legacy；strict1..1000；3个action | cycle_policy_json与本轮快照 | 新rule默认1/wait；旧保存保留 | test_cycle_api、test_cycle_ui |
+| CM-004 | 每日计次 FR007 | 每方案所选日X/N轮 | max_starts_per_day | 正整数，首轮包含 | daily starts(rule,sub,date) | route/腿只计1，零派单回滚 | test_cycle_repository、test_cycle_runtime |
+| CM-005 | 等待条件/续开 FR005/006/008 | 新一期判断；下一可投期续开 | on_target/on_bust | wait_condition/new_cycle | session.last_completed_issue/status | waiting守冷却，新证据；续开守quota风控 | test_cycle_runtime |
+| CM-006 | 跨日/旧轮 FR011 | 启动日与统计日分开 | stat_date查询 | 日期校验 | old start_date与today quota | 未结算不重置，盈亏仍结算日 | test_cycle_runtime、test_cycle_api |
+| CM-007 | 同群防重复/多route FR001/002/007 | 冲突跳过原因 | 既有targets | owner/status/dispatch_mode | 既有job唯一claim+参与route集合 | 不引用别人pending、所有参与终态屏障 | test_cycle_repository、test_cycle_runtime |
+| CM-008 | 旧无route在途 FR012 | 继承方案投递/待结算 | 用户routes仍空 | implicit不可从用户配置伪造 | route=0旧在途+is_implicit新轮 | 旧账本原路径完结，新轮自动账本 | test_cycle_repository、test_cycle_runtime |
+| CM-009 | 恢复/重置范围 FR009/010 | 手动重开；恢复本方案待命 | resume-cycle仅subscription_id | cookie+rule/sub同owner+scope | 保留starts和账本 | 在途/额度/风险/停用拒绝；旧接口无旁路 | test_cycle_api、test_win_streak_roll_stop |
+| CM-010 | 真实界面提交和状态 FR013 | 兼容回显/错误/零值/跨日 | 实际collectPayload结果 | 创建/更新真实schema | 实际SQLite读取一致 | UI不丢legacy、不自动调用启动 | test_cycle_ui + test_cycle_api实际payload联测、QA重放 |
+
+## 6. 验收顺序与完成标志
+
+- [ ] 三波测试先有有效red再green，root检查每个结果；前后端共享字段按architecture冻结。
+- [ ] 旧默认测试显式legacy，不修改生产默认迁就测试；全部时间边界固定时钟。
+- [ ] 全套回归通过，无skip新增核心测试；UI保存payload经真实API。
+- [ ] 所有写集与计划一致，额外文件由原owner向root报备。
+- [ ] 交付提供设计、代码、测试结果及未部署说明；线上规则/资金/消息未被测试更改。
+
+预估总体复杂度高，工具调用约60–100次，数字用于划分任务而非完成承诺；必要修复继续在对应owner中完成。部署和推送不作为这些任务的隐式副作用。
+
+## 写集变更记录
+
+- 经root授权，T-004新增 `services/auto_trigger_cycle_service.py`，owner为orchestration；T-006新增 `tests/cycle_ui_server.py`，owner为frontend。仅调整文件拆分与UI测试支撑，其余业务/API契约保持不变。
+
+- 经root再次授权，T-008新增 `tests/test_cycle_qa.py`，owner为qa_review；冻结契约后的互斥文件实现可三方并行，Wave1绿前不得进行业务集成验收或标记Wave2绿色。

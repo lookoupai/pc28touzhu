@@ -1,0 +1,23 @@
+..........................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................FF..........
+======================================================================
+FAIL: test_manual_restart_reopens_todays_stopped_run (test_win_streak_roll_stop.CycleStopPolicyTests.test_manual_restart_reopens_todays_stopped_run)
+开始新一轮要把今天手动停掉的轮次退回占位态，否则当天窗口再也开不起来。
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/pc28-cycle-isolation/tests/test_win_streak_roll_stop.py", line 333, in test_manual_restart_reopens_todays_stopped_run
+    self.assertIn(int(rule["id"]), result["rule_runs_reopened"])
+AssertionError: 1 not found in []
+
+======================================================================
+FAIL: test_manual_restart_unseals_cycle_stop (test_win_streak_roll_stop.CycleStopPolicyTests.test_manual_restart_unseals_cycle_stop)
+开始新一轮是显式解封入口：周期回起始注、规则当日解封、轮次重新 active。
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/pc28-cycle-isolation/tests/test_win_streak_roll_stop.py", line 370, in test_manual_restart_unseals_cycle_stop
+    self.assertIn(int(rule["id"]), result["cycle_reset"]["resumed_rule_ids"])
+AssertionError: 1 not found in []
+
+----------------------------------------------------------------------
+Ran 582 tests in 80.729s
+
+FAILED (failures=2)

@@ -747,14 +747,14 @@
                                     <small id="subscriptionStrategyModeHint" class="field-hint">均注最简单，适合先跑通整条链路。</small>
                                 </label>
                                 <label class="subscription-roll-field">
-                                    <span>过几关收工</span>
+                                    <span>每轮过几关</span>
                                     <input class="text-input" name="target_streak" type="number" min="1" step="1" value="3">
-                                    <small class="field-hint">连续赢够这个关数，当天就止盈收工；填 3 就是过三关，填 5 就是过五关。</small>
+                                    <small class="field-hint">连续净盈利够这个关数即完成本轮。结束后如何处理，由手动设置或启动它的自动规则决定。</small>
                                 </label>
                                 <label class="subscription-roll-field">
-                                    <span>每天起始注</span>
+                                    <span>每轮起始注</span>
                                     <input class="text-input" name="base_amount" type="number" min="0.01" step="0.01" value="100">
-                                    <small class="field-hint">每天从这里开始滚；过关收工或当天亏完就停，第二天自动重新开始。注码一律按整数下，余额里不足 1 的尾差留在仓里继续滚。</small>
+                                    <small class="field-hint">每轮从这里开始滚。注码按整数下，不足 1 的尾差留在仓里；自动规则继承该起始金额。</small>
                                 </label>
                                 <label class="subscription-roll-field">
                                     <span>押哪种组合</span>
@@ -773,38 +773,35 @@
                                         <option value="chain">链条滚：下一注 = 上一期返还（实盘同款）</option>
                                         <option value="all_in">全仓滚：每期押上全部余额</option>
                                     </select>
-                                    <small class="field-hint">两种都是过关收工、当天亏完起始注就止损。</small>
+                                    <small class="field-hint">链条滚使用上一期返还作为下一注；全仓滚使用当前余额。每轮达标或资金耗尽后，按对应的结束设置处理。</small>
                                 </label>
+                                <div class="wide subscription-roll-field manual-cycle-settings-copy">
+                                    <strong>手动过关结束设置</strong>
+                                    <p class="field-hint">以下设置只管理手动启动的轮次。自动规则的每日轮数与结束处理在自动规则中设置。</p>
+                                </div>
                                 <label class="subscription-roll-field">
-                                    <span>达标后</span>
+                                    <span>手动达标后</span>
                                     <select class="text-input" name="roll_on_target">
                                         <option value="close_day">当天收工（连赢够了就停一天）</option>
                                         <option value="new_cycle">当天重开一轮（继续滚，受"一天最多几轮"限制）</option>
                                         <option value="continue">不停，连赢次数清零继续滚</option>
                                     </select>
-                                    <small class="field-hint">过关止盈的处理方式。想让过关玩法一天跑不止一次，就选"当天重开一轮"。</small>
+                                    <small class="field-hint">仅作用于手动过关。选择重开会接着下一可投注期开始，不重新等待自动触发条件。</small>
                                 </label>
                                 <label class="subscription-roll-field">
-                                    <span>爆仓后</span>
+                                    <span>手动本轮资金耗尽后</span>
                                     <select class="text-input" name="roll_on_bust">
                                         <option value="close_day">当天收工（本金亏光就停一天）</option>
                                         <option value="new_cycle">补足起始注再开一轮</option>
                                     </select>
-                                    <small class="field-hint">当天本金归零时的处理方式。</small>
+                                    <small class="field-hint">手动本轮无法继续滚仓时的处理方式。</small>
                                 </label>
                                 <label class="subscription-roll-field">
-                                    <span>一天最多几轮</span>
+                                    <span>手动一天最多几轮</span>
                                     <input class="text-input" name="roll_max_cycles" type="number" min="1" step="1" value="1">
-                                    <small class="field-hint">填 1 就是一天只跑一轮；重开轮数用满后自动当天收工。</small>
+                                    <small class="field-hint">选择重开时，包含手动第一轮；用满后手动当天收工。自动规则独立计次。</small>
                                 </label>
-                                <label class="subscription-roll-field">
-                                    <span>收工停哪一层</span>
-                                    <select class="text-input" name="roll_close_scope">
-                                        <option value="rule">整条规则（这条规则当天不再下单）</option>
-                                        <option value="route">只停这个路由</option>
-                                    </select>
-                                    <small class="field-hint">默认整条规则一起收工，避免同一条规则的其他路由还在下。</small>
-                                </label>
+                                <input type="hidden" name="roll_close_scope" value="rule">
                                 <label class="subscription-fixed-field">
                                     <span>每期固定金额</span>
                                     <input class="text-input" name="stake_amount" type="number" min="0.01" step="0.01" value="10">

@@ -1047,6 +1047,8 @@ class DatabaseRepository:
             self._ensure_dispatch_lookup_indexes(conn)
             self._ensure_user_telegram_indexes(conn)
             ensure_profit_reporting(conn)
+            self._ensure_auto_trigger_cycle_tables(conn)
+            self._migrate_legacy_cycle_states(conn)
             conn.commit()
 
     def _ensure_subscription_cycle_state_columns(self, conn: sqlite3.Connection) -> None:
@@ -1060,6 +1062,7 @@ class DatabaseRepository:
             "day_closed": "ALTER TABLE subscription_cycle_states ADD COLUMN day_closed INTEGER NOT NULL DEFAULT 0",
             "day_close_scope": "ALTER TABLE subscription_cycle_states ADD COLUMN day_close_scope TEXT",
             "last_cycle_stop_reason": "ALTER TABLE subscription_cycle_states ADD COLUMN last_cycle_stop_reason TEXT",
+            "owner_version": "ALTER TABLE subscription_cycle_states ADD COLUMN owner_version INTEGER NOT NULL DEFAULT 0",
         }
         for column_name, ddl in column_definitions.items():
             if column_name not in existing:
@@ -1072,6 +1075,513 @@ class DatabaseRepository:
         state["cycles_today"] = int(state.get("cycles_today") or 0)
         state["day_closed"] = bool(state.get("day_closed"))
         return state
+
+    def _ensure_auto_trigger_cycle_tables(self, conn: sqlite3.Connection) -> None:
+        """加性隔离：旧表专属于手动，自动状态和启动次数单独保存。"""
+        route_columns = {str(row['name']) for row in conn.execute('PRAGMA table_info(auto_trigger_rule_routes)')}
+        if 'is_implicit' not in route_columns:
+            conn.execute('ALTER TABLE auto_trigger_rule_routes ADD COLUMN is_implicit INTEGER NOT NULL DEFAULT 0')
+        conn.execute('''CREATE UNIQUE INDEX IF NOT EXISTS idx_auto_trigger_implicit_target
+                        ON auto_trigger_rule_routes(rule_id, delivery_target_id) WHERE is_implicit=1''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS auto_trigger_cycle_states (
+            rule_id INTEGER NOT NULL, subscription_id INTEGER NOT NULL, route_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL, rule_run_id INTEGER, stat_date TEXT NOT NULL DEFAULT '',
+            balance REAL NOT NULL DEFAULT 0, cycle_stake REAL, day_pnl REAL,
+            win_streak INTEGER NOT NULL DEFAULT 0, target_streak INTEGER NOT NULL DEFAULT 3,
+            status TEXT NOT NULL DEFAULT 'running', stop_reason TEXT, periods INTEGER NOT NULL DEFAULT 0,
+            pending_plan_json TEXT NOT NULL DEFAULT '', policy_json TEXT NOT NULL DEFAULT '{}',
+            cycles_today INTEGER NOT NULL DEFAULT 0, day_closed INTEGER NOT NULL DEFAULT 0,
+            day_close_scope TEXT, last_cycle_stop_reason TEXT, updated_at TEXT NOT NULL,
+            PRIMARY KEY(rule_id, subscription_id, route_id),
+            FOREIGN KEY(rule_id) REFERENCES auto_trigger_rules(id),
+            FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id),
+            FOREIGN KEY(user_id) REFERENCES users(id))''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS auto_trigger_cycle_sessions (
+            rule_id INTEGER NOT NULL, subscription_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'waiting', active_run_id INTEGER, start_stat_date TEXT NOT NULL DEFAULT '',
+            last_start_issue TEXT NOT NULL DEFAULT '', last_completed_issue TEXT NOT NULL DEFAULT '',
+            stop_reason TEXT NOT NULL DEFAULT '', policy_json TEXT NOT NULL DEFAULT '{}',
+            legacy_policy_json TEXT NOT NULL DEFAULT '{}', participating_route_ids_json TEXT NOT NULL DEFAULT '[]',
+            updated_at TEXT NOT NULL, PRIMARY KEY(rule_id,subscription_id),
+            FOREIGN KEY(rule_id) REFERENCES auto_trigger_rules(id),
+            FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id), FOREIGN KEY(user_id) REFERENCES users(id))''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS auto_trigger_cycle_daily_starts (
+            rule_id INTEGER NOT NULL, subscription_id INTEGER NOT NULL, stat_date TEXT NOT NULL,
+            user_id INTEGER NOT NULL, starts_count INTEGER NOT NULL DEFAULT 0,
+            last_start_issue TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
+            PRIMARY KEY(rule_id,subscription_id,stat_date),
+            FOREIGN KEY(rule_id) REFERENCES auto_trigger_rules(id),
+            FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id), FOREIGN KEY(user_id) REFERENCES users(id))''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS cycle_state_migrations (
+            subscription_id INTEGER PRIMARY KEY, original_state_json TEXT NOT NULL,
+            owner_json TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+            migrated_at TEXT NOT NULL)''')
+        conn.execute('''CREATE INDEX IF NOT EXISTS idx_auto_cycle_pending
+                        ON auto_trigger_cycle_states(user_id) WHERE pending_plan_json != '' ''')
+
+    def _migrate_legacy_cycle_states(self, conn: sqlite3.Connection) -> None:
+        """只迁移能够证明唯一归属的旧周期，原始证据永久保留且不改历史账本。"""
+        unit = copy.copy(self)
+        unit._transaction_connection = conn
+        rows = conn.execute('''SELECT * FROM subscription_cycle_states s WHERE owner_version=0
+            AND NOT EXISTS (SELECT 1 FROM cycle_state_migrations m WHERE m.subscription_id=s.subscription_id)''').fetchall()
+        for raw in rows:
+            original = dict(raw)
+            sub_id, user_id = int(raw['subscription_id']), int(raw['user_id'])
+            pending = _safe_json_loads(raw['pending_plan_json'])
+            events = []
+            if pending:
+                leg_ids = pending.get('leg_event_ids') or []
+                try:
+                    leg_ids = [int(value) for value in leg_ids]
+                except (TypeError, ValueError):
+                    leg_ids = []
+                if leg_ids:
+                    marks = ','.join('?' for _ in leg_ids)
+                    events = [dict(row) for row in conn.execute('SELECT * FROM subscription_progression_events WHERE id IN (%s)' % marks, tuple(leg_ids))]
+                complete_evidence = len(events) == 2 and len(leg_ids) == 2 and {e.get('leg_key') for e in events} == {'main','aux'}
+            else:
+                candidates = conn.execute('''SELECT * FROM subscription_progression_events
+                    WHERE subscription_id=? AND user_id=? AND leg_key IN ('main','aux')
+                    AND created_at<=? ORDER BY id DESC''', (sub_id,user_id,str(raw['updated_at']))).fetchall()
+                manual_runs = [dict(row) for row in conn.execute('''SELECT * FROM subscription_runtime_runs
+                    WHERE subscription_id=? AND user_id=? AND auto_trigger_rule_run_id IS NULL
+                      AND started_at<=?''', (sub_id,user_id,str(raw['updated_at'])))]
+                for event in candidates:
+                    explicit_day = str((_safe_json_loads(event['result_context_json']).get('cycle') or {}).get('stat_date') or event['auto_trigger_stat_date'] or '')
+                    if explicit_day == str(raw['stat_date']):
+                        events.append(dict(event))
+                        continue
+                    if explicit_day or event['auto_trigger_rule_id'] or event['auto_trigger_route_id'] or event['auto_trigger_rule_run_id']:
+                        continue
+                    # 老手动腿结算后 result_context 不再保留 cycle。只在其时间落于
+                    # 唯一的手动 runtime，且创建/结算归属本交易日时恢复手动证据。
+                    try:
+                        created = _parse_iso8601(event['created_at'])
+                        same_day = str(raw['stat_date']) in {
+                            _shanghai_date(event['created_at']),
+                            _shanghai_date(event['settled_at']) if event['settled_at'] else '',
+                        }
+                        matching_runs = [run for run in manual_runs
+                            if _parse_iso8601(run['started_at']) <= created
+                            and (not run.get('ended_at') or created <= _parse_iso8601(run['ended_at']))]
+                    except (TypeError, ValueError):
+                        continue
+                    if same_day and len(matching_runs) == 1:
+                        events.append(dict(event))
+                latest_issue = str(events[0]['issue_no']) if events else ''
+                complete_evidence = bool(events) and {event['leg_key'] for event in events if str(event['issue_no']) == latest_issue} == {'main', 'aux'}
+            valid_events = all(int(event['subscription_id']) == sub_id and int(event['user_id']) == user_id for event in events)
+            owners = {(int(e.get('auto_trigger_rule_id') or 0), int(e.get('auto_trigger_route_id') or 0)) for e in events}
+            expected = (int(pending.get('rule_id') or 0), int(pending.get('route_id') or 0)) if pending else None
+            if expected and events and owners != {expected}:
+                complete_evidence = False
+            if pending and pending.get('rule_run_id'):
+                if any(int(e.get('auto_trigger_rule_run_id') or 0) != int(pending['rule_run_id']) for e in events):
+                    complete_evidence = False
+            # 未使用且没有旧投注证据的初始值是手动基线，绝不复制给自动。
+            unused = not pending and not events and int(raw['periods'] or 0) == 0 and not raw['day_closed']
+            if unused or (complete_evidence and valid_events and owners == {(0,0)}):
+                conn.execute('UPDATE subscription_cycle_states SET owner_version=1 WHERE subscription_id=?',(sub_id,))
+                conn.execute('INSERT INTO cycle_state_migrations VALUES(?,?,?,?,?,?)',
+                    (sub_id,_safe_json_dumps(original),_safe_json_dumps({'scope':'manual'}),'manual','manual_owner',_utc_now_iso()))
+                continue
+            reason = 'migration_owner_ambiguous'
+            if complete_evidence and valid_events and len(owners) == 1 and next(iter(owners))[0] > 0:
+                rule_id, route_id = next(iter(owners))
+                run_ids = {int(e.get('auto_trigger_rule_run_id') or 0) for e in events}
+                run_id = int(pending.get('rule_run_id') or 0) if pending else int(events[0].get('auto_trigger_rule_run_id') or 0)
+                conn.execute('SAVEPOINT migrate_cycle_owner')
+                try:
+                    unit._validate_auto_cycle_owner(rule_id=rule_id,subscription_id=sub_id,user_id=user_id,route_id=route_id,rule_run_id=run_id or None)
+                    # 多个旧run同属同日时只接受最新run的状态；旧表本身没有run id，不能跨归属猜测。
+                    if not run_id or (pending and run_ids != {run_id}):
+                        raise ValueError('missing_run')
+                    owner = {'scope':'auto','rule_id':rule_id,'route_id':route_id,'rule_run_id':run_id}
+                    unit.upsert_auto_trigger_cycle_state(rule_id=rule_id,subscription_id=sub_id,route_id=route_id,user_id=user_id,
+                        rule_run_id=run_id,state=original,policy=_safe_json_loads(raw['policy_json']),pending_plan=pending or None)
+                    run = unit.get_auto_trigger_rule_run(run_id) or {}
+                    is_closed = bool(raw['day_closed']) or run.get('status') == 'stopped'
+                    status = 'day_closed' if is_closed else ('running' if raw['status'] == 'running' or pending else 'waiting')
+                    stop_reason = str(raw['last_cycle_stop_reason'] or raw['stop_reason'] or run.get('stop_reason') or '')
+                    policy = _safe_json_loads(raw['policy_json'])
+                    legacy = policy.get('stop_policy') if isinstance(policy.get('stop_policy'),dict) else {}
+                    unit.upsert_auto_trigger_cycle_session(rule_id=rule_id,subscription_id=sub_id,user_id=user_id,values={
+                        'status':status,'active_run_id':run_id if status=='running' or pending else None,
+                        'start_stat_date':str(run.get('stat_date') or raw['stat_date']),
+                        'last_start_issue':str(run.get('started_issue_no') or ''),
+                        'last_completed_issue':str(events[0].get('issue_no') or '') if not pending else '',
+                        'stop_reason':stop_reason,'policy':{'mode':'legacy'},'legacy_policy':legacy,
+                        'participating_route_ids':[route_id],
+                    })
+                    day = str(run.get('stat_date') or raw['stat_date'])
+                    run_count = conn.execute('''SELECT COUNT(DISTINCT auto_trigger_rule_run_id) FROM subscription_progression_events
+                        WHERE auto_trigger_rule_id=? AND subscription_id=? AND auto_trigger_stat_date=? AND leg_key IN ('main','aux')''',
+                        (rule_id,sub_id,day)).fetchone()[0]
+                    starts = max(1,int(raw['cycles_today'] or 0)+1,int(run_count or 0))
+                    conn.execute('''INSERT INTO auto_trigger_cycle_daily_starts VALUES(?,?,?,?,?,?,?)
+                        ON CONFLICT(rule_id,subscription_id,stat_date) DO UPDATE SET starts_count=MAX(starts_count,excluded.starts_count)''',
+                        (rule_id,sub_id,day,user_id,starts,str(run.get('started_issue_no') or ''),_utc_now_iso()))
+                    conn.execute('INSERT INTO cycle_state_migrations VALUES(?,?,?,?,?,?)',
+                        (sub_id,_safe_json_dumps(original),_safe_json_dumps(owner),'migrated_auto','unique_event_owner',_utc_now_iso()))
+                    conn.execute('DELETE FROM subscription_cycle_states WHERE subscription_id=?',(sub_id,))
+                    conn.execute('RELEASE migrate_cycle_owner')
+                    continue
+                except (ValueError, sqlite3.IntegrityError):
+                    conn.execute('ROLLBACK TO migrate_cycle_owner')
+                    conn.execute('RELEASE migrate_cycle_owner')
+                    reason = 'migration_owner_invalid'
+            owner_rules = {rule_id for rule_id,_ in owners if rule_id>0}
+            if expected and expected[0]>0:
+                owner_rules.add(expected[0])
+            # 无明确owner时，所有引用此旧方案的规则都必须先停下，不能凭空新建一份资金。
+            if not owner_rules:
+                for rule in conn.execute('SELECT * FROM auto_trigger_rules WHERE user_id=?',(user_id,)):
+                    if rule['scope_mode']=='all_subscriptions' or sub_id in _safe_json_loads_list(rule['subscription_ids_json']):
+                        owner_rules.add(int(rule['id']))
+            for rule_id in owner_rules:
+                try:
+                    unit.upsert_auto_trigger_cycle_session(rule_id=rule_id,subscription_id=sub_id,user_id=user_id,
+                        values={'status':'blocked','start_stat_date':str(raw['stat_date']),'stop_reason':reason})
+                except ValueError:
+                    pass  # 其他用户/已删除的旧引用不创建跨用户状态。
+            conn.execute('INSERT INTO cycle_state_migrations VALUES(?,?,?,?,?,?)',
+                (sub_id,_safe_json_dumps(original),_safe_json_dumps({'rule_ids':sorted(owner_rules)}),'blocked',reason,_utc_now_iso()))
+            # 保存原pending证据，但禁止作为可运行手动周期重新派单。
+            conn.execute("UPDATE subscription_cycle_states SET status='stopped',stop_reason=?,day_closed=1 WHERE subscription_id=?",(reason,sub_id))
+
+        # 旧规则首次升级冻结生命周期；以后手动方案改设置不反向改自动行为。
+        for rule in conn.execute('SELECT * FROM auto_trigger_rules'):
+            policy = _safe_json_loads(rule['cycle_policy_json'])
+            if policy.get('mode') == 'rule':
+                continue
+            for sub in conn.execute('SELECT * FROM user_subscriptions WHERE user_id=?',(int(rule['user_id']),)):
+                if rule['scope_mode']=='selected_subscriptions' and int(sub['id']) not in _safe_json_loads_list(rule['subscription_ids_json']):
+                    continue
+                strategy = upgrade_subscription_strategy(_safe_json_loads(sub['strategy_json']))
+                staking = strategy.get('staking_policy') or {}
+                if staking.get('mode') != 'win_streak_roll':
+                    continue
+                owner = dict(rule_id=int(rule['id']),subscription_id=int(sub['id']),user_id=int(rule['user_id']))
+                session = unit.get_auto_trigger_cycle_session(**owner)
+                if not session or not session.get('legacy_policy'):
+                    unit.upsert_auto_trigger_cycle_session(**owner,values={'legacy_policy': staking.get('stop_policy') or {
+                        'on_target':'close_day','on_bust':'close_day','close_scope':'rule','max_cycles_per_day':1}})
+
+    def _validate_auto_cycle_owner(self, *, rule_id: int, subscription_id: int, user_id: int,
+                                   route_id: Optional[int] = None, rule_run_id: Optional[int] = None) -> tuple[dict, dict]:
+        rule = self._fetch_one('SELECT * FROM auto_trigger_rules WHERE id=? AND user_id=?', (int(rule_id), int(user_id)))
+        sub = self._fetch_one('SELECT * FROM user_subscriptions WHERE id=? AND user_id=?', (int(subscription_id), int(user_id)))
+        if not rule or not sub:
+            raise ValueError('规则或跟单方案不存在')
+        if route_id is not None and int(route_id) > 0:
+            route = self._fetch_one('SELECT id FROM auto_trigger_rule_routes WHERE id=? AND rule_id=? AND user_id=?',
+                                   (int(route_id), int(rule_id), int(user_id)))
+            if not route:
+                raise ValueError('过关周期的路由归属不匹配')
+        if rule_run_id is not None:
+            run = self._fetch_one('''SELECT id FROM auto_trigger_rule_runs
+                WHERE id=? AND rule_id=? AND subscription_id=? AND user_id=?''',
+                (int(rule_run_id), int(rule_id), int(subscription_id), int(user_id)))
+            if not run:
+                raise ValueError('过关周期的轮次归属不匹配')
+        return rule, sub
+
+    def get_auto_trigger_cycle_state(self, *, rule_id: int, subscription_id: int,
+                                     route_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+        self._validate_auto_cycle_owner(rule_id=rule_id, subscription_id=subscription_id, user_id=user_id, route_id=route_id)
+        row = self._fetch_one('''SELECT * FROM auto_trigger_cycle_states
+            WHERE rule_id=? AND subscription_id=? AND route_id=? AND user_id=?''',
+            (int(rule_id), int(subscription_id), int(route_id), int(user_id)))
+        return {**self._normalize_cycle_state_row(row), 'scope': 'auto'} if row else None
+
+    def upsert_auto_trigger_cycle_state(self, *, rule_id: int, subscription_id: int, route_id: int,
+                                        user_id: int, rule_run_id: Optional[int], state: Dict[str, Any],
+                                        policy: Optional[Dict[str, Any]] = None,
+                                        pending_plan: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if self._transaction_connection is None:
+            with self.transaction() as unit:
+                return unit.upsert_auto_trigger_cycle_state(
+                    rule_id=rule_id, subscription_id=subscription_id, route_id=route_id, user_id=user_id,
+                    rule_run_id=rule_run_id, state=state, policy=policy, pending_plan=pending_plan,
+                )
+        self._validate_auto_cycle_owner(rule_id=rule_id, subscription_id=subscription_id, user_id=user_id,
+                                       route_id=route_id, rule_run_id=rule_run_id)
+        values = {
+            'rule_id': int(rule_id), 'subscription_id': int(subscription_id), 'route_id': int(route_id),
+            'user_id': int(user_id), 'rule_run_id': rule_run_id, 'stat_date': str(state.get('stat_date') or ''),
+            'balance': _round_money(state.get('balance')), 'cycle_stake': state.get('cycle_stake'),
+            'day_pnl': state.get('day_pnl'), 'win_streak': int(state.get('win_streak') or 0),
+            'target_streak': int(state.get('target_streak') or 3), 'status': str(state.get('status') or 'running'),
+            'stop_reason': state.get('stop_reason'), 'periods': int(state.get('periods') or 0),
+            'pending_plan_json': _safe_json_dumps(pending_plan) if pending_plan else '',
+            'policy_json': _safe_json_dumps(policy or {}), 'cycles_today': int(state.get('cycles_today') or 0),
+            'day_closed': int(bool(state.get('day_closed'))), 'day_close_scope': state.get('day_close_scope'),
+            'last_cycle_stop_reason': state.get('last_cycle_stop_reason'), 'updated_at': _utc_now_iso(),
+        }
+        columns = list(values)
+        with self._connect() as conn:
+            conn.execute('INSERT INTO auto_trigger_cycle_states (%s) VALUES (%s) ON CONFLICT(rule_id,subscription_id,route_id) DO UPDATE SET %s' % (
+                ','.join(columns), ','.join('?' for _ in columns),
+                ','.join('%s=excluded.%s' % (key, key) for key in columns[3:])), tuple(values.values()))
+        return self.get_auto_trigger_cycle_state(rule_id=rule_id, subscription_id=subscription_id, route_id=route_id, user_id=user_id) or {}
+
+    def get_auto_trigger_cycle_session(self, *, rule_id: int, subscription_id: int, user_id: int) -> Optional[dict]:
+        self._validate_auto_cycle_owner(rule_id=rule_id, subscription_id=subscription_id, user_id=user_id)
+        row = self._fetch_one('SELECT * FROM auto_trigger_cycle_sessions WHERE rule_id=? AND subscription_id=? AND user_id=?',
+                              (int(rule_id), int(subscription_id), int(user_id)))
+        if row:
+            row['policy'] = _safe_json_loads(row.get('policy_json'))
+            row['legacy_policy'] = _safe_json_loads(row.get('legacy_policy_json'))
+            row['participating_route_ids'] = [int(value) for value in _safe_json_loads_list(row.get('participating_route_ids_json'))]
+        return row
+
+    def upsert_auto_trigger_cycle_session(self, *, rule_id: int, subscription_id: int, user_id: int, values: dict) -> dict:
+        self._validate_auto_cycle_owner(rule_id=rule_id, subscription_id=subscription_id, user_id=user_id)
+        with self.transaction() as unit:
+            current = unit.get_auto_trigger_cycle_session(rule_id=rule_id, subscription_id=subscription_id, user_id=user_id) or {}
+            data = {**current, **values}
+            status = str(data.get('status') or 'waiting')
+            if status not in {'waiting', 'running', 'continuation', 'day_closed', 'blocked'}:
+                raise ValueError('自动过关会话状态无效')
+            allowed = ['status', 'active_run_id', 'start_stat_date', 'last_start_issue', 'last_completed_issue', 'stop_reason']
+            fields = {key: data.get(key, '' if key != 'active_run_id' else None) for key in allowed}
+            fields['status'] = status
+            fields.update({
+                'policy_json': _safe_json_dumps(data.get('policy') or {}),
+                'legacy_policy_json': _safe_json_dumps(current.get('legacy_policy') or data.get('legacy_policy') or {}),
+                'participating_route_ids_json': _safe_json_dumps(data.get('participating_route_ids') or []),
+                'updated_at': _utc_now_iso(),
+            })
+            columns = ['rule_id', 'subscription_id', 'user_id', *fields]
+            with unit._connect() as conn:
+                conn.execute('INSERT INTO auto_trigger_cycle_sessions (%s) VALUES (%s) ON CONFLICT(rule_id,subscription_id) DO UPDATE SET %s' % (
+                    ','.join(columns), ','.join('?' for _ in columns), ','.join('%s=excluded.%s' % (key,key) for key in fields)),
+                    (int(rule_id), int(subscription_id), int(user_id), *fields.values()))
+            return unit.get_auto_trigger_cycle_session(rule_id=rule_id, subscription_id=subscription_id, user_id=user_id) or {}
+
+    def get_auto_trigger_cycle_daily_starts(self, *, rule_id: int, subscription_id: int, user_id: int, stat_date: str) -> dict:
+        self._validate_auto_cycle_owner(rule_id=rule_id, subscription_id=subscription_id, user_id=user_id)
+        return self._fetch_one('''SELECT * FROM auto_trigger_cycle_daily_starts
+            WHERE rule_id=? AND subscription_id=? AND user_id=? AND stat_date=?''',
+            (int(rule_id), int(subscription_id), int(user_id), str(stat_date))) or {
+                'rule_id': int(rule_id), 'subscription_id': int(subscription_id), 'user_id': int(user_id),
+                'stat_date': str(stat_date), 'starts_count': 0, 'last_start_issue': '',
+            }
+
+    def claim_auto_trigger_cycle_start(self, *, rule_id: int, subscription_id: int, user_id: int,
+                                       stat_date: str, started_issue_no: str, max_starts_per_day: int,
+                                       policy: dict, route_ids: list[int], window_id: str = '') -> dict:
+        """启动额度与独立run一起认领；派单失败由调用者回滚外层事务。"""
+        if isinstance(max_starts_per_day, bool) or not isinstance(max_starts_per_day, int) or not 1 <= max_starts_per_day <= 1000:
+            raise ValueError('每天最多启动次数必须是 1 到 1000 的整数')
+        with self.transaction() as unit:
+            rule, sub = unit._validate_auto_cycle_owner(rule_id=rule_id, subscription_id=subscription_id, user_id=user_id)
+            route_ids = list(dict.fromkeys(int(value) for value in route_ids))
+            if not route_ids:
+                raise ValueError('新自动过关轮必须有参与路由')
+            for route_id in route_ids:
+                if route_id <= 0:
+                    raise ValueError('新自动过关轮必须有有效路由')
+                unit._validate_auto_cycle_owner(rule_id=rule_id, subscription_id=subscription_id, user_id=user_id, route_id=route_id)
+            daily = unit.get_auto_trigger_cycle_daily_starts(rule_id=rule_id,subscription_id=subscription_id,user_id=user_id,stat_date=stat_date)
+            session = unit.get_auto_trigger_cycle_session(rule_id=rule_id,subscription_id=subscription_id,user_id=user_id) or {}
+            reason = ''
+            if rule.get('status') != 'active':
+                reason = 'rule_not_active'
+            elif rule.get('scope_mode') == 'selected_subscriptions' and int(subscription_id) not in _safe_json_loads_list(rule.get('subscription_ids_json')):
+                reason = 'subscription_outside_rule_scope'
+            elif sub.get('status') not in {'active','standby'}:
+                reason = 'subscription_not_active'
+            elif session.get('status') == 'running':
+                reason = 'cycle_running'
+            elif session.get('status') == 'blocked':
+                reason = str(session.get('stop_reason') or 'cycle_blocked')
+            elif session.get('status') == 'day_closed' and session.get('start_stat_date') == str(stat_date):
+                reason = str(session.get('stop_reason') or 'cycle_day_closed')
+            elif int(daily['starts_count']) >= max_starts_per_day:
+                reason = 'cycle_daily_limit'
+            elif session.get('last_start_issue') and self._cycle_issue_not_newer(started_issue_no, session['last_start_issue']):
+                reason = 'cycle_issue_already_started'
+            elif unit._fetch_one('''SELECT 1 FROM auto_trigger_cycle_states WHERE rule_id=? AND subscription_id=? AND pending_plan_json != '' LIMIT 1''', (int(rule_id),int(subscription_id))):
+                reason = 'cycle_pending_settlement'
+            if reason:
+                return {'claimed': False, 'reason': reason, 'run': None, 'starts_count': int(daily['starts_count'])}
+            ordinal = int(daily['starts_count']) + 1
+            key = 'roll:%s%s' % (ordinal, (':' + str(window_id)) if window_id else '')
+            # 唯一日轮身份不重用已有历史。迁移日计数缺证据时也不可覆盖旧run。
+            with unit._connect() as conn:
+                while conn.execute('SELECT 1 FROM auto_trigger_rule_runs WHERE rule_id=? AND subscription_id=? AND stat_date=? AND window_id=?',
+                                   (int(rule_id),int(subscription_id),str(stat_date),key)).fetchone():
+                    ordinal += 1
+                    key = 'roll:%s%s' % (ordinal, (':' + str(window_id)) if window_id else '')
+                run = unit.ensure_auto_trigger_rule_run(rule_id=rule_id,user_id=user_id,subscription_id=subscription_id,stat_date=stat_date,
+                    started_issue_no=started_issue_no,window_id=key)
+                conn.execute('''INSERT INTO auto_trigger_cycle_daily_starts(rule_id,subscription_id,stat_date,user_id,starts_count,last_start_issue,updated_at)
+                    VALUES(?,?,?,?,?,?,?) ON CONFLICT(rule_id,subscription_id,stat_date) DO UPDATE SET
+                    starts_count=excluded.starts_count,last_start_issue=excluded.last_start_issue,updated_at=excluded.updated_at''',
+                    (int(rule_id),int(subscription_id),str(stat_date),int(user_id),int(daily['starts_count'])+1,str(started_issue_no),_utc_now_iso()))
+            unit.upsert_auto_trigger_cycle_session(rule_id=rule_id,subscription_id=subscription_id,user_id=user_id,values={
+                'status':'running','active_run_id':run['id'],'start_stat_date':str(stat_date),'last_start_issue':str(started_issue_no),
+                'stop_reason':'','policy':dict(policy),'participating_route_ids':route_ids,
+            })
+            return {'claimed':True,'reason':'started','run':run,'starts_count':int(daily['starts_count'])+1}
+
+    @staticmethod
+    def _cycle_issue_not_newer(current: Any, previous: Any) -> bool:
+        try:
+            return int(str(current)) <= int(str(previous))
+        except (ValueError,TypeError):
+            return str(current) == str(previous)
+
+    def complete_auto_trigger_cycle_session(self, *, rule_id: int, subscription_id: int, user_id: int,
+                                           rule_run_id: int, completed_issue_no: str,
+                                           status: str, stop_reason: str = '') -> dict:
+        if status not in {'waiting','continuation','day_closed','blocked'}:
+            raise ValueError('过关轮结束状态无效')
+        with self.transaction() as unit:
+            unit._validate_auto_cycle_owner(rule_id=rule_id,subscription_id=subscription_id,user_id=user_id,rule_run_id=rule_run_id)
+            session = unit.get_auto_trigger_cycle_session(rule_id=rule_id,subscription_id=subscription_id,user_id=user_id)
+            if not session or int(session.get('active_run_id') or 0) != int(rule_run_id):
+                return {'completed':False,'reason':'cycle_run_changed'}
+            for route_id in session.get('participating_route_ids') or []:
+                row = unit.get_auto_trigger_cycle_state(rule_id=rule_id,subscription_id=subscription_id,user_id=user_id,route_id=route_id)
+                if not row or int(row.get('rule_run_id') or 0) != int(rule_run_id) or row.get('pending_plan') or row.get('status') == 'running':
+                    return {'completed':False,'reason':'cycle_routes_unfinished'}
+            now = _utc_now_iso()
+            with unit._connect() as conn:
+                conn.execute("UPDATE auto_trigger_rule_runs SET status='closed',stop_reason=?,stopped_at=?,updated_at=? WHERE id=? AND status='active'",
+                             (str(stop_reason),now,now,int(rule_run_id)))
+                conn.execute("""UPDATE auto_trigger_route_subscription_runtime_runs SET status='closed',ended_at=?,end_reason=?,updated_at=?
+                    WHERE auto_trigger_rule_run_id=? AND rule_id=? AND subscription_id=? AND user_id=? AND status='active'""",
+                    (now,str(stop_reason or 'cycle_completed'),now,int(rule_run_id),int(rule_id),int(subscription_id),int(user_id)))
+                if 0 in (session.get('participating_route_ids') or []):
+                    # 旧无route自动单仅允许原腿完成；精确关闭其绑定的旧直派runtime，
+                    # 不关闭同方案另外的手动runtime，不改原账本与事件归属。
+                    conn.execute("""UPDATE subscription_runtime_runs SET status='closed',ended_at=?,end_reason=?,updated_at=?
+                        WHERE auto_trigger_rule_run_id=? AND subscription_id=? AND user_id=? AND status='active'""",
+                        (now,str(stop_reason or 'legacy_route_drained'),now,int(rule_run_id),int(subscription_id),int(user_id)))
+            result = unit.upsert_auto_trigger_cycle_session(rule_id=rule_id,subscription_id=subscription_id,user_id=user_id,values={
+                'status':status,'active_run_id':None,'last_completed_issue':str(completed_issue_no),'stop_reason':str(stop_reason),
+            })
+            return {'completed':True,'session':result}
+
+    def ensure_auto_trigger_cycle_route_runtime(
+        self, *, rule_id: int, subscription_id: int, route_id: int, user_id: int,
+        rule_run_id: int, strategy: dict, started_issue_no: str, signal_id: Optional[int] = None,
+    ) -> dict:
+        """已认领的轮次建立自动续派入口，支持不立即派单；不消耗额外日额度。"""
+        with self.transaction() as unit:
+            unit._validate_auto_cycle_owner(rule_id=rule_id, subscription_id=subscription_id,
+                route_id=route_id, user_id=user_id, rule_run_id=rule_run_id)
+            session = unit.get_auto_trigger_cycle_session(rule_id=rule_id,subscription_id=subscription_id,user_id=user_id) or {}
+            if session.get('status') != 'running' or int(session.get('active_run_id') or 0) != int(rule_run_id):
+                raise ValueError('自动过关轮未运行')
+            if int(route_id) not in (session.get('participating_route_ids') or []):
+                raise ValueError('路由未参与此自动过关轮')
+            if signal_id is not None:
+                signal = unit.get_signal(int(signal_id)) or {}
+                sub = unit.get_subscription(int(subscription_id)) or {}
+                if not signal or int(signal.get('source_id') or 0) != int(sub.get('source_id') or 0):
+                    raise ValueError('自动过关信号归属不匹配')
+            with unit._connect() as conn:
+                return unit._ensure_active_route_subscription_runtime_run(
+                    conn, route_id=int(route_id),rule_id=int(rule_id),subscription_id=int(subscription_id),
+                    user_id=int(user_id),issue_no=str(started_issue_no),signal_id=signal_id,
+                    started_at=_utc_now_iso(),strategy=strategy,rule_run_id=int(rule_run_id),
+                )
+
+    def discard_unstarted_auto_trigger_cycle_routes(
+        self, *, rule_id: int, subscription_id: int, user_id: int,
+        rule_run_id: int, route_ids: list[int],
+    ) -> dict:
+        """部分路由成功时关闭本轮未实际起投的入口，不能影响历史资金或已派任务。"""
+        discarded = []
+        with self.transaction() as unit:
+            unit._validate_auto_cycle_owner(rule_id=rule_id, subscription_id=subscription_id,
+                user_id=user_id, rule_run_id=rule_run_id)
+            for route_id in dict.fromkeys(int(value) for value in route_ids):
+                unit._validate_auto_cycle_owner(rule_id=rule_id, subscription_id=subscription_id,
+                    user_id=user_id, route_id=route_id)
+                with unit._connect() as conn:
+                    has_events = conn.execute('''SELECT 1 FROM subscription_progression_events
+                        WHERE auto_trigger_rule_run_id=? AND auto_trigger_route_id=? AND subscription_id=? AND user_id=? LIMIT 1''',
+                        (int(rule_run_id), route_id, int(subscription_id), int(user_id))).fetchone()
+                    if has_events:
+                        continue
+                    now = _utc_now_iso()
+                    conn.execute('''UPDATE auto_trigger_route_subscription_runtime_runs
+                        SET status='closed', ended_at=?, end_reason='cycle_route_not_started', updated_at=?
+                        WHERE auto_trigger_rule_run_id=? AND route_id=? AND subscription_id=? AND user_id=? AND status='active' ''',
+                        (now, now, int(rule_run_id), route_id, int(subscription_id), int(user_id)))
+                    conn.execute('''UPDATE auto_trigger_cycle_states
+                        SET status='stopped',stop_reason='cycle_route_not_started',updated_at=?
+                        WHERE rule_id=? AND subscription_id=? AND route_id=? AND user_id=? AND rule_run_id=? AND pending_plan_json='' ''',
+                        (now,int(rule_id),int(subscription_id),route_id,int(user_id),int(rule_run_id)))
+                    discarded.append(route_id)
+        return {'discarded_route_ids': discarded}
+
+    def ensure_implicit_auto_trigger_route(self, *, rule_id: int, user_id: int, delivery_target_id: int) -> dict:
+        with self.transaction() as unit:
+            rule = unit._fetch_one('SELECT id FROM auto_trigger_rules WHERE id=? AND user_id=?',(int(rule_id),int(user_id)))
+            target = unit._fetch_one('''SELECT dt.*, ta.status AS account_status FROM delivery_targets dt
+                LEFT JOIN telegram_accounts ta ON ta.id=dt.telegram_account_id WHERE dt.id=? AND dt.user_id=?''',
+                (int(delivery_target_id),int(user_id)))
+            if not rule or not target or target.get('status') != 'active' or target.get('dispatch_mode') == 'direct_only':
+                raise ValueError('规则投递目标不存在或不可用')
+            if target.get('telegram_account_id') and target.get('account_status') != 'active':
+                raise ValueError('规则投递账号不可用')
+            with unit._connect() as conn:
+                conn.execute('''INSERT INTO auto_trigger_rule_routes(rule_id,user_id,delivery_target_id,name,status,is_implicit)
+                    VALUES(?,?,?,?,'active',1) ON CONFLICT(rule_id,delivery_target_id) WHERE is_implicit=1
+                    DO UPDATE SET status='active',name=excluded.name''',
+                    (int(rule_id),int(user_id),int(delivery_target_id),str(target.get('target_name') or '继承方案投递')))
+                row = conn.execute('SELECT id FROM auto_trigger_rule_routes WHERE rule_id=? AND delivery_target_id=? AND is_implicit=1',
+                                   (int(rule_id),int(delivery_target_id))).fetchone()
+            return unit.get_auto_trigger_rule_route(int(row['id'])) or {}
+
+    def list_auto_trigger_cycle_runtime(self, *, rule_id: int, user_id: int, stat_date: str) -> list[dict]:
+        rule = self.get_auto_trigger_rule(int(rule_id))
+        if not rule or int(rule['user_id']) != int(user_id):
+            raise ValueError('规则不存在')
+        subscriptions = self._fetch_all('SELECT id,name,strategy_json FROM user_subscriptions WHERE user_id=? ORDER BY id',(int(user_id),))
+        selected = set(int(value) for value in rule.get('subscription_ids') or [])
+        items = []
+        for sub in subscriptions:
+            owner = dict(rule_id=int(rule_id),subscription_id=int(sub['id']),user_id=int(user_id))
+            session = self.get_auto_trigger_cycle_session(**owner) or {}
+            existing_state = self._fetch_one(
+                'SELECT 1 FROM auto_trigger_cycle_states WHERE rule_id=? AND subscription_id=? AND user_id=? LIMIT 1',
+                (int(rule_id),int(sub['id']),int(user_id)),
+            )
+            outside_scope = rule.get('scope_mode') == 'selected_subscriptions' and int(sub['id']) not in selected
+            if outside_scope and not session and not existing_state:
+                continue
+            strategy = upgrade_subscription_strategy(_safe_json_loads(sub.get('strategy_json')))
+            if (strategy.get('staking_policy') or {}).get('mode') != 'win_streak_roll' and not session and not existing_state:
+                continue
+            daily = self.get_auto_trigger_cycle_daily_starts(**owner,stat_date=str(stat_date))
+            states = self._fetch_all('''SELECT c.*,r.name AS route_name,t.target_name FROM auto_trigger_cycle_states c
+                LEFT JOIN auto_trigger_rule_routes r ON r.id=c.route_id LEFT JOIN delivery_targets t ON t.id=r.delivery_target_id
+                WHERE c.rule_id=? AND c.subscription_id=? AND c.user_id=? ORDER BY c.route_id''',
+                (int(rule_id),int(sub['id']),int(user_id)))
+            routes = []
+            for row in states:
+                pending = _safe_json_loads(row.get('pending_plan_json'))
+                routes.append({key:row.get(key) for key in ('route_id','status','balance','cycle_stake','win_streak','target_streak')} | {
+                    'route_name':str(row.get('route_name') or row.get('target_name') or '继承方案投递'), 'pending_issue':str(pending.get('issue_no') or ''),
+                })
+            maximum = (rule.get('cycle_policy') or {}).get('max_starts_per_day')
+            if maximum is None:
+                maximum = (session.get('legacy_policy') or {}).get('max_cycles_per_day',1)
+            items.append({
+                'subscription_id':int(sub['id']),'subscription_name':str(sub.get('name') or ''),'stat_date':str(stat_date),
+                'starts_today':int(daily['starts_count']),'max_starts_per_day':int(maximum),'status':str(session.get('status') or 'waiting'),
+                'active_run_id':session.get('active_run_id'),'start_stat_date':str(session.get('start_stat_date') or ''),
+                'last_completed_issue':str(session.get('last_completed_issue') or ''),'stop_reason':str(session.get('stop_reason') or ''), 'routes':routes,
+                'outside_scope': bool(outside_scope),
+            })
+        return items
 
     def _ensure_normalized_signal_columns(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute("PRAGMA table_info(normalized_signals)").fetchall()
@@ -1422,6 +1932,7 @@ class DatabaseRepository:
             "daily_risk_control_json": "ALTER TABLE auto_trigger_rules ADD COLUMN daily_risk_control_json TEXT NOT NULL DEFAULT '{}'",
             "trigger_mode": "ALTER TABLE auto_trigger_rules ADD COLUMN trigger_mode TEXT NOT NULL DEFAULT 'condition'",
             "schedule_json": "ALTER TABLE auto_trigger_rules ADD COLUMN schedule_json TEXT NOT NULL DEFAULT '{}'",
+            "cycle_policy_json": "ALTER TABLE auto_trigger_rules ADD COLUMN cycle_policy_json TEXT NOT NULL DEFAULT '{}'",
         }
         for column_name, ddl in column_definitions.items():
             if column_name not in existing_columns:
@@ -1883,6 +2394,7 @@ class DatabaseRepository:
             }.get(legacy_risk_mode, "inherit_rule")
         return {
             "id": int(row["id"]),
+            "is_implicit": bool(row.get("is_implicit")),
             "rule_id": int(row["rule_id"]),
             "user_id": int(row["user_id"]),
             "delivery_target_id": int(row["delivery_target_id"]),
@@ -1969,6 +2481,7 @@ class DatabaseRepository:
             "cooldown_issues": int(row.get("cooldown_issues") or 0),
             "trigger_mode": str(row.get("trigger_mode") or "condition"),
             "schedule": _safe_json_loads(row.get("schedule_json")),
+            "cycle_policy": _safe_json_loads(row.get("cycle_policy_json")) or {"mode": "legacy"},
             "last_triggered_issue_no": str(row.get("last_triggered_issue_no") or ""),
             "last_triggered_at": row.get("last_triggered_at"),
             "created_at": row.get("created_at"),
@@ -3825,6 +4338,7 @@ class DatabaseRepository:
         routes: Optional[list[dict]] = None,
         trigger_mode: str = "condition",
         schedule: Optional[dict] = None,
+        cycle_policy: Optional[dict] = None,
     ) -> Dict[str, Any]:
         now = _utc_now_iso()
         with self._connect() as conn:
@@ -3833,8 +4347,8 @@ class DatabaseRepository:
                 INSERT INTO auto_trigger_rules(
                     user_id, name, status, scope_mode, subscription_ids_json, condition_mode,
                     conditions_json, guard_groups_json, action_json, daily_risk_control_json,
-                    cooldown_issues, trigger_mode, schedule_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    cooldown_issues, trigger_mode, schedule_json, cycle_policy_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(user_id),
@@ -3850,6 +4364,7 @@ class DatabaseRepository:
                     int(cooldown_issues),
                     str(trigger_mode or "condition"),
                     _safe_json_dumps(schedule or {}),
+                    _safe_json_dumps(cycle_policy or {}),
                     now,
                     now,
                 ),
@@ -3892,7 +4407,7 @@ class DatabaseRepository:
         if rule_ids:
             placeholders = ",".join(["?"] * len(rule_ids))
             route_params: list[Any] = list(rule_ids)
-            route_where = "r.rule_id IN (%s)" % placeholders
+            route_where = "r.is_implicit = 0 AND r.rule_id IN (%s)" % placeholders
             if user_id is not None:
                 route_where += " AND r.user_id = ?"
                 route_params.append(int(user_id))
@@ -3952,8 +4467,11 @@ class DatabaseRepository:
         rule_id: int,
         user_id: int,
         status: Optional[str] = None,
+        include_implicit: bool = False,
     ) -> list[Dict[str, Any]]:
         clauses = ["r.rule_id = ?", "r.user_id = ?"]
+        if not include_implicit:
+            clauses.append("r.is_implicit = 0")
         params: list[Any] = [int(rule_id), int(user_id)]
         if status:
             clauses.append("r.status = ?")
@@ -3990,7 +4508,7 @@ class DatabaseRepository:
         updated_at: str,
     ) -> None:
         rows = conn.execute(
-            "SELECT id FROM auto_trigger_rule_routes WHERE rule_id = ? AND user_id = ?",
+            "SELECT id FROM auto_trigger_rule_routes WHERE rule_id = ? AND user_id = ? AND is_implicit = 0",
             (int(rule_id), int(user_id)),
         ).fetchall()
         existing_ids = {int(row["id"]) for row in rows}
@@ -3998,6 +4516,8 @@ class DatabaseRepository:
         for index, route in enumerate(routes or []):
             route_id = route.get("id")
             normalized_route_id = int(route_id) if route_id not in {None, ""} else None
+            if normalized_route_id is not None and normalized_route_id not in existing_ids:
+                raise ValueError("路由不存在或不能通过此入口修改")
             sort_order = int(route.get("sort_order") if route.get("sort_order") not in {None, ""} else index)
             route_risk_mode = str(route.get("route_risk_mode") or "inherit_rule")
             route_risk_control = route.get("route_risk_control") or {}
@@ -4129,6 +4649,7 @@ class DatabaseRepository:
         routes: Optional[list[dict]] = None,
         trigger_mode: str = "condition",
         schedule: Optional[dict] = None,
+        cycle_policy: Optional[dict] = None,
     ) -> Optional[Dict[str, Any]]:
         now = _utc_now_iso()
         with self._connect() as conn:
@@ -4147,6 +4668,7 @@ class DatabaseRepository:
                     cooldown_issues = ?,
                     trigger_mode = ?,
                     schedule_json = ?,
+                    cycle_policy_json = COALESCE(?, cycle_policy_json),
                     updated_at = ?
                 WHERE id = ? AND user_id = ?
                 """,
@@ -4163,6 +4685,7 @@ class DatabaseRepository:
                     int(cooldown_issues),
                     str(trigger_mode or "condition"),
                     _safe_json_dumps(schedule or {}),
+                    _safe_json_dumps(cycle_policy) if cycle_policy is not None else None,
                     now,
                     int(rule_id),
                     int(user_id),
@@ -4243,6 +4766,9 @@ class DatabaseRepository:
                 """, params,
             )
             for table_name in (
+                "auto_trigger_cycle_states",
+                "auto_trigger_cycle_sessions",
+                "auto_trigger_cycle_daily_starts",
                 "auto_trigger_route_subscription_financial_state",
                 "auto_trigger_route_progression_state",
                 "auto_trigger_route_subscription_runtime_runs",
@@ -4604,15 +5130,18 @@ class DatabaseRepository:
         return self._serialize_auto_trigger_rule_run_row(row) if row else None
 
     def get_subscription_runtime_rule_run(self, *, subscription_id: int, user_id: int) -> Optional[Dict[str, Any]]:
-        """无 route 的旧模式只延续明确绑定在当前订阅轮次上的规则。"""
+        """保留当前旧直派轮的明确规则归属，停用/增添路由也不能变成手动单。
+
+        是否允许继续派单由业务层按规则及run状态判断；这里不能隐藏已有owner，
+        否则调用者会将“规则已停用”误判成“没有自动归属”。
+        """
         row = self._fetch_one(
             """
             SELECT rr.* FROM subscription_runtime_runs runtime
             JOIN auto_trigger_rule_runs rr ON rr.id = runtime.auto_trigger_rule_run_id
-            JOIN auto_trigger_rules rule ON rule.id = rr.rule_id AND rule.status = 'active'
+            JOIN auto_trigger_rules rule ON rule.id = rr.rule_id AND rule.user_id = runtime.user_id
             WHERE runtime.subscription_id = ? AND runtime.user_id = ? AND runtime.status = 'active'
               AND rr.subscription_id = runtime.subscription_id AND rr.user_id = runtime.user_id
-              AND NOT EXISTS (SELECT 1 FROM auto_trigger_rule_routes r WHERE r.rule_id = rule.id)
             ORDER BY runtime.id DESC LIMIT 1
             """,
             (int(subscription_id), int(user_id)),
@@ -5114,6 +5643,74 @@ class DatabaseRepository:
                 updated_at=now,
             )
         return result
+
+    def resume_auto_trigger_cycle_day_scope(self, *, rule_id: int, user_id: int,
+                                            subscription_id: int, stat_date: str) -> dict:
+        """把旧整规则/路由的过关收工转为每方案收工，只恢复明确选中的方案。
+
+        仅迁移 cycle_* 收工门禁，日风控/人工风控不会通过此方法解除。
+        历史run、下注账本、启动次数保持原值；新轮由之后的条件触发新claim。
+        """
+        cycle_reasons = {'cycle_target_hit', 'cycle_balance_depleted'}
+        with self.transaction() as unit:
+            raw_rule, _ = unit._validate_auto_cycle_owner(rule_id=rule_id,subscription_id=subscription_id,user_id=user_id)
+            rule_policy = _safe_json_loads(raw_rule.get('cycle_policy_json'))
+            if rule_policy.get('mode') != 'rule':
+                raise ValueError('请先将过关轮次设置改为由本规则控制')
+            rule_day = unit.get_auto_trigger_rule_daily_stat(rule_id=rule_id,user_id=user_id,stat_date=stat_date)
+            rule_stopped = rule_day.get('status') == 'stopped'
+            if rule_stopped and rule_day.get('stopped_reason') not in cycle_reasons:
+                raise ValueError('规则当日风控尚未解除')
+            selected_session = unit.get_auto_trigger_cycle_session(rule_id=rule_id,subscription_id=subscription_id,user_id=user_id) or {}
+            route_ids = set(selected_session.get('participating_route_ids') or [])
+            with unit._connect() as conn:
+                route_days = [dict(row) for row in conn.execute('''SELECT * FROM auto_trigger_route_daily_stats
+                    WHERE rule_id=? AND user_id=? AND stat_date=? AND status='stopped' ''',
+                    (int(rule_id),int(user_id),str(stat_date)))]
+                if any(row['route_id'] in route_ids and row['stopped_reason'] not in cycle_reasons for row in route_days):
+                    raise ValueError('投递路由当日风控尚未解除')
+                clearing_routes = {int(row['route_id']) for row in route_days
+                    if row['stopped_reason'] in cycle_reasons and (rule_stopped or int(row['route_id']) in route_ids)}
+                has_global_cycle_stop = rule_stopped or bool(clearing_routes)
+                protected = []
+                if has_global_cycle_stop:
+                    # 旧route可被多个方案引用，先冻结所有同rule受影响的过关归属；
+                    # 即使它尚未建session，也不能因为另一方案显式恢复而突然可启动。
+                    subs = conn.execute('SELECT * FROM user_subscriptions WHERE user_id=?',(int(user_id),)).fetchall()
+                    selected_ids = set(int(value) for value in _safe_json_loads_list(raw_rule.get('subscription_ids_json')))
+                    for raw_sub in subs:
+                        sub_id = int(raw_sub['id'])
+                        if sub_id == int(subscription_id):
+                            continue
+                        other = unit.get_auto_trigger_cycle_session(rule_id=rule_id,subscription_id=sub_id,user_id=user_id) or {}
+                        if raw_rule.get('scope_mode') == 'selected_subscriptions' and sub_id not in selected_ids and not other:
+                            continue
+                        strategy = upgrade_subscription_strategy(_safe_json_loads(raw_sub['strategy_json']))
+                        if (strategy.get('staking_policy') or {}).get('mode') != 'win_streak_roll' and not other:
+                            continue
+                        if other.get('status') == 'blocked':
+                            continue
+                        unit.upsert_auto_trigger_cycle_session(rule_id=rule_id,subscription_id=sub_id,user_id=user_id,values={
+                            'status':'day_closed','start_stat_date':str(stat_date),
+                            'stop_reason':str(rule_day.get('stopped_reason') or 'cycle_day_closed'),
+                        })
+                        protected.append(sub_id)
+                    if rule_stopped:
+                        conn.execute('''UPDATE auto_trigger_rule_daily_stats SET status='active',stopped_reason='',stopped_at=NULL,updated_at=?
+                            WHERE rule_id=? AND user_id=? AND stat_date=? AND status='stopped'
+                              AND stopped_reason IN ('cycle_target_hit','cycle_balance_depleted')''',
+                            (_utc_now_iso(),int(rule_id),int(user_id),str(stat_date)))
+                    if clearing_routes:
+                        placeholders = ','.join('?' for _ in clearing_routes)
+                        conn.execute('''UPDATE auto_trigger_route_daily_stats SET status='active',stopped_reason='',stopped_at=NULL,updated_at=?
+                            WHERE rule_id=? AND user_id=? AND stat_date=? AND route_id IN (%s)
+                              AND stopped_reason IN ('cycle_target_hit','cycle_balance_depleted')''' % placeholders,
+                            (_utc_now_iso(),int(rule_id),int(user_id),str(stat_date),*sorted(clearing_routes)))
+                unit.upsert_auto_trigger_cycle_session(rule_id=rule_id,subscription_id=subscription_id,user_id=user_id,values={
+                    'status':'waiting','active_run_id':None,'stop_reason':'',
+                })
+            return {'resumed': True, 'protected_subscription_ids': protected,
+                    'cleared_route_ids': sorted(clearing_routes), 'rule_day_cleared': rule_stopped}
 
     def resume_auto_trigger_rule_day(
         self,
@@ -6117,6 +6714,10 @@ class DatabaseRepository:
                 params,
             )
             for table_name in (
+                "auto_trigger_cycle_states",
+                "auto_trigger_cycle_sessions",
+                "auto_trigger_cycle_daily_starts",
+                "subscription_cycle_states",
                 "auto_trigger_route_subscription_financial_state",
                 "auto_trigger_route_progression_state",
                 "auto_trigger_route_subscription_runtime_runs",
@@ -6135,6 +6736,7 @@ class DatabaseRepository:
                 "DELETE FROM subscription_progression_events WHERE subscription_id = ? AND user_id = ?",
                 params,
             )
+            conn.execute("DELETE FROM cycle_state_migrations WHERE subscription_id = ?", (int(subscription_id),))
             cursor = conn.execute(
                 "DELETE FROM user_subscriptions WHERE id = ? AND user_id = ?",
                 params,
@@ -6415,6 +7017,13 @@ class DatabaseRepository:
         ).fetchone()
         if row:
             runtime = dict(row)
+            if row["started_signal_id"] is None and signal_id is not None:
+                conn.execute(
+                    "UPDATE auto_trigger_route_subscription_runtime_runs SET started_signal_id = ?, started_issue_no = ? WHERE id = ?",
+                    (int(signal_id), str(issue_no or ""), int(row["id"])),
+                )
+                runtime["started_signal_id"] = int(signal_id)
+                runtime["started_issue_no"] = str(issue_no or "")
             if row["auto_trigger_rule_run_id"] is None and rule_run_id is not None:
                 conn.execute(
                     "UPDATE auto_trigger_route_subscription_runtime_runs SET auto_trigger_rule_run_id = ? WHERE id = ?",
@@ -7541,8 +8150,8 @@ class DatabaseRepository:
                     win_streak, target_streak, status, stop_reason, periods,
                     pending_plan_json, policy_json,
                     cycles_today, day_closed, day_close_scope, last_cycle_stop_reason,
-                    updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    updated_at, owner_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
                 ON CONFLICT(subscription_id) DO UPDATE SET
                     user_id=excluded.user_id,
                     stat_date=excluded.stat_date,
@@ -7560,7 +8169,8 @@ class DatabaseRepository:
                     day_closed=excluded.day_closed,
                     day_close_scope=excluded.day_close_scope,
                     last_cycle_stop_reason=excluded.last_cycle_stop_reason,
-                    updated_at=excluded.updated_at
+                    updated_at=excluded.updated_at,
+                    owner_version=1
                 """,
                 (
                     int(subscription_id),
@@ -7586,15 +8196,19 @@ class DatabaseRepository:
         return self.get_subscription_cycle_state(subscription_id=int(subscription_id)) or {}
 
     def list_pending_win_streak_cycles(self, user_id: Optional[int] = None) -> list[Dict[str, Any]]:
-        query = "SELECT * FROM subscription_cycle_states WHERE pending_plan_json != ''"
-        params: tuple = ()
-        if user_id is not None:
-            query += " AND user_id = ?"
-            params = (int(user_id),)
-        rows = self._fetch_all(query, params)
         states = []
-        for row in rows:
-            states.append(self._normalize_cycle_state_row({key: row[key] for key in row.keys()}))
+        for table, scope in (("subscription_cycle_states", "manual"), ("auto_trigger_cycle_states", "auto")):
+            query = "SELECT * FROM %s WHERE pending_plan_json != ''" % table
+            params: tuple = ()
+            if user_id is not None:
+                query += " AND user_id = ?"
+                params = (int(user_id),)
+            for row in self._fetch_all(query, params):
+                state = self._normalize_cycle_state_row(row)
+                state["scope"] = scope
+                if scope == "manual" and str(state.get("stop_reason") or "").startswith("migration_"):
+                    state["scope"] = "blocked"
+                states.append(state)
         return states
 
     def create_progression_event_record(
@@ -9391,6 +10005,17 @@ class DatabaseRepository:
         items: list[Dict[str, Any]] = []
         for row in rows:
             route = self._serialize_auto_trigger_rule_route_row(row)
+            starter = row.get("runtime_started_signal_id")
+            if starter is None:
+                # 只开轮尚无首单的会话，允许之后的新一期进入重试扫描；不把启动时
+                # 已开奖的旧信号补成首单。真实started_signal_id在首次建leg时再写入。
+                session = self.get_auto_trigger_cycle_session(
+                    rule_id=int(route["rule_id"]), subscription_id=int(row["subscription_id"]), user_id=int(route["user_id"]),
+                ) or {}
+                if session.get("status") == "running" and int(session.get("active_run_id") or 0) == int(row.get("rule_run_id") or 0):
+                    if self._cycle_issue_not_newer(row.get("issue_no"), session.get("last_start_issue")):
+                        continue
+                    starter = int(row["signal_id"])
             items.append(
                 {
                     "signal_id": int(row["signal_id"]),
@@ -9406,7 +10031,7 @@ class DatabaseRepository:
                     "strategy_json": _safe_json_loads(row.get("strategy_json")),
                     "route": route,
                     "runtime_run_id": int(row["runtime_run_id"]),
-                    "runtime_started_signal_id": row["runtime_started_signal_id"],
+                    "runtime_started_signal_id": starter,
                     "runtime_play_filter": _safe_json_loads(row.get("runtime_play_filter_json")),
                     "started_signal_bet_type": str(row.get("started_signal_bet_type") or ""),
                     "rule_run_id": int(row["rule_run_id"]) if row.get("rule_run_id") is not None else None,
@@ -9430,7 +10055,7 @@ class DatabaseRepository:
             WHERE run.status = 'active'
               AND us.status IN ('active', 'standby') AND r.status = 'active'
               AND s.status = 'ready' AND s.lottery_type = 'pc28'
-              AND s.created_at >= ? AND s.id >= run.started_signal_id
+              AND s.created_at >= ? AND s.id >= COALESCE(run.started_signal_id, 0)
               AND NOT EXISTS (
                   SELECT 1 FROM normalized_signals newer
                   WHERE newer.source_id = s.source_id AND newer.bet_type = s.bet_type

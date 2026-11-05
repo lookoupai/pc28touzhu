@@ -121,6 +121,12 @@ class DrawStreakTriggerTests(unittest.TestCase):
     def run_cycle(self, **kwargs):
         return run_auto_trigger_cycle(self.repo, user_id=self.user_id, now=self.now, draw_clock=self.clock, fetcher=self.prediction_fetcher, **kwargs)
 
+    def auto_cycle(self):
+        jobs = self.repo.list_execution_jobs(user_id=self.user_id)
+        route_id = jobs[0]["auto_trigger_route_id"]
+        route = self.repo.get_auto_trigger_rule_route(route_id)
+        return self.repo.get_auto_trigger_cycle_state(rule_id=route["rule_id"], subscription_id=self.subscription["id"], user_id=self.user_id, route_id=route_id)
+
     def test_draw_trigger_starts_chosen_structure_not_observed_result(self):
         self.signal()
         self.create_rule()
@@ -129,7 +135,7 @@ class DrawStreakTriggerTests(unittest.TestCase):
         self.prediction_fetcher.assert_not_called()
         jobs = self.repo.list_execution_jobs(user_id=self.user_id)
         self.assertEqual(len(jobs), 2)
-        plan = self.repo.get_subscription_cycle_state(subscription_id=self.subscription["id"])["pending_plan"]
+        plan = self.auto_cycle()["pending_plan"]
         self.assertEqual(plan["structure"], "B")
         self.assertEqual(plan["stake_total"], 100)
         self.assertEqual({job["stake_plan"]["leg"]: job["stake_plan"]["amount"] for job in jobs}, {"main": 70, "aux": 30})
@@ -146,7 +152,7 @@ class DrawStreakTriggerTests(unittest.TestCase):
         result = self.run_cycle()
         self.assertEqual(result["summary"]["triggered_count"], 1)
         self.assertEqual(len(self.repo.list_execution_jobs(user_id=self.user_id)), 2)
-        self.assertEqual(self.repo.get_subscription_cycle_state(subscription_id=self.subscription["id"])["pending_plan"]["structure"], "B")
+        self.assertEqual(self.auto_cycle()["pending_plan"]["structure"], "B")
         again = self.run_cycle()
         self.assertEqual(again["summary"]["triggered_count"], 0)
         self.assertEqual(len(self.repo.list_execution_jobs(user_id=self.user_id)), 2)
@@ -156,7 +162,7 @@ class DrawStreakTriggerTests(unittest.TestCase):
         self.draw_fetch.return_value["items"] = draws(9, 11, 16)
         self.create_rule(conditions=[condition("小单")])
         self.assertEqual(self.run_cycle()["summary"]["triggered_count"], 1)
-        plan = self.repo.get_subscription_cycle_state(subscription_id=self.subscription["id"])["pending_plan"]
+        plan = self.auto_cycle()["pending_plan"]
         self.assertEqual(plan["structure"], "B")
 
     def test_one_period_and_interrupted_streak_do_not_start(self):
@@ -185,7 +191,7 @@ class DrawStreakTriggerTests(unittest.TestCase):
         self.repo.update_subscription_status(subscription_id=self.subscription["id"], user_id=self.user_id, status="standby")
         second = self.run_cycle()
         self.assertEqual(second["summary"]["triggered_count"], 0)
-        self.assertEqual(second["rules"][0]["events"][0]["reason"], "draw_issue_already_triggered")
+        self.assertEqual(second["rules"][0]["events"][0]["reason"], "cycle_running")
 
     def test_stale_clock_and_old_draw_history_do_not_start(self):
         self.create_rule(dispatch=False)

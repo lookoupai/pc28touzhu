@@ -910,6 +910,18 @@ class PlatformApiApplication:
             return _json_response(start_response, 200, payload)
 
         auto_trigger_rule_prefix = "/api/platform/auto-trigger-rules/"
+        if path.startswith(auto_trigger_rule_prefix) and path.endswith("/resume-cycle"):
+            if method != "POST":
+                return _json_response(start_response, 405, {"error": "method not allowed"})
+            from pc28touzhu.services.auto_trigger_cycle_service import resume_rule_cycle
+            body = _read_json_body(environ)
+            raw_subscription_id = body.get("subscription_id")
+            if isinstance(raw_subscription_id, bool) or not isinstance(raw_subscription_id, int) or raw_subscription_id < 1:
+                raise ValueError("subscription_id 必须为正整数")
+            payload = resume_rule_cycle(self.repository,
+                rule_id=int(path[len(auto_trigger_rule_prefix):-len("/resume-cycle")]),
+                user_id=int(current_user["id"]), subscription_id=raw_subscription_id)
+            return _json_response(start_response, 200, payload)
         if path.startswith(auto_trigger_rule_prefix) and path.endswith("/status"):
             if method != "POST":
                 return _json_response(start_response, 405, {"error": "method not allowed"})

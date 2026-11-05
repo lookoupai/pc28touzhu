@@ -410,6 +410,10 @@ h3 {
     gap: 8px;
 }
 
+.field[hidden] {
+    display: none;
+}
+
 .field.wide {
     grid-column: 1 / -1;
 }
@@ -565,6 +569,88 @@ select[multiple].text-input {
 
 .condition-row .field[hidden] {
     display: none;
+}
+
+.cycle-rule-field[hidden],
+.cycle-policy-error[hidden] {
+    display: none;
+}
+
+.cycle-policy-grid .meta-line {
+    margin: 0;
+    color: var(--text);
+    font-weight: 400;
+}
+
+.cycle-policy-grid > .wide {
+    grid-column: 1 / -1;
+}
+
+.cycle-policy-error {
+    color: var(--danger);
+}
+
+.cycle-runtime {
+    margin-top: 14px;
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+}
+
+.cycle-runtime summary {
+    min-height: 44px;
+    padding: 10px 0;
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.cycle-runtime summary:focus-visible,
+.cycle-runtime-card:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+}
+
+.cycle-runtime-card {
+    margin-top: 10px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+    overflow-wrap: anywhere;
+}
+
+.cycle-runtime-head,
+.cycle-runtime-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.cycle-state {
+    color: var(--text);
+    font-size: 13px;
+}
+
+.cycle-route-states {
+    padding: 0;
+    list-style: none;
+}
+
+.cycle-route-states li + li {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+}
+
+.cycle-runtime .tiny-btn,
+.cycle-runtime .ghost-btn {
+    min-height: 44px;
+}
+
+.cycle-runtime button:disabled {
+    cursor: not-allowed;
+    color: var(--muted);
+    background: var(--surface-subtle);
 }
 
 .condition-row[data-condition-type="draw_streak"] {

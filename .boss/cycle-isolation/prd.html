@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>产品需求文档 - cycle-isolation</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f7f4;
+      --paper: #ffffff;
+      --ink: #202427;
+      --muted: #687076;
+      --line: #d7dadd;
+      --accent: #245c73;
+      --soft: #eef5f7;
+      --code: #182026;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.65;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+      gap: 28px;
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+    aside {
+      position: sticky;
+      top: 20px;
+      align-self: start;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    main {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 8px;
+      padding: 32px;
+      min-width: 0;
+    }
+    h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 1.4em 0 0.55em; }
+    h1 { margin-top: 0; font-size: 2rem; }
+    h2 { border-bottom: 1px solid var(--line); padding-bottom: 0.3em; }
+    p, ul, ol, table, pre, blockquote { margin: 0 0 1em; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      border-radius: 4px;
+      background: var(--soft);
+      padding: 0.1em 0.35em;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      overflow-x: auto;
+      border-radius: 8px;
+      background: var(--code);
+      color: #f3f7f8;
+      padding: 16px;
+    }
+    pre code { background: transparent; color: inherit; padding: 0; }
+    table { width: 100%; border-collapse: collapse; overflow-x: auto; display: block; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: var(--soft); }
+    blockquote { border-left: 4px solid var(--accent); margin-left: 0; padding: 8px 14px; color: var(--muted); background: var(--soft); }
+    .meta { color: var(--muted); font-size: 0.92rem; margin-bottom: 24px; }
+    .summary { border: 1px solid var(--line); background: var(--soft); border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+    .toc-title { font-weight: 700; margin-bottom: 8px; }
+    .toc ul, .summary ul { padding-left: 20px; }
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; }
+      aside { position: static; }
+      main { padding: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <div class="toc-title">目录</div>
+      <ul><li class="toc-level-2"><a href="#摘要">摘要</a></li><li class="toc-level-1"><a href="#产品需求文档">产品需求文档</a></li><li class="toc-level-2"><a href="#文档信息">文档信息</a></li><li class="toc-level-2"><a href="#1-概述">1. 概述</a></li><li class="toc-level-3"><a href="#1-1-背景">1.1 背景</a></li><li class="toc-level-3"><a href="#1-2-目标和成功指标">1.2 目标和成功指标</a></li><li class="toc-level-3"><a href="#1-3-需求分层">1.3 需求分层</a></li><li class="toc-level-2"><a href="#2-用户画像与核心流程">2. 用户画像与核心流程</a></li><li class="toc-level-2"><a href="#3-功能需求与验收">3. 功能需求与验收</a></li><li class="toc-level-3"><a href="#3-1-配置和计数语义">3.1 配置和计数语义</a></li><li class="toc-level-2"><a href="#4-异常-边界与非功能需求">4. 异常、边界与非功能需求</a></li><li class="toc-level-2"><a href="#5-用户故事">5. 用户故事</a></li><li class="toc-level-2"><a href="#6-范围定义">6. 范围定义</a></li><li class="toc-level-3"><a href="#6-1-范围内">6.1 范围内</a></li><li class="toc-level-3"><a href="#6-2-不做什么">6.2 不做什么</a></li><li class="toc-level-2"><a href="#7-风险与依赖">7. 风险与依赖</a></li><li class="toc-level-2"><a href="#8-假设与已定事项">8. 假设与已定事项</a></li><li class="toc-level-2"><a href="#变更记录">变更记录</a></li></ul>
+    </aside>
+    <main>
+      <h1>产品需求文档</h1>
+      <div class="meta">
+        <div>Feature: cycle-isolation</div>
+        <div>Source: prd.md</div>
+        <div>Generated: 2026-11-04T16:49:39.759Z</div>
+      </div>
+      <section class="summary">
+        <h2>摘要</h2>
+        <ul><li>目标：手动跟单与各自动规则独立保存过关进度、滚仓金额、每日启动次数和收工状态，共用现有投注与结算算法。</li><li>自动规则新增每天最多启动几轮、达标后处理、爆仓后处理；结束处理支持等待条件、直接续开、当天收工。</li><li>手动跟单保留既有行为；自动新轮默认继承投注参数，跨轮调度由规则控制。</li><li>存量记录保留账本、在途单及停止状态；升级、普通保存、手动重置或其他规则活动不得隐式解封或补仓。</li><li>验收覆盖同方案手动/自动并存、规则间隔离、重复轮询、跨日、重置范围和派单结算全链路。</li></ul>
+      </section>
+      <h2 id="摘要">摘要</h2>
+<ul><li>目标：手动跟单与各自动规则独立保存过关进度、滚仓金额、每日启动次数和收工状态，共用现有投注与结算算法。</li><li>自动规则新增每天最多启动几轮、达标后处理、爆仓后处理；结束处理支持等待条件、直接续开、当天收工。</li><li>手动跟单保留既有行为；自动新轮默认继承投注参数，跨轮调度由规则控制。</li><li>存量记录保留账本、在途单及停止状态；升级、普通保存、手动重置或其他规则活动不得隐式解封或补仓。</li><li>验收覆盖同方案手动/自动并存、规则间隔离、重复轮询、跨日、重置范围和派单结算全链路。</li></ul>
+<h1 id="产品需求文档">产品需求文档</h1>
+<h2 id="文档信息">文档信息</h2>
+<ul><li>功能：cycle-isolation / 手动与自动过关运行隔离</li><li>版本：1.0</li><li>日期：2026-11-04</li><li>作者：PM Agent</li><li>状态：已按用户授权收敛，进入架构和实施</li></ul>
+<h2 id="1-概述">1. 概述</h2>
+<h3 id="1-1-背景">1.1 背景</h3>
+<p>用户原话：“我们之前就将手动跟单方案和自动触发规则的计算都分开了，也是考虑到手动和自动的问题，所以设计功能时是不是也都需要考虑两边分别都支持。”随后明确授权设计并开工。</p>
+<p>现状把过关日轮数、达标/爆仓处理和运行状态主要放在跟单策略，自动规则只有开始条件与冷却。用户不能完整配置“结束后回到待命，再次满足条件才开下一轮，每天最多 N 次”。运行归属也没有像盈亏账本一样完全隔离。</p>
+<h3 id="1-2-目标和成功指标">1.2 目标和成功指标</h3>
+<ul><li>同方案手动运行和至少两条自动规则分别结算、结束、停止、重置时，其余归属的金额、关数、日次数和停止标记不变。</li><li>每日上限 N 生效于所有自动新开轮路径；重复检查、并发检查和重启不会多计或漏计启动次数。</li><li>等待条件模式无新证据时不续开；直接续开免重新匹配条件及再次触发冷却，但仍遵守风控、次数和信号可投窗口。</li><li>升级前后历史净盈亏、待结算金额及任务数量一致，已收工状态保持停止。</li></ul>
+<h3 id="1-3-需求分层">1.3 需求分层</h3>
+<table><thead><tr><th>层级</th><th>内容</th><th>来源或推导依据</th></tr></thead><tbody><tr><td>显性</td><td>手动与自动分别支持过关管理，自动规则控制每日启动次数</td><td>用户追问功能归属并明确要求两边都支持</td></tr><tr><td>隐性</td><td>不同自动规则互不影响；重置范围明确</td><td>同方案可被多条规则引用，分开盈亏应延伸到分开运行</td></tr><tr><td>潜在</td><td>迁移在途状态、重复启动和跨日额度必须准确</td><td>现网已有实盘轮次，升级时可能有未结单或收工状态</td></tr><tr><td>惊喜</td><td>本期不扩展额外功能</td><td>聚焦运行正确性，不增加无关策略和统计</td></tr></tbody></table>
+<h2 id="2-用户画像与核心流程">2. 用户画像与核心流程</h2>
+<p>用户是现有平台操作者，已经会配置来源、过关结构与自动条件，期望在熟悉的入口分别控制手动和自动运行，无需理解内部存储方式。</p>
+<p>自动等待条件流程：条件满足 → 有可投注新信号且额度/冷却/风控通过 → 启动一轮 → 达标或本轮可滚金额耗尽 → 全部腿结算完成 → 返回等待条件或当天收工。</p>
+<p>自动续开流程：本轮结束 → 待续开 → 额度/风控和信号窗口通过 → 建立新轮。“直接续开”表示免重新匹配开始条件和再次等待触发冷却，不表示绕过日限制或立刻发送不可投信号。冷却期数仅约束再次通过条件启动。</p>
+<p>手动流程沿用现有手动开始、目标关数、达标/爆仓处理及收工行为，不再充当自动规则的共享状态。</p>
+<h2 id="3-功能需求与验收">3. 功能需求与验收</h2>
+<p>P0 是缺失就不能交付本目标的功能，优先价值高，允许必要的跨模块成本；P1 是使设置可解释的界面增强，复用页面即可完成。</p>
+<table><thead><tr><th>ID</th><th>需求与层级</th><th>优先级及依据</th><th>Given-When-Then 验收标准</th></tr></thead><tbody><tr><td>FR-001</td><td>手动与自动状态隔离；显性</td><td>P0：直接解决用户问题</td><td>Given 同一方案有手动和自动运行，When 任一方结算、达标或爆仓，Then 只改变本归属的关数、金额、次数和停止状态，另一方按自己的状态继续。</td></tr><tr><td>FR-002</td><td>不同自动规则隔离；隐性</td><td>P0：复用方案不能串状态</td><td>Given A、B 两条规则引用同一方案，When A 结束、冷却、收工或重置，Then B 的状态和额度不变；相同投递目标上的原有冲突保护仍有效。</td></tr><tr><td>FR-003</td><td>规则独立配置跨轮行为；显性</td><td>P0：表达每日多次条件启动</td><td>Given 新建过关自动规则，When 保存每日 3 轮、达标后等待条件、爆仓后当天收工，Then 重载一致并按此执行，手动策略的结束动作不覆盖自动配置。</td></tr><tr><td>FR-004</td><td>自动继承投注参数；显性</td><td>P0：保留结构自由组合</td><td>Given 方案为单＋大双、起始 10、目标 3 关，When 自动条件触发，Then 使用这些投注参数；观察大双或小单均不改变投注结构。修改方案不重写已派任务和在途轮次参数。</td></tr><tr><td>FR-005</td><td>结束后等待条件；显性</td><td>P0：核心入场场景</td><td>Given 结束动作是等待条件且剩余额度大于 0，When 本轮全部结算后无新的已开奖期满足条件，Then 不开新轮；When 完成期之后的新已开奖证据满足条件且其他门槛通过，Then 只新开一次。已消费的触发期不得复用。</td></tr><tr><td>FR-006</td><td>直接续开；显性</td><td>P0：保留用户可选控制</td><td>Given 结束动作是直接续开，When 全部腿终态且额度/风控/信号窗口允许，Then 按每轮起始参数建立新轮，免重新匹配开始条件和再次等待触发冷却；无可投信号时等待，不提前记作已派发。</td></tr><tr><td>FR-007</td><td>每日启动额度；显性</td><td>P0：防轮询及续开绕过上限</td><td>Given 同规则同方案每天上限 N，When 任一路径新开自动轮，Then 共用同一额度；两腿、多个路由不重复计次。第 N 轮可正常完成，之后不再新增；无可投信号或未匹配条件不耗次数。</td></tr><tr><td>FR-008</td><td>冷却及日风控继续有效；隐性</td><td>P0：新模式不得绕过已有约束</td><td>Given 冷却未满，When 等待条件模式尝试再次触发，Then 被阻止且原因可见；Given 日止盈止损生效或规则停用，When 任一模式尝试启动，Then 均被阻止。直接续开免触发冷却，本轮正常续投不重复扣次数。</td></tr><tr><td>FR-009</td><td>手动行为保留；显性</td><td>P0：用户明确要求两边支持</td><td>Given 手动方案选择收工、重开或达标继续滚，When 到达对应边界，Then 按原设置处理；手动日轮数只统计手动运行，不占用自动额度。</td></tr><tr><td>FR-010</td><td>停止/重置/恢复范围；隐性</td><td>P0：避免一方意外解封另一方</td><td>Given 手动和自动均有状态，When 在手动入口重置或开始新一轮，Then 自动的在途计划、日额度、关数和收工均不变；自动入口也只影响明确选定规则。单纯重置盈亏不解封收工状态。</td></tr><tr><td>FR-011</td><td>跨日与在途轮次；潜在</td><td>P0：午夜不得重复开轮</td><td>Given 午夜前启动的一轮尚未结束，When 日期变化，Then 保持旧轮金额、关数、待结算计划直到终态，不另开重叠轮；启动次数归启动日，之后的新轮用新日额度，盈亏仍按原结算日期统计。</td></tr><tr><td>FR-012</td><td>存量兼容和迁移；潜在</td><td>P0：现网记录不能丢失或误恢复</td><td>Given 旧规则没有新字段，或旧状态有在途单/当天收工，When 升级并加载，Then 保留原调度行为及可确认的运行归属，账本不变，无重复任务、自动补仓、自动解封；归属不明则阻止受影响状态启动并提示，不复制为多份可用资金。</td></tr><tr><td>FR-013</td><td>状态展示和保存校验；隐性</td><td>P1：避免把等待误认为故障</td><td>Given 存在手动与自动运行，When 查看各自页面，Then 展示本方关数、今日已用/上限、运行/等待条件/待续开/当天收工及原因；非法次数/动作拒绝保存，旧配置回显不改变行为。</td></tr></tbody></table>
+<h3 id="3-1-配置和计数语义">3.1 配置和计数语义</h3>
+<ul><li>每日最多启动次数为正整数，包含当天第一轮，按“规则＋关联方案”分别统计；不同关联方案不相互抢占次数。</li><li>达标后、爆仓后分别支持等待条件、直接续开、当天收工。</li><li>新规则默认每日 1 轮、两种结束动作均为等待条件；用尽当日额度后不再启动。设置为多轮后才会在同日再次等待或续开。</li><li>旧规则通过明确兼容方式保留升级前行为；打开旧规则、改名或保存普通字段不能隐式使用新默认。</li><li>过几关、起始金额、结构、滚仓方式归投注方案；自动新轮继承，运行中参数与已发送任务保留本轮快照。</li><li>当天收工、日风控与停用优先于续开。新轮重置本轮进度和起始注，不清零规则当日累计盈亏。触发冷却仅用于再次等待条件的启动；选择直接续开后不重新等待该冷却。</li><li>只有显式选择直接续开或条件重新满足，且所有门槛允许时，才可按起始参数开始下一轮。升级与缺省配置不隐式补仓。</li><li>自动状态与配置缺失时不能静默读取手动运行进度充数；兼容展示须明确其归属与行为。</li></ul>
+<h2 id="4-异常-边界与非功能需求">4. 异常、边界与非功能需求</h2>
+<table><thead><tr><th>场景</th><th>预期行为</th></tr></thead><tbody><tr><td>同期开奖被重复/并发检查</td><td>同归属只启动一次，轮次数和事件一致。</td></tr><tr><td>一腿送达、另一腿失败或过期</td><td>沿用原结算口径，全部腿终态前不重开，不混入其他归属的腿。</td></tr><tr><td>同规则多个路由</td><td>启动额度按一轮扣一次，继承同一结构；不新增路由独立结构配置。</td></tr><tr><td>触发命中但信号已开奖/封盘</td><td>保持等待，不提前记成已启动/已派发。</td></tr><tr><td>达标后次数用尽或日风控命中</td><td>不续开，显示具体原因。</td></tr><tr><td>调低上限到已用次数以下</td><td>只阻止新启动，不中断当前轮。调高上限不自动解除已有日收工/风控停止。</td></tr><tr><td>午夜旧轮未结且新条件满足</td><td>先完成旧轮，随后评估新日额度；无重叠开轮。</td></tr><tr><td>手动重置有在途单</td><td>沿用在途保护，不清除自动归属的待结算计划。</td></tr><tr><td>迁移归属不明</td><td>保留原证据并阻止受影响状态自动开始，不猜测、复制或丢弃。</td></tr><tr><td>越权访问/修改</td><td>维持既有用户归属校验，不暴露或改变他人运行状态。</td></tr></tbody></table>
+<p>本次不虚构用户规模或延迟指标。所有金额沿用现有精度、整数下注、尾差、退本与赔率口径。回归验证在隔离数据库执行，不以真实投注消息验证功能。不引入新框架或运行依赖，保持现有 UI 交互、认证和 API 风格。</p>
+<h2 id="5-用户故事">5. 用户故事</h2>
+<ul><li>US-001：作为自动规则用户，我希望一轮结束后重新等待连续两期大双，最多每天 3 次，以便控制每次入场。验收对应 FR-003/005/007/008。</li><li>US-002：作为同时手动和自动运行的用户，我希望手动收工不影响自动，以便运行归属与盈亏归属一致。验收对应 FR-001/002/009/010。</li><li>US-003：作为现有用户，我希望升级后未结单延续原轮、已收工规则保持停止，以便升级本身不产生投注。验收对应 FR-011/012。</li></ul>
+<h2 id="6-范围定义">6. 范围定义</h2>
+<h3 id="6-1-范围内">6.1 范围内</h3>
+<p>运行隔离、规则跨轮配置与日额度、手动兼容、明确归属的重置/停止/恢复、迁移保护、页面状态及回归验证。存储和 API 契约由架构文档制定。</p>
+<h3 id="6-2-不做什么">6.2 不做什么</h3>
+<ul><li>不同路由选择不同过关结构：用户明确推迟。</li><li>不增加预测算法、开奖条件、赔率或投注品种。</li><li>不重算或改写已入账盈亏，不将平台策略余额解释为外部账户实际余额。</li><li>不修改现网规则轮数，不解除现网收工，不自动补仓或发 Telegram 消息。</li><li>不新增认证、框架、数据库服务或部署设施。</li></ul>
+<h2 id="7-风险与依赖">7. 风险与依赖</h2>
+<table><thead><tr><th>风险</th><th>触发条件与影响</th><th>应对</th></tr></thead><tbody><tr><td>老状态只识别方案</td><td>多方共用过方案导致迁移归属不明</td><td>用原任务/轮次证据确认；歧义保护，FR-012。</td></tr><tr><td>续开绕过统一入口</td><td>日上限或日风控失效</td><td>所有自动新轮遵守统一日额度与风控；条件重触发额外检查冷却，FR-006/007/008。</td></tr><tr><td>手动重置兼带自动恢复</td><td>自动意外解封</td><td>范围明确，测试另一方原值不变，FR-010。</td></tr><tr><td>午夜重置在途状态</td><td>丢失关数、金额或重复派单</td><td>原轮保持到终态，FR-011。</td></tr><tr><td>UI 新默认覆盖旧值</td><td>旧规则普通保存改变行为</td><td>兼容模式明确回显，FR-012/013。</td></tr></tbody></table>
+<p>依赖为现有过关算法、来源信号、开奖结算、手动/自动账本及权限校验。架构、前后端和 QA 按上述验收对齐。</p>
+<h2 id="8-假设与已定事项">8. 假设与已定事项</h2>
+<p>业务信息已足以实施，无需重复确认开工。默认值、日额度作用域、结束动作按本 PRD 固定；架构发现不能满足的兼容冲突应报告具体原因，不能静默缩减隔离范围。真实部署与迁移由主任务发布决定，不以文档或模拟测试替代部署验证。</p>
+<h2 id="变更记录">变更记录</h2>
+<table><thead><tr><th>版本</th><th>日期</th><th>作者</th><th>变更</th></tr></thead><tbody><tr><td>1.0</td><td>2026-11-04</td><td>PM Agent</td><td>将手动/自动分别控制要求收敛为运行归属、跨轮调度和可执行验收。</td></tr></tbody></table>
+    </main>
+  </div>
+</body>
+</html>

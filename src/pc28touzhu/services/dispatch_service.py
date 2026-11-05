@@ -5,6 +5,7 @@ from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
+from pc28touzhu.domain.auto_trigger_cycle import auto_roll_policy
 from pc28touzhu.domain.pc28_play_filter import strategy_matches_signal
 from pc28touzhu.domain.pc28_issue_window import evaluate_pc28_issue_dispatch_window
 from pc28touzhu.domain.settlement_rules import build_settlement_snapshot
@@ -136,6 +137,10 @@ def _resolve_auto_trigger_context(repository: Any, candidate: Dict[str, Any], ex
                 return {**context, "stopped": True, "stopped_reason": run.get("stop_reason") or "rule_run_stopped"}
     if not context or int(context.get("rule_id") or 0) <= 0 or not str(context.get("stat_date") or "").strip():
         return None
+    if hasattr(repository, "get_auto_trigger_rule"):
+        owning_rule = repository.get_auto_trigger_rule(int(context["rule_id"]))
+        if not owning_rule or owning_rule.get("status") != "active":
+            return {**context, "stopped": True, "stopped_reason": "rule_not_active"}
     stat = repository.get_auto_trigger_rule_daily_stat(
         rule_id=int(context["rule_id"]),
         user_id=int(candidate["user_id"]),
@@ -428,6 +433,11 @@ def _dispatch_signal_for_auto_trigger_routes(
         ):
             _skip_route(route, "rule_day_stopped", stat_date=route_stat_date or stat_date)
             continue
+        if auto_trigger_context.get("rule_id") and route_stat_date != _shanghai_today() and _auto_trigger_rule_day_is_stopped(
+            repository, rule_id=int(auto_trigger_context["rule_id"]), user_id=user_id, stat_date=_shanghai_today(),
+        ):
+            _skip_route(route, "rule_day_stopped", stat_date=_shanghai_today())
+            continue
         if str(route.get("target_status") or "active") != "active":
             _skip_route(route, "target_not_active", target_status=str(route.get("target_status") or ""))
             continue
@@ -468,6 +478,11 @@ def _dispatch_signal_for_auto_trigger_routes(
                 auto_trigger_context,
             )
         )
+        if hasattr(repository, "get_auto_trigger_cycle_state"):
+            roll_state = repository.get_auto_trigger_cycle_state(rule_id=int(auto_trigger_context["rule_id"]),
+                subscription_id=int(subscription_id), user_id=user_id, route_id=route_id)
+            if roll_state and int(roll_state.get("rule_run_id") or 0) == int(route_rule_run_id or 0):
+                strategy = dict((roll_state.get("policy") or {}).get("_strategy_snapshot") or strategy)
         # 玩法不一致时按路由固定玩法在同期号内换选信号：触发选单取的是“最新一条”，
         # 逐期发多种玩法的源会拿到非路由玩法（如最新是组合、路由只收单双），
         # 同期里通常有匹配玩法的信号，换选即可派单；换不到才按玩法不匹配跳过。
@@ -721,6 +736,11 @@ def _dispatch_signal_for_active_auto_trigger_routes(
             route,
             candidate,
         )
+        if hasattr(repository, "get_auto_trigger_cycle_state"):
+            roll_state = repository.get_auto_trigger_cycle_state(rule_id=int(route["rule_id"]),
+                subscription_id=int(candidate["subscription_id"]), user_id=int(candidate["user_id"]), route_id=int(route["id"]))
+            if roll_state and int(roll_state.get("rule_run_id") or 0) == int(candidate.get("rule_run_id") or 0):
+                strategy = dict((roll_state.get("policy") or {}).get("_strategy_snapshot") or strategy)
         if not strategy_matches_signal(strategy, signal):
             _skip(
                 "play_filter_mismatch",
@@ -810,13 +830,41 @@ def _dispatch_win_streak_roll_legs(
     - 上一期未结算前不再派新周期（skip_reason=cycle_pending_settlement），防止同订阅并发双周期
     - 两腿各建一条 progression_event（leg_key 区分），结算完全复用现有 progression 财务/日报链路
     """
-    today = _shanghai_today()
-    state_row = (
+    automatic_rule_id = int((auto_trigger_context or {}).get("rule_id") or route_rule_id or 0)
+    automatic = automatic_rule_id > 0 and hasattr(repository, "get_auto_trigger_cycle_state")
+    cycle_owner = {"rule_id": automatic_rule_id, "subscription_id": subscription_id, "user_id": user_id, "route_id": int(route_id or 0)}
+    today = str(route_stat_date or (auto_trigger_context or {}).get("stat_date") or _shanghai_today()) if automatic else _shanghai_today()
+    state_row = (repository.get_auto_trigger_cycle_state(**cycle_owner) if automatic else
         repository.get_subscription_cycle_state(subscription_id=subscription_id)
-        if hasattr(repository, "get_subscription_cycle_state")
-        else None
-    )
+        if hasattr(repository, "get_subscription_cycle_state") else None)
+    if not automatic and str((state_row or {}).get("stop_reason") or "").startswith("migration_"):
+        return {"created_count": 0, "existing_count": 0, "skipped_count": 1, "skip_reason": "migration_owner_blocked", "jobs": []}
+    if automatic:
+        owning_rule = repository.get_auto_trigger_rule(automatic_rule_id) or {}
+        current_run_id = int(route_rule_run_id or (auto_trigger_context or {}).get("rule_run_id") or 0)
+        owning_run = repository.get_auto_trigger_rule_run(current_run_id) if current_run_id else None
+        if owning_rule.get("status") != "active" or not owning_run or owning_run.get("status") != "active":
+            return {"created_count": 0, "existing_count": 0, "skipped_count": 1, "skip_reason": "rule_run_not_active", "jobs": []}
+        if _auto_trigger_rule_day_is_stopped(repository, rule_id=automatic_rule_id, user_id=user_id, stat_date=_shanghai_today()):
+            return {"created_count": 0, "existing_count": 0, "skipped_count": 1, "skip_reason": "rule_day_stopped", "jobs": []}
+        session = repository.get_auto_trigger_cycle_session(rule_id=automatic_rule_id, subscription_id=subscription_id, user_id=user_id) or {}
+        if session and session.get("status") != "running":
+            return {"created_count": 0, "existing_count": 0, "skipped_count": 1, "skip_reason": "cycle_not_running", "jobs": []}
+        current_run_id = int(route_rule_run_id or (auto_trigger_context or {}).get("rule_run_id") or 0)
+        if session and (int(session.get("active_run_id") or 0) != current_run_id or int(route_id or 0) not in (session.get("participating_route_ids") or [])):
+            return {"created_count": 0, "existing_count": 0, "skipped_count": 1, "skip_reason": "cycle_run_stale", "jobs": []}
+        if state_row:
+            today = str(state_row.get("stat_date") or today)
+            strategy = dict((state_row.get("policy") or {}).get("_strategy_snapshot") or strategy)
+    # 任意归属已占用该期该群时不能为另一归属留下孤儿event或消耗余额。
+    if hasattr(repository, "execution_job_exists_for_target") and repository.execution_job_exists_for_target(
+        signal_id=int(signal["id"]), subscription_id=subscription_id, delivery_target_id=delivery_target_id, from_route=automatic,
+    ):
+        return {"created_count": 0, "existing_count": 0, "skipped_count": 1, "skip_reason": "target_already_dispatched", "jobs": []}
     policy = dict((state_row or {}).get("policy") or {})
+    if not policy and automatic:
+        owning_rule = repository.get_auto_trigger_rule(automatic_rule_id) or {}
+        policy = auto_roll_policy(strategy, owning_rule.get("cycle_policy") or {"mode": "legacy"}, session.get("legacy_policy"))
     if not policy:
         runtime = resolve_staking_runtime_policy(strategy, signal.get("normalized_payload"))
         policy = {
@@ -945,11 +993,11 @@ def _dispatch_win_streak_roll_legs(
             stake_plan["meta"]["auto_trigger_route_id"] = int(route_id)
         planned_message_text = _message_text_from_template(leg_signal, float(leg["stake"]), template)
         if route_id is not None:
-            idempotency_key = "signal:%s:rule:%s:route:%s:target:%s:leg:%s" % (
-                signal["id"], auto_trigger_context.get("rule_id") or "", route_id, delivery_target_id, leg["leg_key"],
+            idempotency_key = "signal:%s:subscription:%s:rule:%s:route:%s:target:%s:leg:%s" % (
+                signal["id"], subscription_id, auto_trigger_context.get("rule_id") or "", route_id, delivery_target_id, leg["leg_key"],
             )
         else:
-            idempotency_key = "signal:%s:target:%s:leg:%s" % (signal["id"], delivery_target_id, leg["leg_key"])
+            idempotency_key = "signal:%s:subscription:%s:target:%s:leg:%s" % (signal["id"], subscription_id, delivery_target_id, leg["leg_key"])
         expire_at = _job_expire_at(execute_after, strategy, stake_plan, issue_window)
         created = repository.create_execution_job_record(
             user_id=user_id,
@@ -996,7 +1044,11 @@ def _dispatch_win_streak_roll_legs(
         "rule_stat_date": str(route_stat_date or (auto_trigger_context.get("stat_date") if auto_trigger_context else "") or ""),
         "user_id": int(user_id),
     }
-    if hasattr(repository, "upsert_subscription_cycle_state"):
+    if automatic:
+        repository.upsert_auto_trigger_cycle_state(**cycle_owner,
+            rule_run_id=int(route_rule_run_id or (auto_trigger_context or {}).get("rule_run_id") or 0) or None,
+            state=state, policy=policy, pending_plan=pending_plan)
+    elif hasattr(repository, "upsert_subscription_cycle_state"):
         repository.upsert_subscription_cycle_state(
             subscription_id=subscription_id,
             user_id=user_id,

@@ -1,0 +1,3 @@
+PASS UI forms: defaults, editing, strict limits, legacy preservation, scoped resume, quota and history.
+PASS manual UI: owned state, null/zero display, manual restart scope, hidden legacy close scope.
+PASS real WSGI + SQLite: UI create/edit/legacy save/resume, persisted quota and manual isolation, zero jobs.

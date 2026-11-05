@@ -1,0 +1,3 @@
+AssertionError [ERR_ASSERTION]: automatic rules expose independent cycle management
+    at domChecks (/tmp/pc28-cycle-isolation/tests/test_cycle_ui.cjs:99:16)
+    at async main (/tmp/pc28-cycle-isolation/tests/test_cycle_ui.cjs:161:5)

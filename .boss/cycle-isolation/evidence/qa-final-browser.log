@@ -1,0 +1,39 @@
+{
+  "health": "ok",
+  "checks": 4,
+  "passed": 4,
+  "failed": 0,
+  "skipped": 0,
+  "cases": [
+    {
+      "page": "rules",
+      "width": 390,
+      "overflow": false,
+      "pageErrors": 0
+    },
+    {
+      "page": "manual",
+      "width": 390,
+      "overflow": false,
+      "pageErrors": 0
+    },
+    {
+      "page": "rules",
+      "width": 1440,
+      "overflow": false,
+      "pageErrors": 0
+    },
+    {
+      "page": "manual",
+      "width": 1440,
+      "overflow": false,
+      "pageErrors": 0
+    }
+  ],
+  "load_ms": [
+    1240,
+    1346,
+    1047,
+    986
+  ]
+}

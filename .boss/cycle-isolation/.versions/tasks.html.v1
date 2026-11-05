@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>开发任务规格 - cycle-isolation</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f7f4;
+      --paper: #ffffff;
+      --ink: #202427;
+      --muted: #687076;
+      --line: #d7dadd;
+      --accent: #245c73;
+      --soft: #eef5f7;
+      --code: #182026;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.65;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+      gap: 28px;
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+    aside {
+      position: sticky;
+      top: 20px;
+      align-self: start;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    main {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 8px;
+      padding: 32px;
+      min-width: 0;
+    }
+    h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 1.4em 0 0.55em; }
+    h1 { margin-top: 0; font-size: 2rem; }
+    h2 { border-bottom: 1px solid var(--line); padding-bottom: 0.3em; }
+    p, ul, ol, table, pre, blockquote { margin: 0 0 1em; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      border-radius: 4px;
+      background: var(--soft);
+      padding: 0.1em 0.35em;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      overflow-x: auto;
+      border-radius: 8px;
+      background: var(--code);
+      color: #f3f7f8;
+      padding: 16px;
+    }
+    pre code { background: transparent; color: inherit; padding: 0; }
+    table { width: 100%; border-collapse: collapse; overflow-x: auto; display: block; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: var(--soft); }
+    blockquote { border-left: 4px solid var(--accent); margin-left: 0; padding: 8px 14px; color: var(--muted); background: var(--soft); }
+    .meta { color: var(--muted); font-size: 0.92rem; margin-bottom: 24px; }
+    .summary { border: 1px solid var(--line); background: var(--soft); border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+    .toc-title { font-weight: 700; margin-bottom: 8px; }
+    .toc ul, .summary ul { padding-left: 20px; }
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; }
+      aside { position: static; }
+      main { padding: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <div class="toc-title">目录</div>
+      <ul><li class="toc-level-2"><a href="#摘要">摘要</a></li><li class="toc-level-1"><a href="#开发任务规格">开发任务规格</a></li><li class="toc-level-2"><a href="#0-repo-preflight">0. Repo Preflight</a></li><li class="toc-level-2"><a href="#1-固定契约">1. 固定契约</a></li><li class="toc-level-2"><a href="#2-任务与完整写集">2. 任务与完整写集</a></li><li class="toc-level-3"><a href="#t-001-be-自动周期与保守迁移">T-001 [BE] 自动周期与保守迁移</a></li><li class="toc-level-3"><a href="#t-002-be-原子额度-会话与内部继承路由">T-002 [BE] 原子额度、会话与内部继承路由</a></li><li class="toc-level-3"><a href="#t-003-be-单轮领域与scope派单">T-003 [BE] 单轮领域与scope派单</a></li><li class="toc-level-3"><a href="#t-004-be-自动启动-结束屏障与再次启动">T-004 [BE] 自动启动、结束屏障与再次启动</a></li><li class="toc-level-3"><a href="#t-005-be-明确恢复api与手动重置范围">T-005 [BE] 明确恢复API与手动重置范围</a></li><li class="toc-level-3"><a href="#t-006-fe-自动规则配置与状态">T-006 [FE] 自动规则配置与状态</a></li><li class="toc-level-3"><a href="#t-007-fe-手动界面独立状态和操作文案">T-007 [FE] 手动界面独立状态和操作文案</a></li><li class="toc-level-3"><a href="#t-008-qa-be-旧测试适配与独立集成验收">T-008 [QA/BE] 旧测试适配与独立集成验收</a></li><li class="toc-level-3"><a href="#t-009-doc-使用与部署说明">T-009 [DOC] 使用与部署说明</a></li><li class="toc-level-2"><a href="#3-并行安全组与依赖">3. 并行安全组与依赖</a></li><li class="toc-level-2"><a href="#4-evidence-waves">4. Evidence Waves</a></li><li class="toc-level-2"><a href="#5-contract-matrix">5. Contract Matrix</a></li><li class="toc-level-2"><a href="#6-验收顺序与完成标志">6. 验收顺序与完成标志</a></li></ul>
+    </aside>
+    <main>
+      <h1>开发任务规格</h1>
+      <div class="meta">
+        <div>Feature: cycle-isolation</div>
+        <div>Source: tasks.md</div>
+        <div>Generated: 2026-11-04T16:57:41.768Z</div>
+      </div>
+      <section class="summary">
+        <h2>摘要</h2>
+        <ul><li>共 9 个任务：后端 5、前端 2、集成 QA 1、交付说明 1；分为数据隔离、业务与界面、最终回归三个 Evidence Wave。</li><li>关键路径：T-001/T-002 仓储 → T-003/T-004/T-005 业务与 API → T-008 跨层验收；前端 T-006/T-007 可在契约冻结后与数据层并行，集成验收等待后端。</li><li>Blast Radius：高；计划最多 24 个代码/测试/README 文件（含可选文件），涉及模型、迁移、队列与调度；无运行依赖、认证方案、CI 或部署配置变更。</li><li>风险确认触发项：文件数 ≥10、数据模型/迁移/队列核心模块。用户已明确授权“开始设计方案开工”及手动/自动隔离范围；仅隔离工作树实施，不再重复确认，不操作线上数据或发送消息。</li><li>Owner：repository 独占仓储，orchestration 独占业务/API/领域，frontend 独占两组 UI 与 JS 测试；QA 只独立复核和写报告。中央文件禁止并发多人修改。</li></ul>
+      </section>
+      <h2 id="摘要">摘要</h2>
+<ul><li>共 9 个任务：后端 5、前端 2、集成 QA 1、交付说明 1；分为数据隔离、业务与界面、最终回归三个 Evidence Wave。</li><li>关键路径：T-001/T-002 仓储 → T-003/T-004/T-005 业务与 API → T-008 跨层验收；前端 T-006/T-007 可在契约冻结后与数据层并行，集成验收等待后端。</li><li>Blast Radius：高；计划最多 24 个代码/测试/README 文件（含可选文件），涉及模型、迁移、队列与调度；无运行依赖、认证方案、CI 或部署配置变更。</li><li>风险确认触发项：文件数 ≥10、数据模型/迁移/队列核心模块。用户已明确授权“开始设计方案开工”及手动/自动隔离范围；仅隔离工作树实施，不再重复确认，不操作线上数据或发送消息。</li><li>Owner：repository 独占仓储，orchestration 独占业务/API/领域，frontend 独占两组 UI 与 JS 测试；QA 只独立复核和写报告。中央文件禁止并发多人修改。</li></ul>
+<h1 id="开发任务规格">开发任务规格</h1>
+<h2 id="0-repo-preflight">0. Repo Preflight</h2>
+<table><thead><tr><th>事实</th><th>结果</th><th>证据</th></tr></thead><tbody><tr><td>默认分支/基线</td><td>origin/main，5b37efa</td><td><code>git symbolic-ref refs/remotes/origin/HEAD</code>、<code>git log -1</code></td></tr><tr><td>当前分支/隔离</td><td>feat/cycle-isolation；/tmp/pc28-cycle-isolation；开工前生产代码干净</td><td><code>git branch --show-current</code>、<code>git status --short</code>；.boss 文档为本次新增</td></tr><tr><td>CI</td><td>仅构建/推送 Docker，多架构；没有测试命令</td><td><code>.github/workflows/docker-image.yml</code>；未发现 .gitlab-ci/.circleci/vercel/netlify</td></tr><tr><td>包管理</td><td>setuptools pyproject；stdlib Python，Telegram 可选依赖</td><td><code>pyproject.toml</code>；本次不修改依赖清单或安装运行依赖</td></tr><tr><td>后端测试</td><td><code>env PYTHONPATH=src python3 -m unittest discover -s tests</code></td><td>582 项基线 /tmp/pc28-cycle-baseline.log；约81秒</td></tr><tr><td>基线失败</td><td>2条手动restart解封自动测试日期敏感；其余580通过</td><td><code>tests/test_win_streak_roll_stop.py</code> 中 test_manual_restart_reopens_todays_stopped_run、test_manual_restart_unseals_cycle_stop；使用固定时钟更新为新scope行为</td></tr><tr><td>Integration/E2E</td><td>真实 SQLite+WSGI 测试已有，浏览器 suite 未配置</td><td>tests/test_api.py、test_draw_streak_trigger.py、test_dispatch_isolation.py；无 package.json/Playwright 配置</td></tr><tr><td>UI 验证工具</td><td>Node 可用；临时jsdom已安装；Chromium缓存可用</td><td>/tmp/pc28-draw-trigger-ui-check/node_modules/jsdom；/root/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome</td></tr><tr><td>schema/enum</td><td>Python domain/service 校验、SQLite DDL；API无外部OpenAPI文件</td><td>domain/win_streak_roll.py、services/auto_trigger_service.py、executor/db_repository.py</td></tr><tr><td>新常量</td><td>cycle_policy.mode=rule/legacy；max_starts_per_day 严格1..1000；on_target/on_bust=wait_condition/new_cycle/close_day</td><td>architecture §3.1，ui-spec §4.2</td></tr><tr><td>权限入口</td><td>WSGI Cookie auth后按当前user限定rule/sub/target</td><td>api/app.py；服务和repository需再次校验owner</td></tr><tr><td>路由约定</td><td><code>/api/platform/auto-trigger-rules/{id}/resume-cycle</code>，其余沿用现有端点</td><td>architecture §5；UI只传subscription_id</td></tr><tr><td>migration</td><td>initialize_database内加性DDL；旧周期归属需证据识别、保留原快照</td><td>db_repository.py；architecture §3.6；禁止在生产DB执行测试</td></tr><tr><td>性能基线</td><td>unknown：没有现成此功能P99/吞吐基线</td><td>检查pyproject、CI、tests；不虚构指标，关注索引和单轮查询次数</td></tr></tbody></table>
+<h2 id="1-固定契约">1. 固定契约</h2>
+<p>架构 §3.7 的 repository 方法名/参数是任务间契约。<code>rule.cycle_policy</code>、<code>rule.cycle_runtime[]</code>、<code>subscription.manual_cycle_state</code> 与 <code>POST .../resume-cycle</code> 按架构 §5 和 ui-spec 实现。改变契约需向 root/架构报告并同步所有消费者，不能让前端猜字段。</p>
+<p>默认新建为 rule/每天1轮/结束等待条件。旧缺字段为legacy，保留冻结旧行为；创建legacy、rule切回legacy拒绝。mode=rule 的每日次数按 rule+subscription，同一启动多个route计一次；正常close_day与上限仅关闭当前方案会话。规则日风控继续是整规则范围。</p>
+<h2 id="2-任务与完整写集">2. 任务与完整写集</h2>
+<p>“共享文件”表示其内有多职责，但仍由指定 owner 唯一写入。以下同 owner 任务按顺序完成，其他 owner 只能读。</p>
+<h3 id="t-001-be-自动周期与保守迁移">T-001 [BE] 自动周期与保守迁移</h3>
+<table><thead><tr><th>文件</th><th>操作</th><th>写集风险</th><th>owner</th><th>说明</th></tr></thead><tbody><tr><td>src/pc28touzhu/executor/db_repository.py</td><td>修改</td><td>共享文件</td><td>repository</td><td>加cycle_policy、auto周期/session/daily starts、implicit route标记、迁移证据；manual表保持调用兼容</td></tr><tr><td>tests/test_cycle_repository.py</td><td>新建</td><td>独占</td><td>repository</td><td>迁移与scope CRUD红绿测试</td></tr></tbody></table>
+<p>步骤：先写真实临时SQLite红测；增加owner校验CRUD、联合pending枚举；pending与历史证据唯一归属才迁移，歧义blocked且保留原行；旧无route在途留route=0原账本结算；重复initialize幂等。迁移不复制资金、不重算事件/任务/财务、不解封旧day。</p>
+<p>验证：manual/auto A/auto B独立；auto pending、已收工、未使用基线、无route pending、冲突归属；migration前后账本金额及任务数相同，原始快照可查。复杂度高，依赖无；约8–12次工具调用。</p>
+<h3 id="t-002-be-原子额度-会话与内部继承路由">T-002 [BE] 原子额度、会话与内部继承路由</h3>
+<table><thead><tr><th>文件</th><th>操作</th><th>写集风险</th><th>owner</th><th>说明</th></tr></thead><tbody><tr><td>src/pc28touzhu/executor/db_repository.py</td><td>修改</td><td>共享文件</td><td>repository</td><td>architecture §3.7 claim/complete/runtime查询与implicit路由，唯一run身份</td></tr><tr><td>tests/test_cycle_repository.py</td><td>修改</td><td>共享文件</td><td>repository</td><td>并发、回滚、权限、内部route可见性与跨日计次</td></tr></tbody></table>
+<p>步骤：BEGIN IMMEDIATE内claim额度+session+新run；外层rollback能全部撤销；complete只关指定run的route runtimes不清账本。implicit route按用户/规则/有效目标创建，UI routes读写排除implicit，已发送旧隐式任务不能因保存而丢失。查询按rule+sub归属与日期隔离。</p>
+<p>验证：并发两连接同一期只一次；配额满拒绝；同rule不同sub独立；route扇出只加1；失败回滚；其他用户写失败；旧run历史不可被覆写；次数/索引健全。依赖T-001，复杂度高，约8–12次调用。</p>
+<h3 id="t-003-be-单轮领域与scope派单">T-003 [BE] 单轮领域与scope派单</h3>
+<table><thead><tr><th>文件</th><th>操作</th><th>写集风险</th><th>owner</th><th>说明</th></tr></thead><tbody><tr><td>src/pc28touzhu/domain/auto_trigger_cycle.py</td><td>新建</td><td>独占</td><td>orchestration</td><td>配置归一化、单轮结束/会话决策，严格整数与legacy规则</td></tr><tr><td>src/pc28touzhu/domain/win_streak_roll.py</td><td>修改（必要时）</td><td>共享文件</td><td>orchestration</td><td>最小接口支持自动单轮结果；保持手动旧结束动作</td></tr><tr><td>src/pc28touzhu/services/dispatch_service.py</td><td>修改</td><td>共享文件</td><td>orchestration</td><td>显式scope读取周期、pending归属、同目标claim、跨日周期快照</td></tr><tr><td>tests/test_cycle_runtime.py</td><td>新建</td><td>独占</td><td>orchestration</td><td>隔离/多route/重复派单/原子性红绿测试</td></tr></tbody></table>
+<p>步骤：根据manual或rule/route归属取状态；manual early-roll分支也先做同群占位检查。两腿创建与pending、claim同事务；不能把别的scope的existing job/event绑定为本轮。自动进行中的周期禁止日期切换重置，修改配置只下一轮生效。</p>
+<p>验证：manual与两个rule分别派到不同目标可以并存；同目标冲突方不耗额度/不留孤儿event；两route各两腿，互不pending阻挡；double dispatch不重复。依赖Wave1绿门禁，复杂度高，约8–14次调用。</p>
+<h3 id="t-004-be-自动启动-结束屏障与再次启动">T-004 [BE] 自动启动、结束屏障与再次启动</h3>
+<table><thead><tr><th>文件</th><th>操作</th><th>写集风险</th><th>owner</th><th>说明</th></tr></thead><tbody><tr><td>src/pc28touzhu/services/auto_trigger_service.py</td><td>修改</td><td>共享文件</td><td>orchestration</td><td>cycle_policy创建/更新、quota/session调度、隐式目标解析、runtime回显</td></tr><tr><td>src/pc28touzhu/services/pc28_auto_settlement_service.py</td><td>修改</td><td>共享文件</td><td>orchestration</td><td>owner结算、pending CAS/事务、参与route终态屏障与结束调度</td></tr><tr><td>tests/test_cycle_runtime.py</td><td>修改</td><td>共享文件</td><td>orchestration</td><td>wait/new_cycle/close_day、cross-day、风控、零派单</td></tr></tbody></table>
+<p>步骤：新轮统一claim，waiting按新证据期&gt;last_completed_issue及冷却，continuation免条件/冷却但守可投窗、日额/风险/停用。无route新自动轮走implicit route。全部参与route完结后关run；quota已满只在当前轮结束后关闭session。已发腿仍结算，重复settlement不推进两次或覆盖下一pending。</p>
+<p>验证：第1轮→结束→同证据不重开→新期条件第2轮→达到N；new_cycle下一信号从base起步；stop/保存/日风控不绕过；某sub收工另一sub可开；23:59轮跨日连赢保留且quota归旧日；无信号、已开奖、已占用不烧额度。依赖T-003，复杂度高，约10–16次调用。</p>
+<h3 id="t-005-be-明确恢复api与手动重置范围">T-005 [BE] 明确恢复API与手动重置范围</h3>
+<table><thead><tr><th>文件</th><th>操作</th><th>写集风险</th><th>owner</th><th>说明</th></tr></thead><tbody><tr><td>src/pc28touzhu/api/app.py</td><td>修改</td><td>共享文件</td><td>orchestration</td><td>scoped resume-cycle端点及原有认证响应风格</td></tr><tr><td>src/pc28touzhu/services/platform_service.py</td><td>修改</td><td>共享文件</td><td>orchestration</td><td>manual_cycle_state、手动重开/重置仅本scope</td></tr><tr><td>src/pc28touzhu/services/auto_trigger_service.py</td><td>修改</td><td>共享文件</td><td>orchestration</td><td>恢复指定rule+sub，旧resume-day/update不绕过</td></tr><tr><td>tests/test_cycle_api.py</td><td>新建</td><td>独占</td><td>orchestration</td><td>真实WSGI+SQLite创建编辑恢复/拒绝/owner/返回字段</td></tr></tbody></table>
+<p>验证：恢复不派单、不清次数或财务；运行/在途/额度满/风险/停用/不在作用范围/他人owner拒绝；手动restart/reset不改变自动pending、停止、次数和钱；合法保存回显1..1000枚举，legacy改名不改变默认，rule不能回legacy。依赖T-004，复杂度高，约8–12次调用。</p>
+<h3 id="t-006-fe-自动规则配置与状态">T-006 [FE] 自动规则配置与状态</h3>
+<table><thead><tr><th>文件</th><th>操作</th><th>写集风险</th><th>owner</th><th>说明</th></tr></thead><tbody><tr><td>src/pc28touzhu/ui/auto_triggers.html</td><td>修改</td><td>独占</td><td>frontend</td><td>过关轮次管理表单、准确作用域/冷却说明</td></tr><tr><td>src/pc28touzhu/ui/auto_triggers.js</td><td>修改</td><td>共享文件</td><td>frontend</td><td>collect/reset/legacy、cycle_runtime、scoped恢复动作</td></tr><tr><td>src/pc28touzhu/ui/auto_triggers.css</td><td>修改</td><td>独占</td><td>frontend</td><td>新块响应式和现有风格</td></tr><tr><td>tests/test_cycle_ui.cjs</td><td>新建</td><td>独占</td><td>frontend</td><td>真实DOM加载/编辑/保存payload/状态与操作回归</td></tr></tbody></table>
+<p>验证：新建rule默认；legacy只旧规则可选，隐藏字段不覆盖旧配置；非法次数拒绝；0/N、跨日、pending/blocked原因准确；历史日期不提供当前日恢复按钮；结束操作不一律误报下个窗口；keyboard与手机布局可用。字段契约冻结后可与Wave1并行，绿集成需T-005。复杂度中高，约6–10次调用。</p>
+<h3 id="t-007-fe-手动界面独立状态和操作文案">T-007 [FE] 手动界面独立状态和操作文案</h3>
+<table><thead><tr><th>文件</th><th>操作</th><th>写集风险</th><th>owner</th><th>说明</th></tr></thead><tbody><tr><td>src/pc28touzhu/ui/autobet.html</td><td>修改</td><td>独占</td><td>frontend</td><td>手动结束设置、每轮目标/起始注、去掉误导rule/route scope选项</td></tr><tr><td>src/pc28touzhu/ui/autobet.js</td><td>修改</td><td>共享文件</td><td>frontend</td><td>只读manual_cycle_state，手动重开提示与payload兼容</td></tr><tr><td>src/pc28touzhu/ui/autobet.css</td><td>修改（必要时）</td><td>独占</td><td>frontend</td><td>仅新增手动状态块样式</td></tr><tr><td>tests/test_cycle_ui.cjs</td><td>修改</td><td>共享文件</td><td>frontend</td><td>manual null/0/停止及自动不被回填</td></tr></tbody></table>
+<p>验证：manual_cycle_state=null时尚未手动开始；不能用自动余额回填；手动重开不承诺解封规则；cycles_today标当天已重开次数，不冒充自动已启动数。依赖T-006顺序实施，可与后端同波并行。复杂度中，约4–8次调用。</p>
+<h3 id="t-008-qa-be-旧测试适配与独立集成验收">T-008 [QA/BE] 旧测试适配与独立集成验收</h3>
+<table><thead><tr><th>文件</th><th>操作</th><th>写集风险</th><th>owner</th><th>说明</th></tr></thead><tbody><tr><td>tests/test_auto_trigger_service.py</td><td>修改</td><td>共享文件</td><td>orchestration</td><td>明确旧用例legacy与新默认，保持原非过关断言</td></tr><tr><td>tests/test_draw_streak_trigger.py</td><td>修改</td><td>共享文件</td><td>orchestration</td><td>新自动scope对应状态查询，不再assert共享manual</td></tr><tr><td>tests/test_win_streak_roll_dispatch.py</td><td>修改</td><td>共享文件</td><td>orchestration</td><td>手动不退化，auto owner断言</td></tr><tr><td>tests/test_win_streak_roll_stop.py</td><td>修改</td><td>共享文件</td><td>orchestration</td><td>固定时钟，旧手动解封auto断言改为隔离和scoped恢复</td></tr><tr><td>tests/test_api.py</td><td>修改（必要时）</td><td>共享文件</td><td>orchestration</td><td>原UI文案/字段变更回归</td></tr></tbody></table>
+<p>QA不与owner同时改这些测试；发现失败回派owner。独立QA执行新tests、全套582基线加新增、迁移快照重放；UI提交payload必须经真实WSGI schema及SQLite持久化验证，mock-only不够。可在/tmp启动临时WSGI+fake executor，使用已缓存Chromium或jsdom验证；任何工具依赖安装只/tmp，不能改变项目依赖/CI。最终结果写qa-report.md，命令真实运行且日志可回查。</p>
+<p>依赖Wave2绿门禁，复杂度高，约6–12次调用。失败不得skip；若发现基线问题则固定时钟/修复适当行为后重跑相关与全套。</p>
+<h3 id="t-009-doc-使用与部署说明">T-009 [DOC] 使用与部署说明</h3>
+<table><thead><tr><th>文件</th><th>操作</th><th>写集风险</th><th>owner</th><th>说明</th></tr></thead><tbody><tr><td>README.md</td><td>修改</td><td>独占</td><td>orchestration</td><td>配置职责、legacy、新结束动作/次数、手动恢复范围、日归属</td></tr></tbody></table>
+<p>QA/DevOps另写.boss/cycle-isolation/qa-report.md、deploy-report.md，需说明尚未部署以及全部repository worker统一切换步骤、SQLite备份回滚边界。依赖T-008；不运行生产发布。复杂度低，约2–4次调用。</p>
+<h2 id="3-并行安全组与依赖">3. 并行安全组与依赖</h2>
+<table><thead><tr><th>Group</th><th>任务</th><th>前置</th><th>写集约束</th></tr></thead><tbody><tr><td>A</td><td>repository:T-001→T-002；frontend:T-006→T-007</td><td>PRD/架构/UI/本评审冻结</td><td>仓储与UI写集互斥；各owner内顺序写</td></tr><tr><td>B</td><td>orchestration:T-003→T-004→T-005；frontend未完成部分</td><td>Wave1绿色，前端按冻结API独立</td><td>orchestration不得写db_repository.py，repository有修复只自身owner处理</td></tr><tr><td>C</td><td>orchestration:T-008→T-009；QA独立执行</td><td>Wave2绿色</td><td>QA只读代码，发现问题回派owner；报告由QA独占</td></tr></tbody></table>
+<pre><code class="language-mermaid">flowchart LR
+  R[T-001迁移] --&gt; Q[T-002额度与会话]
+  Q --&gt; D[T-003派单]
+  D --&gt; S[T-004调度结算]
+  S --&gt; A[T-005 API与恢复]
+  F[T-006规则UI] --&gt; M[T-007手动UI]
+  A --&gt; V[T-008最终验收]
+  M --&gt; V
+  V --&gt; N[T-009说明]</code></pre>
+<h2 id="4-evidence-waves">4. Evidence Waves</h2>
+<p>机器执行命令以 <code>waves.json</code> 为准，均argv数组，无shell拼接，单条目标&lt;120秒。先写行为测试并通知root执行red；不得把测试模块/依赖未安装误当作有效红。root记录runtime事件，不直接编辑execution.json。</p>
+<table><thead><tr><th>Wave</th><th>范围/owner</th><th>红测</th><th>绿门禁</th><th>Contract</th><th>Stop Condition</th></tr></thead><tbody><tr><td>wave-1-data</td><td>T-001/T-002 repository</td><td>test_cycle_repository在新API缺失/旧错误scope上断言失败</td><td>同套通过；既有test_repository通过；diff检查</td><td>CM-001/002/007/008</td><td>迁移改变账本/在途归属不明仍可跑/并发多claim/外层回滚失效则停止</td></tr><tr><td>wave-2-runtime</td><td>T-003至T-007 orchestration+frontend</td><td>test_cycle_runtime、test_cycle_api、test_cycle_ui行为断言失败</td><td>三套通过、两JS语法通过、diff检查</td><td>CM-003/004/005/006/009/010</td><td>无真实API提交证据/零派单耗额/任意跨scope副作用/前后端enum不一致则停止</td></tr><tr><td>wave-3-regression</td><td>T-008/T-009+QA</td><td>复用前两波已记录red，不伪造第二次红</td><td>全套unittest、UI场景重放、diff检查</td><td>CM-001至CM-010</td><td>任一测试失败、迁移对账不平、未验证同群冲突或跨日则不可交付/发布</td></tr></tbody></table>
+<p>Wave3不新增生产行为；其redTests仍指向前两波行为测试，red证据沿用实现前runtime记录，不要求实现完成后制造失败。</p>
+<h2 id="5-contract-matrix">5. Contract Matrix</h2>
+<table><thead><tr><th>ID</th><th>Contract / PRD</th><th>UI / Copy</th><th>Client Payload</th><th>Server Schema</th><th>Persistence</th><th>Business Rule</th><th>Test Evidence</th></tr></thead><tbody><tr><td>CM-001</td><td>手动/自动/各rule隔离 FR001/002</td><td>手动状态与规则状态分别显示</td><td>原subscription与rule id</td><td>owner校验</td><td>manual表与auto(rule,sub,route)</td><td>结算/重置只写归属</td><td>test_cycle_repository、test_cycle_runtime</td></tr><tr><td>CM-002</td><td>迁移保守幂等 FR012</td><td>历史需核对/旧设置</td><td>旧缺字段不补新默认</td><td>legacy只旧数据</td><td>migrations原始快照/blocked</td><td>不改钱/不复发/不解封</td><td>test_cycle_repository迁移组</td></tr><tr><td>CM-003</td><td>配置枚举与默认 FR003/004</td><td>等待条件/直接续开/收工</td><td>cycle_policy</td><td>rule/legacy；strict1..1000；3个action</td><td>cycle_policy_json与本轮快照</td><td>新rule默认1/wait；旧保存保留</td><td>test_cycle_api、test_cycle_ui</td></tr><tr><td>CM-004</td><td>每日计次 FR007</td><td>每方案所选日X/N轮</td><td>max_starts_per_day</td><td>正整数，首轮包含</td><td>daily starts(rule,sub,date)</td><td>route/腿只计1，零派单回滚</td><td>test_cycle_repository、test_cycle_runtime</td></tr><tr><td>CM-005</td><td>等待条件/续开 FR005/006/008</td><td>新一期判断；下一可投期续开</td><td>on_target/on_bust</td><td>wait_condition/new_cycle</td><td>session.last_completed_issue/status</td><td>waiting守冷却，新证据；续开守quota风控</td><td>test_cycle_runtime</td></tr><tr><td>CM-006</td><td>跨日/旧轮 FR011</td><td>启动日与统计日分开</td><td>stat_date查询</td><td>日期校验</td><td>old start_date与today quota</td><td>未结算不重置，盈亏仍结算日</td><td>test_cycle_runtime、test_cycle_api</td></tr><tr><td>CM-007</td><td>同群防重复/多route FR001/002/007</td><td>冲突跳过原因</td><td>既有targets</td><td>owner/status/dispatch_mode</td><td>既有job唯一claim+参与route集合</td><td>不引用别人pending、所有参与终态屏障</td><td>test_cycle_repository、test_cycle_runtime</td></tr><tr><td>CM-008</td><td>旧无route在途 FR012</td><td>继承方案投递/待结算</td><td>用户routes仍空</td><td>implicit不可从用户配置伪造</td><td>route=0旧在途+is_implicit新轮</td><td>旧账本原路径完结，新轮自动账本</td><td>test_cycle_repository、test_cycle_runtime</td></tr><tr><td>CM-009</td><td>恢复/重置范围 FR009/010</td><td>手动重开；恢复本方案待命</td><td>resume-cycle仅subscription_id</td><td>cookie+rule/sub同owner+scope</td><td>保留starts和账本</td><td>在途/额度/风险/停用拒绝；旧接口无旁路</td><td>test_cycle_api、test_win_streak_roll_stop</td></tr><tr><td>CM-010</td><td>真实界面提交和状态 FR013</td><td>兼容回显/错误/零值/跨日</td><td>实际collectPayload结果</td><td>创建/更新真实schema</td><td>实际SQLite读取一致</td><td>UI不丢legacy、不自动调用启动</td><td>test_cycle_ui + test_cycle_api实际payload联测、QA重放</td></tr></tbody></table>
+<h2 id="6-验收顺序与完成标志">6. 验收顺序与完成标志</h2>
+<ul><li>[ ] 三波测试先有有效red再green，root检查每个结果；前后端共享字段按architecture冻结。</li><li>[ ] 旧默认测试显式legacy，不修改生产默认迁就测试；全部时间边界固定时钟。</li><li>[ ] 全套回归通过，无skip新增核心测试；UI保存payload经真实API。</li><li>[ ] 所有写集与计划一致，额外文件由原owner向root报备。</li><li>[ ] 交付提供设计、代码、测试结果及未部署说明；线上规则/资金/消息未被测试更改。</li></ul>
+<p>预估总体复杂度高，工具调用约60–100次，数字用于划分任务而非完成承诺；必要修复继续在对应owner中完成。部署和推送不作为这些任务的隐式副作用。</p>
+    </main>
+  </div>
+</body>
+</html>

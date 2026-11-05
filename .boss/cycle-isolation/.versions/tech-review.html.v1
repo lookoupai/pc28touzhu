@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>技术方案评审报告 - cycle-isolation</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f7f4;
+      --paper: #ffffff;
+      --ink: #202427;
+      --muted: #687076;
+      --line: #d7dadd;
+      --accent: #245c73;
+      --soft: #eef5f7;
+      --code: #182026;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.65;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+      gap: 28px;
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+    aside {
+      position: sticky;
+      top: 20px;
+      align-self: start;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    main {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 8px;
+      padding: 32px;
+      min-width: 0;
+    }
+    h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 1.4em 0 0.55em; }
+    h1 { margin-top: 0; font-size: 2rem; }
+    h2 { border-bottom: 1px solid var(--line); padding-bottom: 0.3em; }
+    p, ul, ol, table, pre, blockquote { margin: 0 0 1em; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      border-radius: 4px;
+      background: var(--soft);
+      padding: 0.1em 0.35em;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      overflow-x: auto;
+      border-radius: 8px;
+      background: var(--code);
+      color: #f3f7f8;
+      padding: 16px;
+    }
+    pre code { background: transparent; color: inherit; padding: 0; }
+    table { width: 100%; border-collapse: collapse; overflow-x: auto; display: block; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: var(--soft); }
+    blockquote { border-left: 4px solid var(--accent); margin-left: 0; padding: 8px 14px; color: var(--muted); background: var(--soft); }
+    .meta { color: var(--muted); font-size: 0.92rem; margin-bottom: 24px; }
+    .summary { border: 1px solid var(--line); background: var(--soft); border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+    .toc-title { font-weight: 700; margin-bottom: 8px; }
+    .toc ul, .summary ul { padding-left: 20px; }
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; }
+      aside { position: static; }
+      main { padding: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <div class="toc-title">目录</div>
+      <ul><li class="toc-level-2"><a href="#摘要">摘要</a></li><li class="toc-level-1"><a href="#技术方案评审报告">技术方案评审报告</a></li><li class="toc-level-2"><a href="#1-评审依据">1. 评审依据</a></li><li class="toc-level-2"><a href="#2-设计结论">2. 设计结论</a></li><li class="toc-level-2"><a href="#3-风险与必须兑现的控制">3. 风险与必须兑现的控制</a></li><li class="toc-level-2"><a href="#4-实施与验证原则">4. 实施与验证原则</a></li><li class="toc-level-2"><a href="#5-工程约束与发布边界">5. 工程约束与发布边界</a></li><li class="toc-level-2"><a href="#6-放行结论">6. 放行结论</a></li></ul>
+    </aside>
+    <main>
+      <h1>技术方案评审报告</h1>
+      <div class="meta">
+        <div>Feature: cycle-isolation</div>
+        <div>Source: tech-review.md</div>
+        <div>Generated: 2026-11-04T16:57:41.419Z</div>
+      </div>
+      <section class="summary">
+        <h2>摘要</h2>
+        <ul><li>评审结论：方案通过，可进入隔离工作树实施；这不是已实现或可直接发布的结论。</li><li>核心决定符合 PRD：手动保留原周期，自动按规则/方案/投递隔离状态，规则/方案共享一次日额度；自动无显式路由通过内部继承路由进入自动账本。</li><li>高风险集中在存量归属迁移、零派单/并发计次、跨日旧轮、多路由结束屏障和旧恢复入口绕过；必须按 <code>tasks.md</code> 的三波红绿证据验证。</li><li>API、UI 的 mode/次数/结束动作、状态字段及恢复范围已对齐。当前无阻塞设计问题，不引入运行依赖或修改部署设施。</li><li>用户已明确授权本次设计及开工。工作仅在 <code>/tmp/pc28-cycle-isolation</code>；本评审不授权操作线上数据库或发送真实投注。</li></ul>
+      </section>
+      <h2 id="摘要">摘要</h2>
+<ul><li>评审结论：方案通过，可进入隔离工作树实施；这不是已实现或可直接发布的结论。</li><li>核心决定符合 PRD：手动保留原周期，自动按规则/方案/投递隔离状态，规则/方案共享一次日额度；自动无显式路由通过内部继承路由进入自动账本。</li><li>高风险集中在存量归属迁移、零派单/并发计次、跨日旧轮、多路由结束屏障和旧恢复入口绕过；必须按 <code>tasks.md</code> 的三波红绿证据验证。</li><li>API、UI 的 mode/次数/结束动作、状态字段及恢复范围已对齐。当前无阻塞设计问题，不引入运行依赖或修改部署设施。</li><li>用户已明确授权本次设计及开工。工作仅在 <code>/tmp/pc28-cycle-isolation</code>；本评审不授权操作线上数据库或发送真实投注。</li></ul>
+<h1 id="技术方案评审报告">技术方案评审报告</h1>
+<h2 id="1-评审依据">1. 评审依据</h2>
+<p>评审日期：2026-11-04；基线 <code>5b37efa</code>；分支 <code>feat/cycle-isolation</code>。已阅读 <code>prd.md</code> FR-001 至 FR-013、<code>architecture.md</code>、<code>ui-spec.md</code>、<code>ui-design.json</code>，并检查现有 repository、派单、自动结算、启动/恢复入口及相关测试。</p>
+<p>现状证据：<code>subscription_cycle_states</code> 以 subscription_id 为唯一键；<code>_dispatch_win_streak_roll_legs</code> 无论手动或自动都访问此表。无 route 的旧自动路径进入订阅 runtime/财务。<code>reset_win_streak_roll_cycle_for_restart</code> 会解封关联自动规则。上述三处说明只加规则表单不够，需要运行归属改造。</p>
+<h2 id="2-设计结论">2. 设计结论</h2>
+<table><thead><tr><th>维度</th><th>结论</th><th>依据</th></tr></thead><tbody><tr><td>状态归属</td><td>通过</td><td>自动周期按 rule/subscription/route，session/quota 按 rule/subscription，不能让第一个路由的 pending 阻挡其他路由。</td></tr><tr><td>财务兼容</td><td>通过</td><td>内部继承路由复用已分离自动账本；旧无 route 在途保留原事件归属直到结算，不重算历史钱。</td></tr><tr><td>日启动控制</td><td>通过</td><td>原子 claim、独立 daily starts、唯一新 run 身份；两腿和多个投递不重复计次；派单为零回滚。</td></tr><tr><td>跨日</td><td>通过</td><td>活跃周期沿用启动日与进度；日盈亏仍按结算日；不靠 midnight 重置清掉 pending。</td></tr><tr><td>API/UI 契约</td><td>通过</td><td><code>cycle_policy</code>、<code>cycle_runtime</code>、<code>manual_cycle_state</code> 与 scoped resume 完整；旧 legacy 明确回显且不能从 rule 切回。</td></tr><tr><td>实施复杂度</td><td>高</td><td>涉及持久化、派单、结算、自动与手动操作、两个页面；已有框架可实现，无新增中间件理由。</td></tr></tbody></table>
+<p>UI 复核已修正一处时窗文案：等待条件的定时规则应“等待新一期且处于允许窗口”，不能误写成必须等待下一个窗口。JSON 使用现有原生页面结构；无需实现新的 React 应用。</p>
+<h2 id="3-风险与必须兑现的控制">3. 风险与必须兑现的控制</h2>
+<table><thead><tr><th>ID</th><th>触发条件</th><th>影响</th><th>等级</th><th>必须验证的控制</th></tr></thead><tbody><tr><td>R-01</td><td>老共享状态混有手动/自动证据或 pending 归属不完整</td><td>资金复制、在途丢失或意外续投</td><td>高</td><td>唯一可信归属才迁移；歧义原始快照留存并 blocked；重复初始化幂等；前后历史金额与任务总数不变。</td></tr><tr><td>R-02</td><td>API 检查与 worker 并发或同一期重试</td><td>多开轮、次数超限</td><td>高</td><td><code>BEGIN IMMEDIATE</code> 内重读/claim/派单；同一期防重复；重复操作仅一条新 run、一次 quota。</td></tr><tr><td>R-03</td><td>相同信号/方案/目标已有手动或另一规则占位</td><td>零派单仍耗额度或引用他方 leg</td><td>高</td><td>保留既有同群唯一 claim；在过关早分支同样检查；冲突方没有 pending、新 run 和已用次数。</td></tr><tr><td>R-04</td><td>多路由仅一条先完成或另一条尚在途</td><td>提前续开、错用余额</td><td>高</td><td>participating routes 只含真正起轮者；全部终态才能结束会话，close_day/风控可阻止续派但保留已发单结算。</td></tr><tr><td>R-05</td><td>午夜时旧轮未完成</td><td>重置连赢/金额或额度记错日期</td><td>高</td><td>自动周期传启动日；当前日风控仍检查；旧轮终结后才认领新日额度，测试冻结 UTC/北京时间。</td></tr><tr><td>R-06</td><td>改名/改条件/增上限/旧 resume-day/手动 restart</td><td>解封别的归属或绕过额度</td><td>高</td><td>更新不重写运行快照/计数；手动只影响手动；resume-cycle 校验 owner、作用范围、在途、quota、风控与停用。</td></tr><tr><td>R-07</td><td>某方案额度满/close_day 而规则还关联其他方案</td><td>误停止整条规则</td><td>高</td><td>mode=rule 的次数与普通收工只作用 rule+subscription，规则日止盈止损才作用整规则。</td></tr><tr><td>R-08</td><td>用户新建而测试默认使用旧语义</td><td>为使旧测试通过而恢复有害默认</td><td>中</td><td>生产新建默认 rule/1/wait_condition；旧行为回归显式 seed 旧数据库或 repository legacy，不改变生产默认。</td></tr><tr><td>R-09</td><td>选直接续开但旧模式在纯算法内自行 running</td><td>绕开 quota/停用/风控</td><td>高</td><td>新 mode 每轮先终态，再由统一启动入口处理下一信号；不能继续使用手动 new_cycle 旁路。</td></tr></tbody></table>
+<h2 id="4-实施与验证原则">4. 实施与验证原则</h2>
+<ol><li>repository owner 独占 <code>db_repository.py</code>；业务 owner 通过 architecture §3.7 使用稳定方法，不并发编辑中央仓储。</li><li>数据波通过后才接受业务集成绿门禁。前端可在字段冻结后并行实现，但不能用 mock 测试作为唯一提交契约证据。</li><li>红测试先落盘并由 root 执行 <code>verify-wave --phase red</code>；必须是目标行为断言失败，不以模块缺失或依赖未安装作为红证据。</li><li>既有基线为 582 项，580 通过；2 项失败来自 <code>test_win_streak_roll_stop.py</code> 固定 2026-11-04，而当前北京时间已跨日。这两项还断言手动 restart 解封自动，正是新需求要替换的行为；使用固定时钟改为隔离断言，禁止改系统时钟或跳过测试。</li><li>保存、迁移、模拟下注及 UI/API 验证仅使用临时数据库。真实 Telegram 边界用 fake executor/回执，不调用真实消息发送。</li><li>阶段结束必须检查完整 diff、最终全套回归、迁移对账与真实 API 契约；未通过不得宣称可发布。</li></ol>
+<h2 id="5-工程约束与发布边界">5. 工程约束与发布边界</h2>
+<p>Python 使用现有 snake_case、SQL 参数绑定、transaction/savepoint；新增自动状态行必须包含 user/rule/subscription/route owner，不能依赖 UI 传入值来确定权限。金额、退款与整数拆注沿用现有领域逻辑。UI 复用现有控件、隐藏兼容路由，不增加路由独立结构。</p>
+<p>高 Blast Radius 的原因是数据模型、迁移与调度行为，不是引入依赖。用户当前“开始设计方案开工”已授权这些范围的可逆代码和隔离测试，故无需重复确认。真实发布需代码/SQLite 备份与所有 repository worker 统一版本切换；本轮文档不执行该操作。</p>
+<h2 id="6-放行结论">6. 放行结论</h2>
+<ul><li>设计阻塞项：0。</li><li>放行 Wave 1 数据层与字段契约明确的前端工作；Wave 2 业务依赖 Wave 1 绿门禁。</li><li>本报告列出的风险控制是实施验收条件，不是已经通过的测试声明。最终证据由 QA 与 root 记录。</li></ul>
+    </main>
+  </div>
+</body>
+</html>

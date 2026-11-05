@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>流水线执行报告 - cycle-isolation</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f7f4;
+      --paper: #ffffff;
+      --ink: #202427;
+      --muted: #687076;
+      --line: #d7dadd;
+      --accent: #245c73;
+      --soft: #eef5f7;
+      --code: #182026;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.65;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+      gap: 28px;
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+    aside {
+      position: sticky;
+      top: 20px;
+      align-self: start;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    main {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 8px;
+      padding: 32px;
+      min-width: 0;
+    }
+    h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 1.4em 0 0.55em; }
+    h1 { margin-top: 0; font-size: 2rem; }
+    h2 { border-bottom: 1px solid var(--line); padding-bottom: 0.3em; }
+    p, ul, ol, table, pre, blockquote { margin: 0 0 1em; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      border-radius: 4px;
+      background: var(--soft);
+      padding: 0.1em 0.35em;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.92em;
+    }
+    pre {
+      overflow-x: auto;
+      border-radius: 8px;
+      background: var(--code);
+      color: #f3f7f8;
+      padding: 16px;
+    }
+    pre code { background: transparent; color: inherit; padding: 0; }
+    table { width: 100%; border-collapse: collapse; overflow-x: auto; display: block; }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: var(--soft); }
+    blockquote { border-left: 4px solid var(--accent); margin-left: 0; padding: 8px 14px; color: var(--muted); background: var(--soft); }
+    .meta { color: var(--muted); font-size: 0.92rem; margin-bottom: 24px; }
+    .summary { border: 1px solid var(--line); background: var(--soft); border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+    .toc-title { font-weight: 700; margin-bottom: 8px; }
+    .toc ul, .summary ul { padding-left: 20px; }
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; }
+      aside { position: static; }
+      main { padding: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <div class="toc-title">目录</div>
+      <ul><li class="toc-level-1"><a href="#流水线执行报告">流水线执行报告</a></li><li class="toc-level-2"><a href="#摘要">摘要</a></li><li class="toc-level-2"><a href="#执行协作">执行协作</a></li><li class="toc-level-2"><a href="#证据链">证据链</a></li><li class="toc-level-3"><a href="#核心用户路径">核心用户路径</a></li><li class="toc-level-3"><a href="#gate-命令与检查项">Gate 命令与检查项</a></li><li class="toc-level-3"><a href="#红测转绿证据">红测转绿证据</a></li><li class="toc-level-3"><a href="#contract-matrix-状态">Contract Matrix 状态</a></li><li class="toc-level-3"><a href="#已知失败与遗留风险">已知失败与遗留风险</a></li><li class="toc-level-2"><a href="#阶段详情">阶段详情</a></li><li class="toc-level-2"><a href="#质量门禁">质量门禁</a></li><li class="toc-level-2"><a href="#产物清单">产物清单</a></li><li class="toc-level-3"><a href="#产品资产">产品资产</a></li><li class="toc-level-3"><a href="#本轮记录">本轮记录</a></li><li class="toc-level-3"><a href="#派生视图">派生视图</a></li></ul>
+    </aside>
+    <main>
+      <h1>流水线执行报告</h1>
+      <div class="meta">
+        <div>Feature: cycle-isolation</div>
+        <div>Source: summary-report.md</div>
+        <div>Generated: 2026-11-05T03:32:16.855Z</div>
+      </div>
+      <section class="summary">
+        <h2>摘要</h2>
+        <ul><li><strong>流水线状态</strong>：❌ failed</li><li><strong>功能名称</strong>：cycle-isolation</li><li><strong>Pipeline Pack</strong>：default</li><li><strong>阶段进度</strong>：3 / 4 已完成</li><li><strong>门禁通过率</strong>：50%</li><li><strong>总重试次数</strong>：0</li><li><strong>Agent 成功/失败</strong>：9 / 0</li><li><strong>平均阶段重试</strong>：0</li><li><strong>修订循环次数</strong>：0</li><li><strong>插件失败次数</strong>：0</li><li><strong>Conversation 打开/收敛/落地</strong>：0 / 0 / 0</li><li><strong>Conversation huddle / unresolved</strong>：0 / 0</li></ul>
+      </section>
+      <h1 id="流水线执行报告">流水线执行报告</h1>
+<h2 id="摘要">摘要</h2>
+<ul><li><strong>流水线状态</strong>：❌ failed</li><li><strong>功能名称</strong>：cycle-isolation</li><li><strong>Pipeline Pack</strong>：default</li><li><strong>阶段进度</strong>：3 / 4 已完成</li><li><strong>门禁通过率</strong>：50%</li><li><strong>总重试次数</strong>：0</li><li><strong>Agent 成功/失败</strong>：9 / 0</li><li><strong>平均阶段重试</strong>：0</li><li><strong>修订循环次数</strong>：0</li><li><strong>插件失败次数</strong>：0</li><li><strong>Conversation 打开/收敛/落地</strong>：0 / 0 / 0</li><li><strong>Conversation huddle / unresolved</strong>：0 / 0</li></ul>
+<hr>
+<h2 id="执行协作">执行协作</h2>
+<table><thead><tr><th>Todo</th><th>Owner</th><th>Status</th><th>Title</th></tr></thead><tbody></tbody></table>
+<h2 id="证据链">证据链</h2>
+<h3 id="核心用户路径">核心用户路径</h3>
+<ul><li>详见 <code>qa-report.md</code>：核心路径必须包含真实浏览器、真实 API、真实 schema 的证据。</li><li>Mock 可辅助定位，但关键路径不能只凭 Mock 通过；缺少真实路径证据时必须标记为未验证。</li></ul>
+<h3 id="gate-命令与检查项">Gate 命令与检查项</h3>
+<ul><li>当前运行时摘要展示 gate 检查结果与执行时间；精确命令请在可用时查阅 gate output 或 <code>qa-report.md</code>。</li></ul>
+<table><thead><tr><th>门禁</th><th>状态</th><th>通过</th><th>检查项</th><th>失败项</th><th>执行时间</th></tr></thead><tbody><tr><td>Gate 0 (代码质量)</td><td>✅ completed</td><td>false</td><td>5</td><td>1</td><td>2026-11-05T03:08:04.224Z</td></tr><tr><td>Gate 1 (测试)</td><td>✅ completed</td><td>true</td><td>3</td><td>0</td><td>2026-11-05T03:13:23.119Z</td></tr><tr><td>Gate 2 (性能)</td><td>✅ completed</td><td>true</td><td>2</td><td>0</td><td>2026-11-05T03:08:04.507Z</td></tr><tr><td>owasp-scan</td><td>✅ completed</td><td>false</td><td>9</td><td>1</td><td>2026-11-05T03:19:23.765Z</td></tr></tbody></table>
+<h3 id="红测转绿证据">红测转绿证据</h3>
+<ul><li>详见 <code>tasks.md</code>：Evidence Wave 计划、红测命令、绿门禁和 Stop Condition。</li><li>详见 <code>qa-report.md</code>：red-to-green 证据、复跑结果和未覆盖路径说明。</li></ul>
+<h3 id="contract-matrix-状态">Contract Matrix 状态</h3>
+<ul><li>详见 <code>tasks.md</code>：Contract Matrix 对齐 UI / Copy、Client Payload、Server Schema、Persistence、Business Rule 与 Test Evidence。</li><li>详见 <code>qa-report.md</code>：Contract Matrix 验证结果、真实 payload、服务端响应和 schema 证据。</li></ul>
+<h3 id="已知失败与遗留风险">已知失败与遗留风险</h3>
+<ul><li>Gate 通过率：50%</li><li>Agent 失败数：0</li><li>插件失败数：0</li><li>详见 <code>qa-report.md</code>：残留风险、未验证核心路径与后续处理建议。</li></ul>
+<hr>
+<h2 id="阶段详情">阶段详情</h2>
+<table><thead><tr><th>阶段</th><th>名称</th><th>状态</th><th>耗时</th><th>重试</th><th>产物数</th></tr></thead><tbody><tr><td>1</td><td>planning</td><td>✅ completed</td><td>635.166s</td><td>0</td><td>10</td></tr><tr><td>2</td><td>review</td><td>✅ completed</td><td>311.423s</td><td>0</td><td>4</td></tr><tr><td>3</td><td>development</td><td>❌ failed</td><td>38002.74s</td><td>0</td><td>3</td></tr><tr><td>4</td><td>deployment</td><td>✅ completed</td><td>489.638s</td><td>0</td><td>2</td></tr></tbody></table>
+<h2 id="质量门禁">质量门禁</h2>
+<table><thead><tr><th>门禁</th><th>状态</th><th>通过</th><th>检查项数</th><th>执行时间</th></tr></thead><tbody><tr><td>Gate 0 (代码质量)</td><td>✅ completed</td><td>false</td><td>5</td><td>2026-11-05T03:08:04.224Z</td></tr><tr><td>Gate 1 (测试)</td><td>✅ completed</td><td>true</td><td>3</td><td>2026-11-05T03:13:23.119Z</td></tr><tr><td>Gate 2 (性能)</td><td>✅ completed</td><td>true</td><td>2</td><td>2026-11-05T03:08:04.507Z</td></tr><tr><td>owasp-scan</td><td>✅ completed</td><td>false</td><td>9</td><td>2026-11-05T03:19:23.765Z</td></tr></tbody></table>
+<h2 id="产物清单">产物清单</h2>
+<h3 id="产品资产">产品资产</h3>
+<blockquote><p>描述产品本身，跨迭代持续维护</p></blockquote>
+<ul><li><code>architecture.md</code></li><li><code>design-brief</code></li><li><code>prd.md</code></li><li><code>ui-design.json</code></li><li><code>ui-spec.md</code></li></ul>
+<h3 id="本轮记录">本轮记录</h3>
+<blockquote><p>描述这一次执行，下一轮会被取代</p></blockquote>
+<ul><li><code>code</code></li><li><code>deploy-report.md</code></li><li><code>design-brief.md</code></li><li><code>qa-report.md</code></li><li><code>tasks.md</code></li><li><code>tech-review.md</code></li></ul>
+<h3 id="派生视图">派生视图</h3>
+<blockquote><p>从 Markdown 生成，可随时重建</p></blockquote>
+<ul><li><code>architecture.html</code></li><li><code>deploy-report.html</code></li><li><code>design-brief.html</code></li><li><code>prd.html</code></li><li><code>qa-report.html</code></li><li><code>tasks.html</code></li><li><code>tech-review.html</code></li><li><code>ui-spec.html</code></li></ul>
+    </main>
+  </div>
+</body>
+</html>

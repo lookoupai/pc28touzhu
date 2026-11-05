@@ -1874,3 +1874,27 @@ body[data-autobet-scope="subscriptions"] .side-panel {
         width: 100%;
     }
 }
+.manual-cycle-state {
+    padding: 14px;
+    margin-top: 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md, 10px);
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+
+.manual-cycle-state p {
+    margin: 8px 0;
+    font-size: 13px;
+}
+
+.manual-cycle-state a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    color: var(--primary-strong);
+}
+
+.manual-cycle-settings-copy strong {
+    color: var(--text);
+}

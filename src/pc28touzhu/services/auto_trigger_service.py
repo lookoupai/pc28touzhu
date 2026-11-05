@@ -24,6 +24,7 @@ from pc28touzhu.domain.subscription_strategy import (
 )
 from pc28touzhu.domain.pc28_profit_rules import drop_matching_catalog_odds, normalize_odds_overrides
 from pc28touzhu.domain.pc28_issue_window import evaluate_pc28_issue_dispatch_window
+from pc28touzhu.domain.auto_trigger_cycle import normalize_cycle_policy, is_roll_subscription
 from pc28touzhu.domain.draw_streak import DRAW_VALUES_BY_METRIC, MAX_DRAW_STREAK, build_draw_streak_snapshot
 from pc28touzhu.domain.settlement_rules import get_settlement_rule, normalize_settlement_rule_id
 from pc28touzhu.domain.win_streak_roll import CYCLE_DAY_STOP_REASONS, normalize_win_streak_roll_policy
@@ -555,6 +556,7 @@ def normalize_rule_payload(payload: Dict[str, Any], *, current: Optional[Dict[st
     return {
         "name": name,
         "status": status,
+        "cycle_policy": normalize_cycle_policy(payload.get("cycle_policy"), current=source.get("cycle_policy"), creating=current is None),
         "scope_mode": scope_mode,
         "subscription_ids": subscription_ids,
         "condition_mode": condition_mode,
@@ -952,6 +954,7 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = N
                 "active_runs": active_runs,
                 "routes": routes,
                 "schedule_status": schedule_status,
+                "cycle_runtime": repository.list_auto_trigger_cycle_runtime(rule_id=int(rule["id"]), user_id=normalized_user_id, stat_date=resolved_stat_date) if hasattr(repository, "list_auto_trigger_cycle_runtime") else [],
             }
         )
     return {"items": items}
@@ -2326,8 +2329,33 @@ def _load_trigger_draw_data(cache: dict, *, draw_clock: Optional[dict], draw_fet
 def evaluate_auto_trigger_rule(
     repository: Any, rule: Dict[str, Any], *, fetcher=None, now: Optional[datetime] = None,
     draw_clock: Optional[Dict[str, Any]] = None,
-    draw_fetcher=None, _draw_data_cache: Optional[dict] = None,
+    draw_fetcher=None, _draw_data_cache: Optional[dict] = None, _skip_roll: bool = False,
 ) -> Dict[str, Any]:
+    if not _skip_roll and hasattr(repository, "get_auto_trigger_cycle_session"):
+        candidates = repository.list_auto_trigger_candidate_subscriptions(
+            user_id=int(rule["user_id"]),
+            subscription_ids=rule.get("subscription_ids") if rule.get("scope_mode") == "selected_subscriptions" else None,
+        )
+        def owns_roll_cycle(item):
+            if is_roll_subscription(item):
+                return True
+            session = repository.get_auto_trigger_cycle_session(rule_id=int(rule["id"]), subscription_id=int(item["id"]), user_id=int(rule["user_id"])) or {}
+            return bool(session.get("active_run_id"))
+        roll = [item for item in candidates if owns_roll_cycle(item)]
+        if roll:
+            from pc28touzhu.services.auto_trigger_cycle_service import evaluate_roll_rule
+            result = evaluate_roll_rule(repository, rule, roll, fetcher=fetcher, now=now, draw_clock=draw_clock,
+                                        draw_fetcher=draw_fetcher, draw_cache=_draw_data_cache)
+            roll_ids = {int(item["id"]) for item in roll}
+            other_ids = [int(item["id"]) for item in candidates if int(item["id"]) not in roll_ids]
+            if other_ids:
+                other = evaluate_auto_trigger_rule(repository, {**rule, "scope_mode": "selected_subscriptions", "subscription_ids": other_ids},
+                    fetcher=fetcher, now=now, draw_clock=draw_clock, draw_fetcher=draw_fetcher,
+                    _draw_data_cache=_draw_data_cache, _skip_roll=True)
+                for key in result["summary"]:
+                    result["summary"][key] += other["summary"].get(key, 0)
+                result["events"].extend(other["events"])
+            return result
     if str(rule.get("trigger_mode") or "condition") == "schedule":
         return evaluate_scheduled_auto_trigger_rule(repository, rule, now=now, draw_clock=draw_clock)
     daily_risk_control = rule.get("daily_risk_control") if isinstance(rule.get("daily_risk_control"), dict) else {}
