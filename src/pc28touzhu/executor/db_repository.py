@@ -951,6 +951,7 @@ class DatabaseRepository:
         "CREATE INDEX IF NOT EXISTS idx_source_raw_items_source_id_desc ON source_raw_items(source_id, id DESC)",
         "CREATE INDEX IF NOT EXISTS idx_source_raw_items_source_status ON source_raw_items(source_id, parse_status)",
         "CREATE INDEX IF NOT EXISTS idx_normalized_signals_source_id_desc ON normalized_signals(source_id, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_normalized_signals_source_issue_numeric ON normalized_signals(source_id, lottery_type, CAST(issue_no AS INTEGER))",
         "CREATE INDEX IF NOT EXISTS idx_normalized_signals_source_status ON normalized_signals(source_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_normalized_signals_raw_item ON normalized_signals(source_raw_item_id, id)",
         "CREATE INDEX IF NOT EXISTS idx_source_raw_items_source_external ON source_raw_items(source_id, external_item_id)",
@@ -3803,6 +3804,20 @@ class DatabaseRepository:
                 tuple(cursor_params + limit_params),
             )
         return [self._serialize_signal_row(row) for row in rows]
+
+    def list_source_prediction_streak_signals(self, *, source_id: int, latest_issue_no: str, periods: int) -> list[dict]:
+        """读取已结算连续段内的原始预测方向，包含重复项以检测同期冲突。"""
+        latest = int(latest_issue_no)
+        return self._fetch_all(
+            """
+            SELECT issue_no, bet_type, bet_value
+            FROM normalized_signals
+            WHERE source_id = ? AND lottery_type = 'pc28'
+              AND CAST(issue_no AS INTEGER) BETWEEN ? AND ?
+              AND bet_type IN ('big_small', 'odd_even', 'combo')
+            """,
+            (int(source_id), max(0, latest - max(1, int(periods)) + 1), latest),
+        )
 
     def create_delivery_target(
         self,

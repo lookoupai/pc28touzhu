@@ -1,0 +1,4 @@
+﻿split,n,success_rate,profitable_rate,net,mean,mdd,longest_loss,periods,censored
+train,4,0.25,0.25,403.05,100.7625,299.89,3,9,0
+validation,8,0.25,0.25,138.52,17.315,507.0,3,19,0
+test,3,0.0,0.0,-298.23,-99.41,298.23,3,8,0

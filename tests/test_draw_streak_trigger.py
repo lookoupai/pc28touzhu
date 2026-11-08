@@ -250,6 +250,52 @@ class DrawStreakTriggerTests(unittest.TestCase):
             self.assertEqual(self.run_cycle()["summary"]["triggered_count"], 1)
         self.draw_fetch.assert_not_called()
 
+    def test_absence_triggers_roll_with_alternating_combinations_without_prediction_api(self):
+        self.signal()
+        self.draw_fetch.return_value["items"] = draws(11, 0, 17, 9, 16)
+        self.create_rule(conditions=[{**condition(threshold=4), "type": "draw_absence"}])
+        self.assertEqual(self.run_cycle()["summary"]["triggered_count"], 1)
+        self.prediction_fetcher.assert_not_called()
+        self.assertEqual(self.auto_cycle()["pending_plan"]["structure"], "B")
+        event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(event["matched_conditions"][0]["actual_draw_absence"], 4)
+        self.assertEqual(self.run_cycle()["summary"]["triggered_count"], 0)
+
+    def test_selected_prediction_direction_interrupts_roll_trigger(self):
+        for offset, value in enumerate(("大", "小", "大")):
+            self.repo.create_signal_record(source_id=self.source["id"], lottery_type="pc28", issue_no=str(LATEST - offset),
+                                           bet_type="big_small", bet_value=value, published_at=self.now.isoformat())
+        self.signal()
+        selected = {"type": "miss_streak", "metric": "big_small", "prediction_value": "大", "threshold": 3, "operator": "gte"}
+        rule = self.create_rule(conditions=[selected])
+        self.prediction_fetcher.side_effect = None
+        self.prediction_fetcher.return_value = {"latest_settled_issue": str(LATEST), "metrics": {"big_small": {"streaks": {"current_miss_streak": 3}}}}
+        with patch("pc28touzhu.services.auto_trigger_service._performance_url_from_source", return_value="https://example.com/performance"):
+            self.assertEqual(self.run_cycle()["summary"]["triggered_count"], 0)
+            update_auto_trigger_rule(self.repo, rule_id=rule["id"], user_id=self.user_id, payload={"conditions": [{**selected, "threshold": 1}]})
+            self.assertEqual(self.run_cycle()["summary"]["triggered_count"], 1)
+        event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(event["matched_conditions"][0]["actual_miss_streak"], 1)
+        self.assertEqual(event["matched_conditions"][0]["prediction_issues"], [str(LATEST)])
+        self.draw_fetch.assert_not_called()
+
+    def test_hit_streak_roll_and_absence_guard_require_same_period(self):
+        for offset in range(3):
+            self.repo.create_signal_record(source_id=self.source["id"], lottery_type="pc28", issue_no=str(LATEST - offset),
+                                           bet_type="big_small", bet_value="大", published_at=self.now.isoformat())
+        self.signal()
+        self.create_rule(conditions=[{"type": "hit_streak", "metric": "big_small", "prediction_value": "大", "threshold": 2, "operator": "gte"}],
+                         guard_groups=[{"conditions": [{**condition("小单", threshold=2), "type": "draw_absence"}]}])
+        self.prediction_fetcher.side_effect = None
+        payload = {"latest_settled_issue": str(LATEST - 1), "metrics": {"big_small": {"streaks": {"current_hit_streak": 2}}}}
+        self.prediction_fetcher.return_value = payload
+        with patch("pc28touzhu.services.auto_trigger_service._performance_url_from_source", return_value="https://example.com/performance"):
+            self.assertEqual(self.run_cycle()["summary"]["triggered_count"], 0)
+            payload["latest_settled_issue"] = str(LATEST)
+            self.assertEqual(self.run_cycle()["summary"]["triggered_count"], 1)
+        event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual({item["type"] for item in event["matched_conditions"]}, {"hit_streak", "draw_absence"})
+
     def test_mixed_guard_requires_prediction_and_draws_from_same_period(self):
         self.create_rule(dispatch=False, guard_groups=[{"conditions": [{"type": "miss_streak", "metric": "combo", "threshold": 2, "operator": "gte"}]}])
         with patch("pc28touzhu.services.auto_trigger_service._performance_url_from_source", return_value="https://example.com/performance"):
@@ -284,7 +330,17 @@ class DrawStreakTriggerTests(unittest.TestCase):
             "conditions": [condition("小单")], "action": {"dispatch_latest_signal": True},
         })["item"]
         self.assertEqual(request("/api/platform/auto-trigger-rules")["items"][0]["conditions"][0]["bet_value"], "小单")
-        request("/api/platform/auto-trigger-rules/%s" % rule["id"], {"conditions": [condition("大双")]})
+        request("/api/platform/auto-trigger-rules/%s" % rule["id"], {
+            "conditions": [{"type": "hit_streak", "metric": "big_small", "prediction_value": "大", "operator": "gte", "threshold": 3},
+                           {**condition("小双"), "type": "draw_absence"}],
+            "guard_groups": [{"conditions": [{"type": "miss_streak", "metric": "odd_even", "prediction_value": "单", "operator": "gte", "threshold": 2}]}],
+        })
+        saved = request("/api/platform/auto-trigger-rules")["items"][0]
+        self.assertEqual(saved["conditions"][0]["prediction_value"], "大")
+        self.assertEqual(saved["conditions"][1]["type"], "draw_absence")
+        self.assertEqual(saved["conditions"][1]["bet_value"], "小双")
+        self.assertEqual(saved["guard_groups"][0]["conditions"][0]["prediction_value"], "单")
+        request("/api/platform/auto-trigger-rules/%s" % rule["id"], {"conditions": [condition("大双")], "guard_groups": []})
         self.signal()
         with patch("pc28touzhu.api.app.get_pc28_draw_clock", return_value=self.clock):
             result = request("/api/platform/auto-trigger-rules/run-once", {"rule_id": rule["id"]})

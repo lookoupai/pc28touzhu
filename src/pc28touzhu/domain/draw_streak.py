@@ -40,18 +40,21 @@ def build_draw_streak_snapshot(items: list[dict], *, latest_issue_no: str, sourc
         raise ValueError("draw_history_not_current")
 
     metrics = {}
+    absent_metrics = {}
     for metric, values in DRAW_VALUES_BY_METRIC.items():
         metrics[metric] = {}
+        absent_metrics[metric] = {}
         for value in values:
-            issues = []
-            issue = latest
-            complete = False
-            while draws.get(issue) is not None:
-                snapshot = derive_pc28_draw_snapshot({"result_number": draws[issue]})
-                if snapshot[metric] != value:
-                    complete = True
-                    break
-                issues.append(str(issue))
-                issue -= 1
-            metrics[metric][value] = {"count": len(issues), "complete": complete, "issues": issues}
-    return {"latest_issue_no": str(latest_issue_no), "source": source, "metrics": metrics}
+            for absent, target in ((False, metrics), (True, absent_metrics)):
+                issues = []
+                issue = latest
+                complete = False
+                while draws.get(issue) is not None:
+                    snapshot = derive_pc28_draw_snapshot({"result_number": draws[issue]})
+                    if (snapshot[metric] == value) == absent:
+                        complete = True
+                        break
+                    issues.append(str(issue))
+                    issue -= 1
+                target[metric][value] = {"count": len(issues), "complete": complete, "issues": issues}
+    return {"latest_issue_no": str(latest_issue_no), "source": source, "metrics": metrics, "absent_metrics": absent_metrics}

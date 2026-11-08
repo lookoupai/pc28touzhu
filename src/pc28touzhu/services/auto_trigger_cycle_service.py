@@ -38,13 +38,13 @@ def _routes(repository: Any, rule: dict, sub: dict) -> list[dict]:
             and (not selected or int(t['id']) in selected)]
 
 
-def _performance(rule: dict, sub: dict, *, fetcher, draw_fetcher, draw_clock, draw_cache, cache: dict) -> tuple[dict, dict | None]:
+def _performance(rule: dict, sub: dict, *, repository, fetcher, draw_fetcher, draw_clock, draw_cache, cache: dict) -> tuple[dict, dict | None]:
     from pc28touzhu.services import auto_trigger_service as ats
     conditions = list(rule.get('conditions') or [])
     for group in rule.get('guard_groups') or []:
         conditions.extend(group.get('conditions') or [])
-    needs_draw = any(c.get('type') == 'draw_streak' for c in conditions)
-    needs_prediction = any(c.get('type') != 'draw_streak' for c in conditions)
+    needs_draw = any(c.get('type') in ats.DRAW_CONDITION_TYPES for c in conditions)
+    needs_prediction = any(c.get('type') not in ats.DRAW_CONDITION_TYPES for c in conditions)
     performance: dict = {'metrics': {}}
     if needs_prediction:
         try:
@@ -56,6 +56,9 @@ def _performance(rule: dict, sub: dict, *, fetcher, draw_fetcher, draw_clock, dr
             if not needs_draw:
                 raise
             performance['prediction_error'] = str(exc)
+        ats._add_prediction_direction_streaks(
+            repository, source_id=int(sub['source_id']), conditions=conditions, performance=performance,
+        )
     if needs_draw:
         try:
             data = ats._load_trigger_draw_data(draw_cache, draw_clock=draw_clock, draw_fetcher=draw_fetcher)
@@ -138,7 +141,7 @@ def evaluate_roll_rule(repository: Any, rule: dict, subscriptions: list[dict], *
                     raise StartSkipped('draw_clock_unavailable')
                 performance = {'latest_settled_issue': latest, 'metrics': {}}
             else:
-                performance, clock = _performance(rule, sub, fetcher=fetcher, draw_fetcher=draw_fetcher,
+                performance, clock = _performance(rule, sub, repository=repository, fetcher=fetcher, draw_fetcher=draw_fetcher,
                     draw_clock=clock, draw_cache=draw_cache, cache=performance_cache)
                 latest = str(performance.get('latest_settled_issue') or '')
                 if not latest:

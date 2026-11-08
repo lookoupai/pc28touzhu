@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
 import time
 from contextlib import nullcontext
@@ -26,6 +27,9 @@ from pc28touzhu.domain.pc28_profit_rules import drop_matching_catalog_odds, norm
 from pc28touzhu.domain.pc28_issue_window import evaluate_pc28_issue_dispatch_window
 from pc28touzhu.domain.auto_trigger_cycle import normalize_cycle_policy, is_roll_subscription
 from pc28touzhu.domain.draw_streak import DRAW_VALUES_BY_METRIC, MAX_DRAW_STREAK, build_draw_streak_snapshot
+from pc28touzhu.domain.prediction_streak import (
+    PREDICTION_STREAK_TYPES, build_prediction_direction_streaks, prediction_streak_count,
+)
 from pc28touzhu.domain.settlement_rules import get_settlement_rule, normalize_settlement_rule_id
 from pc28touzhu.domain.win_streak_roll import CYCLE_DAY_STOP_REASONS, normalize_win_streak_roll_policy
 from pc28touzhu.services.dispatch_service import dispatch_signal
@@ -33,7 +37,8 @@ from pc28touzhu.services.pc28_draw_service import fetch_pc28_recent_draws_deep, 
 
 
 ALLOWED_METRICS = {"big_small", "odd_even", "combo"}
-ALLOWED_CONDITION_TYPES = {"hit_rate", "miss_streak", "draw_streak"}
+DRAW_CONDITION_TYPES = {"draw_streak", "draw_absence"}
+ALLOWED_CONDITION_TYPES = {"hit_rate"} | PREDICTION_STREAK_TYPES | DRAW_CONDITION_TYPES
 ALLOWED_OPERATORS = {"lt", "lte", "gt", "gte"}
 ALLOWED_SCOPE_MODES = {"all_subscriptions", "selected_subscriptions"}
 ALLOWED_TRIGGER_MODES = {"condition", "schedule", "condition_schedule"}
@@ -186,17 +191,22 @@ def _normalize_conditions(value: Any) -> list[dict]:
             raise ValueError("conditions[%s].metric 仅支持 big_small、odd_even、combo" % index)
         condition_type = str(item.get("type") or "hit_rate").strip() or "hit_rate"
         if condition_type not in ALLOWED_CONDITION_TYPES:
-            raise ValueError("conditions[%s].type 仅支持 hit_rate、miss_streak 或 draw_streak" % index)
+            raise ValueError("conditions[%s].type 仅支持 hit_rate、hit_streak、miss_streak、draw_streak 或 draw_absence" % index)
         operator = str(item.get("operator") or "").strip()
         if operator not in ALLOWED_OPERATORS:
             raise ValueError("conditions[%s].operator 仅支持 lt、lte、gt、gte" % index)
         threshold = _to_float(item.get("threshold"), "conditions[%s].threshold" % index)
+        if not math.isfinite(threshold):
+            raise ValueError("conditions[%s].threshold 必须为有限数字" % index)
         if condition_type == "hit_rate" and (threshold < 0 or threshold > 100):
             raise ValueError("conditions[%s].threshold 必须在 0 到 100 之间" % index)
-        if condition_type == "miss_streak" and threshold < 0:
-            raise ValueError("conditions[%s].threshold 不能小于 0" % index)
+        if condition_type in PREDICTION_STREAK_TYPES and (threshold < 0 or not threshold.is_integer()):
+            raise ValueError("conditions[%s].threshold 必须为非负整数" % index)
+        prediction_value = str(item.get("prediction_value") or "").strip()
+        if condition_type in PREDICTION_STREAK_TYPES and prediction_value and prediction_value not in DRAW_VALUES_BY_METRIC[metric]:
+            raise ValueError("conditions[%s].prediction_value 必须为空（不限）或所选玩法的预测方向" % index)
         draw_value = str(item.get("bet_value") or "").strip()
-        if condition_type == "draw_streak":
+        if condition_type in DRAW_CONDITION_TYPES:
             if draw_value not in DRAW_VALUES_BY_METRIC[metric]:
                 raise ValueError("conditions[%s].bet_value 必须是所选玩法的开奖结果" % index)
             if not 1 <= threshold <= MAX_DRAW_STREAK or not threshold.is_integer():
@@ -225,7 +235,8 @@ def _normalize_conditions(value: Any) -> list[dict]:
                 "operator": operator,
                 "threshold": int(threshold) if condition_type != "hit_rate" else round(threshold, 2),
                 "min_sample_count": min_sample_count,
-                **({"bet_value": draw_value} if condition_type == "draw_streak" else {}),
+                **({"bet_value": draw_value} if condition_type in DRAW_CONDITION_TYPES else {}),
+                **({"prediction_value": prediction_value} if condition_type in PREDICTION_STREAK_TYPES and prediction_value else {}),
             }
         )
     return normalized
@@ -1202,9 +1213,10 @@ def _match_condition(condition: Dict[str, Any], performance: Dict[str, Any]) -> 
     metric_key = str(condition.get("metric") or "")
     metric_payload = metrics.get(metric_key) if isinstance(metrics.get(metric_key), dict) else {}
     condition_type = str(condition.get("type") or "hit_rate").strip() or "hit_rate"
-    if condition_type == "draw_streak":
+    if condition_type in DRAW_CONDITION_TYPES:
         draw_snapshot = performance.get("draw_streak") or {}
-        streak = draw_snapshot.get("metrics", {}).get(metric_key, {}).get(condition.get("bet_value"))
+        snapshot_key = "absent_metrics" if condition_type == "draw_absence" else "metrics"
+        streak = draw_snapshot.get(snapshot_key, {}).get(metric_key, {}).get(condition.get("bet_value"))
         if not streak:
             return None
         operator = str(condition.get("operator") or "")
@@ -1213,25 +1225,33 @@ def _match_condition(condition: Dict[str, Any], performance: Dict[str, Any]) -> 
         if _compare(streak["count"], operator, float(condition.get("threshold") or 0)):
             return {
                 **condition,
-                "actual_draw_streak": streak["count"],
+                "actual_" + condition_type: streak["count"],
                 "streak_complete": streak["complete"],
                 "draw_issues": list(streak["issues"]),
                 "metric_label": METRIC_LABELS.get(metric_key, metric_key),
             }
         return None
-    if condition_type == "miss_streak":
-        streaks = metric_payload.get("streaks") if isinstance(metric_payload.get("streaks"), dict) else {}
-        miss_streak = streaks.get("current_miss_streak")
-        if miss_streak is None:
-            return None
-        try:
-            streak_count = int(miss_streak)
-        except (TypeError, ValueError):
+    if condition_type in PREDICTION_STREAK_TYPES:
+        evidence = {}
+        prediction_value = str(condition.get("prediction_value") or "")
+        if prediction_value:
+            streak = metric_payload.get("direction_streaks", {}).get(prediction_value, {}).get(condition_type)
+            if not streak:
+                return None
+            if not streak["complete"] and condition.get("operator") in {"lt", "lte"}:
+                return None
+            streak_count = streak["count"]
+            evidence = {"streak_complete": streak["complete"], "prediction_issues": list(streak["issues"])}
+        else:
+            streaks = metric_payload.get("streaks") if isinstance(metric_payload.get("streaks"), dict) else {}
+            streak_count = prediction_streak_count(streaks.get("current_" + condition_type))
+        if streak_count is None:
             return None
         if _compare(float(streak_count), str(condition.get("operator") or ""), float(condition.get("threshold") or 0)):
             return {
                 **condition,
-                "actual_miss_streak": streak_count,
+                "actual_" + condition_type: streak_count,
+                **evidence,
                 "metric_label": METRIC_LABELS.get(metric_key, metric_key),
             }
         return None
@@ -2375,6 +2395,28 @@ def _load_trigger_draw_data(cache: dict, *, draw_clock: Optional[dict], draw_fet
     return cache
 
 
+def _add_prediction_direction_streaks(repository: Any, *, source_id: int, conditions: list[dict], performance: dict) -> None:
+    selected = [c for c in conditions if c.get("type") in PREDICTION_STREAK_TYPES and c.get("prediction_value")]
+    latest = str(performance.get("latest_settled_issue") or "")
+    if not selected or not latest.isdigit():
+        return
+    metrics = performance.get("metrics") if isinstance(performance.get("metrics"), dict) else {}
+    # 指定方向的连续段不会超过整体连中/连挂，只读取这个已结算区间。
+    periods = 0
+    for condition in selected:
+        metric = metrics.get(condition["metric"])
+        streaks = metric.get("streaks") if isinstance(metric, dict) else None
+        if isinstance(streaks, dict):
+            periods = max(periods, prediction_streak_count(streaks.get("current_" + condition["type"])) or 0)
+    items = repository.list_source_prediction_streak_signals(
+        source_id=source_id, latest_issue_no=latest, periods=periods,
+    ) if periods else []
+    directions = build_prediction_direction_streaks(items, latest_issue_no=latest, metrics=metrics)
+    for metric, values in directions.items():
+        if isinstance(metrics.get(metric), dict):
+            metrics[metric]["direction_streaks"] = values
+
+
 def evaluate_auto_trigger_rule(
     repository: Any, rule: Dict[str, Any], *, fetcher=None, now: Optional[datetime] = None,
     draw_clock: Optional[Dict[str, Any]] = None,
@@ -2428,8 +2470,8 @@ def evaluate_auto_trigger_rule(
     all_conditions = list(rule.get("conditions") or [])
     for group in rule.get("guard_groups") or []:
         all_conditions.extend(group.get("conditions") or [])
-    has_draw_conditions = any(item.get("type") == "draw_streak" for item in all_conditions)
-    has_prediction_conditions = any(item.get("type") != "draw_streak" for item in all_conditions)
+    has_draw_conditions = any(item.get("type") in DRAW_CONDITION_TYPES for item in all_conditions)
+    has_prediction_conditions = any(item.get("type") not in DRAW_CONDITION_TYPES for item in all_conditions)
 
     for subscription in subscriptions:
         source = subscription.get("source") if isinstance(subscription.get("source"), dict) else {}
@@ -2531,6 +2573,9 @@ def evaluate_auto_trigger_rule(
                         raise
                     # OR 中独立的开奖条件仍可判断；依赖预测的条件没有数据就不匹配。
                     performance["prediction_error"] = str(exc)
+                _add_prediction_direction_streaks(
+                    repository, source_id=int(subscription["source_id"]), conditions=all_conditions, performance=performance,
+                )
             if has_draw_conditions:
                 performance = copy.deepcopy(performance)
                 performance.pop("draw_streak", None)
@@ -2625,7 +2670,7 @@ def evaluate_auto_trigger_rule(
                     stop_reason = "daily_risk_stopped"
                 elif current_run and current_run.get("status") == "stopped":
                     stop_reason = str(current_run.get("stop_reason") or "rule_run_stopped")
-                if not stop_reason and any(item.get("type") == "draw_streak" for item in matched):
+                if not stop_reason and any(item.get("type") in DRAW_CONDITION_TYPES for item in matched):
                     last_trigger = unit.get_latest_auto_trigger_event(
                         rule_id=int(rule["id"]), subscription_id=int(subscription["id"]), status="triggered",
                     )

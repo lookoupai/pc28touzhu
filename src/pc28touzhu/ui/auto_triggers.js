@@ -22,9 +22,13 @@
     ];
     const conditionTypeOptions = [
         ["hit_rate", "命中率"],
+        ["hit_streak", "当前连中"],
         ["miss_streak", "当前连挂"],
         ["draw_streak", "连续开出"],
+        ["draw_absence", "连续不出"],
     ];
+    const drawConditionTypes = ["draw_streak", "draw_absence"];
+    const predictionStreakTypes = ["hit_streak", "miss_streak"];
     const drawValuesByMetric = {
         big_small: ["大", "小"],
         odd_even: ["单", "双"],
@@ -309,12 +313,13 @@
         const type = condition.type || "hit_rate";
         const metric = metricOptions.find(function (item) { return item[0] === condition.metric; });
         const operator = operatorOptions.find(function (item) { return item[0] === condition.operator; });
-        if (type === "draw_streak") {
-            const actual = condition.actual_draw_streak == null ? "" : ("（当前" + (condition.streak_complete === false ? "至少" : "") + String(condition.actual_draw_streak) + "期）");
-            return String(condition.bet_value || "") + "连续开出" + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "期" + actual;
+        const actualCount = condition["actual_" + type];
+        const actual = actualCount == null ? "" : ("（当前" + (condition.streak_complete === false ? "至少" : "") + String(actualCount) + "期）");
+        if (drawConditionTypes.includes(type)) {
+            return String(condition.bet_value || "") + (type === "draw_absence" ? "连续不出" : "连续开出") + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "期" + actual;
         }
-        if (type === "miss_streak") {
-            return (metric ? metric[1] : condition.metric) + "当前连挂" + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "期";
+        if (predictionStreakTypes.includes(type)) {
+            return (metric ? metric[1] : condition.metric) + "（" + (condition.prediction_value ? "预测" + condition.prediction_value : "不限方向") + "）" + (type === "hit_streak" ? "当前连中" : "当前连挂") + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "期" + actual;
         }
         const windowSize = Number(condition.window_size || String(condition.window || "").replace("recent_", "") || 100);
         const sampleText = condition.min_sample_count ? "（样本>=" + String(condition.min_sample_count) + "）" : "";
@@ -624,6 +629,11 @@
         }).join("");
     }
 
+    function conditionValueOptions(type, metric) {
+        const values = (drawValuesByMetric[metric] || drawValuesByMetric.big_small).map(function (value) { return [value, value]; });
+        return drawConditionTypes.includes(type) ? values : [["", "不限"]].concat(values);
+    }
+
     function conditionRowHtml(condition) {
         const item = condition || {type: "hit_rate", metric: "big_small", operator: "lt", threshold: 40, min_sample_count: 100};
         const conditionType = item.type || "hit_rate";
@@ -633,7 +643,7 @@
             '<div class="condition-row">' +
                 '<label class="field"><span>条件</span><select class="text-input condition-type">' + options(conditionTypeOptions, conditionType) + '</select></label>' +
                 '<label class="field"><span>玩法</span><select class="text-input condition-metric">' + options(metricOptions, item.metric) + '</select></label>' +
-                '<label class="field condition-draw-value-field"><span>开奖结果</span><select class="text-input condition-draw-value">' + options((drawValuesByMetric[item.metric] || drawValuesByMetric.big_small).map(function (value) { return [value, value]; }), item.bet_value) + '</select></label>' +
+                '<label class="field condition-draw-value-field"><span class="condition-value-label">' + (drawConditionTypes.includes(conditionType) ? '开奖结果' : '预测方向') + '</span><select class="text-input condition-draw-value">' + options(conditionValueOptions(conditionType, item.metric), drawConditionTypes.includes(conditionType) ? item.bet_value : (item.prediction_value || "")) + '</select></label>' +
                 '<label class="field condition-window-field"><span>统计期数</span><select class="text-input condition-window">' + options(hitRateWindowOptions, windowSize) + '</select></label>' +
                 '<label class="field"><span>比较</span><select class="text-input condition-operator">' + options(operatorOptions, item.operator) + '</select></label>' +
                 '<label class="field condition-threshold-field"><span class="condition-threshold-label">' + escapeHtml(thresholdLabel) + '</span><input class="text-input condition-threshold" type="number" min="0" max="100" step="0.01" value="' + escapeHtml(item.threshold) + '"></label>' +
@@ -851,24 +861,26 @@
 
     function updateConditionRowVisibility(row, preferDefaultOperator) {
         const type = row.querySelector(".condition-type").value || "hit_rate";
+        const previousType = row.dataset.conditionType;
         row.dataset.conditionType = type;
-        const isMissStreak = type === "miss_streak";
-        const isDrawStreak = type === "draw_streak";
-        const isStreak = isMissStreak || isDrawStreak;
+        const isPredictionStreak = predictionStreakTypes.includes(type);
+        const isDrawStreak = drawConditionTypes.includes(type);
+        const isStreak = isPredictionStreak || isDrawStreak;
         const threshold = row.querySelector(".condition-threshold");
         const operator = row.querySelector(".condition-operator");
         const windowInput = row.querySelector(".condition-window");
         const sampleInput = row.querySelector(".condition-sample");
-        row.querySelector(".condition-threshold-label").textContent = isDrawStreak ? "连续期数" : (isMissStreak ? "连挂期数" : "阈值 %");
+        row.querySelector(".condition-threshold-label").textContent = isDrawStreak ? "连续期数" : (isPredictionStreak ? (type === "hit_streak" ? "连中期数" : "连挂期数") : "阈值 %");
         threshold.min = isDrawStreak ? "1" : "0";
-        threshold.max = isMissStreak ? "" : "100";
+        threshold.max = isPredictionStreak ? "" : "100";
         threshold.step = isStreak ? "1" : "0.01";
         row.querySelector(".condition-window-field").hidden = isStreak;
         row.querySelector(".condition-sample-field").hidden = isStreak;
-        row.querySelector(".condition-draw-value-field").hidden = !isDrawStreak;
+        row.querySelector(".condition-draw-value-field").hidden = !isStreak;
+        row.querySelector(".condition-value-label").textContent = isDrawStreak ? "开奖结果" : "预测方向";
         const drawValue = row.querySelector(".condition-draw-value");
-        const drawValues = drawValuesByMetric[row.querySelector(".condition-metric").value] || [];
-        drawValue.innerHTML = options(drawValues.map(function (value) { return [value, value]; }), drawValue.value);
+        const resetDirection = previousType && drawConditionTypes.includes(previousType) !== isDrawStreak;
+        drawValue.innerHTML = options(conditionValueOptions(type, row.querySelector(".condition-metric").value), resetDirection ? "" : drawValue.value);
         if (!isStreak && Number(sampleInput.value || 0) > Number(windowInput.value || 100)) {
             sampleInput.value = String(windowInput.value || 100);
         }
@@ -877,9 +889,6 @@
         }
         if (preferDefaultOperator === true && isStreak) {
             threshold.value = isDrawStreak ? "2" : "5";
-        }
-        if (isMissStreak && !Number(threshold.value || 0)) {
-            threshold.value = "5";
         }
     }
 
@@ -1069,7 +1078,8 @@
                 window_size: type === "hit_rate" ? windowSize : 0,
                 window: type === "hit_rate" ? ("recent_" + String(windowSize)) : "current",
                 min_sample_count: Number(row.querySelector(".condition-sample").value || 100),
-                ...(type === "draw_streak" ? {bet_value: row.querySelector(".condition-draw-value").value} : {}),
+                ...(drawConditionTypes.includes(type) ? {bet_value: row.querySelector(".condition-draw-value").value} : {}),
+                ...(predictionStreakTypes.includes(type) ? {prediction_value: row.querySelector(".condition-draw-value").value} : {}),
             };
         });
     }

@@ -277,11 +277,25 @@ async function realApiChecks() {
         assert.equal(d.getElementById('guardPanel').hidden, false);
         d.querySelector('.schedule-window-end').value = '';
         d.querySelectorAll('.remove-schedule-window-btn')[1].click();
+        const primary = d.querySelector('#conditionRows .condition-row');
+        change(w, primary.querySelector('.condition-type'), 'hit_streak');
+        change(w, primary.querySelector('.condition-draw-value'), '大');
+        primary.querySelector('.condition-threshold').value = '3';
+        d.getElementById('addGuardGroupBtn').click();
+        const guard = d.querySelector('#guardGroupRows .condition-row');
+        change(w, guard.querySelector('.condition-type'), 'draw_absence');
+        change(w, guard.querySelector('.condition-metric'), 'combo');
+        change(w, guard.querySelector('.condition-draw-value'), '大双');
+        guard.querySelector('.condition-threshold').value = '4';
         submit(w);
         await until(() => requestLog.length > 0 && !d.getElementById('saveRuleBtn').disabled, 'real API create');
         assert.equal(requestLog[0].status, 200, d.getElementById('statusMessage').textContent);
         let payload = await (await http('/api/platform/auto-trigger-rules')).json();
         const created = payload.items.find(item => item.name === '真实界面创建规则');
+        assert.equal(created.conditions[0].type, 'hit_streak');
+        assert.equal(created.conditions[0].prediction_value, '大');
+        assert.equal(created.guard_groups[0].conditions[0].type, 'draw_absence');
+        assert.equal(created.guard_groups[0].conditions[0].bet_value, '大双');
         assert.deepEqual(created.cycle_policy, {mode: 'rule', max_starts_per_day: 3, on_target: 'wait_condition', on_bust: 'new_cycle'});
         assert.ok(Array.isArray(created.cycle_runtime));
         assert.equal(created.cycle_runtime[0].starts_today, 0);
@@ -361,9 +375,20 @@ async function browserChecks(info) {
             await page.getByLabel('每个方案每天最多启动（轮）', {exact: true}).fill('5');
             await page.getByLabel('过关成功后', {exact: true}).selectOption('new_cycle');
             await page.getByText(/过关运行 ·/).first().click();
+            const conditionRow = page.locator('#conditionRows .condition-row').first();
+            for (const type of ['hit_streak', 'miss_streak', 'draw_streak', 'draw_absence']) {
+                await conditionRow.locator('.condition-type').selectOption(type);
+                await conditionRow.locator('.condition-metric').selectOption('combo');
+                assert.ok(await conditionRow.locator('.condition-draw-value-field').isVisible());
+                const values = await conditionRow.locator('.condition-draw-value option').evaluateAll(options => options.map(o => o.value));
+                assert.equal(values.includes(''), ['hit_streak', 'miss_streak'].includes(type));
+                await conditionRow.locator('.condition-draw-value').selectOption('大双');
+                const size = await page.evaluate(() => ({viewport: innerWidth, width: document.documentElement.scrollWidth}));
+                assert.ok(size.width <= size.viewport + 1, type + ' overflows at ' + viewport.width);
+            }
             const dimensions = await page.evaluate(() => ({viewport: innerWidth, width: document.documentElement.scrollWidth}));
             assert.ok(dimensions.width <= dimensions.viewport + 1, 'rule page overflows at ' + viewport.width + ': ' + JSON.stringify(dimensions));
-            const evidence = path.join(root, '.boss/cycle-isolation/evidence');
+            const evidence = process.env.PC28_UI_EVIDENCE_DIR || path.join(root, '.boss/cycle-isolation/evidence');
             fs.mkdirSync(evidence, {recursive: true});
             await page.screenshot({path: path.join(evidence, 'rules-' + viewport.width + '.png'), fullPage: true});
             await page.goto(info.url + '/autobet/subscriptions');
@@ -377,8 +402,85 @@ async function browserChecks(info) {
     } finally {await browser.close();}
 }
 
+async function streakDomChecks() {
+    let rule = fixtureRule(33, {
+        conditions: [{type: 'miss_streak', metric: 'big_small', operator: 'lte', threshold: 0}],
+        guard_groups: [{name: '附加条件', conditions: [{type: 'hit_streak', metric: 'big_small', prediction_value: '小', operator: 'gte', threshold: 2}]}],
+    });
+    const writes = [];
+    const dom = mountRulePage(async (requestPath, opts = {}) => {
+        let data = {items: []};
+        if (requestPath === '/api/auth/me') data = {user: {id: 1, username: 'local-test'}};
+        else if (requestPath === '/api/platform/sources') data = {items: [{id: 17, name: '来源', status: 'active'}]};
+        else if (requestPath === '/api/platform/subscriptions/summary') data = {items: [subscription]};
+        else if (requestPath.startsWith('/api/platform/auto-trigger-rules')) {
+            if (opts.method === 'POST') {
+                writes.push(JSON.parse(opts.body));
+                rule = {...rule, ...writes.at(-1)};
+                data = {item: rule};
+            } else data = {items: [rule]};
+        } else if (requestPath.startsWith('/api/platform/auto-trigger-events')) {
+            data = {items: [{status: 'triggered', latest_issue_no: '4000000', matched_conditions: [
+                {type: 'hit_streak', metric: 'big_small', prediction_value: '大', operator: 'gte', threshold: 3, actual_hit_streak: 3},
+                {type: 'draw_absence', metric: 'combo', bet_value: '大双', operator: 'gte', threshold: 4, actual_draw_absence: 4, streak_complete: false},
+            ]}]};
+        }
+        return {ok: true, status: 200, json: async () => data};
+    });
+    const w = dom.window;
+    const d = w.document;
+    try {
+        await until(() => d.querySelector('.edit-rule-btn'), 'streak rules loaded');
+        d.querySelector('.edit-rule-btn').click();
+        let row = d.querySelector('#conditionRows .condition-row');
+        let guard = d.querySelector('#guardGroupRows .condition-row');
+        assert.equal(row.querySelector('.condition-draw-value').value, '', 'old miss rule stays unrestricted');
+        assert.equal(row.querySelector('.condition-threshold').value, '0', 'saved zero threshold is preserved');
+        assert.equal(row.querySelector('.condition-value-label').textContent, '预测方向');
+        assert.deepEqual([...row.querySelector('.condition-draw-value').options].map(o => o.textContent), ['不限', '大', '小']);
+        assert.equal(guard.querySelector('.condition-draw-value').value, '小');
+        change(w, row.querySelector('.condition-type'), 'hit_streak');
+        change(w, row.querySelector('.condition-draw-value'), '大');
+        row.querySelector('.condition-threshold').value = '3';
+        change(w, guard.querySelector('.condition-metric'), 'combo');
+        assert.equal(guard.querySelector('.condition-draw-value').value, '', 'changing metric resets invalid direction');
+        change(w, guard.querySelector('.condition-type'), 'draw_absence');
+        assert.equal(guard.querySelector('.condition-value-label').textContent, '开奖结果');
+        assert.ok([...guard.querySelector('.condition-draw-value').options].every(o => o.value), 'draw absence requires a result');
+        change(w, guard.querySelector('.condition-draw-value'), '大双');
+        guard.querySelector('.condition-threshold').value = '4';
+        submit(w);
+        await until(() => writes.length === 1 && !d.getElementById('saveRuleBtn').disabled, 'new streak conditions saved');
+        assert.equal(writes[0].conditions[0].prediction_value, '大');
+        assert.equal(writes[0].conditions[0].bet_value, undefined);
+        assert.equal(writes[0].guard_groups[0].conditions[0].type, 'draw_absence');
+        assert.equal(writes[0].guard_groups[0].conditions[0].bet_value, '大双');
+        assert.equal(writes[0].guard_groups[0].conditions[0].prediction_value, undefined);
+        d.querySelector('.edit-rule-btn').click();
+        row = d.querySelector('#conditionRows .condition-row');
+        guard = d.querySelector('#guardGroupRows .condition-row');
+        assert.equal(row.querySelector('.condition-draw-value').value, '大');
+        assert.equal(guard.querySelector('.condition-draw-value').value, '大双');
+        change(w, row.querySelector('.condition-type'), 'miss_streak');
+        assert.equal(row.querySelector('.condition-draw-value').value, '大', 'hit/miss retain their shared direction');
+        change(w, row.querySelector('.condition-metric'), 'odd_even');
+        assert.equal(row.querySelector('.condition-draw-value').value, '');
+        change(w, row.querySelector('.condition-draw-value'), '单');
+        change(w, guard.querySelector('.condition-type'), 'draw_streak');
+        assert.equal(guard.querySelector('.condition-draw-value').value, '大双', 'draw presence/absence retain their shared result');
+        submit(w);
+        await until(() => writes.length === 2 && !d.getElementById('saveRuleBtn').disabled, 'updated streak conditions saved');
+        assert.equal(writes[1].conditions[0].prediction_value, '单');
+        assert.equal(writes[1].guard_groups[0].conditions[0].type, 'draw_streak');
+        assert.match(d.getElementById('eventList').textContent, /预测大.*当前连中.*当前3期/);
+        assert.match(d.getElementById('eventList').textContent, /大双连续不出.*当前至少4期/);
+        console.log('PASS streak UI: unrestricted legacy rules, all four conditions, direction changes, guards, save/edit round trips and event evidence.');
+    } finally {dom.window.close();}
+}
+
 async function main() {
     await domChecks();
+    await streakDomChecks();
     await manualDomChecks();
     if (!process.argv.includes('--dom-only')) await realApiChecks();
 }

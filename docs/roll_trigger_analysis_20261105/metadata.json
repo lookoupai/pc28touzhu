@@ -1,0 +1,189 @@
+{
+  "snapshot_sha256": "6cb68ba350bbd0460ba3bcc2a7386c2ad2ac01cb9d7be42b8fe9f09635d73453",
+  "extracted_at_utc": "2026-11-05T14:08:45.201047+00:00",
+  "draw_count": 24490,
+  "first_draw": "2026-09-06 00:02:30",
+  "last_draw": "2026-11-05 22:07:00",
+  "first_issue": 3478380,
+  "last_issue": 3502869,
+  "invalid_draws": [],
+  "issue_gaps": 0,
+  "prediction_audit": {
+    "1": {
+      "rows": 9927,
+      "eligible": 8157,
+      "big_small_count": 8157,
+      "odd_even_count": 8157,
+      "combo_count": 8157,
+      "not_settled": 1767,
+      "too_late_for_40s_cutoff": 3
+    },
+    "2": {
+      "rows": 19750,
+      "eligible": 12535,
+      "big_small_count": 12535,
+      "odd_even_count": 12535,
+      "combo_count": 12535,
+      "not_settled": 7204,
+      "too_late_for_40s_cutoff": 11
+    },
+    "4": {
+      "rows": 21887,
+      "eligible": 20429,
+      "big_small_count": 20429,
+      "odd_even_count": 20429,
+      "combo_count": 20429,
+      "not_settled": 1427,
+      "too_late_for_40s_cutoff": 31
+    },
+    "5": {
+      "rows": 22191,
+      "not_settled": 2378,
+      "eligible": 19789,
+      "big_small_count": 19789,
+      "odd_even_count": 19789,
+      "combo_count": 19789,
+      "too_late_for_40s_cutoff": 24
+    },
+    "7": {
+      "rows": 24413,
+      "eligible": 24367,
+      "big_small_count": 24367,
+      "odd_even_count": 24367,
+      "combo_count": 24367,
+      "too_late_for_40s_cutoff": 45,
+      "not_settled": 1
+    },
+    "8": {
+      "rows": 24413,
+      "eligible": 24367,
+      "big_small_count": 24367,
+      "odd_even_count": 24367,
+      "combo_count": 24367,
+      "too_late_for_40s_cutoff": 45,
+      "not_settled": 1
+    },
+    "9": {
+      "rows": 24413,
+      "eligible": 24367,
+      "big_small_count": 24367,
+      "odd_even_count": 24367,
+      "combo_count": 24367,
+      "too_late_for_40s_cutoff": 45,
+      "not_settled": 1
+    },
+    "15": {
+      "rows": 19083,
+      "eligible": 19022,
+      "big_small_count": 19022,
+      "odd_even_count": 19022,
+      "combo_count": 19022,
+      "too_late_for_40s_cutoff": 57,
+      "not_settled": 4
+    },
+    "16": {
+      "rows": 18810,
+      "eligible": 18749,
+      "big_small_count": 18749,
+      "odd_even_count": 18749,
+      "combo_count": 18749,
+      "too_late_for_40s_cutoff": 57,
+      "not_settled": 4
+    },
+    "17": {
+      "rows": 18754,
+      "too_late_for_40s_cutoff": 42,
+      "eligible": 18707,
+      "combo_count": 18707,
+      "not_settled": 5
+    },
+    "18": {
+      "rows": 18841,
+      "eligible": 18794,
+      "big_small_count": 18794,
+      "too_late_for_40s_cutoff": 42,
+      "not_settled": 5
+    },
+    "21": {
+      "rows": 7797,
+      "too_late_for_40s_cutoff": 16,
+      "eligible": 7777,
+      "big_small_count": 7777,
+      "odd_even_count": 7777,
+      "combo_count": 7777,
+      "not_settled": 4
+    },
+    "22": {
+      "rows": 7796,
+      "eligible": 7777,
+      "big_small_count": 7777,
+      "odd_even_count": 7777,
+      "combo_count": 7777,
+      "too_late_for_40s_cutoff": 15,
+      "not_settled": 4
+    },
+    "23": {
+      "rows": 7796,
+      "eligible": 7777,
+      "big_small_count": 7777,
+      "odd_even_count": 7777,
+      "combo_count": 7777,
+      "too_late_for_40s_cutoff": 15,
+      "not_settled": 4
+    },
+    "24": {
+      "rows": 7796,
+      "eligible": 7777,
+      "big_small_count": 7777,
+      "odd_even_count": 7777,
+      "combo_count": 7777,
+      "too_late_for_40s_cutoff": 15,
+      "not_settled": 4
+    }
+  },
+  "split_definition": [
+    [
+      "train",
+      "2026-09-06",
+      "2026-10-01"
+    ],
+    [
+      "validation",
+      "2026-10-01",
+      "2026-10-21"
+    ],
+    [
+      "test",
+      "2026-10-21",
+      "2026-11-06"
+    ]
+  ],
+  "decision_time": "open_time minus 40 seconds",
+  "caveat": "Recorded created_at/settled_at provide chronology checks, not immutable historical version proof.",
+  "valid_combo_streams": [
+    "follow:2",
+    "follow:4",
+    "follow:5",
+    "follow:7",
+    "follow:8",
+    "follow:9",
+    "follow:15",
+    "follow:16",
+    "follow:17",
+    "follow:21",
+    "follow:22",
+    "follow:23",
+    "follow:24",
+    "fixed:8:A",
+    "fixed:8:B",
+    "fixed:8:C",
+    "fixed:8:D",
+    "fixed:16:A",
+    "fixed:16:B",
+    "fixed:16:C",
+    "fixed:16:D"
+  ],
+  "candidate_count": 1911,
+  "eligible_positive_train_validation": 89,
+  "selection": "minimum train/validation mean, then train mean; each segment >=15 completed rounds, both positive"
+}

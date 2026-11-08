@@ -653,7 +653,10 @@ select[multiple].text-input {
     background: var(--surface-subtle);
 }
 
-.condition-row[data-condition-type="draw_streak"] {
+.condition-row[data-condition-type="draw_streak"],
+.condition-row[data-condition-type="draw_absence"],
+.condition-row[data-condition-type="hit_streak"],
+.condition-row[data-condition-type="miss_streak"] {
     --condition-columns: minmax(180px, 1.2fr) minmax(90px, 0.7fr) minmax(100px, 0.7fr) minmax(125px, 0.9fr) minmax(95px, 0.6fr) minmax(170px, auto);
 }
 

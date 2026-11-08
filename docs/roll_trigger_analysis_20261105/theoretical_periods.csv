@@ -1,0 +1,5 @@
+﻿rule,structure,label,profit_probability,refund_partial_loss_probability,full_loss_probability,flat_probability,ev_per_100
+pc28_fullpay_2_8_regular,A,单+小双,0.414,0.317,0.269,0.0,-0.26840000000001396
+pc28_fullpay_2_8_regular,B,单+大双,0.396,0.373,0.231,0.0,-0.26780000000000825
+pc28_fullpay_2_8_regular,C,双+小单,0.396,0.373,0.231,0.0,-0.26780000000002246
+pc28_fullpay_2_8_regular,D,双+大单,0.414,0.317,0.269,0.0,-0.26840000000001396

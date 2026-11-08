@@ -1757,6 +1757,68 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(event["matched_conditions"][0]["type"], "miss_streak")
         self.assertEqual(event["matched_conditions"][0]["actual_miss_streak"], 5)
 
+    def test_current_hit_streak_supports_unrestricted_and_selected_prediction_direction(self):
+        self.repo.update_subscription_status(subscription_id=self.subscription["id"], user_id=self.user_id, status="standby")
+        for offset, value in enumerate(("大", "小", "大")):
+            self.repo.create_signal_record(source_id=self.source["id"], lottery_type="pc28", issue_no=str(20260418000 - offset),
+                                           bet_type="big_small", bet_value=value)
+        selected = {"type": "hit_streak", "metric": "big_small", "prediction_value": "大", "operator": "gte", "threshold": 3}
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload={
+            "name": "连中方向", "scope_mode": "selected_subscriptions", "subscription_ids": [self.subscription["id"]],
+            "conditions": [selected], "cooldown_issues": 0, "action": {"dispatch_latest_signal": False},
+        })["item"]
+        performance = self._performance_payload()
+        performance["metrics"]["big_small"]["streaks"] = {"current_hit_streak": 3, "current_miss_streak": 0}
+        self.assertEqual(run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: performance)["summary"]["triggered_count"], 0)
+        updated = update_auto_trigger_rule(self.repo, rule_id=rule["id"], user_id=self.user_id,
+                                          payload={"conditions": [{**selected, "prediction_value": ""}]})["item"]
+        self.assertNotIn("prediction_value", updated["conditions"][0])
+        with patch.object(self.repo, "list_source_prediction_streak_signals", side_effect=AssertionError("不限方向无需本地预测记录")):
+            self.assertEqual(run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: performance)["summary"]["triggered_count"], 1)
+        event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        self.assertEqual(event["matched_conditions"][0]["actual_hit_streak"], 3)
+
+    def test_selected_miss_direction_guard_is_scoped_to_source_and_round_trips(self):
+        self.repo.update_subscription_status(subscription_id=self.subscription["id"], user_id=self.user_id, status="standby")
+        for offset in range(2):
+            self.repo.create_signal_record(source_id=self.source["id"], lottery_type="pc28", issue_no=str(20260418000 - offset),
+                                           bet_type="big_small", bet_value="大")
+        other = self.repo.create_source_record(owner_user_id=self.user_id, source_type="internal_ai", name="另一来源", status="active")
+        self.repo.create_signal_record(source_id=other["id"], lottery_type="pc28", issue_no="20260418000", bet_type="big_small", bet_value="小")
+        guard = {"type": "miss_streak", "metric": "big_small", "prediction_value": "大", "operator": "gte", "threshold": 2}
+        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload={
+            "name": "指定方向附加条件", "scope_mode": "selected_subscriptions", "subscription_ids": [self.subscription["id"]],
+            "conditions": [{"metric": "big_small", "operator": "lt", "threshold": 40}],
+            "guard_groups": [{"conditions": [guard]}], "action": {"dispatch_latest_signal": False},
+        })["item"]
+        updated = update_auto_trigger_rule(self.repo, rule_id=rule["id"], user_id=self.user_id, payload={"name": "改名"})["item"]
+        self.assertEqual(updated["guard_groups"][0]["conditions"][0]["prediction_value"], "大")
+        result = run_auto_trigger_cycle(self.repo, user_id=self.user_id, fetcher=lambda url: self._performance_payload(big_small_miss_streak=2))
+        self.assertEqual(result["summary"]["triggered_count"], 1)
+        event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
+        match = next(c for c in event["matched_conditions"] if c["type"] == "miss_streak")
+        self.assertEqual(match["actual_miss_streak"], 2)
+        self.assertTrue(match["streak_complete"])
+
+    def test_absence_triggers_regular_subscription_and_rejects_duplicate_draw(self):
+        self.repo.update_subscription_status(subscription_id=self.subscription["id"], user_id=self.user_id, status="standby")
+        create_auto_trigger_rule(self.repo, user_id=self.user_id, payload={
+            "name": "连续不出", "scope_mode": "selected_subscriptions", "subscription_ids": [self.subscription["id"]],
+            "conditions": [{"type": "draw_absence", "metric": "combo", "bet_value": "大双", "operator": "gte", "threshold": 3}],
+            "cooldown_issues": 0, "action": {"dispatch_latest_signal": False},
+        })
+        items = [{"issue_no": str(20260418000 - offset), "result_number": value} for offset, value in enumerate((9, 17, 0, 16))]
+        clock = {"latest_issue_no": "20260418000", "stale": False}
+        def no_prediction_fetch(url):
+            self.fail("连续不出不需要预测统计")
+        with patch("pc28touzhu.services.auto_trigger_service.fetch_pc28_recent_draws_deep", return_value={"items": items}):
+            first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, draw_clock=clock, fetcher=no_prediction_fetch)
+            self.assertEqual(first["summary"]["triggered_count"], 1)
+            self.repo.update_subscription_status(subscription_id=self.subscription["id"], user_id=self.user_id, status="standby")
+            again = run_auto_trigger_cycle(self.repo, user_id=self.user_id, draw_clock=clock, fetcher=no_prediction_fetch)
+            self.assertEqual(again["summary"]["triggered_count"], 0)
+            self.assertEqual(again["rules"][0]["events"][0]["reason"], "draw_issue_already_triggered")
+
     def test_condition_trigger_skips_when_signal_already_drawn_then_retries_fresh(self):
         # 信号源逐期发布滞后于开奖结算时（实测差 2~5 秒），条件命中瞬间的最新 ready 信号
         # 正是刚结算那一期。过去这段会被建轮+记 triggered+进冷却，留下一堆永不下单的空壳轮次；

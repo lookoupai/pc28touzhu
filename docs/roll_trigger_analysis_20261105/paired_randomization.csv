@@ -1,0 +1,6 @@
+﻿stream,condition,paired_signflip_p_one_sided,holm_p_five_holdout_comparisons
+fixed:8:A,rate:odd_even:20<=35,0.2371826171875,0.374755859375
+follow:9,draw:双>=4,0.12176513671875,0.36529541015625
+fixed:8:D,draw:大单>=1,0.06201171875,0.248046875
+follow:7,draw:大双>=3,0.1873779296875,0.374755859375
+fixed:8:B,draw:单>=5,0.02874755859375,0.14373779296875
