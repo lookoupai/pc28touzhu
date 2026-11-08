@@ -59,22 +59,10 @@
             section: "支持查询页",
             eyebrow: "支持查询",
             title: "支持查询页",
-            description: "从排障和支持视角查询用户、托管账号、群组、模板和跟单配置，配置动作继续回到 /autobet。",
+            description: "从排障和支持视角查询用户、托管账号、群组、模板和跟单配置，具体配置通过策略管理和资源配置进入。",
             load: loadSupportData,
             render: renderSupportPage,
         },
-    };
-    const LEGACY_HASH_REDIRECTS = {
-        "#sourcesSection": "/admin/sources",
-        "#signalsSection": "/admin/signals",
-        "#rawItemsSection": "/admin/sources",
-        "#executionJobsSection": "/admin/execution",
-        "#executorsSection": "/admin/execution",
-        "#failuresSection": "/admin/execution",
-        "#alertsSection": "/admin/alerts",
-        "#accountsSection": "/admin/support",
-        "#subscriptionsSection": "/admin/support",
-        "#targetsSection": "/admin/support",
     };
     const SOURCE_TEMPLATES = {
         ai_trading_simulator_export: {
@@ -156,16 +144,6 @@
     function resolveRoute(pathname) {
         const path = normalizePath(pathname);
         return ROUTES[path] ? path : "/admin";
-    }
-
-    function maybeRedirectLegacyHash() {
-        const currentPath = resolveRoute(window.location.pathname);
-        const target = LEGACY_HASH_REDIRECTS[window.location.hash || ""];
-        if (!target || currentPath !== "/admin") {
-            return false;
-        }
-        window.location.replace(target);
-        return true;
     }
 
     function setStatus(message, isError) {
@@ -385,9 +363,14 @@
         return state.filters[routeConfig.key] || {};
     }
 
+    function syncAdminFilterUrl() {
+        if (window.PlatformNavigation) window.PlatformNavigation.setQuery(getFilterState());
+    }
+
     function resetCurrentRouteFilters() {
         const routeConfig = ROUTES[state.currentRoute] || ROUTES["/admin"];
         state.filters[routeConfig.key] = cloneFilters(DEFAULT_FILTERS[routeConfig.key] || {});
+        syncAdminFilterUrl();
     }
 
     function applyRouteMeta(routePath) {
@@ -1214,7 +1197,7 @@
                     "</article>" +
                     '<article class="panel">' +
                         '<div class="panel-header"><div><p class="panel-kicker">派发规则</p><h2>信号中心使用说明</h2></div></div>' +
-                        '<div class="status-card"><div class="status-head"><strong>页面定位</strong>' + renderStatusPill("current") + '</div><p class="helper-text">这里用于看标准信号是否正常生成，以及是否已经正确展开到执行任务。策略、群组和模板编辑仍回到 /autobet。</p></div>' +
+                        '<div class="status-card"><div class="status-head"><strong>页面定位</strong>' + renderStatusPill("current") + '</div><p class="helper-text">这里用于看标准信号是否正常生成，以及是否已经正确展开到执行任务。策略、群组和模板在对应配置页维护。</p></div>' +
                         '<div class="status-card"><div class="status-head"><strong>人工派发</strong>' + renderStatusPill("warning") + '</div><p class="helper-text">人工派发是高风险动作，只保留在信号列表的最后一步，不与普通浏览和筛选混在首页。</p></div>' +
                         '<div class="status-card"><div class="status-head"><strong>排障路径</strong>' + renderStatusPill("info") + '</div><p class="helper-text">如果信号已生成但任务异常，请直接进入执行中心；如果信号根本没有生成，请返回来源接入中心看 raw item 标准化。</p></div>' +
                     "</article>" +
@@ -1729,7 +1712,7 @@
                         '<a class="ghost-btn link-btn" href="/autobet/templates">去模板工作区</a>',
                         '<a class="ghost-btn link-btn" href="/autobet/subscriptions">去跟单工作区</a>',
                     ]) +
-                    '<div class="status-card"><div class="status-head"><strong>支持页原则</strong>' + renderStatusPill("current") + '</div><p class="helper-text">本页只做排障和查询。账号授权、群组测试发送、模板编辑、跟单配置依旧统一回到 /autobet，避免后台重新变成用户配置入口。</p></div>' +
+                    '<div class="status-card"><div class="status-head"><strong>支持页原则</strong>' + renderStatusPill("current") + '</div><p class="helper-text">本页只做排障和查询。账号授权、群组测试、模板编辑和跟单配置通过左侧导航进入对应页面。</p></div>' +
                 "</section>" +
                 '<section class="panel">' +
                     '<div class="panel-header"><div><p class="panel-kicker">用户</p><h2>用户与会话概况</h2></div></div>' +
@@ -1860,6 +1843,11 @@
     async function loadRoute(options) {
         const normalized = options || {};
         state.currentRoute = resolveRoute(window.location.pathname);
+        const routeKey = ROUTES[state.currentRoute].key;
+        const query = new URLSearchParams(location.search);
+        Object.keys(DEFAULT_FILTERS[routeKey] || {}).forEach(function (key) {
+            if (query.has(key)) state.filters[routeKey][key] = query.get(key);
+        });
         applyRouteMeta(state.currentRoute);
         renderLoadingState();
         try {
@@ -1892,6 +1880,7 @@
             state.filters[routeConfig.key] = {};
         }
         state.filters[routeConfig.key][filterKey] = value;
+        syncAdminFilterUrl();
         rerenderCurrentRoute();
     }
 
@@ -2132,7 +2121,5 @@
         handleContentSubmit(event);
     });
 
-    if (!maybeRedirectLegacyHash()) {
-        loadRoute();
-    }
+    loadRoute();
 })();

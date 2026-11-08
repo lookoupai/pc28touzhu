@@ -10,7 +10,6 @@
     const alertsFilterForm = document.getElementById("alertsFilterForm");
     const resetAlertsFilterBtn = document.getElementById("resetAlertsFilterBtn");
     const alertsList = document.getElementById("alertsList");
-    const workspaceLinks = Array.from(document.querySelectorAll(".workspace-link"));
 
     function setStatus(message, isError) {
         statusMessage.textContent = message || "";
@@ -43,55 +42,6 @@
         }
         button.toggleAttribute("disabled", Boolean(busy));
         button.textContent = busy ? busyText : (button.getAttribute("data-idle-text") || "");
-    }
-
-    function setActiveWorkspaceLink(targetHash) {
-        workspaceLinks.forEach(function (link) {
-            link.classList.toggle("is-active", link.getAttribute("href") === targetHash);
-        });
-    }
-
-    function initWorkspaceNav() {
-        workspaceLinks.forEach(function (link) {
-            link.addEventListener("click", function () {
-                const href = link.getAttribute("href") || "";
-                if (href.startsWith("#")) {
-                    setActiveWorkspaceLink(href);
-                }
-            });
-        });
-
-        if (!("IntersectionObserver" in window)) {
-            return;
-        }
-
-        const sections = workspaceLinks.map(function (link) {
-            const href = link.getAttribute("href") || "";
-            if (!href.startsWith("#")) {
-                return null;
-            }
-            return document.querySelector(href);
-        }).filter(Boolean);
-
-        const observer = new IntersectionObserver(function (entries) {
-            const visible = entries.filter(function (entry) {
-                return entry.isIntersecting;
-            }).sort(function (left, right) {
-                return left.boundingClientRect.top - right.boundingClientRect.top;
-            })[0];
-
-            if (!visible || !visible.target || !visible.target.id) {
-                return;
-            }
-            setActiveWorkspaceLink("#" + visible.target.id);
-        }, {
-            rootMargin: "-20% 0px -60% 0px",
-            threshold: [0.1, 0.3, 0.6],
-        });
-
-        sections.forEach(function (section) {
-            observer.observe(section);
-        });
     }
 
     async function request(path, options) {
@@ -205,7 +155,9 @@
 
     function syncFilterStateToUrl() {
         const filterState = getFilterState();
-        const params = new URLSearchParams();
+        const params = new URLSearchParams(window.location.search);
+        params.delete("severity");
+        params.delete("alert_type");
         if (filterState.severity) {
             params.set("severity", filterState.severity);
         }
@@ -213,7 +165,7 @@
             params.set("alert_type", filterState.alertType);
         }
         const nextUrl = window.location.pathname + (params.toString() ? "?" + params.toString() : "");
-        window.history.replaceState({}, "", nextUrl);
+        window.history.replaceState({}, "", nextUrl + window.location.hash);
     }
 
     function alertMatchesFilter(item) {
@@ -272,7 +224,7 @@
         if (metadata.signal_id) {
             actions.push('<a class="panel-link" href="/records?signal_id=' + encodeURIComponent(String(metadata.signal_id)) + '">查看相关记录</a>');
         }
-        actions.push('<a class="panel-link" href="/admin#alertsSection">去管理端处理</a>');
+        actions.push('<a class="panel-link" href="/admin/alerts" data-admin-only hidden>去管理端处理</a>');
         return actions.join("");
     }
 
@@ -417,6 +369,5 @@
     });
 
     applyFilterStateToForm();
-    initWorkspaceNav();
     refreshAll();
 }());

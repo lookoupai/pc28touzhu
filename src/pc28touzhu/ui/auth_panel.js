@@ -326,6 +326,8 @@
             : "请先注册或登录";
         const isAuthenticated = Boolean(currentUser);
         document.documentElement.setAttribute("data-authenticated", isAuthenticated ? "true" : "false");
+        document.documentElement.setAttribute("data-auth-role", role);
+        document.dispatchEvent(new CustomEvent("platform-auth:synced", {detail: {user: currentUser}}));
 
         setText(byId("currentUsername"), username);
         setText(byId("currentUserMeta"), meta);
@@ -409,10 +411,10 @@
         if (isAuthenticated) {
             try {
                 const pending = sessionStorage.getItem("post_login_redirect");
-                if (pending && pending.indexOf("/admin") === 0) {
+                if (pending && pending.startsWith("/") && !pending.startsWith("//") && new URL(pending, location.origin).origin === location.origin && (!pending.startsWith("/admin") || role === "admin")) {
                     sessionStorage.removeItem("post_login_redirect");
                     const current = window.location.pathname + window.location.search + window.location.hash;
-                    if (current !== pending) {
+                    if (current !== pending || document.body.hasAttribute("data-admin-access-denied")) {
                         window.location.href = pending;
                     }
                 }

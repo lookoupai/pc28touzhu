@@ -10,49 +10,21 @@
     <link rel="stylesheet" href="/assets/alerts.css">
 </head>
 <body>
-    <div class="page-shell">
-        <header class="topbar">
-            <a class="brand" href="/">
-                <span class="brand-mark">P28</span>
-                <span class="brand-copy">
-                    <strong>pc28touzhu</strong>
-                    <span>异常提醒与人工处理</span>
-                </span>
-            </a>
-            <nav class="topbar-actions">
-                <button id="refreshAlertsBtn" class="nav-link nav-button" type="button">刷新告警</button>
-                <a class="nav-link" href="/">首页</a>
-                <a class="nav-link" href="/autobet">自动投注总控台</a>
-                <a class="nav-link" href="/records">执行记录</a>
-                <a class="nav-link" href="/admin#alertsSection" data-requires-auth>管理控制台</a>
-                <button id="accountMenuBtn" class="nav-link nav-button" type="button" data-auth-account-label aria-haspopup="dialog" aria-controls="accountDialog">登录</button>
-            </nav>
-        </header>
+    __APP_SHELL__
+    <div class="page-shell app-page" id="mainContent" tabindex="-1">
 
-        <nav class="workspace-nav" aria-label="异常提醒导航">
-            <a class="workspace-link is-active" href="#alertsOverviewSection">告警概览</a>
-            <a class="workspace-link" href="#alertsFilterSection">筛选</a>
-            <a class="workspace-link" href="#alertsListSection">告警列表</a>
-            <a class="workspace-link" href="#alertsActionsSection">处理入口</a>
-            <a class="workspace-link" href="/autobet">总控台</a>
-            <a class="workspace-link" href="/autobet/sources#sourcesSection">来源</a>
-            <a class="workspace-link" href="/autobet/accounts#accountsSection">账号</a>
-            <a class="workspace-link" href="/autobet/targets#targetsSection">群组</a>
-            <a class="workspace-link" href="/records">记录</a>
-        </nav>
 
         <main class="layout">
             <section class="hero-card">
                 <div class="hero-copy">
                     <p class="eyebrow">告警中心</p>
-                    <h1>集中查看当前账号下的异常提醒，并把需要人工介入的任务尽快处理掉。</h1>
+                    <h1>异常提醒</h1>
                     <p class="hero-text">
-                        这里聚合的是平台当前 `alerts` 视图。重点帮助你判断：
-                        哪些告警最紧急、通知是否成功、哪些失败任务还可以直接重试。
+                        查看当前账户的异常提醒、通知状态和处理入口。
                     </p>
-                    <div class="hero-actions">
+                    <div class="hero-actions"><button id="refreshAlertsBtn" class="ghost-btn" type="button">刷新</button>
                         <a class="primary-link" href="#alertsListSection">查看告警列表</a>
-                        <a class="ghost-link" href="/autobet">回自动投注总控台</a>
+                        <a class="ghost-link" href="/">返回工作台</a>
                     </div>
                 </div>
                 <aside class="hero-status">
@@ -137,7 +109,7 @@
                         <p class="panel-kicker">总控台</p>
                         <h2>回总控台看链路</h2>
                         <p>如果你不确定告警卡在哪一环，直接回总控台看执行链路摘要和工作区入口。</p>
-                        <a class="panel-link" href="/autobet">回总控台</a>
+                        <a class="panel-link" href="/">回总控台</a>
                     </article>
                 </section>
             </section>

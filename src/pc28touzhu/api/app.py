@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 from urllib.parse import parse_qs
 
+from pc28touzhu.api.ui_navigation import PAGE_ROUTES, ADMIN_PAGE_ROUTES, render_navigation, navigation_data
+
 from pc28touzhu.auth import (
     SESSION_COOKIE_NAME,
     build_session_cookie_value,
@@ -105,15 +107,9 @@ UI_ASSET_FILENAME_MAP = {
     "account-menu.js": "account_menu.js",
     "auth-guard.js": "auth_guard.js",
     "auth-panel.js": "auth_panel.js",
-}
-ADMIN_PAGE_ROUTES = {
-    "/admin",
-    "/admin/sources",
-    "/admin/signals",
-    "/admin/execution",
-    "/admin/alerts",
-    "/admin/support",
-    "/admin/telegram",
+    "app-shell.css": "app_shell.css",
+    "app-shell.js": "app_shell.js",
+    "bot-binding.js": "bot_binding.js",
 }
 SESSION_COOKIE_MAX_AGE = 2592000
 
@@ -196,8 +192,23 @@ def _asset_version(filename: str) -> str:
     return str(int(path.stat().st_mtime))
 
 
-def _load_ui_html_file(filename: str) -> str:
+def _load_ui_html_file(filename: str, page_path: str = "") -> str:
     text = _load_ui_file(filename)
+    page_path = page_path or next((path for path, page in PAGE_ROUTES.items() if page["template"] == filename), "/")
+    if "__APP_SHELL__" in text:
+        shell = _load_ui_file("app_shell.html")
+        shell = shell.replace("__PAGE_TITLE__", PAGE_ROUTES[page_path]["title"])
+        shell = shell.replace("__APP_NAVIGATION__", render_navigation(page_path))
+        shell = shell.replace("__NAVIGATION_DATA__", navigation_data(page_path))
+        text = text.replace("__APP_SHELL__", shell)
+        text = text.replace("<body", '<body class="has-app-shell"', 1)
+        text = text.replace("__PAGE_TITLE__", PAGE_ROUTES[page_path]["title"])
+        if filename == "autobet.html":
+            scope = page_path.rsplit("/", 1)[-1]
+            text = text.replace("__WORKSPACE_CONTENT__", _load_ui_file("workspace_%s.html" % scope))
+            text = text.replace('data-autobet-scope="workbench"', 'data-autobet-scope="%s"' % page_path.rsplit("/", 1)[-1])
+        text = text.replace("</head>", '<link rel="stylesheet" href="/assets/app-shell.css">\n</head>')
+        text = text.replace('<script src="/assets/auth-panel.js">', '<script src="/assets/app-shell.js"></script>\n    <script src="/assets/auth-panel.js">')
     if ACCOUNT_DIALOG_PLACEHOLDER in text:
         text = text.replace(ACCOUNT_DIALOG_PLACEHOLDER, _load_ui_file("account_dialog.html"))
 
@@ -284,70 +295,36 @@ class PlatformApiApplication:
         path = str(environ.get("PATH_INFO") or "/")
         normalized_path = path if path == "/" else path.rstrip("/")
 
-        if path == "/":
+        if normalized_path == "/autobet" or normalized_path in PAGE_ROUTES:
             if method != "GET":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_html_file("home.html"), "text/html; charset=utf-8")
+            if normalized_path == "/autobet" or path != normalized_path:
+                destination = "/" if normalized_path == "/autobet" else normalized_path
+                query = str(environ.get("QUERY_STRING") or "")
+                if query:
+                    destination += "?" + query
+                start_response("302 Found", [("Location", destination), ("Cache-Control", "no-store"), ("Content-Length", "0")])
+                return [b""]
+            page = PAGE_ROUTES[normalized_path]
+            if page["admin"]:
+                try:
+                    self._require_admin_console_user(environ)
+                except PermissionError as exc:
+                    status_code = int(getattr(exc, "status_code", 401))
+                    return _text_response(start_response, status_code, self._render_admin_access_denied(str(exc), normalized_path), "text/html; charset=utf-8")
+            return _text_response(start_response, 200, _load_ui_html_file(page["template"], normalized_path), "text/html; charset=utf-8")
 
-        if normalized_path in ADMIN_PAGE_ROUTES:
+        shared_assets = {
+            "/assets/app-shell.css": ("app_shell.css", "text/css"),
+            "/assets/app-shell.js": ("app_shell.js", "application/javascript"),
+            "/assets/bot-binding.js": ("bot_binding.js", "application/javascript"),
+            "/assets/workbench.css": ("workbench.css", "text/css"),
+        }
+        if path in shared_assets:
             if method != "GET":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
-            try:
-                self._require_admin_console_user(environ)
-            except PermissionError as exc:
-                status_code = 401 if "登录" in str(exc) else 403
-                return _text_response(
-                    start_response,
-                    status_code,
-                    self._render_admin_access_denied(str(exc)),
-                    "text/html; charset=utf-8",
-                )
-            return _text_response(start_response, 200, _load_ui_html_file("dashboard.html"), "text/html; charset=utf-8")
-
-        if path == "/records":
-            if method != "GET":
-                return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_html_file("records.html"), "text/html; charset=utf-8")
-
-        if path == "/autobet":
-            if method != "GET":
-                return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_html_file("autobet.html"), "text/html; charset=utf-8")
-
-        if path == "/autobet/sources":
-            if method != "GET":
-                return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_html_file("autobet.html"), "text/html; charset=utf-8")
-
-        if path == "/autobet/accounts":
-            if method != "GET":
-                return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_html_file("autobet.html"), "text/html; charset=utf-8")
-
-        if path == "/autobet/templates":
-            if method != "GET":
-                return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_html_file("autobet.html"), "text/html; charset=utf-8")
-
-        if path == "/autobet/targets":
-            if method != "GET":
-                return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_html_file("autobet.html"), "text/html; charset=utf-8")
-
-        if path == "/autobet/subscriptions":
-            if method != "GET":
-                return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_html_file("autobet.html"), "text/html; charset=utf-8")
-
-        if path == "/auto-triggers":
-            if method != "GET":
-                return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_html_file("auto_triggers.html"), "text/html; charset=utf-8")
-
-        if path == "/alerts":
-            if method != "GET":
-                return _json_response(start_response, 405, {"error": "method not allowed"})
-            return _text_response(start_response, 200, _load_ui_html_file("alerts.html"), "text/html; charset=utf-8")
+            filename, content_type = shared_assets[path]
+            return _text_response(start_response, 200, _load_ui_file(filename), content_type + "; charset=utf-8")
 
         if path == "/assets/home.css":
             if method != "GET":
@@ -1371,8 +1348,8 @@ class PlatformApiApplication:
             return True
         return _parse_authorization(environ) == self.executor_api_token
 
-    def _render_admin_access_denied(self, message: str) -> str:
-        template = _load_ui_html_file("admin_access_denied.html")
+    def _render_admin_access_denied(self, message: str, page_path: str = "/admin") -> str:
+        template = _load_ui_html_file("admin_access_denied.html", page_path)
         return template.replace("__ADMIN_ACCESS_MESSAGE__", str(message or "当前请求不具备后台访问权限。"))
 
     def _is_user_active(self, user: Optional[Dict[str, Any]]) -> bool:

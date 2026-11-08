@@ -194,7 +194,7 @@ async function manualDomChecks() {
     const item = JSON.parse(JSON.stringify(subscription));
     const writes = [];
     const confirmations = [];
-    const dom = new JSDOM(fs.readFileSync(path.join(ui, 'autobet.html'), 'utf8'), {url: 'http://127.0.0.1/autobet/subscriptions', runScripts: 'outside-only'});
+    const dom = new JSDOM(fs.readFileSync(path.join(ui, 'autobet.html'), 'utf8').replace('__WORKSPACE_CONTENT__', fs.readFileSync(path.join(ui, 'workspace_subscriptions.html'), 'utf8')), {url: 'http://127.0.0.1/autobet/subscriptions', runScripts: 'outside-only'});
     const w = dom.window;
     w.scrollTo = () => {};
     w.PlatformUiText = {labelStatus: value => String(value || '—'), labelSourceType: value => String(value || '—')};
@@ -362,6 +362,7 @@ async function browserChecks(info) {
         await context.route('**/*', route => new URL(route.request().url()).origin === info.url ? route.continue() : route.abort());
         const page = await context.newPage();
         page.on('pageerror', error => errors.push(error.message));
+        page.on('dialog', dialog => dialog.accept());
         for (const viewport of [{width: 1440, height: 1000}, {width: 390, height: 844}]) {
             await page.setViewportSize(viewport);
             await page.goto(info.url + '/auto-triggers');

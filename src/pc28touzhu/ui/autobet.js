@@ -9,17 +9,13 @@
         templates: [],
         subscriptions: [],
         jobs: [],
-        alerts: [],
         failures: [],
-        telegramBinding: null,
         subscriptionStatDate: "",
         subscriptionDailySummary: null,
         expandedSubscriptionId: null,
         subscriptionDetailTabs: {},
         subscriptionAllDailyHistories: {},
         subscriptionRuntimeHistories: {},
-        lastRecommendedActionKey: null,
-        showIssueJobsOnly: false,
         showArchivedTargets: false,
         scopeFocused: false,
     };
@@ -39,25 +35,17 @@
     const targetForm = document.getElementById("targetForm");
     const messageTemplateForm = document.getElementById("messageTemplateForm");
     const subscriptionForm = document.getElementById("subscriptionForm");
-    const toggleAutobetBtn = document.getElementById("toggleAutobetBtn");
     const toggleArchivedTargetsBtn = document.getElementById("toggleArchivedTargetsBtn");
     const batchResolveSubscriptionsBtn = document.getElementById("batchResolveSubscriptionsBtn");
     const subscriptionStatDateInput = document.getElementById("subscriptionStatDateInput");
     const subscriptionStatTodayBtn = document.getElementById("subscriptionStatTodayBtn");
-    const workspaceLinks = Array.from(document.querySelectorAll(".workspace-link"));
     const cancelAccountEditBtn = document.getElementById("cancelAccountEditBtn");
     const cancelTargetEditBtn = document.getElementById("cancelTargetEditBtn");
     const cancelMessageTemplateEditBtn = document.getElementById("cancelMessageTemplateEditBtn");
     const cancelSubscriptionEditBtn = document.getElementById("cancelSubscriptionEditBtn");
-    const priorityActionCard = document.getElementById("autobetPriorityActionCard");
-    const toggleRecentIssueJobsBtn = document.getElementById("toggleRecentIssueJobsBtn");
     const accountVerifyForm = document.getElementById("accountVerifyForm");
     const accountModeButtons = Array.from(document.querySelectorAll("[data-account-auth-mode]"));
     const targetKeyPreview = document.getElementById("targetKeyPreview");
-    const onboardingGuideSteps = document.getElementById("onboardingGuideSteps");
-    const onboardingProgressMeta = document.getElementById("onboardingProgressMeta");
-    const onboardingPrerequisite = document.getElementById("onboardingPrerequisite");
-    const continueOnboardingBtn = document.getElementById("continueOnboardingBtn");
     const sourceNameInput = document.getElementById("sourceNameInput");
     const sourceUrlInput = document.getElementById("sourceUrlInput");
     const fillSourceExampleBtn = document.getElementById("fillSourceExampleBtn");
@@ -148,16 +136,6 @@
     const accountWorkspaceSummaryText = document.getElementById("accountWorkspaceSummaryText");
     const templateWorkspaceSummary = document.getElementById("templateWorkspaceSummary");
     const templateWorkspaceSummaryText = document.getElementById("templateWorkspaceSummaryText");
-    const executionFlowSummary = document.getElementById("autobetExecutionFlowSummary");
-    const executionFlowSummaryText = document.getElementById("autobetExecutionFlowSummaryText");
-    const executionFlowChains = document.getElementById("autobetExecutionFlowChains");
-    const workspaceCards = document.getElementById("autobetWorkspaceCards");
-    const botBindingMetrics = document.getElementById("botBindingMetrics");
-    const botBindingSummary = document.getElementById("botBindingSummary");
-    const botBindingCommand = document.getElementById("botBindingCommand");
-    const botBindingCommandMeta = document.getElementById("botBindingCommandMeta");
-    const botBindingActions = document.getElementById("botBindingActions");
-    const botBindingInstructions = document.getElementById("botBindingInstructions");
     const templatePresetButtons = Array.from(document.querySelectorAll(".template-preset-btn"));
     const templateSampleButtons = Array.from(document.querySelectorAll(".template-sample-btn"));
     const accountModeGuideTitle = document.getElementById("accountModeGuideTitle");
@@ -275,97 +253,7 @@
     };
 
     function currentAutobetScope() {
-        const pathname = String(window.location.pathname || "").trim();
-        if (pathname === "/autobet/sources") {
-            return "sources";
-        }
-        if (pathname === "/autobet/accounts") {
-            return "accounts";
-        }
-        if (pathname === "/autobet/templates") {
-            return "templates";
-        }
-        if (pathname === "/autobet/targets") {
-            return "targets";
-        }
-        if (pathname === "/autobet/subscriptions") {
-            return "subscriptions";
-        }
-        return "workbench";
-    }
-
-    function autobetScopeConfig(scope) {
-        const normalized = String(scope || "workbench").trim() || "workbench";
-        if (normalized === "sources") {
-            return {
-                eyebrow: "方案来源",
-                title: "这里专门处理来源管理、抓取推进和启停状态。",
-                detail: "新增、编辑、停用、归档删除，以及一键推进“抓取 -> 标准化 -> 派发”的动作，都收口在这个来源工作区。",
-                primaryHref: "#sourcesSection",
-                primaryText: "去管理来源",
-                secondaryHref: "/autobet/subscriptions#subscriptionsSection",
-                secondaryText: "去看跟单",
-                activeHref: "/autobet/sources#sourcesSection",
-            };
-        }
-        if (normalized === "accounts") {
-            return {
-                eyebrow: "托管账号",
-                title: "这里专门处理托管账号接入、授权和可执行状态。",
-                detail: "先让账号真正可用，再去群组、模板和跟单工作区完成后续链路配置。",
-                primaryHref: "#accountsSection",
-                primaryText: "去处理账号",
-                secondaryHref: "/autobet/targets#targetsSection",
-                secondaryText: "去群组页",
-                activeHref: "/autobet/accounts#accountsSection",
-            };
-        }
-        if (normalized === "templates") {
-            return {
-                eyebrow: "下注模板",
-                title: "这里专门管理下注格式模板和玩法映射。",
-                detail: "不同平台、群组和机器人协议不同。当前页面只聚焦模板维护，保存后再把模板绑定到对应投注群。",
-                primaryHref: "#templatesSection",
-                primaryText: "去维护模板",
-                secondaryHref: "/autobet/targets#targetsSection",
-                secondaryText: "去绑定群组",
-                activeHref: "/autobet/templates#templatesSection",
-            };
-        }
-        if (normalized === "targets") {
-            return {
-                eyebrow: "投递群组",
-                title: "这里专门处理投递群组、可达性测试和模板绑定。",
-                detail: "群组创建默认停用，先测试发送成功，再启用并绑定对应下注模板。",
-                primaryHref: "#targetsSection",
-                primaryText: "去配置群组",
-                secondaryHref: "/autobet/templates#templatesSection",
-                secondaryText: "去管理模板",
-                activeHref: "/autobet/targets#targetsSection",
-            };
-        }
-        if (normalized === "subscriptions") {
-            return {
-                eyebrow: "跟单策略",
-                title: "在这里设置一条来源收到后怎么下单、发到哪些群。",
-                detail: "选来源、定金额，再检查群组和模板，信号才会真正发出去。",
-                primaryHref: "#subscriptionsSection",
-                primaryText: "去设置跟单",
-                secondaryHref: "/autobet/targets#targetsSection",
-                secondaryText: "去看群组",
-                activeHref: "/autobet/subscriptions#subscriptionsSection",
-            };
-        }
-        return {
-            eyebrow: "总控台",
-            title: "这里是自动投注总控台，先看业务链路，再进入对应工作区处理。",
-            detail: "主总控台只保留总览、健康检查、执行链路和入口卡片；群组、模板、跟单这些具体配置动作，优先进入对应工作区完成。",
-            primaryHref: "#autobetQuickstartSection",
-            primaryText: "开始 4 步向导",
-            secondaryHref: "/",
-            secondaryText: "返回总览",
-            activeHref: "/autobet#autobetQuickstartSection",
-        };
+        return window.location.pathname.replace(/\/$/, "").split("/").pop();
     }
 
     function currentUserStorageKey(name) {
@@ -392,29 +280,6 @@
             window.localStorage.setItem(storageKey, normalized);
         } catch (error) {
             // noop
-        }
-    }
-
-    async function copyTextToClipboard(text) {
-        const normalized = String(text || "").trim();
-        if (!normalized) {
-            throw new Error("没有可复制的内容");
-        }
-        if (window.navigator && window.navigator.clipboard && typeof window.navigator.clipboard.writeText === "function") {
-            await window.navigator.clipboard.writeText(normalized);
-            return;
-        }
-        const fallbackField = document.createElement("textarea");
-        fallbackField.value = normalized;
-        fallbackField.setAttribute("readonly", "readonly");
-        fallbackField.style.position = "fixed";
-        fallbackField.style.opacity = "0";
-        document.body.appendChild(fallbackField);
-        fallbackField.select();
-        const copied = document.execCommand("copy");
-        document.body.removeChild(fallbackField);
-        if (!copied) {
-            throw new Error("当前浏览器不支持自动复制，请手动复制绑定命令");
         }
     }
 
@@ -611,15 +476,6 @@
             .replace(/'/g, "&#39;");
     }
 
-    function truncateText(value, length) {
-        const text = String(value == null ? "" : value);
-        const limit = Number(length) || 0;
-        if (limit <= 0 || text.length <= limit) {
-            return text;
-        }
-        return text.slice(0, Math.max(0, limit - 3)) + "...";
-    }
-
     function renderStatusPill(status) {
         const normalized = String(status || "inactive").trim() || "inactive";
         return '<span class="config-status-pill is-' + escapeHtml(normalized) + '">' + escapeHtml(statusText(normalized)) + "</span>";
@@ -628,10 +484,6 @@
     function renderStatusPillWithLabel(status, label) {
         const normalized = String(status || "inactive").trim() || "inactive";
         return '<span class="config-status-pill is-' + escapeHtml(normalized) + '">' + escapeHtml(label || statusText(normalized)) + "</span>";
-    }
-
-    function renderPill(text, className) {
-        return '<span class="' + className + '">' + escapeHtml(statusText(text)) + "</span>";
     }
 
     function formatDateTime(value) {
@@ -664,92 +516,21 @@
         if (cancelButton instanceof HTMLElement) {
             cancelButton.hidden = !editing;
         }
-    }
-
-    function setActiveWorkspaceLink(targetHash) {
-        const hasMatch = workspaceLinks.some(function (link) {
-            return link.getAttribute("href") === targetHash;
-        });
-        if (!hasMatch) {
-            return;
-        }
-        workspaceLinks.forEach(function (link) {
-            link.classList.toggle("is-active", link.getAttribute("href") === targetHash);
-        });
+        if (window.PlatformNavigation) window.PlatformNavigation.markClean(form);
     }
 
     function applyAutobetScope() {
         const scope = currentAutobetScope();
-        const config = autobetScopeConfig(scope);
         document.body.setAttribute("data-autobet-scope", scope);
-        const eyebrow = document.getElementById("autobetHeroEyebrow");
-        const title = document.getElementById("autobetHeroTitle");
-        const detail = document.getElementById("autobetHeroText");
-        const primaryAction = document.getElementById("autobetHeroPrimaryAction");
-        const secondaryAction = document.getElementById("autobetHeroSecondaryAction");
-        if (eyebrow instanceof HTMLElement) {
-            eyebrow.textContent = config.eyebrow;
-        }
-        if (title instanceof HTMLElement) {
-            title.textContent = config.title;
-        }
-        if (detail instanceof HTMLElement) {
-            detail.textContent = config.detail;
-        }
-        if (primaryAction instanceof HTMLAnchorElement) {
-            primaryAction.setAttribute("href", config.primaryHref);
-            primaryAction.textContent = config.primaryText;
-        }
-        if (secondaryAction instanceof HTMLAnchorElement) {
-            secondaryAction.setAttribute("href", config.secondaryHref);
-            secondaryAction.textContent = config.secondaryText;
-        }
-        workspaceLinks.forEach(function (link) {
-            link.classList.toggle("is-active", link.getAttribute("href") === config.activeHref);
-        });
-    }
-
-    function initWorkspaceNav() {
-        workspaceLinks.forEach(function (link) {
-            link.addEventListener("click", function () {
-                const href = link.getAttribute("href") || "";
-                if (href.startsWith("#")) {
-                    setActiveWorkspaceLink(href);
-                }
-            });
-        });
-
-        if (!("IntersectionObserver" in window)) {
-            return;
-        }
-
-        const sections = workspaceLinks.map(function (link) {
-            const href = link.getAttribute("href") || "";
-            if (!href.startsWith("#")) {
-                return null;
-            }
-            return document.querySelector(href);
-        }).filter(Boolean);
-
-        const observer = new IntersectionObserver(function (entries) {
-            const visible = entries.filter(function (entry) {
-                return entry.isIntersecting;
-            }).sort(function (left, right) {
-                return left.boundingClientRect.top - right.boundingClientRect.top;
-            })[0];
-
-            if (!visible || !visible.target || !visible.target.id) {
-                return;
-            }
-            setActiveWorkspaceLink("#" + visible.target.id);
-        }, {
-            rootMargin: "-20% 0px -60% 0px",
-            threshold: [0.1, 0.3, 0.6],
-        });
-
-        sections.forEach(function (section) {
-            observer.observe(section);
-        });
+        const copy = {
+            sources: "导入、维护方案来源，并查看来源的信号链路。",
+            accounts: "管理 Telegram 账号授权与可用状态。",
+            targets: "绑定投递群组、选择模板并测试可达性。",
+            templates: "维护消息格式、玩法映射和发送预览。",
+            subscriptions: "选择来源、玩法和投递群组，管理跟单方案。",
+        };
+        document.getElementById("autobetHeroText").textContent = copy[scope] || "";
+        document.getElementById("autobetHeroEyebrow").textContent = scope === "subscriptions" ? "策略管理" : "资源配置";
     }
 
     function scrollToHashTarget(hash) {
@@ -757,46 +538,17 @@
         if (!normalized || normalized.charAt(0) !== "#") {
             return false;
         }
-        const target = document.querySelector(normalized);
+        let id;
+        try { id = decodeURIComponent(normalized.slice(1)); } catch (error) { return false; }
+        const target = document.getElementById(id);
         if (!(target instanceof HTMLElement)) {
             return false;
         }
-        setActiveWorkspaceLink(normalized);
         target.scrollIntoView({behavior: "smooth", block: "start"});
         if (window.history && typeof window.history.replaceState === "function") {
             window.history.replaceState({}, "", window.location.pathname + window.location.search + normalized);
         }
         return true;
-    }
-
-    function highlightPriorityActionCard() {
-        if (!(priorityActionCard instanceof HTMLElement)) {
-            return;
-        }
-        priorityActionCard.classList.remove("is-updated");
-        void priorityActionCard.offsetWidth;
-        priorityActionCard.classList.add("is-updated");
-        window.setTimeout(function () {
-            priorityActionCard.classList.remove("is-updated");
-        }, 1300);
-    }
-
-    function focusRecentJobCard(jobId) {
-        const normalizedJobId = String(jobId || "").trim();
-        if (!normalizedJobId) {
-            return;
-        }
-        const card = document.querySelector('[data-job-card-id="' + normalizedJobId.replace(/"/g, '\\"') + '"]');
-        if (!(card instanceof HTMLElement)) {
-            return;
-        }
-        card.scrollIntoView({behavior: "smooth", block: "start"});
-        card.classList.remove("is-highlighted");
-        void card.offsetWidth;
-        card.classList.add("is-highlighted");
-        window.setTimeout(function () {
-            card.classList.remove("is-highlighted");
-        }, 1450);
     }
 
     async function request(path, options) {
@@ -1066,135 +818,6 @@
             return "删除后会清除手机号和 Session，历史执行记录保留，关联的停用/归档群组会解除绑定。";
         }
         return "删除后会清除手机号和 Session，当前没有需要保留的关联记录。";
-    }
-
-    function currentTelegramBinding() {
-        if (!state.telegramBinding || typeof state.telegramBinding !== "object") {
-            return null;
-        }
-        return state.telegramBinding;
-    }
-
-    function telegramBindTokenState(binding) {
-        const item = binding || currentTelegramBinding();
-        const bindToken = item ? String(item.bind_token || "").trim() : "";
-        const expireAt = item ? String(item.bind_token_expire_at || "").trim() : "";
-        const expireTimestamp = expireAt ? Date.parse(expireAt) : NaN;
-        const isExpired = Boolean(bindToken) && Number.isFinite(expireTimestamp) && expireTimestamp <= Date.now();
-        return {
-            bindToken: bindToken,
-            expireAt: expireAt,
-            hasToken: Boolean(bindToken),
-            isExpired: isExpired,
-            isActive: Boolean(bindToken) && !isExpired,
-        };
-    }
-
-    function telegramBindingLabel(binding) {
-        const item = binding || currentTelegramBinding();
-        if (!item || !item.is_bound) {
-            return "未绑定";
-        }
-        const username = String(item.telegram_username || "").trim();
-        if (username) {
-            return "@" + username;
-        }
-        if (item.telegram_user_id != null) {
-            return "用户 #" + String(item.telegram_user_id);
-        }
-        const chatId = String(item.telegram_chat_id || "").trim();
-        return chatId ? ("chat_id " + chatId) : "已绑定";
-    }
-
-    function currentBindCommand() {
-        const tokenState = telegramBindTokenState();
-        return tokenState.isActive ? ("/bind " + tokenState.bindToken) : "/bind <绑定码>";
-    }
-
-    function renderBotBindingMetrics(binding, tokenState) {
-        if (!(botBindingMetrics instanceof HTMLElement)) {
-            return;
-        }
-        const item = binding || null;
-        const commandState = item && item.is_bound ? "已可查询" : "待绑定";
-        const commandDetail = item && item.is_bound
-            ? "当前 Telegram 私聊账号已绑定，可直接使用 /subs、/play、/restart、/profit、/plan、/rule 和 /auto。"
-            : "完成绑定后，收益查询 Bot 才能识别你当前平台账号。";
-        const codeValue = tokenState.isActive
-            ? tokenState.bindToken
-            : (tokenState.hasToken ? "已过期" : "未生成");
-        const codeDetail = tokenState.isActive
-            ? ("有效期至 " + formatDateTime(tokenState.expireAt) + "。")
-            : (tokenState.hasToken
-                ? "当前绑定码已过期，请重新生成。"
-                : "网页端生成后，再去 Telegram 私聊 Bot 使用。");
-        botBindingMetrics.innerHTML = [
-            '<article class="health-card"><span class="setup-label">绑定状态</span><strong>' + escapeHtml(item && item.is_bound ? "已绑定" : "未绑定") + '</strong><p>' + escapeHtml(item && item.is_bound ? ("当前账号 " + telegramBindingLabel(item) + " 已绑定到平台用户。") : "当前 Telegram 私聊账号还没有绑定到平台用户。") + '</p></article>',
-            '<article class="health-card"><span class="setup-label">当前绑定码</span><strong class="mono-text">' + escapeHtml(codeValue) + '</strong><p>' + escapeHtml(codeDetail) + '</p></article>',
-            '<article class="health-card"><span class="setup-label">收益命令</span><strong>' + escapeHtml(commandState) + '</strong><p>' + escapeHtml(commandDetail) + '</p></article>',
-        ].join("");
-    }
-
-    function renderBotBindingSection() {
-        if (!(botBindingSummary instanceof HTMLElement) ||
-            !(botBindingCommand instanceof HTMLElement) ||
-            !(botBindingCommandMeta instanceof HTMLElement) ||
-            !(botBindingActions instanceof HTMLElement) ||
-            !(botBindingInstructions instanceof HTMLElement)) {
-            return;
-        }
-
-        if (!state.currentUser) {
-            renderBotBindingMetrics(null, {bindToken: "", expireAt: "", hasToken: false, isExpired: false, isActive: false});
-            botBindingSummary.textContent = "登录后可在网页端生成绑定码，再去 Telegram 私聊收益查询 Bot 完成账号绑定。";
-            botBindingCommand.textContent = "/bind <绑定码>";
-            botBindingCommandMeta.textContent = "当前未登录，暂时不能生成绑定码。";
-            botBindingActions.innerHTML = [
-                '<button id="generateBindCodeBtn" class="primary-btn" type="button" disabled>登录后生成绑定码</button>',
-                '<button id="copyBindCommandBtn" class="ghost-btn" type="button" disabled>复制 /bind 命令</button>',
-                '<button id="clearTelegramBindingBtn" class="ghost-btn" type="button" disabled>解除当前绑定</button>',
-            ].join("");
-            botBindingInstructions.innerHTML = [
-                '<p>1. 先在网页端登录当前平台账号。</p>',
-                '<p>2. 登录后点击“生成绑定码”，复制完整的 <span class="mono-text">/bind</span> 命令。</p>',
-                '<p>3. 去 Telegram 私聊收益查询 Bot，先发送 <span class="mono-text">/start</span>，再发送绑定命令。</p>',
-            ].join("");
-            return;
-        }
-
-        const binding = currentTelegramBinding();
-        const tokenState = telegramBindTokenState(binding);
-        const isBound = Boolean(binding && binding.is_bound);
-        const clearButtonText = isBound ? "解除当前绑定" : (tokenState.hasToken ? "清空当前绑定码" : "解除当前绑定");
-        const generateButtonText = isBound
-            ? "重新生成绑定码"
-            : (tokenState.isActive ? "刷新绑定码" : "生成绑定码");
-
-        renderBotBindingMetrics(binding, tokenState);
-        if (isBound) {
-            botBindingSummary.textContent = "当前 Telegram 账号 " + telegramBindingLabel(binding) + " 已绑定到平台用户，可直接在 Bot 私聊里查询收益。";
-        } else if (tokenState.isActive) {
-            botBindingSummary.textContent = "绑定码已生成，请在 " + formatDateTime(tokenState.expireAt) + " 前去 Telegram 私聊收益查询 Bot 完成绑定。";
-        } else if (tokenState.hasToken) {
-            botBindingSummary.textContent = "之前生成的绑定码已过期，请重新生成新的绑定码。";
-        } else {
-            botBindingSummary.textContent = "当前还没有绑定码。点击下方按钮后，在 Telegram 私聊收益查询 Bot 发送 /bind 命令即可。";
-        }
-        botBindingCommand.textContent = currentBindCommand();
-        botBindingCommandMeta.textContent = tokenState.isActive
-            ? "复制后直接发送给收益查询 Bot。绑定完成后，可继续使用 /subs、/play、/restart、/profit、/plan、/rule 和 /auto。"
-            : "绑定码只在网页端生成。当前默认有效期来自后台 Telegram 配置。";
-        botBindingActions.innerHTML = [
-            '<button id="generateBindCodeBtn" class="primary-btn" type="button">' + escapeHtml(generateButtonText) + '</button>',
-            '<button id="copyBindCommandBtn" class="ghost-btn" type="button"' + (tokenState.isActive ? "" : " disabled") + '>复制 /bind 命令</button>',
-            '<button id="clearTelegramBindingBtn" class="ghost-btn" type="button"' + (isBound || tokenState.hasToken ? "" : " disabled") + '>' + escapeHtml(clearButtonText) + '</button>',
-        ].join("");
-        botBindingInstructions.innerHTML = [
-            '<p>1. 绑定码只能在网页端生成，默认有效期由后台 Telegram 配置决定。</p>',
-            '<p>2. 到 Telegram 私聊收益查询 Bot，先发送 <span class="mono-text">/start</span>，再发送上面的绑定命令。</p>',
-            '<p>3. 绑定完成后，可在同一个私聊窗口继续发送 <span class="mono-text">/subs</span>、<span class="mono-text">/play</span>、<span class="mono-text">/restart</span>、<span class="mono-text">/profit</span>、<span class="mono-text">/plan</span>、<span class="mono-text">/rule</span>、<span class="mono-text">/auto</span>。</p>',
-            '<p>4. 如果 Bot 没有响应，请联系管理员确认收益查询 Bot 已启用且 Token 正常。</p>',
-        ].join("");
     }
 
     function availableAccountsForTargets() {
@@ -1869,6 +1492,7 @@
         if (!(messageTemplateForm instanceof HTMLFormElement)) {
             return;
         }
+        if (window.PlatformNavigation && !window.PlatformNavigation.confirmLeaveForm(messageTemplateForm)) return;
         const preset = templatePresetCatalog()[String(presetId || "").trim()];
         if (!preset) {
             return;
@@ -1881,6 +1505,7 @@
         applyTemplateConfigToForm(cloneJson(preset.config));
         applyTemplateSample(preset.preview && preset.preview.sampleId || "big_small");
         setFormEditingState(messageTemplateForm, document.getElementById("createMessageTemplateBtn"), cancelMessageTemplateEditBtn, false, "新增模板");
+        if (window.PlatformNavigation) window.PlatformNavigation.markDirty(messageTemplateForm);
         setStatus("已套用模板预设：「" + preset.name + "」。", false);
     }
 
@@ -2117,22 +1742,6 @@
         return left.length === right.length && left.every(function (item, index) {
             return item === right[index];
         });
-    }
-
-    function resolveSignalPlayFilterKey(signal) {
-        const item = signal && typeof signal === "object" ? signal : {};
-        const betType = String(item.bet_type || "").trim();
-        const betValue = String(item.bet_value || "").trim();
-        if (betType === "combo" && ["大单", "大双", "小单", "小双"].includes(betValue)) {
-            return "combo:" + betValue;
-        }
-        if (betType === "big_small" && ["大", "小"].includes(betValue)) {
-            return "big_small:" + betValue;
-        }
-        if ((betType === "big_small" || betType === "odd_even") && ["单", "双"].includes(betValue)) {
-            return "odd_even:" + betValue;
-        }
-        return "";
     }
 
     function syncSubscriptionBetFilterUI() {
@@ -2703,32 +2312,6 @@
         });
     }
 
-    function primarySource() {
-        const subscription = primarySubscription();
-        if (subscription) {
-            const linkedSource = sourceById(subscription.source_id);
-            if (linkedSource) {
-                return linkedSource;
-            }
-        }
-        const aiSource = aiSources()[0];
-        return aiSource || state.sources[0] || null;
-    }
-
-    function primaryAccount() {
-        const items = availableAccountsForTargets();
-        return items.find(function (item) {
-            return item.status === "active";
-        }) || items[0] || null;
-    }
-
-    function primaryTarget() {
-        const items = visibleTargets();
-        return items.find(function (item) {
-            return item.status === "active";
-        }) || items[0] || null;
-    }
-
     function primarySubscription() {
         const items = visibleSubscriptions();
         return items.find(function (item) {
@@ -2866,31 +2449,6 @@
         };
     }
 
-    function pendingAccountForWizard() {
-        const priorities = {
-            login_expired: 0,
-            password_required: 1,
-            code_sent: 2,
-            pending_import: 3,
-            new: 4,
-            pending: 5,
-        };
-        return visibleAccounts().filter(function (item) {
-            return !isAccountAuthorized(item);
-        }).sort(function (left, right) {
-            const leftPriority = priorities[accountAuthState(left)] == null ? 99 : priorities[accountAuthState(left)];
-            const rightPriority = priorities[accountAuthState(right)] == null ? 99 : priorities[accountAuthState(right)];
-            return leftPriority - rightPriority;
-        })[0] || null;
-    }
-
-    function wizardTargetCandidate() {
-        const items = visibleTargets();
-        return items.find(function (item) {
-            return item.status === "active";
-        }) || items[0] || null;
-    }
-
     function hasTargetRecentActivity(item) {
         if (!item) {
             return false;
@@ -2906,12 +2464,6 @@
         }
         const testStatus = targetLastTestStatus(item);
         return testStatus === "success" || testStatus === "ok" || hasTargetRecentActivity(item) || readStoredValue("wizard-tested-target") === targetProgressToken(item);
-    }
-
-    function activeAccounts() {
-        return state.accounts.filter(function (item) {
-            return item.status === "active" && isAccountAuthorized(item);
-        });
     }
 
     function activeTargets() {
@@ -2950,34 +2502,6 @@
         return state.subscriptions.filter(function (item) {
             return item.status === "active" && !isSubscriptionRiskBlocked(item);
         });
-    }
-
-    function readinessState() {
-        const aiSourceCount = state.sources.filter(function (item) {
-            return item.source_type === "ai_trading_simulator_export";
-        }).length;
-        const activeTargetCount = activeTargets().length;
-        const activeSubscriptionCount = activeSubscriptions().length;
-        const missing = [];
-        if (!state.currentUser) {
-            missing.push("登录");
-        }
-        if (!aiSourceCount) {
-            missing.push("AI 方案");
-        }
-        if (!activeAccounts().length) {
-            missing.push("激活托管账号");
-        }
-        if (!activeTargetCount) {
-            missing.push("激活投递群组");
-        }
-        if (!activeSubscriptionCount) {
-            missing.push("激活跟单策略");
-        }
-        return {
-            ready: missing.length === 0,
-            missing: missing,
-        };
     }
 
     function summarizeStrategyMode(payload) {
@@ -3258,10 +2782,6 @@
         ].join("");
     }
 
-    function renderSubscriptionDailyHistory(subscription) {
-        return renderSubscriptionDailyHistoryItems(subscriptionDailyHistory(subscription), {});
-    }
-
     function renderSubscriptionProfitDetail(subscription) {
         const stat = subscriptionDailyStat(subscription) || {};
         const statDate = String(stat.stat_date || state.subscriptionStatDate || "--");
@@ -3500,55 +3020,6 @@
         ].join("");
     }
 
-    function archivedCounts() {
-        return {
-            accounts: state.accounts.filter(isArchivedItem).length,
-            targets: state.targets.filter(isArchivedItem).length,
-            subscriptions: state.subscriptions.filter(isArchivedItem).length,
-        };
-    }
-
-    function globalAutobetState() {
-        const accountItems = visibleAccounts();
-        const targetItems = visibleTargets();
-        const subscriptionItems = visibleSubscriptions();
-        const activeAccountCount = activeAccounts().length;
-        const activeTargetCount = activeTargets().length;
-        const activeSubscriptionCount = activeSubscriptions().length;
-        const configuredCount = accountItems.length + targetItems.length + subscriptionItems.length;
-
-        if (!configuredCount) {
-            return {
-                status: "inactive",
-                title: "自动投注尚未配置",
-                detail: "当前没有可控制的托管账号、投递群组或跟单策略；已归档项不会参与全局启停。",
-                actionText: "恢复自动投注",
-                nextStatus: "active",
-                disabled: true,
-            };
-        }
-
-        if (activeAccountCount > 0 && activeTargetCount > 0 && activeSubscriptionCount > 0) {
-            return {
-                status: "active",
-                title: "自动投注运行条件已开启",
-                detail: "当前至少有一条激活中的托管账号、投递群组和跟单策略，后续派发会继续命中这些激活配置。",
-                actionText: "暂停自动投注",
-                nextStatus: "inactive",
-                disabled: false,
-            };
-        }
-
-        return {
-            status: "inactive",
-            title: "自动投注已部分或全部暂停",
-            detail: "当前激活中的账号、投递群组或跟单策略不完整。恢复自动投注只会批量恢复未归档配置项的启用状态。",
-            actionText: "恢复自动投注",
-            nextStatus: "active",
-            disabled: false,
-        };
-    }
-
     function entityStatusAction(status, pauseText, resumeText) {
         const normalized = String(status || "inactive");
         if (normalized === "active") {
@@ -3562,171 +3033,6 @@
 
     function confirmDangerousAction(message) {
         return window.confirm(message);
-    }
-
-    function runtimeBoardState() {
-        const aiSources = state.sources.filter(function (item) {
-            return item.source_type === "ai_trading_simulator_export";
-        });
-        const activeAccountItems = activeAccounts();
-        const activeTargetItems = activeTargets();
-        const activeSubscriptionItems = activeSubscriptions();
-        const visibleAccountItems = visibleAccounts();
-        const visibleTargetItems = visibleTargets();
-        const visibleSubscriptionItems = visibleSubscriptions();
-        const archives = archivedCounts();
-        const totalArchived = archives.accounts + archives.targets + archives.subscriptions;
-        const blockers = [];
-        const suggestions = [];
-
-        if (!state.currentUser) {
-            blockers.push("当前未登录，无法判断当前账号的自动投注配置。");
-            suggestions.push("先登录当前用户账号。");
-        }
-        if (!aiSources.length) {
-            blockers.push("尚未导入 AI 方案来源，自动投注没有可跟随的信号入口。");
-            suggestions.push("先回首页导入 AITradingSimulator 方案链接。");
-        }
-        if (!activeAccountItems.length) {
-            blockers.push(
-                visibleAccountItems.length
-                    ? "托管账号存在但都未激活，当前没有可执行任务的账号。"
-                    : "没有可用的托管账号，投递链路无法启动。"
-            );
-            suggestions.push("至少保留一个激活中的托管账号。");
-        }
-        if (!activeTargetItems.length) {
-            blockers.push(
-                visibleTargetItems.length
-                    ? "投递群组存在但都未激活，任务没有实际落点。"
-                    : "没有可用的投递群组，任务无法派发。"
-            );
-            suggestions.push("至少保留一个激活中的投递群组。");
-        }
-        if (!activeSubscriptionItems.length) {
-            blockers.push(
-                visibleSubscriptionItems.length
-                    ? "跟单策略存在但都未激活，来源信号不会展开为执行任务。"
-                    : "没有可用的跟单策略，来源信号不会进入你的执行链路。"
-            );
-            suggestions.push("至少保留一个激活中的跟单策略。");
-        }
-
-        let headline = "待配置";
-        let detail = "当前还没有形成完整的自动投注运行链路。";
-        if (!state.currentUser) {
-            headline = "等待登录";
-            detail = "登录后才能基于当前用户的配置判断自动投注是否处于可运行状态。";
-        } else if (!blockers.length) {
-            headline = "可运行";
-            detail = "当前来源、托管账号、投递群组和跟单策略都已具备，自动投注满足最小运行条件。";
-        } else if (!visibleAccountItems.length && !visibleTargetItems.length && !visibleSubscriptionItems.length && totalArchived > 0) {
-            headline = "仅有归档配置";
-            detail = "当前只剩已归档配置；这些项目会保留历史展示，但不会参与自动投注。";
-        } else if (visibleAccountItems.length || visibleTargetItems.length || visibleSubscriptionItems.length || aiSources.length) {
-            headline = "存在阻塞";
-            detail = "系统已识别到部分配置，但运行链路仍不完整，自动投注不会稳定命中。";
-        }
-
-        const checklistItems = [
-            {
-                title: "AI 方案来源",
-                status: aiSources.length ? "active" : "inactive",
-                body: aiSources.length
-                    ? ("已导入 " + aiSources.length + " 个 AI 来源，当前主来源为「" + (primarySource() ? primarySource().name : "--") + "」。")
-                    : "当前还没有导入 AI 方案来源。",
-            },
-            {
-                title: "托管账号",
-                status: activeAccountItems.length ? "active" : (archives.accounts ? "archived" : "inactive"),
-                body: activeAccountItems.length
-                    ? ("当前有 " + activeAccountItems.length + " 个激活账号，主执行账号为「" + (primaryAccount() ? primaryAccount().label : "--") + "」。")
-                    : (visibleAccountItems.length ? "已配置账号但没有激活账号。" : "当前没有可用于执行的托管账号。"),
-            },
-            {
-                title: "投递群组",
-                status: activeTargetItems.length ? "active" : (archives.targets ? "archived" : "inactive"),
-                body: activeTargetItems.length
-                    ? ("当前有 " + activeTargetItems.length + " 个激活群组，主投递群组为「" + (primaryTarget() ? (primaryTarget().target_name || primaryTarget().target_key || "--") : "--") + "」。")
-                    : (visibleTargetItems.length ? "已配置投递群组但没有激活群组。" : "当前没有可用的投递群组。"),
-            },
-            {
-                title: "跟单策略",
-                status: activeSubscriptionItems.length ? "active" : (archives.subscriptions ? "archived" : "inactive"),
-                body: activeSubscriptionItems.length
-                    ? ("当前有 " + activeSubscriptionItems.length + " 条激活策略，主策略为「" + summarizeStrategy(primarySubscription() ? primarySubscription().strategy : {}, primarySubscription() ? primarySubscription().strategy_v2 : {}) + "」。")
-                    : (visibleSubscriptionItems.length ? "已配置跟单策略但没有激活策略。" : "当前没有可用的跟单策略。"),
-            },
-            {
-                title: "建议动作",
-                status: blockers.length ? "inactive" : "active",
-                body: blockers.length ? suggestions.join("；") : "当前配置已具备运行条件，下一步更适合去执行记录和异常提醒页观察实际派发结果。",
-            },
-        ];
-
-        if (totalArchived > 0) {
-            checklistItems.push({
-                title: "归档统计",
-                status: "archived",
-                body: "已归档 " + totalArchived + " 项，其中托管账号 " + archives.accounts + "、投递群组 " + archives.targets + "、跟单策略 " + archives.subscriptions + "。",
-            });
-        }
-
-        return {
-            headline: headline,
-            detail: detail,
-            blockerCount: blockers.length,
-            blockerSummary: blockers.length ? blockers.join("；") : "当前没有检测到阻塞项，自动投注可进入运行观察阶段。",
-            archiveCount: totalArchived,
-            archiveSummary: totalArchived
-                ? ("托管账号 " + archives.accounts + "、投递群组 " + archives.targets + "、跟单策略 " + archives.subscriptions + "。")
-                : "当前没有已归档配置。",
-            suggestionSummary: blockers.length ? suggestions.join("；") : "关键链路已完整，可继续关注执行记录与异常提醒。",
-            checklistItems: checklistItems,
-        };
-    }
-
-    function renderRunChecklist(runtime) {
-        const root = document.getElementById("autobetRunChecklist");
-        if (!(root instanceof HTMLElement)) {
-            return;
-        }
-        root.innerHTML = runtime.checklistItems.map(function (item) {
-            return [
-                '<article class="checklist-item">',
-                '<div class="checklist-head"><strong class="checklist-title">' + escapeHtml(item.title || "--") + "</strong>" + renderStatusPill(item.status) + "</div>",
-                '<p class="checklist-body">' + escapeHtml(item.body || "--") + "</p>",
-                "</article>",
-            ].join("");
-        }).join("");
-    }
-
-    function renderCurrentConfig() {
-        const source = primarySource();
-        const account = primaryAccount();
-        const target = primaryTarget();
-        const subscription = primarySubscription();
-        const sourceState = source ? sourcePipelineState(source) : null;
-
-        document.getElementById("currentSourceName").textContent = source ? source.name : "未导入方案";
-        document.getElementById("currentSourceMeta").textContent = source
-            ? (((sourceState && sourceState.activeSubscription) ? "已接入激活跟单" : ((source.source_type || "--") + " · " + (source.visibility || "private"))) + (sourceState ? (" · " + sourceState.headline) : ""))
-            : "先在首页导入一个来源，再回来设置跟单。";
-
-        document.getElementById("currentAccountName").textContent = account ? account.label : "未绑定";
-        document.getElementById("currentAccountMeta").textContent = account
-            ? ((account.phone || "--") + " · " + accountAuthLabel(account))
-            : "当前没有可用于执行的 Telegram 托管账号。";
-
-        document.getElementById("currentTargetName").textContent = target ? (target.target_name || target.target_key || "未命名群组") : "未配置";
-        document.getElementById("currentTargetMeta").textContent = target
-            ? ("目标 Key：" + (target.target_key || "--") + " · 状态：" + statusText(target.status || "inactive"))
-            : "没有投递群组时，任务没有实际执行落点。";
-
-        document.getElementById("currentStrategyName").textContent = subscription ? ("来源 #" + subscription.source_id) : "未建立";
-        document.getElementById("currentStrategyMeta").textContent = subscription
-            ? summarizeStrategy(subscription.strategy || {}, subscription.strategy_v2 || {})
-            : "建立订阅后，来源信号才会进入你的执行任务视图。";
     }
 
     function parseTimeMs(value) {
@@ -4288,141 +3594,6 @@
         accountWorkspaceSummaryText.textContent = "当前账号接入链路已稳定，可继续去群组工作区完成绑定与测试。";
     }
 
-    function renderExecutionFlowSection() {
-        if (!(executionFlowSummary instanceof HTMLElement) || !(executionFlowChains instanceof HTMLElement)) {
-            return;
-        }
-        const subscriptions = visibleSubscriptions();
-        const activeSubs = activeSubscriptions();
-        const activeTargetsList = activeTargets();
-        executionFlowSummary.innerHTML = [
-            '<article class="health-card"><span class="setup-label">来源</span><strong>' + escapeHtml(String(state.sources.filter(function (item) { return item.source_type === "ai_trading_simulator_export"; }).length)) + '</strong><p>可进入自动投注的 AI 方案来源数量。</p></article>',
-            '<article class="health-card"><span class="setup-label">跟单</span><strong>' + escapeHtml(String(activeSubs.length)) + '</strong><p>当前处于启用状态、会实际接收信号的策略数量。</p></article>',
-            '<article class="health-card"><span class="setup-label">群组</span><strong>' + escapeHtml(String(activeTargetsList.length)) + '</strong><p>实际会接收展开任务的启用群组数量。</p></article>',
-            '<article class="health-card"><span class="setup-label">模板</span><strong>' + escapeHtml(String(activeTemplateCount())) + '</strong><p>处于启用状态的模板数量。</p></article>',
-        ].join("");
-
-        if (!(executionFlowSummaryText instanceof HTMLElement)) {
-            return;
-        }
-        if (!subscriptions.length) {
-            executionFlowSummaryText.textContent = "还没有跟单策略，当前只有配置对象，还没有形成业务链路。";
-            executionFlowChains.innerHTML = '<article class="checklist-item"><div class="checklist-head"><strong class="checklist-title">还没有执行链路</strong>' + renderStatusPill("inactive") + '</div><p class="checklist-body">先去跟单工作区建立策略，页面才会展示来源如何落到群组和模板。</p></article>';
-            return;
-        }
-        const chainItems = subscriptions.slice(0, 3).map(function (subscription) {
-            const source = sourceById(subscription.source_id);
-            const chainState = subscriptionTargetsState(subscription);
-            const previewTarget = chainState.previewTargets[0] || null;
-            const preview = previewTarget ? subscriptionPreviewForTarget(subscription, previewTarget) : null;
-            const blockers = chainState.summaries.length
-                ? chainState.summaries.map(function (entry) { return entry.label + " " + entry.count + " 个"; }).join("；")
-                : "当前没有阻塞项。";
-            return [
-                '<article class="checklist-item">',
-                '<div class="checklist-head"><strong class="checklist-title">' + escapeHtml(source ? source.name : ("#" + subscription.source_id)) + '</strong>' + renderStatusPill(subscription.status) + '</div>',
-                '<p class="checklist-body">' + escapeHtml("来源 -> 跟单策略 -> " + chainState.previewTargets.length + " 个群组 -> " + chainState.previewTargets.filter(function (item) { return item.template_id != null; }).length + " 个模板绑定。") + '</p>',
-                '<div class="checklist-foot"><span class="cell-muted">' + escapeHtml(summarizeStrategy(subscription.strategy || {}, subscription.strategy_v2 || {})) + '</span><span class="cell-muted">' + escapeHtml(blockers) + '</span>' + (preview ? ('<span class="cell-muted">样例：' + escapeHtml(preview.rendered.text || "--") + '</span>') : "") + '</div>',
-                '</article>',
-            ].join("");
-        });
-        executionFlowSummaryText.textContent = "从主总控台可以直接定位链路卡点，再决定去模板、群组还是跟单工作区处理。";
-        executionFlowChains.innerHTML = chainItems.join("");
-    }
-
-    function renderWorkspaceCards() {
-        if (!(workspaceCards instanceof HTMLElement)) {
-            return;
-        }
-        const targetIssues = visibleTargets().filter(function (item) {
-            return subscriptionTargetDiagnostics(item).some(function (entry) {
-                return entry.severity === "blocked";
-            });
-        }).length;
-        const templateDrafts = state.templates.filter(function (item) {
-            return !isArchivedItem(item) && String(item.status || "inactive") === "inactive";
-        }).length;
-        const subscriptionIssues = visibleSubscriptions().filter(function (item) {
-            return subscriptionTargetsState(item).summaries.length > 0;
-        }).length;
-        const activeLinkedSourceCount = aiSources().filter(function (item) {
-            return Boolean(activeSourceSubscription(item.id));
-        }).length;
-        const binding = currentTelegramBinding();
-        const tokenState = telegramBindTokenState(binding);
-        const cards = [
-            {
-                kicker: "Sources",
-                title: "来源链路",
-                body: aiSources().length
-                    ? ("已导入 " + aiSources().length + " 个来源，其中 " + activeLinkedSourceCount + " 个正被激活跟单使用。")
-                    : "还没有导入来源，整条自动投注链路没有信号入口。",
-                meta: aiSources().length ? "这里补上抓取、标准化和派发闭环。" : "先去首页导入公开方案链接。",
-                href: "/autobet/sources#sourcesSection",
-                text: "去来源页",
-            },
-            {
-                kicker: "Accounts",
-                title: "托管账号与授权",
-                body: activeAccounts().length
-                    ? ("当前有 " + activeAccounts().length + " 个可执行账号。")
-                    : "当前没有可执行账号，优先完成授权。",
-                meta: activeAccounts().length ? "账号链路已具备。" : "会直接阻塞所有发送。",
-                href: "/autobet/accounts#accountsSection",
-                text: "去账号区",
-            },
-            {
-                kicker: "Targets",
-                title: "群组工作区",
-                body: "已配置 " + visibleTargets().length + " 个群组，其中 " + targetIssues + " 个存在关键阻塞。",
-                meta: "可反查哪些跟单会发到这个群。",
-                href: "/autobet/targets#targetsSection",
-                text: "去群组页",
-            },
-            {
-                kicker: "Bot",
-                title: "收益查询 Bot 绑定",
-                body: !state.currentUser
-                    ? "登录后在网页端生成绑定码，再到 Telegram 私聊 Bot 完成绑定。"
-                    : (binding && binding.is_bound
-                        ? ("当前已绑定 " + telegramBindingLabel(binding) + "，可以直接查询收益。")
-                        : (tokenState.isActive
-                            ? ("绑定码有效至 " + formatDateTime(tokenState.expireAt) + "。")
-                            : "当前还没有有效绑定码。")),
-                meta: binding && binding.is_bound ? "用于 /profit 和 /plan 查询。" : "入口已经放回用户总控台，不再藏在后台。",
-                href: "/autobet#botBindingSection",
-                text: "去 Bot 绑定",
-            },
-            {
-                kicker: "Templates",
-                title: "模板工作区",
-                body: "当前 " + templateDrafts + " 套草稿模板，" + activeTemplateCount() + " 套启用模板。",
-                meta: "可查看哪些群组正在使用模板。",
-                href: "/autobet/templates#templatesSection",
-                text: "去模板页",
-            },
-            {
-                kicker: "Follow",
-                title: "跟单工作区",
-                body: "当前 " + visibleSubscriptions().length + " 条策略，其中 " + subscriptionIssues + " 条存在链路阻塞。",
-                meta: "可直接看最终发单示例。",
-                href: "/autobet/subscriptions#subscriptionsSection",
-                text: "去跟单页",
-            },
-        ];
-        workspaceCards.innerHTML = cards.map(function (card) {
-            return [
-                '<article class="action-card workspace-action-card">',
-                '<p class="panel-kicker">' + escapeHtml(card.kicker) + '</p>',
-                '<h2>' + escapeHtml(card.title) + '</h2>',
-                '<p>' + escapeHtml(card.body) + '</p>',
-                '<p class="workspace-action-meta">' + escapeHtml(card.meta) + '</p>',
-                '<a class="panel-link" href="' + escapeHtml(card.href) + '">' + escapeHtml(card.text) + '</a>',
-                '</article>',
-            ].join("");
-        }).join("");
-    }
-
     function renderTargetWorkspaceSummary() {
         const root = document.getElementById("targetWorkspaceSummary");
         const summaryText = document.getElementById("targetWorkspaceSummaryText");
@@ -4467,103 +3638,6 @@
         }
     }
 
-    function renderHealthCheck() {
-        const accountHeadline = document.getElementById("autobetHealthAccountAuthHeadline");
-        const accountDetail = document.getElementById("autobetHealthAccountAuthDetail");
-        const targetHeadline = document.getElementById("autobetHealthTargetReachabilityHeadline");
-        const targetDetail = document.getElementById("autobetHealthTargetReachabilityDetail");
-        const lastTestHeadline = document.getElementById("autobetHealthLastTestHeadline");
-        const lastTestDetail = document.getElementById("autobetHealthLastTestDetail");
-        const healthSummary = document.getElementById("autobetHealthSummary");
-        if (!(accountHeadline instanceof HTMLElement) || !(targetHeadline instanceof HTMLElement) || !(lastTestHeadline instanceof HTMLElement)) {
-            return;
-        }
-
-        if (!state.currentUser) {
-            accountHeadline.textContent = "待检查";
-            accountDetail.textContent = "登录后查看托管账号授权状态。";
-            targetHeadline.textContent = "待检查";
-            targetDetail.textContent = "登录后查看投递群组测试结果和最近活动。";
-            lastTestHeadline.textContent = "--";
-            lastTestDetail.textContent = "完成测试发送后，这里会显示最近一次测试时间。";
-            if (healthSummary instanceof HTMLElement) {
-                healthSummary.textContent = "登录后可生成配置健康报告。";
-            }
-            return;
-        }
-
-        const allAccounts = visibleAccounts();
-        const authorizedCount = allAccounts.filter(isAccountAuthorized).length;
-        if (!allAccounts.length) {
-            accountHeadline.textContent = "不可用";
-            accountDetail.textContent = "当前没有托管账号，请先创建并完成授权。";
-        } else if (authorizedCount === allAccounts.length) {
-            accountHeadline.textContent = "健康";
-            accountDetail.textContent = "共 " + allAccounts.length + " 个托管账号，全部已授权。";
-        } else {
-            accountHeadline.textContent = "待修复";
-            accountDetail.textContent = "共 " + allAccounts.length + " 个托管账号，仅 " + authorizedCount + " 个已授权。";
-        }
-
-        const allTargets = visibleTargets();
-        const reachableCount = allTargets.filter(function (item) {
-            const testState = targetLastTestStatus(item);
-            if (testState === "success" || testState === "ok") {
-                return true;
-            }
-            return isTargetWizardVerified(item);
-        }).length;
-        if (!allTargets.length) {
-            targetHeadline.textContent = "不可用";
-            targetDetail.textContent = "当前没有投递群组，请先绑定群组并完成测试发送。";
-        } else if (reachableCount === allTargets.length) {
-            targetHeadline.textContent = "健康";
-            targetDetail.textContent = "共 " + allTargets.length + " 个投递群组，均已验证可达。";
-        } else {
-            targetHeadline.textContent = "待修复";
-            targetDetail.textContent = "共 " + allTargets.length + " 个投递群组，已验证 " + reachableCount + " 个。";
-        }
-
-        const targetLastTimes = allTargets.map(targetLastTestAt).filter(Boolean);
-        const backendLatest = targetLastTimes.sort(function (left, right) {
-            return parseTimeMs(right) - parseTimeMs(left);
-        })[0] || "";
-        const localLatest = readStoredValue("wizard-last-target-test-at");
-        const latestValue = parseTimeMs(localLatest) > parseTimeMs(backendLatest) ? localLatest : backendLatest;
-        if (!latestValue) {
-            lastTestHeadline.textContent = "--";
-            lastTestDetail.textContent = "还没有测试发送记录，建议先在投递群组里执行一次测试发送。";
-        } else {
-            lastTestHeadline.textContent = formatDateTime(latestValue);
-            lastTestDetail.textContent = "最近测试发送时间已记录，可继续关注群组可达性。";
-        }
-
-        if (healthSummary instanceof HTMLElement) {
-            const accountPart = allAccounts.length ? (authorizedCount + "/" + allAccounts.length) : "未配置";
-            const targetPart = allTargets.length ? (reachableCount + "/" + allTargets.length) : "未配置";
-            healthSummary.textContent = "账号授权 " + accountPart + "，群组可达 " + targetPart + "。";
-        }
-    }
-
-    function recentJobSummary() {
-        const deliveredCount = state.jobs.filter(function (item) { return item.status === "delivered"; }).length;
-        const pendingCount = state.jobs.filter(function (item) { return item.status === "pending"; }).length;
-        const issueCount = state.jobs.filter(function (item) {
-            return item.status === "failed" || item.status === "expired" || item.status === "skipped";
-        }).length;
-        return {
-            deliveredCount: deliveredCount,
-            pendingCount: pendingCount,
-            issueCount: issueCount,
-        };
-    }
-
-    function issueJobs() {
-        return state.jobs.filter(function (item) {
-            return item.status === "failed" || item.status === "expired" || item.status === "skipped";
-        });
-    }
-
     function normalizeFailureReason(errorMessage) {
         const text = String(errorMessage || "").trim().toLowerCase();
         if (!text) {
@@ -4587,322 +3661,8 @@
         return String(errorMessage || "").trim();
     }
 
-    function failureReasonSummary() {
-        const reasonCounter = {};
-        state.failures.forEach(function (item) {
-            const reason = normalizeFailureReason(item.error_message);
-            reasonCounter[reason] = (reasonCounter[reason] || 0) + 1;
-        });
-        const orderedReasons = Object.keys(reasonCounter).sort(function (left, right) {
-            return reasonCounter[right] - reasonCounter[left];
-        });
-        return {
-            topReason: orderedReasons[0] || "",
-            parts: orderedReasons.slice(0, 3).map(function (reason) {
-                return reason + " " + reasonCounter[reason] + " 次";
-            }),
-        };
-    }
-
-    function recommendedActionState(runtime) {
-        const aiSources = state.sources.filter(function (item) {
-            return item.source_type === "ai_trading_simulator_export";
-        });
-        const summary = recentJobSummary();
-        const failureSummary = failureReasonSummary();
-        const hasCriticalAlerts = state.alerts.some(function (item) {
-            return String(item.severity || "") === "critical";
-        });
-
-        if (!state.currentUser) {
-            return {
-                actionKey: "login",
-                badgeText: "登录",
-                badgeClass: "step-pill is-pending",
-                title: "先登录当前账号",
-                description: "当前还没有用户会话。先登录，系统才能判断你的自动投注配置和最近运行反馈。",
-                primaryHref: "#autobetAccountSection",
-                primaryText: "去登录与账户",
-                secondaryHref: "/",
-                secondaryText: "返回首页",
-            };
-        }
-        if (!aiSources.length) {
-            return {
-                actionKey: "import_source",
-                badgeText: "来源",
-                badgeClass: "step-pill is-pending",
-                title: "先导入 AI 方案来源",
-                description: "没有来源时，自动投注没有可跟随的信号入口，后续账号和群组都无法真正命中任务。",
-                primaryHref: "/autobet/sources#sourcesSection",
-                primaryText: "去来源工作区",
-                secondaryHref: "/#importSection",
-                secondaryText: "首页快捷导入",
-            };
-        }
-        if (!activeAccounts().length) {
-            return {
-                actionKey: "fix_accounts",
-                badgeText: "账号",
-                badgeClass: "step-pill is-pending",
-                title: "优先处理托管账号",
-                description: "当前没有激活中的托管账号，执行链路无法真正把任务发出去。",
-                primaryHref: "/autobet/accounts#accountsSection",
-                primaryText: "去检查托管账号",
-                secondaryHref: "/records?status=failed",
-                secondaryText: "查看失败记录",
-            };
-        }
-        if (!activeTargets().length) {
-            return {
-                actionKey: "fix_targets",
-                badgeText: "群组",
-                badgeClass: "step-pill is-pending",
-                title: "优先恢复投递群组",
-                description: "当前没有激活中的投递群组，任务即使生成也没有实际落点。",
-                primaryHref: "/autobet/targets#targetsSection",
-                primaryText: "去检查投递群组",
-                secondaryHref: "/records?status=failed",
-                secondaryText: "查看失败记录",
-            };
-        }
-        if (!activeSubscriptions().length) {
-            return {
-                actionKey: "fix_subscriptions",
-                badgeText: "跟单",
-                badgeClass: "step-pill is-pending",
-                title: "优先恢复跟单策略",
-                description: "当前没有激活中的跟单策略，来源信号不会进入你的执行任务链路。",
-                primaryHref: "/autobet/subscriptions#subscriptionsSection",
-                primaryText: "去检查跟单策略",
-                secondaryHref: "#currentConfigSection",
-                secondaryText: "查看当前配置",
-            };
-        }
-        if (failureSummary.topReason === "会话失效") {
-            return {
-                actionKey: "repair_session",
-                badgeText: "会话",
-                badgeClass: "step-pill is-pending",
-                title: "优先检查托管账号会话",
-                description: "最近失败主要集中在会话失效。应先检查 Telegram 托管账号的 session 路径、登录状态和可用性。",
-                primaryHref: "/autobet/accounts#accountsSection",
-                primaryText: "去检查托管账号",
-                secondaryHref: "/records?status=failed",
-                secondaryText: "查看失败记录",
-            };
-        }
-        if (summary.issueCount > 0) {
-            return {
-                actionKey: "handle_failures",
-                badgeText: "重试",
-                badgeClass: "step-pill is-pending",
-                title: "优先处理最近失败任务",
-                description: failureSummary.parts.length
-                    ? ("最近失败主要集中在：" + failureSummary.parts.join("、") + "。先处理失败任务，再观察是否持续复发。")
-                    : "最近存在失败、过期或跳过任务，建议优先检查失败记录。",
-                primaryHref: "/records?status=failed",
-                primaryText: "去处理失败任务",
-                secondaryHref: "/alerts",
-                secondaryText: "查看异常提醒",
-            };
-        }
-        if (hasCriticalAlerts) {
-            return {
-                actionKey: "check_alerts",
-                badgeText: "告警",
-                badgeClass: "step-pill is-pending",
-                title: "优先处理关键告警",
-                description: "当前存在 critical 级别告警。即使运行链路完整，也应先确认执行器状态和异常通知是否已经恢复。",
-                primaryHref: "/alerts",
-                primaryText: "去查看关键告警",
-                secondaryHref: "/records",
-                secondaryText: "查看执行记录",
-            };
-        }
-        return {
-            actionKey: runtime.blockerCount ? "review_blockers" : "observe_runtime",
-            badgeText: runtime.blockerCount ? "检查" : "就绪",
-            badgeClass: runtime.blockerCount ? "step-pill is-pending" : "step-pill is-done",
-            title: runtime.blockerCount ? "按阻塞项逐项补齐配置" : "保持观察当前运行结果",
-            description: runtime.blockerCount
-                ? "当前运行链路还有阻塞项，建议先按上面的运行阻塞清单逐项补齐，再观察最近执行反馈。"
-                : "当前关键链路已完整。接下来更适合继续观察执行记录、异常提醒和失败重试结果。",
-            primaryHref: runtime.blockerCount ? "#autobetOverviewSection" : "/records",
-            primaryText: runtime.blockerCount ? "查看阻塞清单" : "查看执行记录",
-            secondaryHref: "/alerts",
-            secondaryText: "查看异常提醒",
-        };
-    }
-
-    function renderRecentJobSummary() {
-        const summary = recentJobSummary();
-        document.getElementById("autobetRecentDeliveredCount").textContent = String(summary.deliveredCount);
-        document.getElementById("autobetRecentPendingCount").textContent = String(summary.pendingCount);
-        document.getElementById("autobetRecentIssueCount").textContent = String(summary.issueCount);
-        document.getElementById("autobetRecentDeliveredMeta").textContent = summary.deliveredCount
-            ? ("最近 " + state.jobs.length + " 条记录中已送达 " + summary.deliveredCount + " 条。")
-            : "最近没有已送达任务。";
-        document.getElementById("autobetRecentPendingMeta").textContent = summary.pendingCount
-            ? ("当前仍有 " + summary.pendingCount + " 条任务待执行。")
-            : "当前没有待执行任务。";
-        document.getElementById("autobetRecentIssueMeta").textContent = summary.issueCount
-            ? ("最近有 " + summary.issueCount + " 条任务处于失败、过期或跳过状态。")
-            : "最近没有失败、过期或跳过任务。";
-
-        if (!state.failures.length) {
-            document.getElementById("autobetFailureDigest").textContent = "最近没有新的失败反馈，当前执行结果相对平稳。";
-            return;
-        }
-
-        document.getElementById("autobetFailureDigest").textContent = "最近失败主要集中在：" + failureReasonSummary().parts.join("、") + "。";
-    }
-
-    function syncRecentJobsFilterControl() {
-        if (!(toggleRecentIssueJobsBtn instanceof HTMLButtonElement)) {
-            return;
-        }
-        const issueCount = issueJobs().length;
-        toggleRecentIssueJobsBtn.textContent = state.showIssueJobsOnly ? "查看全部反馈" : "只看失败项";
-        toggleRecentIssueJobsBtn.disabled = !state.showIssueJobsOnly && issueCount <= 0;
-    }
-
-    function renderPriorityAction(runtime) {
-        const action = recommendedActionState(runtime);
-        const badge = document.getElementById("autobetActionBadge");
-        const primary = document.getElementById("autobetPrimaryAction");
-        const secondary = document.getElementById("autobetSecondaryAction");
-
-        document.getElementById("autobetActionTitle").textContent = action.title;
-        document.getElementById("autobetActionDescription").textContent = action.description;
-        badge.textContent = action.badgeText;
-        badge.className = action.badgeClass;
-        primary.textContent = action.primaryText;
-        primary.setAttribute("href", action.primaryHref);
-        secondary.textContent = action.secondaryText;
-        secondary.setAttribute("href", action.secondaryHref);
-        secondary.hidden = !action.secondaryHref;
-        return action.actionKey;
-    }
-
-    function renderRecentJobs() {
-        const root = document.getElementById("autobetRecentJobs");
-        if (!(root instanceof HTMLElement)) {
-            return;
-        }
-        const items = (state.showIssueJobsOnly ? issueJobs() : state.jobs).slice(0, 4);
-        syncRecentJobsFilterControl();
-        if (!items.length) {
-            root.innerHTML = state.showIssueJobsOnly
-                ? '<article class="checklist-item"><div class="checklist-head"><strong class="checklist-title">当前没有失败项</strong>' + renderPill("INFO", "alert-pill is-info") + '</div><p class="checklist-body">最近记录里没有失败、过期或跳过任务，可以切回全部反馈继续观察运行结果。</p></article>'
-                : '<article class="checklist-item"><div class="checklist-head"><strong class="checklist-title">暂无执行反馈</strong>' + renderPill("INFO", "alert-pill is-info") + '</div><p class="checklist-body">当前还没有最近执行记录。完成抓取、标准化和派发后，这里会显示最近执行反馈。</p></article>';
-            return;
-        }
-        root.innerHTML = items.map(function (item) {
-            const errorText = item.last_error_message || item.error_message || "";
-            const metaParts = [
-                (item.issue_no || "--") + " · " + ((item.bet_type || "--") + " / " + (item.bet_value || "--")),
-                "目标 " + (item.target_name || item.target_key || "--"),
-                "账号 " + (item.telegram_account_label || "--"),
-                "更新时间 " + formatDateTime(item.updated_at || item.last_executed_at),
-            ];
-            if (errorText) {
-                metaParts.push("异常 " + errorText);
-            }
-            const actions = [];
-            if (item.can_retry) {
-                actions.push('<button class="ghost-btn retry-job-btn" type="button" data-job-id="' + escapeHtml(String(item.id)) + '">立即重试</button>');
-            }
-            if (item.signal_id != null) {
-                actions.push('<a class="panel-link" href="/records?signal_id=' + encodeURIComponent(String(item.signal_id)) + '">查看对应记录</a>');
-            } else {
-                actions.push('<a class="panel-link" href="/records">查看完整记录</a>');
-            }
-            return [
-                '<article class="checklist-item" data-job-card-id="' + escapeHtml(String(item.id)) + '">',
-                '<div class="checklist-head"><strong class="checklist-title">' + escapeHtml(item.planned_message_text || (item.bet_value || "--")) + '</strong>' + renderPill(item.status || "--", 'job-pill is-' + escapeHtml(String(item.status || "pending"))) + '</div>',
-                '<p class="checklist-body">' + escapeHtml(metaParts.join(" · ")) + '</p>',
-                '<div class="checklist-foot">' + actions.join("") + '</div>',
-                '</article>',
-            ].join("");
-        }).join("");
-    }
-
-    function renderRecentAlerts() {
-        const root = document.getElementById("autobetRecentAlerts");
-        if (!(root instanceof HTMLElement)) {
-            return;
-        }
-        const items = state.alerts.slice(0, 4);
-        if (!items.length) {
-            root.innerHTML = '<article class="checklist-item"><div class="checklist-head"><strong class="checklist-title">暂无异常提醒</strong>' + renderPill("INFO", "alert-pill is-info") + '</div><p class="checklist-body">执行器状态、任务重试和通知发送目前没有新的异常提示。</p></article>';
-            return;
-        }
-        root.innerHTML = items.map(function (item) {
-            const severity = String(item.severity || "warning");
-            const metadata = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
-            const actions = ['<a class="panel-link" href="/alerts">查看全部告警</a>'];
-            if (metadata.signal_id != null) {
-                actions.unshift('<a class="panel-link" href="/records?signal_id=' + encodeURIComponent(String(metadata.signal_id)) + '">查看相关记录</a>');
-            } else if (metadata.job_id != null) {
-                actions.unshift('<a class="panel-link" href="/records">查看相关记录</a>');
-            }
-            return [
-                '<article class="checklist-item">',
-                '<div class="checklist-head"><strong class="checklist-title">' + escapeHtml(item.title || "--") + '</strong>' + renderPill(severity, "alert-pill is-" + escapeHtml(severity)) + '</div>',
-                '<p class="checklist-body">' + escapeHtml(item.message || "--") + '</p>',
-                '<div class="checklist-foot"><span class="cell-muted">' + escapeHtml(item.alert_type || "--") + '</span>' + actions.join("") + '</div>',
-                '</article>',
-            ].join("");
-        }).join("");
-    }
-
-    function renderScopeStatus(scope) {
-        const headline = document.getElementById("autobetReadinessHeadline");
-        const detail = document.getElementById("autobetReadinessDetail");
-        if (!(headline instanceof HTMLElement) || !(detail instanceof HTMLElement)) {
-            return;
-        }
-        const normalized = String(scope || "workbench").trim() || "workbench";
-        if (normalized === "sources") {
-            const items = aiSources();
-            headline.textContent = items.length ? (String(items.length) + " 个来源") : "暂无来源";
-            detail.textContent = items.length ? "当前只加载来源链路相关数据。" : "先导入 AITradingSimulator 方案来源。";
-            return;
-        }
-        if (normalized === "accounts") {
-            const items = visibleAccounts();
-            const authorizedCount = items.filter(isAccountAuthorized).length;
-            headline.textContent = items.length ? (String(authorizedCount) + " 个已授权") : "暂无账号";
-            detail.textContent = items.length ? ("当前共 " + String(items.length) + " 个未归档托管账号。") : "先创建或导入托管账号。";
-            return;
-        }
-        if (normalized === "templates") {
-            const items = state.templates.filter(function (item) {
-                return !isArchivedItem(item);
-            });
-            headline.textContent = items.length ? (String(activeTemplateCount()) + " 个启用") : "暂无模板";
-            detail.textContent = items.length ? ("当前共 " + String(items.length) + " 个未归档模板。") : "先创建下注格式模板。";
-            return;
-        }
-        if (normalized === "targets") {
-            const items = visibleTargets();
-            headline.textContent = items.length ? (String(activeTargets().length) + " 个启用") : "暂无群组";
-            detail.textContent = items.length ? ("当前共 " + String(items.length) + " 个未归档投递群组。") : "先新增并测试投递群组。";
-            return;
-        }
-        if (normalized === "subscriptions") {
-            const items = visibleSubscriptions();
-            headline.textContent = items.length ? (String(activeSubscriptions().length) + " 个启用") : "暂无跟单";
-            detail.textContent = items.length ? ("当前共 " + String(items.length) + " 个未归档跟单策略。") : "先新建一条跟单策略。";
-            return;
-        }
-        renderOverview();
-    }
-
     function renderLoadedScope(scope) {
         const normalized = String(scope || "workbench").trim() || "workbench";
-        safeRender("scope-status", function () { renderScopeStatus(normalized); });
         if (normalized === "sources") {
             safeRender("source-cards", renderSourceCards);
             safeRender("source-list", renderSourceList);
@@ -4925,21 +3685,6 @@
             safeRender("subscription-cards", renderSubscriptionCards);
             return;
         }
-        safeRender("overview", renderOverview);
-        safeRender("execution-flow", renderExecutionFlowSection);
-        safeRender("workspace-cards", renderWorkspaceCards);
-        safeRender("onboarding", renderOnboardingGuide);
-        safeRender("source-cards", renderSourceCards);
-        safeRender("source-list", renderSourceList);
-        safeRender("account-cards", renderAccountCards);
-        safeRender("target-summary", renderTargetWorkspaceSummary);
-        safeRender("target-cards", renderTargetCards);
-        safeRender("template-cards", renderTemplateCards);
-        safeRender("subscription-cards", renderSubscriptionCards);
-        safeRender("recent-job-summary", renderRecentJobSummary);
-        safeRender("recent-jobs", renderRecentJobs);
-        safeRender("recent-alerts", renderRecentAlerts);
-        safeRender("bot-binding", renderBotBindingSection);
     }
 
     function renderSelectOptions(selectEl, items, config) {
@@ -4963,6 +3708,7 @@
     }
 
     function refreshSourceSelects() {
+        if (!(subscriptionForm instanceof HTMLFormElement)) return;
         const items = state.sources.filter(function (item) {
             return item.source_type === "ai_trading_simulator_export";
         });
@@ -5047,6 +3793,7 @@
     }
 
     function refreshAccountSelects() {
+        if (!(targetForm instanceof HTMLFormElement)) return;
         const items = availableAccountsForTargets().slice();
         const currentValue = String(targetForm.elements.telegram_account_id.value || "").trim();
         const currentAccount = accountById(currentValue);
@@ -5179,241 +3926,25 @@
         renderTemplateWorkspaceSummary();
     }
 
-    function renderOverview() {
-        const aiSources = state.sources.filter(function (item) {
-            return item.source_type === "ai_trading_simulator_export";
-        });
-        const readiness = readinessState();
-        const source = primarySource();
-        const account = primaryAccount();
-        const runtime = runtimeBoardState();
-
-        document.getElementById("autobetSourceCount").textContent = String(aiSources.length);
-        document.getElementById("autobetAccountCount").textContent = String(activeAccounts().length);
-        document.getElementById("autobetTargetCount").textContent = String(activeTargets().length);
-        document.getElementById("autobetSubscriptionCount").textContent = String(activeSubscriptions().length);
-        document.getElementById("autobetReadinessHeadline").textContent = readiness.ready ? "已具备条件" : "待配置";
-        document.getElementById("autobetReadinessDetail").textContent = readiness.ready
-            ? "方案、账号、投递群组和跟单策略都已存在，已具备自动投注基础条件。"
-            : "还缺少：" + (readiness.missing.join("、") || "基础配置");
-        document.getElementById("autobetPrimarySource").textContent = source ? source.name : "未导入";
-        document.getElementById("autobetPrimarySourceMeta").textContent = source
-            ? ((source.source_type || "--") + " · " + (source.visibility || "private"))
-            : "先从首页导入公开方案页链接。";
-        document.getElementById("autobetPrimaryAccount").textContent = account ? account.label : "未绑定";
-        document.getElementById("autobetPrimaryAccountMeta").textContent = account
-            ? ((account.phone || "--") + " · " + accountAuthLabel(account))
-            : "当前还没有托管账号可用于执行。";
-
-        document.getElementById("autobetRuntimeHeadline").textContent = runtime.headline;
-        document.getElementById("autobetRuntimeDetail").textContent = runtime.detail;
-        document.getElementById("autobetBlockerCount").textContent = String(runtime.blockerCount);
-        document.getElementById("autobetBlockerSummary").textContent = runtime.blockerSummary;
-        document.getElementById("autobetArchiveCount").textContent = String(runtime.archiveCount);
-        document.getElementById("autobetArchiveSummary").textContent = runtime.archiveSummary;
-        document.getElementById("autobetSuggestionSummary").textContent = runtime.suggestionSummary;
-        renderRunChecklist(runtime);
-        const nextActionKey = renderPriorityAction(runtime);
-        if (state.lastRecommendedActionKey !== null && state.lastRecommendedActionKey !== nextActionKey) {
-            highlightPriorityActionCard();
-        }
-        state.lastRecommendedActionKey = nextActionKey;
-        renderCurrentConfig();
-
-        const globalState = globalAutobetState();
-        const statusEl = document.getElementById("autobetGlobalStatus");
-        statusEl.className = "config-status-pill is-" + escapeHtml(globalState.status);
-        statusEl.textContent = statusText(globalState.status);
-        document.getElementById("autobetGlobalTitle").textContent = globalState.title;
-        document.getElementById("autobetGlobalDetail").textContent = globalState.detail;
-        toggleAutobetBtn.textContent = globalState.actionText;
-        toggleAutobetBtn.dataset.nextStatus = globalState.nextStatus;
-        toggleAutobetBtn.toggleAttribute("disabled", Boolean(globalState.disabled));
-        renderBotBindingSection();
-        renderHealthCheck();
-    }
-
     function focusScopeSectionOnLoad() {
-        const scope = currentAutobetScope();
-        const hash = window.location.hash || "";
-        if (hash && scrollToHashTarget(hash)) {
-            return;
+        const params = new URLSearchParams(window.location.search);
+        const subscriptionId = params.get("subscription_id");
+        if (currentAutobetScope() === "subscriptions" && subscriptionId) {
+            const item = state.subscriptions.find(function (entry) { return String(entry.id) === subscriptionId; });
+            if (item) {
+                state.expandedSubscriptionId = subscriptionId;
+                renderSubscriptionCards();
+                const button = subscriptionCards.querySelector('[data-subscription-id="' + Number(item.id) + '"]');
+                if (button) (button.closest("article") || button).scrollIntoView({block: "start"});
+            }
         }
-        if (scope === "sources") {
-            scrollToHashTarget("#sourcesSection");
-            return;
+        const sourceId = params.get("source_id");
+        if (currentAutobetScope() === "subscriptions" && !subscriptionId && sourceId && sourceById(sourceId)) {
+            subscriptionForm.elements.source_id.value = sourceId;
+            syncSubscriptionBetFilterUI();
+            if (window.PlatformNavigation) window.PlatformNavigation.markClean(subscriptionForm);
         }
-        if (scope === "accounts") {
-            scrollToHashTarget("#accountsSection");
-            return;
-        }
-        if (scope === "templates") {
-            scrollToHashTarget("#templatesSection");
-            return;
-        }
-        if (scope === "targets") {
-            scrollToHashTarget("#targetsSection");
-            return;
-        }
-        if (scope === "subscriptions") {
-            scrollToHashTarget("#subscriptionsSection");
-        }
-    }
-
-    function buildOnboardingSteps() {
-        const loggedIn = Boolean(state.currentUser);
-        const aiSources = state.sources.filter(function (item) {
-            return item.source_type === "ai_trading_simulator_export";
-        });
-        const authorizedAccount = primaryAccount();
-        const pendingAccount = pendingAccountForWizard();
-        const target = wizardTargetCandidate();
-        const targetAccount = target ? accountById(target.telegram_account_id) : null;
-        const targetVerified = isTargetWizardVerified(target);
-        const subscriptions = visibleSubscriptions();
-        const steps = [
-            {
-                key: "source",
-                index: 1,
-                title: "导入方案",
-                summary: "先导入 AITradingSimulator 公开方案链接，后续跟单才有来源。",
-                complete: aiSources.length > 0,
-                detail: aiSources.length
-                    ? ("已识别 " + aiSources.length + " 个方案来源，当前主来源是「" + (primarySource() ? primarySource().name : "--") + "」。")
-                    : "先去来源工作区导入公开方案链接，向导会在这里自动识别并进入下一步。",
-                actionText: "去来源工作区",
-            },
-            {
-                key: "account",
-                index: 2,
-                title: "授权账号",
-                summary: "创建一个托管 Telegram 账号，并完成验证码或二次密码授权。",
-                complete: Boolean(authorizedAccount),
-                detail: authorizedAccount
-                    ? ("已授权账号「" + (authorizedAccount.label || "--") + "」，可以继续用于群组测试发送。")
-                    : (pendingAccount
-                        ? accountAuthDescription(pendingAccount)
-                        : "还没有可用托管账号。先创建账号，系统才知道要用哪个 Session 发消息。"),
-                actionText: pendingAccount
-                    ? (accountAuthMode(pendingAccount) === "session_import"
-                        ? "去导入 Session"
-                        : ((accountAuthState(pendingAccount) === "code_sent" || accountAuthState(pendingAccount) === "password_required") ? "继续完成授权" : (accountAuthState(pendingAccount) === "login_expired" ? "重新发送验证码" : "去补充授权")))
-                    : "去创建托管账号",
-            },
-            {
-                key: "target",
-                index: 3,
-                title: "绑定群组并测试发送",
-                summary: "绑定目标群组后，立即发一条测试消息，确认账号已入群且具备发言权限。",
-                complete: Boolean(target && targetVerified),
-                detail: !target
-                    ? "还没有投递群组。建议先绑定一个常用投注群，再发测试消息确认可达性。"
-                    : (targetVerified
-                        ? ("群组「" + (target.target_name || target.target_key || "--") + "」已通过向导验证或最近已有任务活动。")
-                        : (!targetAccount
-                            ? "当前群组还没有绑定托管账号，请先补充绑定关系。"
-                            : (!isAccountAuthorized(targetAccount)
-                                ? ("群组「" + (target.target_name || target.target_key || "--") + "」绑定的账号尚未授权，暂时不能测试发送。")
-                                : "建议现在发送一条测试消息，确认账号已入群、未被禁言且目标可正常触达。"))),
-                actionText: !target ? "去绑定投递群组" : ((targetAccount && isAccountAuthorized(targetAccount)) ? "发送测试消息" : "检查群组配置"),
-            },
-            {
-                key: "subscription",
-                index: 4,
-                title: "设置跟单",
-                summary: "把来源、金额和群组串起来，信号才会真正变成发单任务。",
-                complete: subscriptions.length > 0,
-                detail: subscriptions.length
-                    ? ("已建立 " + subscriptions.length + " 条跟单，当前主策略是「" + summarizeStrategy(primarySubscription() ? primarySubscription().strategy : {}, primarySubscription() ? primarySubscription().strategy_v2 : {}) + "」。")
-                    : "选一个来源，再设置金额方式，信号才会真正变成发单任务。",
-                actionText: "去设置跟单",
-            },
-        ];
-
-        const firstIncompleteIndex = loggedIn
-            ? steps.findIndex(function (item) { return !item.complete; })
-            : 0;
-        const currentStepKey = !loggedIn
-            ? "login"
-            : (firstIncompleteIndex >= 0 ? steps[firstIncompleteIndex].key : "current-config");
-        writeStoredValue("wizard-current-step", currentStepKey);
-
-        return {
-            loggedIn: loggedIn,
-            currentStepKey: currentStepKey,
-            steps: steps.map(function (item, index) {
-                if (!loggedIn) {
-                    return {
-                        key: item.key,
-                        index: item.index,
-                        title: item.title,
-                        summary: item.summary,
-                        detail: "请先在右侧“登录与账户”区域登录当前账号，登录后再继续这一步。",
-                        actionText: item.actionText,
-                        status: index === 0 ? "current" : "locked",
-                    };
-                }
-                return {
-                    key: item.key,
-                    index: item.index,
-                    title: item.title,
-                    summary: item.summary,
-                    detail: item.detail,
-                    actionText: item.actionText,
-                    status: item.complete ? "complete" : (index === firstIncompleteIndex ? "current" : "locked"),
-                };
-            }),
-        };
-    }
-
-    function renderOnboardingGuide() {
-        if (!(onboardingGuideSteps instanceof HTMLElement) || !(continueOnboardingBtn instanceof HTMLButtonElement)) {
-            return;
-        }
-        const wizard = buildOnboardingSteps();
-        const completedCount = wizard.steps.filter(function (item) {
-            return item.status === "complete";
-        }).length;
-        const currentStep = wizard.steps.find(function (item) {
-            return item.status === "current";
-        }) || null;
-
-        if (onboardingPrerequisite instanceof HTMLElement) {
-            onboardingPrerequisite.hidden = wizard.loggedIn;
-        }
-        if (onboardingProgressMeta instanceof HTMLElement) {
-            onboardingProgressMeta.textContent = wizard.loggedIn
-                ? (completedCount >= wizard.steps.length
-                    ? "4 步已全部完成。现在可以回到配置概览观察运行状态，或继续微调账号、群组和策略。"
-                    : ("已完成 " + completedCount + "/4 步，当前建议先做第 " + (currentStep ? currentStep.index : 4) + " 步。"))
-                : "当前未登录，向导还不能判断你的实际进度。";
-        }
-
-        continueOnboardingBtn.textContent = wizard.loggedIn
-            ? (currentStep ? ("继续第 " + currentStep.index + " 步") : "查看当前配置")
-            : "先登录后开始";
-        continueOnboardingBtn.dataset.stepKey = wizard.currentStepKey;
-
-        onboardingGuideSteps.innerHTML = wizard.steps.map(function (item) {
-            const statusText = item.status === "complete" ? "已完成" : (item.status === "current" ? "当前步骤" : "等待上一步");
-            return [
-                '<article class="onboarding-step is-' + escapeHtml(item.status) + '">',
-                '<div class="onboarding-step-head">',
-                '<span class="onboarding-step-index">0' + escapeHtml(String(item.index)) + '</span>',
-                '<div class="onboarding-step-copy">',
-                '<div class="onboarding-step-title-row"><strong>' + escapeHtml(item.title) + '</strong><span class="onboarding-step-status is-' + escapeHtml(item.status) + '">' + escapeHtml(statusText) + "</span></div>",
-                '<p class="onboarding-step-summary">' + escapeHtml(item.summary) + "</p>",
-                "</div>",
-                "</div>",
-                '<div class="onboarding-step-body">',
-                '<p class="onboarding-step-detail">' + escapeHtml(item.detail) + "</p>",
-                (item.status === "current"
-                    ? '<button class="primary-btn onboarding-step-action-btn" type="button" data-onboarding-step="' + escapeHtml(item.key) + '">' + escapeHtml(item.actionText) + "</button>"
-                    : ""),
-                "</div>",
-                "</article>",
-            ].join("");
-        }).join("");
+        if (window.location.hash) scrollToHashTarget(window.location.hash);
     }
 
     function renderSourceWorkspaceSummary() {
@@ -5466,7 +3997,7 @@
         }
         const items = aiSources();
         if (!items.length) {
-            sourceCards.innerHTML = '<article class="config-list-item config-list-empty-card"><strong>还没有导入 AI 方案</strong><p>先回首页导入 AITradingSimulator 的公开方案页链接，再来这里配置账号、群组和跟单策略。</p></article>';
+            sourceCards.innerHTML = '<article class="config-list-item config-list-empty-card"><strong>还没有导入 AI 方案</strong><p>在上方导入来源，再配置跟单方案。</p></article>';
             return;
         }
         sourceCards.innerHTML = items.map(function (item) {
@@ -5493,7 +4024,7 @@
         }
         const items = aiSources();
         if (!items.length) {
-            sourceList.innerHTML = '<article class="config-list-item config-list-empty-card"><strong>当前还没有来源链路</strong><p>先从首页导入 AITradingSimulator 公开方案，再回这里决定哪个来源要进入跟单和派发链路。</p></article>';
+            sourceList.innerHTML = '<article class="config-list-item config-list-empty-card"><strong>当前还没有来源链路</strong><p>在上方导入来源，再选择用于跟单的方案。</p></article>';
             renderSourceWorkspaceSummary();
             return;
         }
@@ -5552,7 +4083,7 @@
                 ].join(""),
                 footerMarkup: '<div class="config-list-actions source-card-actions">' +
                     '<button class="ghost-btn edit-source-btn" type="button" data-source-id="' + escapeHtml(String(item.id)) + '">编辑来源</button>' +
-                    '<button class="ghost-btn source-subscription-btn" type="button" data-source-id="' + escapeHtml(String(item.id)) + '">' + escapeHtml(activeSubscription ? "查看这个来源的跟单" : "用这个来源建跟单") + '</button>' +
+                    '<a class="ghost-btn link-btn source-subscription-link" href="/autobet/subscriptions?' + (subscription ? 'subscription_id=' + encodeURIComponent(subscription.id) : 'source_id=' + encodeURIComponent(item.id) + '#subscriptionForm') + '">' + escapeHtml(subscription ? "查看这个来源的跟单" : "用这个来源建跟单") + '</a>' +
                     '<button class="' + (activeSubscription ? 'primary-btn' : 'ghost-btn') + ' source-pipeline-btn" type="button" data-source-id="' + escapeHtml(String(item.id)) + '"' + (activeSubscription ? '' : ' disabled') + '>' + escapeHtml(pipelineButtonText) + '</button>' +
                     '<button class="ghost-btn toggle-source-btn" type="button" data-source-id="' + escapeHtml(String(item.id)) + '" data-next-status="' + escapeHtml(statusAction.nextStatus) + '">' + escapeHtml(statusAction.actionText) + '</button>' +
                     archiveAction +
@@ -5725,7 +4256,7 @@
                 (cycle.pending_issue ? '<p>第 <span class="mono-text">' + escapeHtml(cycle.pending_issue) + '</span> 期待结算</p>' : '');
         }
         return '<section class="manual-cycle-state" aria-label="手动过关状态"><strong>手动过关状态</strong>' + content +
-            '<a href="/auto-triggers">查看自动规则</a></section>';
+            '<a href="/auto-triggers?subscription_id=' + encodeURIComponent(subscription.id) + '">查看自动规则</a></section>';
     }
 
     function renderSubscriptionCards() {
@@ -5862,7 +4393,7 @@
                     settlementPanelMarkup,
                     expandedDetailMarkup,
                 ].join(""),
-                footerMarkup: "<div class=\"config-list-actions\"><button class=\"ghost-btn subscription-detail-toggle-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\">" + detailToggleText + "</button><button class=\"ghost-btn edit-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\">编辑</button><button class=\"ghost-btn toggle-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\" data-next-status=\"" + statusAction.nextStatus + "\">" + statusAction.actionText + "</button>" + standbyAction + resetAction + archiveAction + progressionActions + "</div>",
+                footerMarkup: "<div class=\"config-list-actions\"><button class=\"ghost-btn subscription-detail-toggle-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\">" + detailToggleText + "</button><button class=\"ghost-btn edit-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\">编辑</button><button class=\"ghost-btn toggle-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\" data-next-status=\"" + statusAction.nextStatus + "\">" + statusAction.actionText + "</button>" + standbyAction + resetAction + archiveAction + progressionActions + '<a class="ghost-btn link-btn" href="/auto-triggers?subscription_id=' + encodeURIComponent(item.id) + '">关联自动规则</a></div>',
             });
         }).join("");
         renderSubscriptionWorkspaceSummary();
@@ -5879,27 +4410,24 @@
         state.templates = [];
         state.subscriptions = [];
         state.jobs = [];
-        state.alerts = [];
         state.failures = [];
-        state.telegramBinding = null;
         state.subscriptionDailySummary = null;
         state.expandedSubscriptionId = null;
         state.subscriptionDetailTabs = {};
         state.subscriptionAllDailyHistories = {};
         state.subscriptionRuntimeHistories = {};
-        state.showIssueJobsOnly = false;
         state.scopeFocused = false;
         if (sourceForm instanceof HTMLFormElement) {
             sourceForm.reset();
             sourceForm.elements.visibility.value = "private";
         }
-        accountForm.reset();
+        if (accountForm) accountForm.reset();
         resetAccountVerifyForm();
-        targetForm.reset();
+        if (targetForm) targetForm.reset();
         if (messageTemplateForm instanceof HTMLFormElement) {
             messageTemplateForm.reset();
         }
-        subscriptionForm.reset();
+        if (subscriptionForm) subscriptionForm.reset();
         setFormEditingState(sourceForm, createSourceBtn, cancelSourceEditBtn, false, "导入来源");
         setFormEditingState(accountForm, document.getElementById("createAccountBtn"), cancelAccountEditBtn, false, "新增托管账号");
         syncAccountModeUI("phone_login");
@@ -5916,21 +4444,7 @@
         refreshAccountSelects();
         refreshTemplateSelects();
         refreshSubscriptionTargetSelects();
-        renderOverview();
-        renderExecutionFlowSection();
-        renderWorkspaceCards();
-        renderOnboardingGuide();
-        renderSourceCards();
-        renderSourceList();
-        renderAccountCards();
-        renderTargetWorkspaceSummary();
-        renderTargetCards();
-        renderTemplateCards();
-        renderSubscriptionCards();
-        renderRecentJobSummary();
-        renderRecentJobs();
-        renderRecentAlerts();
-        renderBotBindingSection();
+        renderLoadedScope(currentAutobetScope());
         syncBatchResolveButtonState();
     }
 
@@ -5951,7 +4465,7 @@
         if (normalized === "subscriptions") {
             return ["sources", "accounts", "targets", "templates", "subscriptions"];
         }
-        return ["sources", "accounts", "targets", "templates", "subscriptions", "jobs", "alerts", "failures", "telegramBinding"];
+        return [];
     }
 
     function shouldLoadRecentPipelineData(scope) {
@@ -5967,9 +4481,7 @@
         state.templates = [];
         state.subscriptions = [];
         state.jobs = [];
-        state.alerts = [];
         state.failures = [];
-        state.telegramBinding = null;
         state.subscriptionDailySummary = null;
     }
 
@@ -6018,19 +4530,9 @@
                     state.jobs = payload.items || [];
                 });
             },
-            alerts: function () {
-                return request("/api/platform/alerts?limit=4").then(function (payload) {
-                    state.alerts = payload.items || [];
-                });
-            },
             failures: function () {
                 return request("/api/platform/execution-failures?limit=20").then(function (payload) {
                     state.failures = payload.items || [];
-                });
-            },
-            telegramBinding: function () {
-                return request("/api/platform/telegram-binding").then(function (payload) {
-                    state.telegramBinding = payload.item || null;
                 });
             },
         };
@@ -6101,7 +4603,6 @@
                     if (!updated) {
                         return;
                     }
-                    safeRender("scope-status", function () { renderScopeStatus(scope); });
                     safeRender("source-cards", renderSourceCards);
                     safeRender("source-list", renderSourceList);
                 }).catch(function (error) {
@@ -6111,50 +4612,10 @@
                 });
             }
         } catch (error) {
-            resetCollections();
-            setStatus(error.message || "自动投注配置页面加载失败", true);
+            setStatus(error.message || "配置页面加载失败，请刷新重试", true);
         } finally {
             setButtonBusy(refreshAutobetBtn, false, "刷新配置");
         }
-    }
-
-    async function setAllEntityStatuses(nextStatus) {
-        const requests = [];
-        state.accounts.forEach(function (item) {
-            if (!isArchivedItem(item) && item.status !== nextStatus) {
-                requests.push(
-                    request("/api/platform/telegram-accounts/" + item.id + "/status", {
-                        method: "POST",
-                        body: {status: nextStatus},
-                    })
-                );
-            }
-        });
-        state.targets.forEach(function (item) {
-            if (!isArchivedItem(item) && item.status !== nextStatus) {
-                requests.push(
-                    request("/api/platform/delivery-targets/" + item.id + "/status", {
-                        method: "POST",
-                        body: {status: nextStatus},
-                    })
-                );
-            }
-        });
-        state.subscriptions.forEach(function (item) {
-            if (!isArchivedItem(item) && item.status !== nextStatus) {
-                requests.push(
-                    request("/api/platform/subscriptions/" + item.id + "/status", {
-                        method: "POST",
-                        body: {status: nextStatus},
-                    })
-                );
-            }
-        });
-        if (!requests.length) {
-            return 0;
-        }
-        await Promise.all(requests);
-        return requests.length;
     }
 
     async function updateEntityStatus(pathPrefix, entityId, nextStatus, successMessage) {
@@ -6207,35 +4668,6 @@
         } finally {
             setButtonBusy(button, false, config.idleText || "测试发送");
         }
-    }
-
-    function openSourceSubscriptionStep(sourceId) {
-        const source = sourceById(sourceId);
-        if (!source) {
-            throw new Error("source_id 对应的来源不存在");
-        }
-        scrollToHashTarget("#subscriptionsSection");
-        const existingSubscription = sourceSubscription(sourceId);
-        if (existingSubscription && subscriptionCards instanceof HTMLElement) {
-            const editButton = subscriptionCards.querySelector('.edit-subscription-btn[data-subscription-id="' + String(existingSubscription.id).replace(/"/g, '\\"') + '"]');
-            if (editButton instanceof HTMLButtonElement) {
-                editButton.click();
-                setStatus("已打开这个来源的现有跟单策略。", false);
-                return;
-            }
-        }
-        subscriptionForm.elements.edit_id.value = "";
-        subscriptionForm.elements.source_id.value = String(source.id);
-        setFormEditingState(subscriptionForm, document.getElementById("createSubscriptionBtn"), cancelSubscriptionEditBtn, false, "新建跟单策略");
-        resetSubscriptionStrategyFormState();
-        subscriptionForm.elements.source_id.value = String(source.id);
-        syncSubscriptionBetFilterUI();
-        syncSubscriptionPresetUI();
-        syncSubscriptionSettlementUI();
-        syncSubscriptionRiskControlUI();
-        subscriptionForm.scrollIntoView({behavior: "smooth", block: "start"});
-        focusElement(subscriptionForm.elements.source_id);
-        setStatus("已预选来源「" + (source.name || "--") + "」，现在可以直接创建跟单策略。", false);
     }
 
     function loadSourceIntoForm(source) {
@@ -6319,121 +4751,7 @@
         }
     }
 
-    function openAccountWizardStep() {
-        if (currentAutobetScope() === "workbench") {
-            window.location.href = "/autobet/accounts#accountsSection";
-            return;
-        }
-        if (!state.currentUser) {
-            scrollToHashTarget("#autobetAccountSection");
-            focusElement(document.getElementById("authUsername"));
-            return;
-        }
-        const pendingAccount = pendingAccountForWizard();
-        if (pendingAccount) {
-            loadAccountIntoForm(pendingAccount, {scroll: false});
-            if (accountAuthMode(pendingAccount) === "session_import") {
-                scrollToHashTarget("#accountsSection");
-                focusElement(accountForm.querySelector('input[name="session_file"]'));
-                return;
-            }
-            if (accountAuthState(pendingAccount) === "code_sent" || accountAuthState(pendingAccount) === "password_required") {
-                showAccountVerification(pendingAccount);
-                return;
-            }
-            scrollToHashTarget("#accountsSection");
-            setStatus("登录已过期，正在重新发送验证码。", false);
-            if (typeof accountForm.requestSubmit === "function") {
-                accountForm.requestSubmit();
-            } else {
-                accountForm.dispatchEvent(new Event("submit", {cancelable: true, bubbles: true}));
-            }
-            return;
-        }
-        scrollToHashTarget("#accountsSection");
-        focusElement(accountForm.elements.label);
-    }
-
-    async function openTargetWizardStep(button) {
-        if (currentAutobetScope() === "workbench") {
-            window.location.href = "/autobet/targets#targetsSection";
-            return;
-        }
-        const item = wizardTargetCandidate();
-        if (!item) {
-            scrollToHashTarget("#targetsSection");
-            const recommendedAccount = primaryAccount();
-            if (recommendedAccount) {
-                targetForm.elements.telegram_account_id.value = String(recommendedAccount.id);
-            }
-            focusElement(targetForm.elements.target_key);
-            return;
-        }
-        const account = accountById(item.telegram_account_id);
-        if (!account) {
-            scrollToHashTarget("#targetsSection");
-            setStatus("该群组还没有绑定托管账号，请先补充绑定关系。", true);
-            focusElement(targetForm.elements.telegram_account_id);
-            return;
-        }
-        if (!isAccountAuthorized(account)) {
-            scrollToHashTarget("#targetsSection");
-            setStatus("该群组绑定的账号尚未授权，请先完成账号授权。", true);
-            return;
-        }
-        await performTargetTestSend(item, button, {
-            successMessage: "测试消息已发送，向导已进入下一步。",
-            idleText: "发送测试消息",
-        });
-    }
-
-    function openSubscriptionWizardStep() {
-        if (currentAutobetScope() === "workbench") {
-            window.location.href = "/autobet/subscriptions#subscriptionsSection";
-            return;
-        }
-        scrollToHashTarget("#subscriptionsSection");
-        const source = primarySource();
-        if (source) {
-            subscriptionForm.elements.source_id.value = String(source.id);
-        }
-        focusElement(subscriptionForm.elements.source_id);
-    }
-
-    async function handleOnboardingAction(stepKey, triggerButton) {
-        writeStoredValue("wizard-current-step", stepKey);
-        if (stepKey === "login") {
-            scrollToHashTarget("#autobetAccountSection");
-            focusElement(document.getElementById("authUsername"));
-            return;
-        }
-        if (stepKey === "source") {
-            if (currentAutobetScope() !== "sources") {
-                window.location.href = "/autobet/sources#sourcesSection";
-                return;
-            }
-            scrollToHashTarget("#sourcesSection");
-            focusElement(sourceNameInput || sourceUrlInput);
-            return;
-        }
-        if (stepKey === "account") {
-            openAccountWizardStep();
-            return;
-        }
-        if (stepKey === "target") {
-            await openTargetWizardStep(triggerButton);
-            return;
-        }
-        if (stepKey === "subscription") {
-            openSubscriptionWizardStep();
-            return;
-        }
-        if (stepKey === "current-config") {
-            scrollToHashTarget("#currentConfigSection");
-        }
-    }
-
-    accountForm.addEventListener("submit", async function (event) {
+    if (accountForm) accountForm.addEventListener("submit", async function (event) {
         event.preventDefault();
         const form = event.currentTarget;
         let accountId = "";
@@ -6545,7 +4863,7 @@
         });
     });
 
-    accountVerifyForm.addEventListener("submit", async function (event) {
+    if (accountVerifyForm) accountVerifyForm.addEventListener("submit", async function (event) {
         event.preventDefault();
         const form = event.currentTarget;
         let accountId = "";
@@ -6722,7 +5040,7 @@
         });
     }
 
-    cancelAccountEditBtn.addEventListener("click", function () {
+    if (cancelAccountEditBtn) cancelAccountEditBtn.addEventListener("click", function () {
         accountForm.reset();
         setFormEditingState(accountForm, document.getElementById("createAccountBtn"), cancelAccountEditBtn, false, "新增托管账号");
         resetAccountVerifyForm();
@@ -6827,18 +5145,6 @@
                 loadSourceIntoForm(source);
                 return;
             }
-            if (target.classList.contains("source-subscription-btn")) {
-                const sourceId = target.getAttribute("data-source-id");
-                if (!sourceId) {
-                    return;
-                }
-                try {
-                    openSourceSubscriptionStep(sourceId);
-                } catch (error) {
-                    setStatus(error.message, true);
-                }
-                return;
-            }
             if (target.classList.contains("archive-source-btn")) {
                 const sourceId = target.getAttribute("data-source-id");
                 if (!sourceId || !confirmDangerousAction("归档后该来源不会继续作为活跃来源参与新链路。确认继续吗？")) {
@@ -6897,7 +5203,7 @@
         });
     }
 
-    targetForm.elements.telegram_account_id.addEventListener("change", function (event) {
+    if (targetForm) targetForm.elements.telegram_account_id.addEventListener("change", function (event) {
         const select = event.currentTarget;
         if (!(select instanceof HTMLSelectElement)) {
             return;
@@ -6911,11 +5217,11 @@
         }
     });
 
-    targetForm.elements.target_key.addEventListener("input", function () {
+    if (targetForm) targetForm.elements.target_key.addEventListener("input", function () {
         syncTargetKeyPreview();
     });
 
-    targetForm.elements.target_key.addEventListener("blur", function (event) {
+    if (targetForm) targetForm.elements.target_key.addEventListener("blur", function (event) {
         const input = event.currentTarget;
         if (!(input instanceof HTMLInputElement)) {
             return;
@@ -6933,7 +5239,7 @@
         syncTargetKeyPreview();
     });
 
-    targetForm.addEventListener("submit", async function (event) {
+    if (targetForm) targetForm.addEventListener("submit", async function (event) {
         event.preventDefault();
         const form = event.currentTarget;
         try {
@@ -7081,7 +5387,7 @@
         });
     }
 
-    cancelTargetEditBtn.addEventListener("click", function () {
+    if (cancelTargetEditBtn) cancelTargetEditBtn.addEventListener("click", function () {
         targetForm.reset();
         refreshAccountSelects();
         refreshTemplateSelects();
@@ -7170,6 +5476,7 @@
                 applyTemplateConfigToForm(cloneJson(item.config || {}));
                 setFormEditingState(messageTemplateForm, document.getElementById("createMessageTemplateBtn"), cancelMessageTemplateEditBtn, false, "新增模板");
                 messageTemplateForm.scrollIntoView({behavior: "smooth", block: "start"});
+                if (window.PlatformNavigation) window.PlatformNavigation.markDirty(messageTemplateForm);
                 setStatus("已复制模板到表单，建议先以草稿保存。", false);
                 return;
             }
@@ -7368,7 +5675,7 @@
         });
     }
 
-    subscriptionForm.addEventListener("submit", async function (event) {
+    if (subscriptionForm) subscriptionForm.addEventListener("submit", async function (event) {
         event.preventDefault();
         const form = event.currentTarget;
         try {
@@ -7626,6 +5933,7 @@
                     return;
                 }
                 state.expandedSubscriptionId = String(subscriptionId);
+                if (window.PlatformNavigation) window.PlatformNavigation.setQuery({subscription_id: subscriptionId});
                 state.subscriptionDetailTabs[String(subscriptionId)] = String(tabKey);
                 if (String(tabKey) === "runtime" && !state.subscriptionRuntimeHistories[String(subscriptionId)]) {
                     try {
@@ -7655,6 +5963,7 @@
                         items: payload.items || [],
                     };
                     state.expandedSubscriptionId = String(subscriptionId);
+                if (window.PlatformNavigation) window.PlatformNavigation.setQuery({subscription_id: subscriptionId});
                     state.subscriptionDetailTabs[String(subscriptionId)] = "profit";
                     renderSubscriptionCards();
                 } catch (error) {
@@ -7973,7 +6282,7 @@
         });
     }
 
-    cancelSubscriptionEditBtn.addEventListener("click", function () {
+    if (cancelSubscriptionEditBtn) cancelSubscriptionEditBtn.addEventListener("click", function () {
         subscriptionForm.reset();
         refreshSourceSelects();
         setFormEditingState(subscriptionForm, document.getElementById("createSubscriptionBtn"), cancelSubscriptionEditBtn, false, "新建跟单策略");
@@ -8058,38 +6367,6 @@
         });
     }
 
-    document.getElementById("autobetRecentJobs").addEventListener("click", async function (event) {
-        const target = event.target;
-        if (!(target instanceof HTMLElement) || !target.classList.contains("retry-job-btn")) {
-            return;
-        }
-        const jobId = target.getAttribute("data-job-id");
-        if (!jobId) {
-            return;
-        }
-        try {
-            setButtonBusy(target, true, "重试中...");
-            await request("/api/platform/execution-jobs/" + jobId + "/retry", {
-                method: "POST",
-                body: {},
-            });
-            await refreshAll();
-            focusRecentJobCard(jobId);
-            setStatus("执行任务 " + jobId + " 已重置为待执行。", false);
-        } catch (error) {
-            setStatus(error.message, true);
-        } finally {
-            setButtonBusy(target, false, "立即重试");
-        }
-    });
-
-    if (toggleRecentIssueJobsBtn instanceof HTMLButtonElement) {
-        toggleRecentIssueJobsBtn.addEventListener("click", function () {
-            state.showIssueJobsOnly = !state.showIssueJobsOnly;
-            renderRecentJobs();
-        });
-    }
-
     if (toggleArchivedTargetsBtn instanceof HTMLButtonElement) {
         toggleArchivedTargetsBtn.addEventListener("click", function () {
             state.showArchivedTargets = !state.showArchivedTargets;
@@ -8097,53 +6374,6 @@
             setStatus(state.showArchivedTargets ? "已展开归档群组。" : "已隐藏归档群组。", false);
         });
     }
-
-    if (onboardingGuideSteps instanceof HTMLElement) {
-        onboardingGuideSteps.addEventListener("click", async function (event) {
-            const target = event.target;
-            if (!(target instanceof HTMLElement) || !target.classList.contains("onboarding-step-action-btn")) {
-                return;
-            }
-            const stepKey = String(target.getAttribute("data-onboarding-step") || "").trim();
-            if (!stepKey) {
-                return;
-            }
-            try {
-                await handleOnboardingAction(stepKey, target);
-            } catch (error) {
-                setStatus(error.message || "向导操作失败", true);
-            }
-        });
-    }
-
-    if (continueOnboardingBtn instanceof HTMLButtonElement) {
-        continueOnboardingBtn.addEventListener("click", async function () {
-            const stepKey = String(continueOnboardingBtn.dataset.stepKey || "").trim();
-            if (!stepKey) {
-                return;
-            }
-            try {
-                await handleOnboardingAction(stepKey, continueOnboardingBtn);
-            } catch (error) {
-                setStatus(error.message || "无法继续当前向导步骤", true);
-            }
-        });
-    }
-
-    ["autobetPrimaryAction", "autobetSecondaryAction"].forEach(function (elementId) {
-        const link = document.getElementById(elementId);
-        if (!(link instanceof HTMLAnchorElement)) {
-            return;
-        }
-        link.addEventListener("click", function (event) {
-            const href = link.getAttribute("href") || "";
-            if (!href.startsWith("#")) {
-                return;
-            }
-            event.preventDefault();
-            scrollToHashTarget(href);
-        });
-    });
 
     document.addEventListener("platform-auth:changed", async function (event) {
         const detail = event.detail || {};
@@ -8166,6 +6396,7 @@
     if (subscriptionStatDateInput instanceof HTMLInputElement) {
         subscriptionStatDateInput.addEventListener("change", async function (event) {
             state.subscriptionStatDate = event.target.value || todayDateString();
+            if (window.PlatformNavigation) window.PlatformNavigation.setQuery({stat_date: state.subscriptionStatDate});
             syncSubscriptionStatDateControls();
             await refreshAll();
         });
@@ -8174,95 +6405,11 @@
     if (subscriptionStatTodayBtn instanceof HTMLButtonElement) {
         subscriptionStatTodayBtn.addEventListener("click", async function () {
             state.subscriptionStatDate = todayDateString();
+            if (window.PlatformNavigation) window.PlatformNavigation.setQuery({stat_date: state.subscriptionStatDate});
             syncSubscriptionStatDateControls();
             await refreshAll();
         });
     }
-
-    if (botBindingActions instanceof HTMLElement) {
-        botBindingActions.addEventListener("click", async function (event) {
-            const target = event.target;
-            if (!(target instanceof HTMLButtonElement)) {
-                return;
-            }
-            if (target.id === "generateBindCodeBtn") {
-                try {
-                    setButtonBusy(target, true, "生成中...");
-                    const payload = await request("/api/platform/telegram-binding/token", {
-                        method: "POST",
-                        body: {},
-                    });
-                    state.telegramBinding = payload.item || null;
-                    renderBotBindingSection();
-                    const tokenState = telegramBindTokenState(state.telegramBinding);
-                    setStatus(
-                        tokenState.isActive
-                            ? ("新的绑定码已生成，有效期至 " + formatDateTime(tokenState.expireAt) + "。")
-                            : "绑定码已生成。",
-                        false
-                    );
-                } catch (error) {
-                    setStatus(error.message, true);
-                } finally {
-                    renderBotBindingSection();
-                }
-                return;
-            }
-            if (target.id === "copyBindCommandBtn") {
-                try {
-                    await copyTextToClipboard(currentBindCommand());
-                    setStatus("绑定命令已复制。去 Telegram 私聊收益查询 Bot 后直接粘贴发送即可。", false);
-                } catch (error) {
-                    setStatus(error.message, true);
-                }
-                return;
-            }
-            if (target.id !== "clearTelegramBindingBtn") {
-                return;
-            }
-            if (!confirmDangerousAction("解除后，当前 Telegram 私聊账号将不能继续查询这个平台账号的收益；如果只是换绑，也可以直接重新生成绑定码。确认继续吗？")) {
-                return;
-            }
-            try {
-                setButtonBusy(target, true, "处理中...");
-                const payload = await request("/api/platform/telegram-binding/unbind", {
-                    method: "POST",
-                    body: {},
-                });
-                state.telegramBinding = payload.item || null;
-                renderBotBindingSection();
-                setStatus("当前 Telegram Bot 绑定已解除。", false);
-            } catch (error) {
-                setStatus(error.message, true);
-            } finally {
-                renderBotBindingSection();
-            }
-        });
-    }
-
-    toggleAutobetBtn.addEventListener("click", async function () {
-        const nextStatus = String(toggleAutobetBtn.dataset.nextStatus || "").trim();
-        if (!nextStatus || toggleAutobetBtn.hasAttribute("disabled")) {
-            return;
-        }
-        try {
-            setButtonBusy(toggleAutobetBtn, true, nextStatus === "inactive" ? "暂停中..." : "恢复中...");
-            const changedCount = await setAllEntityStatuses(nextStatus);
-            await refreshAll();
-            if (changedCount <= 0) {
-                setStatus("当前没有需要批量更新状态的自动投注配置。", false);
-            } else {
-                setStatus("已将 " + changedCount + " 个配置项批量更新为" + statusText(nextStatus) + "。", false);
-            }
-        } catch (error) {
-            setStatus(error.message, true);
-        } finally {
-            const globalState = globalAutobetState();
-            setButtonBusy(toggleAutobetBtn, false, globalState.actionText);
-            toggleAutobetBtn.dataset.nextStatus = globalState.nextStatus;
-            toggleAutobetBtn.toggleAttribute("disabled", Boolean(globalState.disabled));
-        }
-    });
 
     if (batchResolveSubscriptionsBtn instanceof HTMLButtonElement) {
         batchResolveSubscriptionsBtn.addEventListener("click", async function () {
@@ -8302,7 +6449,6 @@
     }
 
     applyAutobetScope();
-    initWorkspaceNav();
     syncAccountModeUI("phone_login");
     if (messageTemplateForm instanceof HTMLFormElement) {
         messageTemplateForm.elements.status.value = "active";
@@ -8313,7 +6459,7 @@
     syncTemplatePreview();
     resetAccountVerifyForm();
     resetSubscriptionStrategyFormState();
-    state.subscriptionStatDate = todayDateString();
+    state.subscriptionStatDate = new URLSearchParams(location.search).get("stat_date") || todayDateString();
     syncSubscriptionStatDateControls();
     refreshAll();
 }());

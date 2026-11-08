@@ -1429,16 +1429,13 @@ class PlatformApiApplicationTests(unittest.TestCase):
         body = b"".join(self.app(build_testing_environ("/"), start_response)).decode("utf-8")
         self.assertEqual(captured["status"], "200 OK")
         self.assertEqual(captured["headers"]["Content-Type"], "text/html; charset=utf-8")
-        self.assertIn("自动投注总览", body)
-        self.assertIn("进入自动投注总控台", body)
-        self.assertIn("自动投注总控台", body)
-        self.assertIn("/autobet/sources#sourcesSection", body)
-        self.assertIn("/autobet/accounts#accountsSection", body)
-        self.assertIn("/autobet/targets#targetsSection", body)
-        self.assertIn("/autobet/templates#templatesSection", body)
-        self.assertIn("/autobet/subscriptions#subscriptionsSection", body)
-        self.assertIn("快捷导入方案", body)
-        self.assertIn("下一步", body)
+        self.assertIn("工作台", body)
+        self.assertIn("策略链路", body)
+        self.assertIn("配置向导", body)
+        self.assertIn("批量操作", body)
+        self.assertIn('href="/auto-triggers"', body)
+        self.assertNotIn('id="importSourceForm"', body)
+        self.assertNotIn('href="/autobet"', body)
 
     def test_home_page_injects_shared_account_dialog_and_versions_shared_assets(self):
         captured = {"status": None, "headers": None}
@@ -1458,7 +1455,7 @@ class PlatformApiApplicationTests(unittest.TestCase):
             self.assertNotEqual(match.group(1), "0", asset_name)
 
     def test_shared_account_dialog_template_is_injected_for_all_pages(self):
-        for page_name in ["home.html", "records.html", "alerts.html", "autobet.html", "auto_triggers.html", "dashboard.html"]:
+        for page_name in ["home.html", "records.html", "alerts.html", "autobet.html", "auto_triggers.html", "dashboard.html", "bot_binding.html"]:
             text = _load_ui_html_file(page_name)
             self.assertNotIn("__ACCOUNT_DIALOG__", text, page_name)
             self.assertIn('id="accountDialog"', text, page_name)
@@ -1614,15 +1611,14 @@ class PlatformApiApplicationTests(unittest.TestCase):
         body = b"".join(self.app(build_testing_environ("/records"), start_response)).decode("utf-8")
         self.assertEqual(captured["status"], "200 OK")
         self.assertEqual(captured["headers"]["Content-Type"], "text/html; charset=utf-8")
-        self.assertIn("执行记录与异常回看", body)
-        self.assertIn("记录概览", body)
+        self.assertIn("执行记录", body)
         self.assertIn("执行记录列表", body)
         self.assertIn("记录页处理入口", body)
-        self.assertIn("自动投注总控台", body)
-        self.assertIn("/autobet/sources#sourcesSection", body)
-        self.assertIn("/autobet/accounts#accountsSection", body)
-        self.assertIn("/autobet/targets#targetsSection", body)
-        self.assertIn("/autobet/subscriptions#subscriptionsSection", body)
+        self.assertIn("工作台", body)
+        self.assertIn('href="/autobet/sources"', body)
+        self.assertIn('href="/autobet/accounts"', body)
+        self.assertIn('href="/autobet/targets"', body)
+        self.assertIn('href="/autobet/subscriptions"', body)
 
     def test_alerts_page_renders_html(self):
         captured = {"status": None, "headers": None}
@@ -1634,55 +1630,28 @@ class PlatformApiApplicationTests(unittest.TestCase):
         body = b"".join(self.app(build_testing_environ("/alerts"), start_response)).decode("utf-8")
         self.assertEqual(captured["status"], "200 OK")
         self.assertEqual(captured["headers"]["Content-Type"], "text/html; charset=utf-8")
-        self.assertIn("异常提醒与人工处理", body)
-        self.assertIn("告警概览", body)
+        self.assertIn("异常提醒", body)
         self.assertIn("告警列表", body)
         self.assertIn("告警页处理入口", body)
-        self.assertIn("自动投注总控台", body)
-        self.assertIn("/autobet/sources#sourcesSection", body)
-        self.assertIn("/autobet/accounts#accountsSection", body)
-        self.assertIn("/autobet/targets#targetsSection", body)
+        self.assertIn("工作台", body)
+        self.assertIn('href="/autobet/sources"', body)
+        self.assertIn('href="/autobet/accounts"', body)
+        self.assertIn('href="/autobet/targets"', body)
         self.assertIn("/records", body)
 
-    def test_autobet_page_renders_html(self):
-        captured = {"status": None, "headers": None}
-
+    def test_autobet_redirects_to_workbench_and_preserves_query(self):
+        captured = {}
         def start_response(status, headers):
-            captured["status"] = status
-            captured["headers"] = dict(headers)
+            captured.update(status=status, headers=dict(headers))
+        body = b"".join(self.app(build_testing_environ("/autobet", query="stat_date=2026-11-08"), start_response))
+        self.assertEqual(captured["status"], "302 Found")
+        self.assertEqual(captured["headers"]["Location"], "/?stat_date=2026-11-08")
+        self.assertEqual(body, b"")
 
-        body = b"".join(self.app(build_testing_environ("/autobet"), start_response)).decode("utf-8")
-        self.assertEqual(captured["status"], "200 OK")
-        self.assertEqual(captured["headers"]["Content-Type"], "text/html; charset=utf-8")
-        self.assertIn("自动投注总控台", body)
-        self.assertIn("当前版本的配置语义", body)
-        self.assertIn("自动投注状态", body)
-        self.assertIn("运行阻塞与建议", body)
-        self.assertIn("优先处理动作", body)
-        self.assertIn("最近执行反馈", body)
-        self.assertIn("只看失败项", body)
-        self.assertIn("最近异常提醒", body)
-        self.assertIn("当前配置与运行上下文", body)
-        self.assertIn("投递群组", body)
-        self.assertIn("跟单策略", body)
-
-    def test_autobet_includes_execution_flow_and_workspaces(self):
-        captured = {"status": None, "headers": None}
-
-        def start_response(status, headers):
-            captured["status"] = status
-            captured["headers"] = dict(headers)
-
-        body = b"".join(self.app(build_testing_environ("/autobet"), start_response)).decode("utf-8")
-        self.assertEqual(captured["status"], "200 OK")
-        self.assertIn("执行链路", body)
-        self.assertIn("工作区", body)
-        self.assertIn("进入各工作区处理问题", body)
-        self.assertIn("/autobet/sources#sourcesSection", body)
-        self.assertIn("/autobet/accounts#accountsSection", body)
-        self.assertIn("/autobet/targets#targetsSection", body)
-        self.assertIn("/autobet/templates#templatesSection", body)
-
+    def test_workbench_includes_execution_flow_and_workspaces(self):
+        text = _load_ui_html_file("home.html")
+        for label in ("工作台", "策略链路", "跟单方案", "自动触发", "方案来源", "消息模板", "收益 Bot 绑定"):
+            self.assertIn(label, text)
 
     def test_autobet_focus_routes_render_html(self):
         for path in ("/autobet/sources", "/autobet/accounts", "/autobet/templates", "/autobet/targets", "/autobet/subscriptions"):
@@ -1695,7 +1664,7 @@ class PlatformApiApplicationTests(unittest.TestCase):
             body = b"".join(self.app(build_testing_environ(path), start_response)).decode("utf-8")
             self.assertEqual(captured["status"], "200 OK")
             self.assertEqual(captured["headers"]["Content-Type"], "text/html; charset=utf-8")
-            self.assertIn("自动投注总控台", body)
+            self.assertIn("工作台", body)
 
     def test_autobet_sources_workspace_renders_source_copy(self):
         captured = {"status": None, "headers": None}
@@ -1708,7 +1677,7 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(captured["status"], "200 OK")
         self.assertIn("方案来源", body)
         self.assertIn("来源链路工作区", body)
-        self.assertIn("/autobet/sources#sourcesSection", body)
+        self.assertIn('href="/autobet/sources"', body)
 
     def test_autobet_accounts_workspace_renders_account_copy(self):
         captured = {"status": None, "headers": None}
@@ -1724,6 +1693,10 @@ class PlatformApiApplicationTests(unittest.TestCase):
 
     def test_ui_assets_render(self):
         for path, content_type in (
+            ("/assets/app-shell.css", "text/css; charset=utf-8"),
+            ("/assets/app-shell.js", "application/javascript; charset=utf-8"),
+            ("/assets/workbench.css", "text/css; charset=utf-8"),
+            ("/assets/bot-binding.js", "application/javascript; charset=utf-8"),
             ("/assets/home.css", "text/css; charset=utf-8"),
             ("/assets/home.js", "application/javascript; charset=utf-8"),
             ("/assets/records.css", "text/css; charset=utf-8"),

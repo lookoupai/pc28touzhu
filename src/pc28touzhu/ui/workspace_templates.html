@@ -1,0 +1,121 @@
+<section id="templatesSection" class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">下注模板</p>
+                                <h2>下注格式模板</h2>
+                            </div>
+                            <p id="templateWorkspaceSummaryText" class="panel-copy">这里不仅维护模板内容，也会告诉你哪些群组正在使用它。</p>
+                        </div>
+                        <div id="templateWorkspaceSummary" class="health-grid template-summary-grid"></div>
+                        <div class="autobet-note account-setup-note">
+                            <strong>不同投注平台、群组和机器人，下注口令往往不同</strong>
+                            <p>在这里维护“玩法到发言格式”的映射，再把模板绑定到具体群组。派发任务时，系统会按群组模板生成最终下注文本。</p>
+                        </div>
+                        <section class="template-preset-strip" aria-label="模板预设">
+                            <div class="template-preset-head">
+                                <strong>常用预设</strong>
+                                <span class="field-hint">直接套用后再微调，比从空白 JSON 起步更快。</span>
+                            </div>
+                            <div class="template-preset-actions">
+                                <button class="ghost-btn template-preset-btn" type="button" data-template-preset="pc28_high_roll">高倍直发</button>
+                                <button class="ghost-btn template-preset-btn" type="button" data-template-preset="number_sum_slash">和值斜杠</button>
+                                <button class="ghost-btn template-preset-btn" type="button" data-template-preset="abc_position">ABC 定位</button>
+                                <button class="ghost-btn template-preset-btn" type="button" data-template-preset="combo_matrix">组合矩阵</button>
+                            </div>
+                        </section>
+                        <form data-track-changes id="messageTemplateForm" class="autobet-form">
+                            <input name="edit_id" type="hidden">
+                            <div class="autobet-form-grid">
+                                <label>
+                                    <span>模板名称</span>
+                                    <input class="text-input" name="name" type="text" placeholder="例如：加拿大28高倍模板" required>
+                                </label>
+                                <label>
+                                    <span>彩种</span>
+                                    <input class="text-input" name="lottery_type" type="text" value="pc28" required>
+                                </label>
+                                <label>
+                                    <span>模板状态</span>
+                                    <select class="text-input" name="status">
+                                        <option value="inactive">草稿</option>
+                                        <option value="active" selected>启用</option>
+                                    </select>
+                                </label>
+                                <label class="wide">
+                                    <span>默认格式</span>
+                                    <input class="text-input" name="template_text" type="text" value="{{bet_value}}{{amount}}" required>
+                                    <small class="field-hint">可用变量：<code>{{bet_value}}</code>、<code>{{amount}}</code>、<code>{{issue_no}}</code>、<code>{{bet_type}}</code>，以及信号 payload 中的额外字段。</small>
+                                </label>
+                                <div class="wide template-rule-builder-panel">
+                                    <div class="template-rule-builder-head">
+                                        <div>
+                                            <span>规则填写区</span>
+                                            <small class="field-hint">默认使用填写式编辑。适合把“大双”映射成 <code>ds</code> 这种新手场景。</small>
+                                        </div>
+                                        <button id="toggleTemplateJsonBtn" class="ghost-btn" type="button">切换到高级 JSON</button>
+                                    </div>
+                                    <div id="templateRuleBuilderContent" class="template-rule-builder-content">
+                                        <div id="templateRuleBuilder" class="template-rule-builder"></div>
+                                        <div class="form-actions">
+                                            <button id="addCustomTemplateRuleBtn" class="ghost-btn" type="button">新增自定义玩法</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <label class="wide template-config-json-field" hidden>
+                                    <span>规则 JSON</span>
+                                    <textarea class="text-area" name="config" rows="12" placeholder='{"bet_rules":{"number_sum":{"format":"{{bet_value}}/{{amount}}"}}}' required></textarea>
+                                    <small class="field-hint">填写区会自动生成 JSON。只有需要特殊玩法或额外字段时，再展开高级模式手动调整。</small>
+                                </label>
+                            </div>
+                            <div class="form-actions">
+                                <button id="fillPc28TemplateBtn" class="ghost-btn" type="button">填充加拿大28高倍示例</button>
+                                <button id="createMessageTemplateBtn" class="primary-btn" type="submit">新增模板</button>
+                                <button id="cancelMessageTemplateEditBtn" class="ghost-btn" type="button" hidden>取消编辑</button>
+                            </div>
+                        </form>
+                        <section class="template-preview-panel" aria-label="模板预览">
+                            <div class="panel-header">
+                                <div>
+                                    <p class="panel-kicker">预览</p>
+                                    <h2>模板实时预览</h2>
+                                </div>
+                                <p class="panel-copy">先在这里验证某个玩法会被渲染成什么下注口令，再绑定到目标群组。</p>
+                            </div>
+                            <div class="template-sample-strip" aria-label="玩法样例">
+                                <button class="ghost-btn template-sample-btn" type="button" data-template-sample="big_small">大小单双</button>
+                                <button class="ghost-btn template-sample-btn" type="button" data-template-sample="combo">组合</button>
+                                <button class="ghost-btn template-sample-btn" type="button" data-template-sample="number_sum">和值</button>
+                                <button class="ghost-btn template-sample-btn" type="button" data-template-sample="abc">ABC</button>
+                                <button class="ghost-btn template-sample-btn" type="button" data-template-sample="special">特殊</button>
+                            </div>
+                            <div class="autobet-form-grid">
+                                <label>
+                                    <span>预览玩法类型</span>
+                                    <input id="templatePreviewBetType" class="text-input" type="text" value="big_small" placeholder="例如：big_small">
+                                </label>
+                                <label>
+                                    <span>预览投注值</span>
+                                    <input id="templatePreviewBetValue" class="text-input" type="text" value="大" placeholder="例如：大 / 豹子 / 0">
+                                </label>
+                                <label>
+                                    <span>预览金额</span>
+                                    <input id="templatePreviewAmount" class="text-input" type="number" min="0.01" step="0.01" value="10">
+                                </label>
+                                <label>
+                                    <span>预览期号</span>
+                                    <input id="templatePreviewIssueNo" class="text-input" type="text" value="20260410001" placeholder="例如：20260410001">
+                                </label>
+                                <label class="wide">
+                                    <span>额外字段 JSON</span>
+                                    <textarea id="templatePreviewPayload" class="text-area" rows="4" placeholder='{"position":"a"}'></textarea>
+                                    <small class="field-hint">用于模拟额外变量，例如 ABC 玩法中的 <code>{{position}}</code>。</small>
+                                </label>
+                            </div>
+                            <div class="template-preview-result">
+                                <span class="setup-label">最终下注文本</span>
+                                <strong id="templatePreviewOutput">--</strong>
+                                <p id="templatePreviewMeta">输入玩法、投注值和金额后，这里会显示模板渲染结果。</p>
+                            </div>
+                        </section>
+                        <div id="messageTemplateList" class="config-list"></div>
+                    </section>

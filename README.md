@@ -15,10 +15,13 @@ PC28 投注信号平台与 Telegram 执行器。
 
 - **平台 API**：WSGI 应用，入口为 `src/pc28touzhu/main.py`
 - **Web 页面**：
-  - 用户首页：`/`
+  - 工作台（合并原首页和总控台）：`/`
   - 执行记录：`/records`
   - 异常提醒：`/alerts`
-  - 自动投注配置：`/autobet`
+  - 跟单方案：`/autobet/subscriptions`，自动触发：`/auto-triggers`
+  - 资源配置：`/autobet/sources`、`/autobet/accounts`、`/autobet/targets`、`/autobet/templates`
+  - 收益 Bot 绑定：`/autobet/bot`
+  - 原 `/autobet` 兼容跳转到工作台，旧区块链接映射到对应页面
   - 管理控制台：`/admin`
 - **执行链路**：`signal -> subscription -> delivery_target -> execution_job -> executor report`
 - **执行器模型**：支持多用户、多 Telegram 账号、多投递目标
@@ -224,7 +227,11 @@ TG_REPORT_TIMEZONE=Asia/Shanghai
 - `GET /`
 - `GET /records`
 - `GET /alerts`
-- `GET /autobet`
+- `GET /autobet/subscriptions`
+- `GET /auto-triggers`
+- `GET /autobet/sources`、`GET /autobet/accounts`、`GET /autobet/targets`、`GET /autobet/templates`
+- `GET /autobet/bot`
+- `GET /autobet`（兼容重定向）
 - `GET /admin`
 
 ### 注入演示任务
@@ -281,7 +288,9 @@ TG_REPORT_TIMEZONE=Asia/Shanghai
 
 托管账号删除采用“归档后删除”策略：没有启用中群组和待执行任务即可删除；有历史执行记录时保留账号墓碑和历史显示，清除手机号、Session 等凭据，并解除停用/归档群组的账号绑定。
 
-用户端与后台共用的账户弹窗现在由服务端在页面渲染阶段注入统一模板；`auth-panel.js`、`account-menu.js`、`auth-guard.js`、`ui-text.js` 这类共享资源也统一按文件更新时间附带版本参数，避免浏览器继续命中旧缓存。
+用户端与后台共用导航、页面框架与账户弹窗，由服务端注入统一模板。页面地址、名称和菜单分组集中在 `api/ui_navigation.py`，配置页正文分别位于 `ui/workspace_*.html`，详见 [导航与工作台](docs/navigation-workbench.md)。
+
+`auth-panel.js`、`account-menu.js`、`auth-guard.js`、`ui-text.js` 这类共享资源也统一按文件更新时间附带版本参数，避免浏览器继续命中旧缓存。
 
 ## API 概览
 

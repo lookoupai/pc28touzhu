@@ -1,0 +1,57 @@
+<section id="targetsSection" class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">投递群组</p>
+                                <h2>投递群组</h2>
+                            </div>
+                            <div class="panel-header-actions">
+                                <p id="targetWorkspaceSummaryText" class="panel-copy">这里统一处理群组绑定、模板绑定、测试发送和启停状态。</p>
+                                <button id="toggleArchivedTargetsBtn" class="ghost-btn" type="button" hidden>查看已归档</button>
+                            </div>
+                        </div>
+                        <div id="targetWorkspaceSummary" class="health-grid"></div>
+                        <form data-track-changes id="targetForm" class="autobet-form">
+                            <input name="edit_id" type="hidden">
+                            <div class="autobet-form-grid">
+                                <label>
+                                    <span>选择托管账号</span>
+                                    <select class="text-input" name="telegram_account_id" required>
+                                        <option value="">请先选择账号</option>
+                                    </select>
+                                </label>
+                                <label>
+                                    <span>目标名称</span>
+                                    <input class="text-input" name="target_name" type="text" placeholder="例如：主投注群">
+                                </label>
+                                <label>
+                                    <span>派单模式</span>
+                                    <select class="text-input" name="dispatch_mode">
+                                        <option value="shared">互斥并存</option>
+                                        <option value="rule_only">仅自动规则</option>
+                                        <option value="direct_only">仅手动跟单</option>
+                                    </select>
+                                </label>
+                                <label>
+                                    <span>下注格式模板</span>
+                                    <select class="text-input" name="template_id">
+                                        <option value="">默认格式（未绑定模板）</option>
+                                    </select>
+                                    <small class="field-hint">不同投注群、不同机器人协议不同。建议为群组绑定专用模板。</small>
+                                </label>
+                                <label class="wide">
+                                    <span>群组标识</span>
+                                    <input class="text-input" name="target_key" type="text" placeholder="粘贴 https://t.me/... 或填写 @username / -100..." required>
+                                    <small id="targetKeyPreview" class="field-hint" hidden></small>
+                                    <small class="field-hint">
+                                        不知道怎么填？可以把 Telegram 机器人 <code>@userinfobot</code> 拉进目标群组并发送任意消息，它会返回该群组的 <code>Chat ID</code>（通常是 <code>-100...</code>），把这个值填到这里即可。
+                                        注意：<code>@userinfobot</code> 属于第三方机器人，介意隐私的群请谨慎添加；如果群组有 <code>@username</code>，也可以直接尝试填写 <code>@username</code>。
+                                    </small>
+                                </label>
+                            </div>
+                            <div class="form-actions">
+                                <button id="createTargetBtn" class="primary-btn" type="submit">新增投递群组</button>
+                                <button id="cancelTargetEditBtn" class="ghost-btn" type="button" hidden>取消编辑</button>
+                            </div>
+                        </form>
+                        <div id="targetList" class="config-list"></div>
+                    </section>

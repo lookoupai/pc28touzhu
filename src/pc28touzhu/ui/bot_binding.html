@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>收益 Bot 绑定 · pc28touzhu</title><link rel="stylesheet" href="/assets/autobet.css"></head>
+<body>
+__APP_SHELL__
+<main class="app-page" id="mainContent" tabindex="-1">
+<header class="app-page-heading"><div><p>资源配置</p><h1>收益 Bot 绑定</h1><p>绑定 Telegram 私聊账号，查询你的方案与收益。</p></div><button id="refreshBindingBtn" class="ghost-btn" type="button">刷新</button></header>
+<div id="statusMessage" class="status-banner" role="status"></div>
+                <section id="botBindingSection" class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <p class="panel-kicker">Telegram Bot</p>
+                            <h2>收益查询 Bot 绑定</h2>
+                        </div>
+                        <p id="botBindingSummary" class="panel-copy">登录后可在这里生成绑定码，并把当前 Telegram 私聊账号绑定到平台用户。</p>
+                    </div>
+                    <div id="botBindingMetrics" class="health-grid"></div>
+                    <div class="content-grid bot-binding-grid">
+                        <article class="health-card bot-binding-card">
+                            <span class="setup-label">绑定命令</span>
+                            <strong id="botBindingCommand" class="mono-text">/bind &lt;绑定码&gt;</strong>
+                            <p id="botBindingCommandMeta">生成绑定码后，在 Telegram 私聊收益查询 Bot 发送这条命令即可。</p>
+                            <div id="botBindingActions" class="form-actions bot-binding-actions"></div>
+                        </article>
+                        <article class="health-card bot-binding-card">
+                            <span class="setup-label">使用说明</span>
+                            <div id="botBindingInstructions" class="bot-binding-instructions"></div>
+                        </article>
+                    </div>
+                </section>
+
+
+</main>
+__ACCOUNT_DIALOG__
+<script src="/assets/ui-text.js"></script>
+<script src="/assets/auth-panel.js"></script>
+<script src="/assets/account-menu.js"></script>
+<script src="/assets/auth-guard.js"></script>
+<script src="/assets/bot-binding.js"></script>
+</body></html>

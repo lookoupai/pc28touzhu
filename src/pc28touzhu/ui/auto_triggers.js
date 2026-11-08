@@ -7,13 +7,15 @@
         sources: [],
         deliveryTargets: [],
         templates: [],
-        editingRuleId: "",
+        editingRuleId: new URLSearchParams(window.location.search).get("rule_id") || "",
         statDate: "",
         eventLimit: 30,
         eventStatusFilter: "all",
+        linkedSubscriptionId: new URLSearchParams(location.search).get("subscription_id") || "",
         editingCyclePolicy: null,
     };
     let currentUserLoadToken = 0;
+    let dataLoadToken = 0;
 
     const metricOptions = [
         ["big_small", "大小"],
@@ -523,11 +525,21 @@
 
     function renderRuleList() {
         const list = $("ruleList");
-        if (!state.rules.length) {
-            list.innerHTML = '<div class="empty-state">暂无规则。先选择一个已存在跟单方案，再配置命中率条件。</div>';
+        const subscriptionFilter = $("ruleSubscriptionFilter");
+        if (subscriptionFilter) {
+            subscriptionFilter.innerHTML = '<option value="">全部方案</option>' + state.subscriptions.map(function (item) {
+                return '<option value="' + escapeHtml(item.id) + '">' + escapeHtml(subscriptionLabel(item)) + '</option>';
+            }).join("");
+            subscriptionFilter.value = state.linkedSubscriptionId;
+        }
+        const visibleRules = state.rules.filter(function (rule) {
+            return !state.linkedSubscriptionId || rule.scope_mode === "all_subscriptions" || (rule.subscription_ids || []).some(function (id) { return String(id) === state.linkedSubscriptionId; });
+        });
+        if (!visibleRules.length) {
+            list.innerHTML = '<div class="empty-state">当前范围暂无规则。可以新建规则并关联跟单方案。</div>';
             return;
         }
-        list.innerHTML = state.rules.map(function (rule) {
+        list.innerHTML = visibleRules.map(function (rule) {
             const selected = String(rule.id) === String(state.editingRuleId) ? " is-active" : "";
             const scope = rule.scope_mode === "all_subscriptions" ? "全部跟单方案" : ("指定 " + String((rule.subscription_ids || []).length) + " 个方案");
             const isSchedule = String(rule.trigger_mode || "condition") === "schedule";
@@ -556,6 +568,10 @@
             return '' +
                 '<article class="rule-card' + selected + '">' +
                     '<div class="rule-card-head"><div><strong>' + escapeHtml(rule.name) + '</strong><p class="meta-line">' + escapeHtml(scope) + '</p></div>' + statusPill(rule.status) + '</div>' +
+                    '<p class="meta-line">' + (rule.scope_mode === "all_subscriptions" ? '<a href="/autobet/subscriptions">查看全部跟单方案</a>' : (rule.subscription_ids || []).map(function (id) {
+                        const sub = state.subscriptions.find(function (item) { return Number(item.id) === Number(id); });
+                        return '<a href="/autobet/subscriptions?subscription_id=' + encodeURIComponent(id) + '">' + escapeHtml(sub ? subscriptionLabel(sub) : "方案 #" + id) + '</a>';
+                    }).join(" · ")) + '</p>' +
                     (hasSchedule ? '<p class="meta-line">' + escapeHtml(scheduleText) + '</p>' : '') +
                     (!isSchedule ? '<p class="meta-line">' + escapeHtml("开始条件：" + conditions) + '</p>' : '') +
                     (blockedSubscriptions.length ? '<p class="meta-line">未就绪：' + escapeHtml(blockedSubscriptions.join("；")) + '</p>' : '') +
@@ -984,6 +1000,10 @@
         updateCyclePolicyVisibility();
         renderRuleList();
         setStatus("", false);
+        if (window.PlatformNavigation) {
+            window.PlatformNavigation.markClean(form);
+            window.PlatformNavigation.setQuery({rule_id: state.editingRuleId});
+        }
     }
 
     function updateTriggerModeVisibility() {
@@ -1208,6 +1228,7 @@
     }
 
     async function loadData(options) {
+        const dataToken = ++dataLoadToken;
         const normalized = options || {};
         if (!normalized.skipCurrentUserReload) {
             const token = ++currentUserLoadToken;
@@ -1234,6 +1255,7 @@
                 (state.eventStatusFilter === "all" ? "" : ("&status=" + encodeURIComponent(state.eventStatusFilter)))
             ),
         ]);
+        if (dataToken !== dataLoadToken) return;
         state.sources = payloads[0].items || [];
         state.subscriptions = payloads[1].items || [];
         state.deliveryTargets = (payloads[2].items || []).filter(function (item) { return item.status !== "archived"; });
@@ -1243,6 +1265,7 @@
         renderSummary();
         renderRuleList();
         renderEvents();
+        if (window.PlatformNavigation && window.PlatformNavigation.isDirty($("ruleForm"))) return;
         if (!state.editingRuleId) {
             resetForm();
         } else {
@@ -1259,7 +1282,12 @@
 
     document.addEventListener("platform-auth:changed", async function (event) {
         const detail = event.detail || {};
+        currentUserLoadToken += 1;
+        dataLoadToken += 1;
+        state.rules = []; state.events = []; state.subscriptions = [];
+        state.sources = []; state.deliveryTargets = []; state.templates = [];
         setCurrentUser(detail.user || null);
+        resetForm(); renderRuleList(); renderEvents(); renderSummary();
         await loadData({skipCurrentUserReload: true});
         if (detail.message) {
             setStatus(detail.message, false);
@@ -1281,6 +1309,7 @@
                 body: payload,
             });
             state.editingRuleId = String((saved.item || {}).id || ruleId);
+            if (window.PlatformNavigation) window.PlatformNavigation.markClean(form);
             await loadData();
             setStatus("规则已保存。正在运行的轮次保持原设置。", false);
         } catch (error) {
@@ -1299,6 +1328,11 @@
     }
 
     function attachEvents() {
+        if ($("ruleSubscriptionFilter")) $("ruleSubscriptionFilter").addEventListener("change", function () {
+            state.linkedSubscriptionId = this.value;
+            if (window.PlatformNavigation) window.PlatformNavigation.setQuery({subscription_id: state.linkedSubscriptionId});
+            renderRuleList();
+        });
         $("cycleModeSelect").addEventListener("change", function () {
             if (this.value === "rule" && (state.editingCyclePolicy || {}).mode === "legacy") {
                 const form = $("ruleForm");
@@ -1318,17 +1352,19 @@
         $("dailyRiskEnabledInput").addEventListener("change", updateDailyRiskVisibility);
         $("statDateInput").addEventListener("change", async function (event) {
             state.statDate = event.target.value || todayDateString();
+            if (window.PlatformNavigation) window.PlatformNavigation.setQuery({stat_date: state.statDate});
             syncStatDateControls();
             await loadData();
         });
         $("statDateTodayBtn").addEventListener("click", async function () {
             state.statDate = todayDateString();
+            if (window.PlatformNavigation) window.PlatformNavigation.setQuery({stat_date: state.statDate});
             syncStatDateControls();
             await loadData();
         });
         $("refreshBtn").addEventListener("click", loadData);
-        $("newRuleBtn").addEventListener("click", function () { resetForm(); });
-        $("cancelEditBtn").addEventListener("click", function () { resetForm(); });
+        $("newRuleBtn").addEventListener("click", function () { if (!window.PlatformNavigation || window.PlatformNavigation.confirmLeaveForm($("ruleForm"))) resetForm(); });
+        $("cancelEditBtn").addEventListener("click", function () { if (!window.PlatformNavigation || window.PlatformNavigation.confirmLeaveForm($("ruleForm"))) resetForm(); });
         $("eventStatusFilter").addEventListener("change", function (event) {
             state.eventStatusFilter = event.target.value || "all";
             loadData();
@@ -1462,6 +1498,7 @@
                 return;
             }
             if (target.classList.contains("edit-rule-btn")) {
+                if (window.PlatformNavigation && !window.PlatformNavigation.confirmLeaveForm($("ruleForm"))) return;
                 const rule = state.rules.find(function (item) { return String(item.id) === String(target.dataset.id); });
                 resetForm(rule);
                 window.scrollTo({top: 0, behavior: "smooth"});
@@ -1582,7 +1619,7 @@
         });
     }
 
-    state.statDate = todayDateString();
+    state.statDate = new URLSearchParams(window.location.search).get("stat_date") || todayDateString();
 
     if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", function () {

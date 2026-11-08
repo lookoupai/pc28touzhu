@@ -13,7 +13,6 @@
     const recordsTableBody = document.getElementById("recordsTableBody");
     const recordsCardList = document.getElementById("recordsCardList");
     const recordsAlertList = document.getElementById("recordsAlertList");
-    const workspaceLinks = Array.from(document.querySelectorAll(".workspace-link"));
 
     function setStatus(message, isError) {
         statusMessage.textContent = message || "";
@@ -54,55 +53,6 @@
         }
         button.toggleAttribute("disabled", Boolean(busy));
         button.textContent = busy ? busyText : (button.getAttribute("data-idle-text") || "");
-    }
-
-    function setActiveWorkspaceLink(targetHash) {
-        workspaceLinks.forEach(function (link) {
-            link.classList.toggle("is-active", link.getAttribute("href") === targetHash);
-        });
-    }
-
-    function initWorkspaceNav() {
-        workspaceLinks.forEach(function (link) {
-            link.addEventListener("click", function () {
-                const href = link.getAttribute("href") || "";
-                if (href.startsWith("#")) {
-                    setActiveWorkspaceLink(href);
-                }
-            });
-        });
-
-        if (!("IntersectionObserver" in window)) {
-            return;
-        }
-
-        const sections = workspaceLinks.map(function (link) {
-            const href = link.getAttribute("href") || "";
-            if (!href.startsWith("#")) {
-                return null;
-            }
-            return document.querySelector(href);
-        }).filter(Boolean);
-
-        const observer = new IntersectionObserver(function (entries) {
-            const visible = entries.filter(function (entry) {
-                return entry.isIntersecting;
-            }).sort(function (left, right) {
-                return left.boundingClientRect.top - right.boundingClientRect.top;
-            })[0];
-
-            if (!visible || !visible.target || !visible.target.id) {
-                return;
-            }
-            setActiveWorkspaceLink("#" + visible.target.id);
-        }, {
-            rootMargin: "-20% 0px -60% 0px",
-            threshold: [0.1, 0.3, 0.6],
-        });
-
-        sections.forEach(function (section) {
-            observer.observe(section);
-        });
     }
 
     async function request(path, options) {
@@ -218,7 +168,9 @@
 
     function syncFilterStateToUrl() {
         const filterState = getFilterState();
-        const params = new URLSearchParams();
+        const params = new URLSearchParams(window.location.search);
+        params.delete("status");
+        params.delete("signal_id");
         if (filterState.status) {
             params.set("status", filterState.status);
         }
@@ -226,7 +178,7 @@
             params.set("signal_id", filterState.signalId);
         }
         const nextUrl = window.location.pathname + (params.toString() ? "?" + params.toString() : "");
-        window.history.replaceState({}, "", nextUrl);
+        window.history.replaceState({}, "", nextUrl + window.location.hash);
     }
 
     function renderFilterSummary() {
@@ -456,6 +408,5 @@
     });
 
     applyFilterStateToForm();
-    initWorkspaceNav();
     refreshAll();
 }());

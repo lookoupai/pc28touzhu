@@ -10,50 +10,21 @@
     <link rel="stylesheet" href="/assets/records.css">
 </head>
 <body>
-    <div class="page-shell">
-        <header class="topbar">
-            <a class="brand" href="/">
-                <span class="brand-mark">P28</span>
-                <span class="brand-copy">
-                    <strong>pc28touzhu</strong>
-                    <span>执行记录与异常回看</span>
-                </span>
-            </a>
-            <nav class="topbar-actions">
-                <button id="refreshRecordsBtn" class="nav-link nav-button" type="button">刷新记录</button>
-                <a class="nav-link" href="/">首页</a>
-                <a class="nav-link" href="/autobet">自动投注总控台</a>
-                <a class="nav-link" href="/alerts">异常提醒</a>
-                <a class="nav-link" href="/admin#executionJobsSection" data-requires-auth>管理控制台</a>
-                <button id="accountMenuBtn" class="nav-link nav-button" type="button" data-auth-account-label aria-haspopup="dialog" aria-controls="accountDialog">登录</button>
-            </nav>
-        </header>
+    __APP_SHELL__
+    <div class="page-shell app-page" id="mainContent" tabindex="-1">
 
-        <nav class="workspace-nav" aria-label="执行记录导航">
-            <a class="workspace-link is-active" href="#recordsOverviewSection">记录概览</a>
-            <a class="workspace-link" href="#recordsFilterSection">筛选</a>
-            <a class="workspace-link" href="#recordsTableSection">记录列表</a>
-            <a class="workspace-link" href="#recordsActionsSection">处理入口</a>
-            <a class="workspace-link" href="/autobet">总控台</a>
-            <a class="workspace-link" href="/autobet/sources#sourcesSection">来源</a>
-            <a class="workspace-link" href="/autobet/accounts#accountsSection">账号</a>
-            <a class="workspace-link" href="/autobet/targets#targetsSection">群组</a>
-            <a class="workspace-link" href="/autobet/subscriptions#subscriptionsSection">跟单</a>
-            <a class="workspace-link" href="/alerts">告警</a>
-        </nav>
 
         <main class="layout">
             <section class="hero-card">
                 <div class="hero-copy">
                     <p class="eyebrow">执行记录</p>
-                    <h1>集中查看你的自动执行记录、失败原因和最近重试情况。</h1>
+                    <h1>执行记录</h1>
                     <p class="hero-text">
-                        这里直接复用平台当前的 `execution-jobs` 数据，不新造模型。优先帮助你回答三件事：
-                        最近发了什么、哪里失败了、哪些任务还能重试。
+                        查看最近投递、失败原因和可重试任务。
                     </p>
-                    <div class="hero-actions">
+                    <div class="hero-actions"><button id="refreshRecordsBtn" class="ghost-btn" type="button">刷新</button>
                         <a class="primary-link" href="#recordsTableSection">查看记录列表</a>
-                        <a class="ghost-link" href="/autobet">回自动投注总控台</a>
+                        <a class="ghost-link" href="/">返回工作台</a>
                     </div>
                 </div>
                 <aside class="hero-status">
@@ -138,7 +109,7 @@
                         <p class="panel-kicker">管理端</p>
                         <h2>更底层排障</h2>
                         <p>需要看 execution-jobs 原始明细、执行器状态和底层重试策略时，再进入管理控制台。</p>
-                        <a class="panel-link" href="/admin#executionJobsSection">去管理端排障</a>
+                        <a class="panel-link" href="/admin/execution" data-admin-only hidden>去管理端排障</a>
                     </article>
                 </section>
             </section>

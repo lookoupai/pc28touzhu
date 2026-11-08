@@ -1,0 +1,47 @@
+<section id="sourcesSection" class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">方案来源</p>
+                                <h2>来源链路工作区</h2>
+                            </div>
+                            <p id="sourceWorkspaceSummaryText" class="panel-copy">这里直接告诉你一个来源有没有被跟单使用，以及它最近有没有跑到信号和任务阶段。</p>
+                        </div>
+                        <div id="sourceWorkspaceSummary" class="health-grid"></div>
+                        <div class="autobet-note source-workspace-note">
+                            <strong>这一块负责把“导入来源”真正推进到“生成信号并发到群”</strong>
+                            <p>来源本身不会自动变成下注消息。当前版本需要先让某个跟单策略使用这个来源，再抓取、标准化、派发，执行器才会往目标群发单。</p>
+                        </div>
+                        <form data-track-changes id="sourceForm" class="autobet-form">
+                            <input name="edit_id" type="hidden">
+                            <div class="autobet-form-grid">
+                                <label>
+                                    <span>来源名称</span>
+                                    <input id="sourceNameInput" class="text-input" name="name" type="text" placeholder="可选，留空自动生成">
+                                </label>
+                                <label>
+                                    <span>可见性</span>
+                                    <select class="text-input" name="visibility">
+                                        <option value="private">私有</option>
+                                        <option value="public">公开</option>
+                                    </select>
+                                </label>
+                                <label class="wide">
+                                    <span>公开方案页链接或导出地址</span>
+                                    <input id="sourceUrlInput" class="text-input" name="source_url" type="url" placeholder="https://your-ai-platform.example.com/public/predictors/12" required>
+                                    <small class="field-hint">这里只做用户自己的 AITradingSimulator 来源导入。链接会自动归一化成 execution 导出地址。</small>
+                                    <small id="sourceUrlError" class="field-hint" hidden></small>
+                                </label>
+                            </div>
+                            <div class="form-actions">
+                                <button id="fillSourceExampleBtn" class="ghost-btn" type="button">填入示例</button>
+                                <button id="createSourceBtn" class="primary-btn" type="submit">导入来源</button>
+                                <button id="cancelSourceEditBtn" class="ghost-btn" type="button" hidden>取消编辑</button>
+                            </div>
+                        </form>
+                        <div class="source-workspace-actions">
+                            <a class="ghost-btn link-btn" href="/autobet/sources#sourceForm">导入新来源</a>
+                            <a class="ghost-btn link-btn" href="/autobet/subscriptions#subscriptionsSection">去跟单区</a>
+                            <a class="ghost-btn link-btn" href="/records">去执行记录</a>
+                        </div>
+                        <div id="sourceList" class="config-list"></div>
+                    </section>

@@ -1,0 +1,77 @@
+<section id="accountsSection" class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">托管账号</p>
+                                <h2>托管账号</h2>
+                            </div>
+                            <p id="accountWorkspaceSummaryText" class="panel-copy">这里专门处理托管账号接入、授权进度和账号可执行状态。</p>
+                        </div>
+                        <div id="accountWorkspaceSummary" class="health-grid account-summary-grid"></div>
+                        <div class="autobet-note account-setup-note">
+                            <strong id="accountModeHeadline">先选接入方式，再由系统接管 Session</strong>
+                            <p id="accountModeDescription">系统会先创建托管账号，再发送 Telegram 验证码。</p>
+                        </div>
+                        <section class="account-mode-guide" aria-label="当前接入方式说明">
+                            <div class="account-mode-guide-head">
+                                <span id="accountModeBadge" class="account-mode-badge is-phone-login">手机号登录</span>
+                                <strong id="accountModeGuideTitle">通过手机号接入 Telegram</strong>
+                            </div>
+                            <p id="accountModeGuideSummary" class="account-mode-guide-summary">适合没有现成 Session 文件的账号。系统会发送验证码，你在下方继续完成授权。</p>
+                            <div id="accountModeGuideSteps" class="account-mode-guide-steps"></div>
+                        </section>
+                        <form data-track-changes id="accountForm" class="autobet-form">
+                            <input name="edit_id" type="hidden">
+                            <input name="auth_mode" type="hidden" value="phone_login">
+                            <div class="account-mode-switch" role="tablist" aria-label="账号接入方式">
+                                <button class="account-mode-btn is-active" type="button" data-account-auth-mode="phone_login">手机号登录</button>
+                                <button class="account-mode-btn" type="button" data-account-auth-mode="session_import">导入 Session</button>
+                            </div>
+                            <div class="autobet-form-grid">
+                                <label>
+                                    <span>账号标签</span>
+                                    <input class="text-input" name="label" type="text" placeholder="例如：主账号" required>
+                                </label>
+                                <label class="account-phone-field">
+                                    <span>手机号</span>
+                                    <input class="text-input" name="phone" type="tel" inputmode="tel" placeholder="+12019362923">
+                                </label>
+                                <label class="wide account-session-file-field" hidden>
+                                    <span>Session 文件</span>
+                                    <input class="text-input" name="session_file" type="file" accept=".session,application/octet-stream">
+                                    <small class="field-hint">上传商家附带的 Telethon `.session` 文件，系统会自动校验并保存。</small>
+                                </label>
+                            </div>
+                            <div class="form-actions">
+                                <button id="createAccountBtn" class="primary-btn" type="submit">创建并发送验证码</button>
+                                <button id="cancelAccountEditBtn" class="ghost-btn" type="button" hidden>取消编辑</button>
+                            </div>
+                        </form>
+                        <div id="accountPostActionHint" class="account-post-action-hint">
+                            <strong id="accountPostActionTitle">提交后继续完成账号授权</strong>
+                            <p id="accountPostActionBody">发送验证码后，下方会出现验证码输入框。登录过期时请先重新发码，不要继续填二次密码。</p>
+                        </div>
+                        <form data-track-changes id="accountVerifyForm" class="autobet-form account-verify-form" hidden>
+                            <input name="telegram_account_id" type="hidden">
+                            <div class="account-verify-card">
+                                <strong>继续完成账号授权</strong>
+                                <p id="accountVerifySummary">验证码已发送，请继续填写。</p>
+                                <p id="accountVerifyFeedback" class="account-verify-feedback" hidden></p>
+                                <div class="autobet-form-grid account-verify-fields">
+                                    <label class="account-code-field">
+                                        <span>验证码</span>
+                                        <input class="text-input" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="请输入收到的验证码">
+                                    </label>
+                                    <label class="account-password-field">
+                                        <span>二次密码</span>
+                                        <input class="text-input" name="password" type="password" autocomplete="off" placeholder="请输入 Telegram 两步验证密码（云密码）">
+                                    </label>
+                                </div>
+                                <p id="accountPasswordHint" class="field-hint account-password-hint" hidden>二次密码是 Telegram 设置里的两步验证密码，不是手机号登录密码，也不是刚才的验证码。</p>
+                                <div class="form-actions">
+                                    <button id="verifyAccountCodeBtn" class="primary-btn" type="submit">提交验证码</button>
+                                    <button id="verifyAccountPasswordBtn" class="primary-btn" type="submit" hidden>提交二次密码</button>
+                                </div>
+                            </div>
+                        </form>
+                        <div id="accountList" class="config-list"></div>
+                    </section>

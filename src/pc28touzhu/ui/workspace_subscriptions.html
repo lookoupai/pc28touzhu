@@ -1,0 +1,327 @@
+<section id="subscriptionsSection" class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <p class="panel-kicker">跟单策略</p>
+                                <h2>跟单策略</h2>
+                            </div>
+                            <div class="subscription-panel-head-actions">
+                                <p id="subscriptionWorkspaceSummaryText" class="panel-copy">在这里看清一条来源会发到哪些群、发多少钱、套用哪个模板。</p>
+                                <div class="subscription-stat-toolbar">
+                                    <label class="compact-field" for="subscriptionStatDateInput">
+                                        <span>查看日期盈亏</span>
+                                        <input id="subscriptionStatDateInput" class="compact-input" type="date">
+                                    </label>
+                                    <button id="subscriptionStatTodayBtn" class="ghost-btn" type="button">今天</button>
+                                </div>
+                                <button id="batchResolveSubscriptionsBtn" class="ghost-btn" type="button">批量自动结算待结算记录</button>
+                            </div>
+                        </div>
+                        <div class="autobet-note subscription-workspace-note">
+                            <strong>这一步就是把来源信号变成实际下单消息</strong>
+                            <p>选好来源后，设置均注、跟随来源金额或倍投，页面会直接显示会发到哪些群、用哪个模板，以及最终发单示例。</p>
+                        </div>
+                        <div id="subscriptionWorkspaceSummary" class="health-grid subscription-summary-grid"></div>
+                        <form data-track-changes id="subscriptionForm" class="autobet-form" novalidate>
+                            <input name="edit_id" type="hidden">
+                            <div class="autobet-form-grid">
+                                <label>
+                                    <span>选择要跟单的来源</span>
+                                    <select class="text-input" name="source_id" required>
+                                        <option value="">请选择来源</option>
+                                    </select>
+                                </label>
+                                <label class="wide subscription-play-filter-mode-field">
+                                    <span>跟单玩法</span>
+                                    <select id="subscriptionBetFilterModeSelect" class="text-input" name="bet_filter_mode">
+                                        <option value="selected">只跟选中的玩法（推荐）</option>
+                                        <option value="all">跟随来源这次导出的全部玩法</option>
+                                    </select>
+                                    <small id="subscriptionBetFilterHint" class="field-hint">建议先用自选玩法，只勾你真正想下的内容。</small>
+                                </label>
+                                <label class="wide subscription-target-field">
+                                    <span>发送群组</span>
+                                    <select id="subscriptionTargetSelect" class="text-input subscription-target-select" name="delivery_target_ids" multiple required></select>
+                                    <small id="subscriptionTargetHint" class="field-hint">按住 Ctrl 或 Command 可选择多个群组；只会向这里选中的群组发单。</small>
+                                </label>
+                                <div id="subscriptionBetFilterFields" class="wide subscription-play-filter-fields" hidden>
+                                    <div class="subscription-play-filter-toolbar">
+                                        <div class="subscription-play-filter-shortcuts">
+                                            <button class="row-button" type="button" data-play-filter-preset="big_small">只玩大小</button>
+                                            <button class="row-button" type="button" data-play-filter-preset="odd_even">只玩单双</button>
+                                            <button class="row-button" type="button" data-play-filter-preset="combo">只玩组合</button>
+                                            <button class="row-button" type="button" data-play-filter-preset="custom">自己勾选</button>
+                                        </div>
+                                        <p id="subscriptionBetFilterSelectionSummary" class="subscription-play-filter-summary">当前还没选玩法</p>
+                                    </div>
+                                    <div class="subscription-play-filter-group">
+                                        <span class="subscription-play-filter-title">大小</span>
+                                        <label class="subscription-play-filter-chip">
+                                            <input type="checkbox" name="bet_filter_key" value="big_small:大">
+                                            <span>大</span>
+                                        </label>
+                                        <label class="subscription-play-filter-chip">
+                                            <input type="checkbox" name="bet_filter_key" value="big_small:小">
+                                            <span>小</span>
+                                        </label>
+                                    </div>
+                                    <div class="subscription-play-filter-group">
+                                        <span class="subscription-play-filter-title">单双</span>
+                                        <label class="subscription-play-filter-chip">
+                                            <input type="checkbox" name="bet_filter_key" value="odd_even:单">
+                                            <span>单</span>
+                                        </label>
+                                        <label class="subscription-play-filter-chip">
+                                            <input type="checkbox" name="bet_filter_key" value="odd_even:双">
+                                            <span>双</span>
+                                        </label>
+                                    </div>
+                                    <div class="subscription-play-filter-group">
+                                        <span class="subscription-play-filter-title">组合</span>
+                                        <label class="subscription-play-filter-chip">
+                                            <input type="checkbox" name="bet_filter_key" value="combo:大单">
+                                            <span>大单</span>
+                                        </label>
+                                        <label class="subscription-play-filter-chip">
+                                            <input type="checkbox" name="bet_filter_key" value="combo:大双">
+                                            <span>大双</span>
+                                        </label>
+                                        <label class="subscription-play-filter-chip">
+                                            <input type="checkbox" name="bet_filter_key" value="combo:小单">
+                                            <span>小单</span>
+                                        </label>
+                                        <label class="subscription-play-filter-chip">
+                                            <input type="checkbox" name="bet_filter_key" value="combo:小双">
+                                            <span>小双</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <label class="wide">
+                                    <span>策略名称</span>
+                                    <input class="text-input" name="subscription_name" type="text" maxlength="60" placeholder="例如：组合马尔可夫 过三关">
+                                    <small class="field-hint">给方案起个好认的名字；同一个来源可以建多个不同玩法的方案。</small>
+                                </label>
+                                <label class="wide subscription-strategy-mode-field">
+                                    <span>下单方式</span>
+                                    <select id="subscriptionStrategyModeSelect" class="text-input" name="strategy_mode">
+                                        <option value="fixed">均注：每期都用固定金额</option>
+                                        <option value="follow_source">跟随来源金额</option>
+                                        <option value="martingale">倍投：未中后按倍数加注</option>
+                                        <option value="win_streak_roll">过关滚仓：连赢几关收工，盈利滚进去</option>
+                                    </select>
+                                    <small id="subscriptionStrategyModeHint" class="field-hint">均注最简单，适合先跑通整条链路。</small>
+                                </label>
+                                <label class="subscription-roll-field">
+                                    <span>每轮过几关</span>
+                                    <input class="text-input" name="target_streak" type="number" min="1" step="1" value="3">
+                                    <small class="field-hint">连续净盈利够这个关数即完成本轮。结束后如何处理，由手动设置或启动它的自动规则决定。</small>
+                                </label>
+                                <label class="subscription-roll-field">
+                                    <span>每轮起始注</span>
+                                    <input class="text-input" name="base_amount" type="number" min="0.01" step="0.01" value="100">
+                                    <small class="field-hint">每轮从这里开始滚。注码按整数下，不足 1 的尾差留在仓里；自动规则继承该起始金额。</small>
+                                </label>
+                                <label class="subscription-roll-field">
+                                    <span>押哪种组合</span>
+                                    <select class="text-input" name="roll_structure">
+                                        <option value="A">单 + 小双（放弃大双）</option>
+                                        <option value="B">单 + 大双（放弃小双）</option>
+                                        <option value="C">双 + 小单（放弃大单）</option>
+                                        <option value="D">双 + 大单（放弃小单）</option>
+                                        <option value="follow_signal">跟随信号自动选</option>
+                                    </select>
+                                    <small class="field-hint">每期总注 = 当前余额，主注押单双占 70%，辅助注押组合占 30%。</small>
+                                </label>
+                                <label class="subscription-roll-field">
+                                    <span>赢了怎么滚</span>
+                                    <select class="text-input" name="roll_mode">
+                                        <option value="chain">链条滚：下一注 = 上一期返还（实盘同款）</option>
+                                        <option value="all_in">全仓滚：每期押上全部余额</option>
+                                    </select>
+                                    <small class="field-hint">链条滚使用上一期返还作为下一注；全仓滚使用当前余额。每轮达标或资金耗尽后，按对应的结束设置处理。</small>
+                                </label>
+                                <div class="wide subscription-roll-field manual-cycle-settings-copy">
+                                    <strong>手动过关结束设置</strong>
+                                    <p class="field-hint">以下设置只管理手动启动的轮次。自动规则的每日轮数与结束处理在自动规则中设置。</p>
+                                </div>
+                                <label class="subscription-roll-field">
+                                    <span>手动达标后</span>
+                                    <select class="text-input" name="roll_on_target">
+                                        <option value="close_day">当天收工（连赢够了就停一天）</option>
+                                        <option value="new_cycle">当天重开一轮（继续滚，受"一天最多几轮"限制）</option>
+                                        <option value="continue">不停，连赢次数清零继续滚</option>
+                                    </select>
+                                    <small class="field-hint">仅作用于手动过关。选择重开会接着下一可投注期开始，不重新等待自动触发条件。</small>
+                                </label>
+                                <label class="subscription-roll-field">
+                                    <span>手动本轮资金耗尽后</span>
+                                    <select class="text-input" name="roll_on_bust">
+                                        <option value="close_day">当天收工（本金亏光就停一天）</option>
+                                        <option value="new_cycle">补足起始注再开一轮</option>
+                                    </select>
+                                    <small class="field-hint">手动本轮无法继续滚仓时的处理方式。</small>
+                                </label>
+                                <label class="subscription-roll-field">
+                                    <span>手动一天最多几轮</span>
+                                    <input class="text-input" name="roll_max_cycles" type="number" min="1" step="1" value="1">
+                                    <small class="field-hint">选择重开时，包含手动第一轮；用满后手动当天收工。自动规则独立计次。</small>
+                                </label>
+                                <input type="hidden" name="roll_close_scope" value="rule">
+                                <label class="subscription-fixed-field">
+                                    <span>每期固定金额</span>
+                                    <input class="text-input" name="stake_amount" type="number" min="0.01" step="0.01" value="10">
+                                </label>
+                                <label class="wide subscription-follow-tip-field" hidden>
+                                    <span>跟随来源金额说明</span>
+                                    <small class="field-hint">系统会直接使用来源信号里的金额，适合你想完全照抄来源金额时使用。</small>
+                                </label>
+                                <label class="subscription-martingale-field" hidden>
+                                    <span>起始金额</span>
+                                    <input class="text-input" name="base_stake" type="number" min="0.01" step="0.01" value="10">
+                                    <small class="field-hint">第 1 手先下多少。</small>
+                                </label>
+                                <label class="subscription-martingale-field" hidden>
+                                    <span>每次乘几倍</span>
+                                    <input class="text-input" name="multiplier" type="number" min="1.01" step="0.01" value="2">
+                                    <small class="field-hint">未中后，下一手金额按这个倍数递增。</small>
+                                </label>
+                                <label class="subscription-martingale-field" hidden>
+                                    <span>最多追几手</span>
+                                    <input class="text-input" name="max_steps" type="number" min="2" step="1" value="3">
+                                    <small class="field-hint">到达这手后，再未中就按“更多设置”里的规则处理。</small>
+                                </label>
+                            </div>
+                            <div class="subscription-advanced">
+                                <button id="toggleSubscriptionAdvancedBtn" class="ghost-btn" type="button" aria-expanded="false">展开更多设置</button>
+                                <div id="subscriptionAdvancedFields" class="autobet-form-grid" hidden>
+                                    <label>
+                                        <span>信号过期时间（秒）</span>
+                                        <input class="text-input" name="expire_after_seconds" type="number" min="30" step="30" value="120">
+                                    </label>
+                                    <label class="wide subscription-settlement-mode-field">
+                                        <span>收益结算规则</span>
+                                        <select id="subscriptionSettlementRuleSourceSelect" class="text-input" name="settlement_rule_source">
+                                            <option value="follow_signal">跟随来源规则</option>
+                                            <option value="subscription_fixed">固定指定一套规则</option>
+                                        </select>
+                                        <small id="subscriptionSettlementRuleHint" class="field-hint">默认跟随来源信号里的结算规则。只有当你明确知道自己要统一按哪套口径记账时，才建议固定指定。</small>
+                                    </label>
+                                    <label class="subscription-settlement-fixed-field" hidden>
+                                        <span>固定结算规则</span>
+                                        <select class="text-input" name="settlement_rule_id">
+                                            <option value="pc28_netdisk_regular">OK游戏网盘</option>
+                                            <option value="pc28_netdisk_abc">OK游戏网盘 ABC</option>
+                                            <option value="pc28_high_regular">OK游戏高赔常规</option>
+                                            <option value="pc28_high_abc">OK游戏高赔 ABC</option>
+                                            <option value="pc28_fullpay_netdisk_regular">彩28网盘</option>
+                                            <option value="pc28_fullpay_2_0_regular">彩28满赔2.0</option>
+                                            <option value="pc28_fullpay_2_8_regular">彩28满赔2.8</option>
+                                            <option value="pc28_fullpay_3_2_regular">彩28满赔3.2</option>
+                                        </select>
+                                    </label>
+                                    <div class="subscription-settlement-fixed-field subscription-odds-fields wide" hidden>
+                                        <label>
+                                            <span>大小 / 单双赔率</span>
+                                            <input class="text-input" name="odds_big_small" type="number" min="1.0001" max="1000" step="0.0001">
+                                        </label>
+                                        <label>
+                                            <span>大双 / 小单赔率</span>
+                                            <input class="text-input" name="odds_combo_small_odd_big_even" type="number" min="1.0001" max="1000" step="0.0001">
+                                        </label>
+                                        <label>
+                                            <span>大单 / 小双赔率</span>
+                                            <input class="text-input" name="odds_combo_big_odd_small_even" type="number" min="1.0001" max="1000" step="0.0001">
+                                        </label>
+                                        <p id="subscriptionSettlementRefundHint" class="field-hint">固定规则后可微调这三项赔率；与预设相同则不会写入自定义覆盖。</p>
+                                        <button id="resetSubscriptionOddsBtn" class="ghost-btn" type="button">恢复预设赔率</button>
+                                    </div>
+                                    <label class="subscription-settlement-field">
+                                        <span>兜底净利倍数</span>
+                                        <input class="text-input" name="fallback_profit_ratio" type="number" min="0.01" step="0.01" value="1">
+                                        <small class="field-hint">当当前玩法没有明确赔率规则时，系统会按“本金 × 这个倍数”估算净利。这个字段只影响收益/风控口径，不影响发单文本。</small>
+                                    </label>
+                                    <label class="subscription-martingale-advanced-field" hidden>
+                                        <span>回本后怎么走</span>
+                                        <select class="text-input" name="refund_action">
+                                            <option value="hold">保持当前手数</option>
+                                            <option value="reset">回到第 1 手</option>
+                                        </select>
+                                        <small class="field-hint">例如第 3 手回本后，是继续留在第 3 手，还是回到第 1 手。</small>
+                                    </label>
+                                    <label class="subscription-martingale-advanced-field" hidden>
+                                        <span>追到最高一手还未中</span>
+                                        <select class="text-input" name="cap_action">
+                                            <option value="reset">回到第 1 手</option>
+                                            <option value="hold">停在最高一手</option>
+                                        </select>
+                                        <small class="field-hint">达到最多追手后，如果还未中，下一次按这里的规则处理。</small>
+                                    </label>
+                                    <label class="wide">
+                                        <span>自动停单</span>
+                                        <span class="checkbox-line">
+                                            <input id="subscriptionRiskControlEnabledCheckbox" name="risk_control_enabled" type="checkbox">
+                                            <span>达到止盈或止损后停止当前轮次</span>
+                                        </span>
+                                        <small class="field-hint">每次手工结算为“命中 / 回本 / 未中”后，系统会按累计净盈亏判断是否停止当前轮次；需要时可再手动开始新一轮。</small>
+                                    </label>
+                                    <label class="subscription-risk-field" hidden>
+                                        <span>累计净赚到多少停</span>
+                                        <input class="text-input" name="profit_target" type="number" min="0" step="0.01" placeholder="例如：50">
+                                    </label>
+                                    <label class="subscription-risk-field" hidden>
+                                        <span>累计净亏到多少停</span>
+                                        <input class="text-input" name="loss_limit" type="number" min="0" step="0.01" placeholder="例如：30">
+                                    </label>
+                                    <div class="wide subscription-risk-field subscription-risk-play-limits" hidden>
+                                        <div class="subscription-risk-play-limit-header">
+                                            <span>按玩法覆盖额度</span>
+                                            <small class="field-hint">留空则使用上面的通用额度；填写后该玩法按自己的止盈/止损额度判断。</small>
+                                        </div>
+                                        <label>
+                                            <span>大小</span>
+                                            <span class="subscription-risk-play-limit-inputs">
+                                                <input class="text-input" name="risk_big_small_profit_target" type="number" min="0" step="0.01" placeholder="止盈">
+                                                <input class="text-input" name="risk_big_small_loss_limit" type="number" min="0" step="0.01" placeholder="止损">
+                                            </span>
+                                        </label>
+                                        <label>
+                                            <span>单双</span>
+                                            <span class="subscription-risk-play-limit-inputs">
+                                                <input class="text-input" name="risk_odd_even_profit_target" type="number" min="0" step="0.01" placeholder="止盈">
+                                                <input class="text-input" name="risk_odd_even_loss_limit" type="number" min="0" step="0.01" placeholder="止损">
+                                            </span>
+                                        </label>
+                                        <label>
+                                            <span>组合</span>
+                                            <span class="subscription-risk-play-limit-inputs">
+                                                <input class="text-input" name="risk_combo_profit_target" type="number" min="0" step="0.01" placeholder="止盈">
+                                                <input class="text-input" name="risk_combo_loss_limit" type="number" min="0" step="0.01" placeholder="止损">
+                                            </span>
+                                        </label>
+                                    </div>
+                                    <div class="wide subscription-risk-field subscription-risk-hit-rate-gate" hidden>
+                                        <div class="subscription-risk-play-limit-header">
+                                            <span>当日命中率熔断（直派专用）</span>
+                                            <small class="field-hint">当日直派已结算满 N 单且命中率低于阈值时，当天暂停继续直派，次日自动恢复。组合建议 25%，大小/单双建议 50%。</small>
+                                        </div>
+                                        <label class="checkbox-line">
+                                            <input name="risk_hit_rate_gate_enabled" type="checkbox">
+                                            <span>启用当日命中率熔断</span>
+                                        </label>
+                                        <label>
+                                            <span>命中率阈值(%)</span>
+                                            <input class="text-input" name="risk_hit_rate_threshold" type="number" min="1" max="99" step="0.1" placeholder="25 或 50">
+                                        </label>
+                                        <label>
+                                            <span>最小结算单数</span>
+                                            <input class="text-input" name="risk_hit_rate_min_settled" type="number" min="1" step="1" placeholder="20">
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="form-actions">
+                                <button id="createSubscriptionBtn" class="primary-btn" type="submit">新建跟单策略</button>
+                                <button id="cancelSubscriptionEditBtn" class="ghost-btn" type="button" hidden>取消编辑</button>
+                            </div>
+                        </form>
+                        <div id="subscriptionList" class="config-list"></div>
+                    </section>
