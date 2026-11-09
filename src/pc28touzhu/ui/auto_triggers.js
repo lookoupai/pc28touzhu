@@ -21,6 +21,8 @@
         ["big_small", "大小"],
         ["odd_even", "单双"],
         ["combo", "组合"],
+        ["double_group", "双组"],
+        ["kill_group", "杀组"],
     ];
     const conditionTypeOptions = [
         ["hit_rate", "命中率"],
@@ -35,6 +37,8 @@
         big_small: ["大", "小"],
         odd_even: ["单", "双"],
         combo: ["大单", "大双", "小单", "小双"],
+        double_group: ["大单+大双", "大单+小单", "大单+小双", "大双+小单", "大双+小双", "小单+小双"],
+        kill_group: ["大单", "大双", "小单", "小双"],
     };
     const cycleActionLabels = {
         wait_condition: "等待下次条件满足",
@@ -318,10 +322,10 @@
         const actualCount = condition["actual_" + type];
         const actual = actualCount == null ? "" : ("（当前" + (condition.streak_complete === false ? "至少" : "") + String(actualCount) + "期）");
         if (drawConditionTypes.includes(type)) {
-            return String(condition.bet_value || "") + (type === "draw_absence" ? "连续不出" : "连续开出") + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "期" + actual;
+            return groupDirectionLabel(condition.metric, condition.bet_value || "") + (type === "draw_absence" ? "连续不出" : "连续开出") + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "期" + actual;
         }
         if (predictionStreakTypes.includes(type)) {
-            return (metric ? metric[1] : condition.metric) + "（" + (condition.prediction_value ? "预测" + condition.prediction_value : "不限方向") + "）" + (type === "hit_streak" ? "当前连中" : "当前连挂") + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "期" + actual;
+            return (metric ? metric[1] : condition.metric) + "（" + (condition.prediction_value ? "预测" + groupDirectionLabel(condition.metric, condition.prediction_value) : "不限方向") + "）" + (type === "hit_streak" ? "当前连中" : "当前连挂") + (operator ? operator[1] : condition.operator) + String(condition.threshold) + "期" + actual;
         }
         const windowSize = Number(condition.window_size || String(condition.window || "").replace("recent_", "") || 100);
         const sampleText = condition.min_sample_count ? "（样本>=" + String(condition.min_sample_count) + "）" : "";
@@ -646,8 +650,14 @@
     }
 
     function conditionValueOptions(type, metric) {
-        const values = (drawValuesByMetric[metric] || drawValuesByMetric.big_small).map(function (value) { return [value, value]; });
+        const values = (drawValuesByMetric[metric] || drawValuesByMetric.big_small).map(function (value) { return [value, groupDirectionLabel(metric, value)]; });
         return drawConditionTypes.includes(type) ? values : [["", "不限"]].concat(values);
+    }
+
+    function groupDirectionLabel(metric, value) {
+        if (metric === "kill_group") return "杀" + value + "（其余三组）";
+        if (metric === "double_group") return String(value).replace("+", "＋");
+        return value;
     }
 
     function conditionRowHtml(condition) {
@@ -843,7 +853,7 @@
                         '<button class="ghost-btn reset-route-odds-btn" type="button">恢复预设</button>' +
                     '</div>' +
                     '<label class="field"><span>投注</span><select class="text-input route-staking-mode">' + options([["inherit", "继承跟单方案"], ["override", "固定金额"]], stakingMode) + '</select></label>' +
-                    '<label class="field route-staking-field"><span>固定金额</span><input class="text-input route-fixed-amount" type="number" min="0.01" step="0.01" value="' + escapeHtml(stakingPolicy.fixed_amount || 10) + '"></label>' +
+                    '<label class="field route-staking-field"><span>固定金额（双组/杀组按每组合）</span><input class="text-input route-fixed-amount" type="number" min="0.01" step="0.01" value="' + escapeHtml(stakingPolicy.fixed_amount || 10) + '"></label>' +
                     '<label class="field"><span>玩法</span><select class="text-input route-play-filter-mode">' + options([["inherit", "继承规则动作"], ["keep", "保持跟单方案"], ["matched_metric", "命中玩法"], ["fixed_metric", "固定玩法"]], playFilterMode) + '</select></label>' +
                     '<label class="field route-fixed-metric-field"><span>固定玩法</span><select class="text-input route-fixed-metric">' + options(metricOptions, playFilter.fixed_metric || "big_small") + '</select></label>' +
                     '<label class="field"><span>模板</span><select class="text-input route-template-mode">' + options([["target_default", "群组默认"], ["override", "单独模板"]], templateMode) + '</select></label>' +

@@ -13,7 +13,8 @@ from uuid import uuid4
 
 from pc28touzhu.config import get_runtime_config
 from pc28touzhu.domain.pc28_play_filter import normalize_play_filter_keys, normalize_play_filter_mode
-from pc28touzhu.domain.settlement_rules import resolve_pc28_result_for_signal
+from pc28touzhu.domain.settlement_rules import resolve_pc28_group_settlement, resolve_pc28_result_for_signal
+from pc28touzhu.domain.pc28_group_play import GROUP_PLAY_TYPES
 from pc28touzhu.domain.subscription_strategy import (
     normalize_subscription_strategy_input,
     present_subscription_item,
@@ -1751,12 +1752,18 @@ def resolve_subscription_progression(repository: Any, *, subscription_id: Any, u
             "bet_type": str(leg_bet["bet_type"]),
             "bet_value": str(leg_bet["bet_value"]),
         }
-    resolved = resolve_pc28_result_for_signal(
-        signal=settle_signal,
-        settlement_rule_id=settlement_rule_id,
-        draw_context=draw_context,
-        rule=frozen_rule,
-    )
+    if snapshot.get("group") or settle_signal.get("bet_type") in GROUP_PLAY_TYPES:
+        resolved = resolve_pc28_group_settlement(
+            signal=settle_signal, stake_amount=current_event["stake_amount"],
+            settlement_rule_id=settlement_rule_id, draw_context=draw_context, snapshot=snapshot,
+        )
+    else:
+        resolved = resolve_pc28_result_for_signal(
+            signal=settle_signal,
+            settlement_rule_id=settlement_rule_id,
+            draw_context=draw_context,
+            rule=frozen_rule,
+        )
     settle_context = {
         "resolution_mode": "auto",
         "refund_reason": resolved.get("refund_reason"),
@@ -1765,6 +1772,8 @@ def resolve_subscription_progression(repository: Any, *, subscription_id: Any, u
         "actual_value": resolved.get("actual_value"),
         "draw_snapshot": resolved.get("draw_snapshot"),
     }
+    if "group_settlement" in resolved:
+        settle_context.update(prediction_hit=resolved["prediction_hit"], group_settlement=resolved["group_settlement"])
     if leg_bet.get("bet_type") and leg_bet.get("bet_value"):
         # 过关玩法要留住每条腿的押法：算钱、复盘、下一期对账都靠它
         settle_context["leg"] = dict(leg_bet)
@@ -1903,11 +1912,13 @@ def resolve_pending_pc28_progressions_from_draws(
             },
         )
         result_type = str(((resolved.get("resolved") or {}).get("result_type")) or "").strip().lower()
-        if result_type == "hit":
+        prediction_hit = (resolved.get("resolved") or {}).get("prediction_hit")
+        stat_result = ("hit" if prediction_hit else "miss") if isinstance(prediction_hit, bool) else result_type
+        if stat_result == "hit":
             hit_count += 1
-        elif result_type == "refund":
+        elif stat_result == "refund":
             refund_count += 1
-        elif result_type == "miss":
+        elif stat_result == "miss":
             miss_count += 1
         resolved_items.append(
             {
@@ -1916,6 +1927,7 @@ def resolve_pending_pc28_progressions_from_draws(
                 "issue_no": issue_no,
                 "result_type": result_type,
                 "refund_reason": (resolved.get("resolved") or {}).get("refund_reason"),
+                **({"prediction_hit": prediction_hit, "financial_result": result_type} if isinstance(prediction_hit, bool) else {}),
             }
         )
 
@@ -2558,15 +2570,23 @@ def list_execution_jobs(
         limit=max(1, min(int(limit or 100), 200)),
     )
     for item in items:
-        item["can_retry"] = item.get("status") in RETRYABLE_EXECUTION_JOB_STATUSES
+        item["can_retry"] = _execution_job_can_retry(item)
     return {"items": items}
+
+
+def _execution_job_can_retry(item: Dict[str, Any]) -> bool:
+    status = item.get("status") or item.get("job_status")
+    if (item.get("stake_plan") or {}).get("group_play") or item.get("bet_type") in GROUP_PLAY_TYPES:
+        expire_at = _parse_iso8601(item.get("expire_at"))
+        return bool(status == "failed" and item.get("progression_status") == "pending" and expire_at and expire_at > datetime.now(timezone.utc))
+    return status in RETRYABLE_EXECUTION_JOB_STATUSES
 
 
 def retry_execution_job(repository: Any, *, job_id: Any, user_id: Any) -> Dict[str, Any]:
     normalized_job_id = _to_positive_int(job_id, "job_id")
     normalized_user_id = _to_positive_int(user_id, "user_id")
     item = repository.retry_execution_job(job_id=normalized_job_id, user_id=normalized_user_id)
-    item["can_retry"] = item.get("status") in RETRYABLE_EXECUTION_JOB_STATUSES
+    item["can_retry"] = _execution_job_can_retry(item)
     return {"item": item}
 
 
@@ -2614,7 +2634,7 @@ def list_recent_execution_failures(
         limit=max(1, min(int(limit or 20), 100)),
     )
     for item in items:
-        item["can_retry"] = item.get("job_status") in RETRYABLE_EXECUTION_JOB_STATUSES
+        item["can_retry"] = _execution_job_can_retry(item)
         item.update(
             _auto_retry_policy(
                 job_status=item.get("job_status"),
@@ -2624,6 +2644,8 @@ def list_recent_execution_failures(
                 base_delay_seconds=auto_retry_base_delay_seconds,
             )
         )
+        if item.get("bet_type") in GROUP_PLAY_TYPES and not item["can_retry"]:
+            item.update(auto_retry_enabled=False, auto_retry_state="blocked", next_retry_at=None)
     return {"items": items}
 
 

@@ -1,0 +1,84 @@
+{
+  "waves": [
+    {
+      "id": "domain-money",
+      "title": "领域与资金闭环",
+      "writeSet": [
+        "domain",
+        "services/dispatch_service.py",
+        "services/platform_service.py",
+        "executor"
+      ],
+      "redTests": [
+        [
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_group_play",
+          "tests.test_group_dispatch",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_group_play",
+          "tests.test_group_dispatch",
+          "tests.test_settlement_rules",
+          "tests.test_profit_reporting",
+          "-q"
+        ]
+      ],
+      "contractRows": [
+        "CM1",
+        "CM2",
+        "CM3"
+      ],
+      "stopCondition": "资金、幂等或隔离测试失败即修复",
+      "status": "passed"
+    },
+    {
+      "id": "source-rules-ui",
+      "title": "来源、规则和页面",
+      "writeSet": [
+        "services",
+        "ui",
+        "AITradingSimulator"
+      ],
+      "redTests": [
+        [
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_group_source_contract",
+          "tests.test_group_triggers",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tests",
+          "-q"
+        ],
+        [
+          "node",
+          "tests/test_group_ui.cjs"
+        ]
+      ],
+      "contractRows": [
+        "CM1",
+        "CM4",
+        "CM5"
+      ],
+      "stopCondition": "旧玩法或跨项目契约失败即修复",
+      "status": "passed"
+    }
+  ]
+}

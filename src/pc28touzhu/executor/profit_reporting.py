@@ -10,6 +10,7 @@ import sqlite3
 
 
 BACKFILL_KEY = "profit_report_settlements_v1"
+GROUP_STATS_TRIGGER_KEY = "profit_report_group_stats_v1"
 REPORT_COLUMNS = (
     "user_id", "subscription_id", "source_id", "source_name", "origin_type",
     "rule_id", "rule_name", "stat_date", "profit_amount", "loss_amount",
@@ -36,9 +37,9 @@ def _settlement_projection(event: str, from_sql: str) -> str:
                MAX({event}.loss_delta, 0) AS loss_amount,
                {event}.net_delta AS net_profit,
                1 AS settled_event_count,
-               CASE WHEN {event}.resolved_result_type = 'hit' THEN 1 ELSE 0 END AS hit_count,
-               CASE WHEN {event}.resolved_result_type = 'miss' THEN 1 ELSE 0 END AS miss_count,
-               CASE WHEN {event}.resolved_result_type = 'refund' THEN 1 ELSE 0 END AS refund_count
+               CASE WHEN {event}.prediction_hit = 1 OR ({event}.prediction_hit IS NULL AND {event}.resolved_result_type = 'hit') THEN 1 ELSE 0 END AS hit_count,
+               CASE WHEN {event}.prediction_hit = 0 OR ({event}.prediction_hit IS NULL AND {event}.resolved_result_type = 'miss') THEN 1 ELSE 0 END AS miss_count,
+               CASE WHEN {event}.prediction_hit IS NULL AND {event}.resolved_result_type = 'refund' THEN 1 ELSE 0 END AS refund_count
         FROM {from_sql}
         LEFT JOIN normalized_signals signal ON signal.id = {event}.signal_id
         LEFT JOIN user_subscriptions subscription
@@ -127,6 +128,11 @@ def ensure_profit_reporting(conn: sqlite3.Connection) -> None:
             (BACKFILL_KEY, '{"version":1}'),
         )
 
+    # 只升级触发器定义，不重做历史汇总；旧单 prediction_hit 为 NULL，口径不变。
+    if not conn.execute("SELECT 1 FROM platform_runtime_settings WHERE setting_key = ?", (GROUP_STATS_TRIGGER_KEY,)).fetchone():
+        conn.execute("DROP TRIGGER IF EXISTS profit_report_settlement_insert")
+        conn.execute("DROP TRIGGER IF EXISTS profit_report_settlement_update")
+        conn.execute("INSERT INTO platform_runtime_settings(setting_key, value_json) VALUES (?, ?)", (GROUP_STATS_TRIGGER_KEY, '{"version":1}'))
     addition = _insert_report_sql(_settlement_projection("NEW", "(SELECT 1)"))
     old_key = """
         user_id = OLD.user_id AND subscription_id = OLD.subscription_id
@@ -147,7 +153,7 @@ def ensure_profit_reporting(conn: sqlite3.Connection) -> None:
     conn.execute(f"""
         CREATE TRIGGER IF NOT EXISTS profit_report_settlement_update
         AFTER UPDATE OF user_id, subscription_id, signal_id, status, settled_at,
-                        auto_trigger_rule_id, auto_trigger_route_id, resolved_result_type,
+                        auto_trigger_rule_id, auto_trigger_route_id, resolved_result_type, prediction_hit,
                         profit_delta, loss_delta, net_delta ON subscription_progression_events
         WHEN OLD.status = 'settled' OR NEW.status = 'settled'
         BEGIN
@@ -156,9 +162,9 @@ def ensure_profit_reporting(conn: sqlite3.Connection) -> None:
                 loss_amount = ROUND(loss_amount - MAX(OLD.loss_delta, 0), 2),
                 net_profit = ROUND(net_profit - OLD.net_delta, 2),
                 settled_event_count = settled_event_count - 1,
-                hit_count = hit_count - CASE WHEN OLD.resolved_result_type = 'hit' THEN 1 ELSE 0 END,
-                miss_count = miss_count - CASE WHEN OLD.resolved_result_type = 'miss' THEN 1 ELSE 0 END,
-                refund_count = refund_count - CASE WHEN OLD.resolved_result_type = 'refund' THEN 1 ELSE 0 END
+                hit_count = hit_count - CASE WHEN OLD.prediction_hit = 1 OR (OLD.prediction_hit IS NULL AND OLD.resolved_result_type = 'hit') THEN 1 ELSE 0 END,
+                miss_count = miss_count - CASE WHEN OLD.prediction_hit = 0 OR (OLD.prediction_hit IS NULL AND OLD.resolved_result_type = 'miss') THEN 1 ELSE 0 END,
+                refund_count = refund_count - CASE WHEN OLD.prediction_hit IS NULL AND OLD.resolved_result_type = 'refund' THEN 1 ELSE 0 END
             WHERE {old_key};
             {addition}
             DELETE FROM profit_report_daily_stats WHERE {old_key} AND settled_event_count = 0;

@@ -75,7 +75,8 @@ class ExternalSourceContractTests(unittest.TestCase):
         bet_pairs = {(entry["bet_type"], entry["bet_value"]) for entry in entries}
         self.assertEqual(
             bet_pairs,
-            {("big_small", "大"), ("odd_even", "单"), ("combo", "大单")},
+            {("big_small", "大"), ("odd_even", "单"), ("combo", "大单"),
+             ("double_group", "大单+小双"), ("kill_group", "小双")},
         )
         for entry in entries:
             self.assertEqual(entry["issue_no"], self.sample["items"][0]["issue_no"])

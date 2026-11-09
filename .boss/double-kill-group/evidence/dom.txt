@@ -1,0 +1,3 @@
+node tests/test_group_ui.cjs
+双组/杀组 DOM 与来源展示验证通过
+exit_code=0

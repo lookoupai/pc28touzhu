@@ -433,6 +433,8 @@
             odd_even: "单双",
             big_small: "大小",
             combo: "组合",
+            double_group: "双组",
+            kill_group: "杀组",
         };
         if (urlObject.pathname === "/api/export/consensus/pc28/best-pair-signals") {
             const ids = urlObject.searchParams.get("predictor_ids");

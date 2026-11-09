@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from pc28touzhu.domain.pc28_play_filter import normalize_play_filter_keys, normalize_play_filter_mode
+from pc28touzhu.domain.pc28_group_play import GROUP_PLAY_TYPES
 from pc28touzhu.domain.pc28_profit_rules import coerce_odds_overrides, drop_matching_catalog_odds, normalize_odds_overrides
 from pc28touzhu.domain.win_streak_roll import normalize_stop_policy, normalize_win_streak_roll_policy
 from pc28touzhu.domain.settlement_rules import (
@@ -18,7 +19,7 @@ from pc28touzhu.domain.settlement_rules import (
 
 ALLOWED_STAKING_POLICY_MODES = {"fixed", "follow_source", "martingale", "win_streak_roll"}
 ALLOWED_SETTLEMENT_RULE_SOURCES = {"follow_signal", "subscription_fixed"}
-ALLOWED_RISK_PLAY_KEYS = ("big_small", "odd_even", "combo")
+ALLOWED_RISK_PLAY_KEYS = ("big_small", "odd_even", "combo", *GROUP_PLAY_TYPES)
 DEFAULT_EXPIRE_AFTER_SECONDS = 120
 DEFAULT_FALLBACK_PROFIT_RATIO = 1.0
 # 命中率熔断：当日已结算（命中+未中，回本不计）满 N 单且命中率低于阈值时停止当日跟单。
@@ -341,13 +342,18 @@ def _normalize_dispatch_v2(payload: Any) -> Dict[str, Any]:
 def normalize_subscription_strategy_input(value: Any) -> Dict[str, Any]:
     payload = _to_object(value)
     if is_subscription_strategy_v2(payload):
-        return {
+        normalized = {
             "play_filter": _normalize_play_filter_v2(payload.get("play_filter")),
             "staking_policy": _normalize_staking_policy_v2(payload.get("staking_policy")),
             "settlement_policy": _normalize_settlement_policy_v2(payload.get("settlement_policy")),
             "risk_control": _normalize_risk_control_v2(payload.get("risk_control")),
             "dispatch": _normalize_dispatch_v2(payload.get("dispatch")),
         }
+        if normalized["staking_policy"]["mode"] == "win_streak_roll" and any(
+            key.partition(":")[0] in GROUP_PLAY_TYPES for key in normalized["play_filter"]["selected_keys"]
+        ):
+            raise ValueError("双组、杀组支持固定金额、来源金额或倍投，请勿与过关结构同时使用")
+        return normalized
     return _normalize_legacy_subscription_strategy(payload)
 
 

@@ -5,6 +5,10 @@ import copy
 import re
 from typing import Any, Dict, Optional
 
+from pc28touzhu.domain.pc28_group_play import (
+    group_selection_for_signal, group_stake_legs, normalize_group_selection,
+)
+
 from pc28touzhu.domain.pc28_profit_rules import (
     HOUSE_NUMBER_ODDS,
     HOUSE_REFERENCE_ODDS,
@@ -278,6 +282,7 @@ def build_settlement_snapshot(
     resolved_from: str,
     signal: Optional[Dict[str, Any]] = None,
     odds_overrides: Optional[Dict[str, Any]] = None,
+    stake_amount: Optional[float] = None,
 ) -> Dict[str, Any]:
     signal_payload = signal if isinstance(signal, dict) else {}
     normalized_rule_id = normalize_settlement_rule_id(settlement_rule_id, allow_empty=True)
@@ -287,7 +292,7 @@ def build_settlement_snapshot(
         implemented_odds = catalog_implemented_odds(rule.get("profit_rule_id"), rule.get("odds_profile"))
     normalized_overrides = drop_matching_catalog_odds(coerce_odds_overrides(odds_overrides), implemented_odds)
     resolved_odds = merge_implemented_odds(implemented_odds, normalized_overrides) if implemented_odds else {}
-    return {
+    snapshot = {
         "rule_source": str(rule_source or ""),
         "settlement_rule_id": normalized_rule_id,
         "fallback_profit_ratio": round(float(fallback_profit_ratio or 1.0), 4),
@@ -303,6 +308,15 @@ def build_settlement_snapshot(
             "bet_value": str(signal_payload.get("bet_value") or ""),
         },
     }
+    selection = group_selection_for_signal(signal_payload)
+    if selection:
+        if not rule:
+            raise ValueError("双组、杀组必须使用有效的 PC28 结算规则")
+        snapshot["group"] = dict(selection)
+        if stake_amount is not None:
+            snapshot["group"]["legs"] = group_stake_legs(selection, stake_amount)
+        snapshot["signal"].update(bet_type=selection["bet_type"], bet_value=selection["bet_value"])
+    return snapshot
 
 
 def _to_object(value: Any) -> Dict[str, Any]:
@@ -620,3 +634,75 @@ def resolve_pc28_settled_hit_profit(
     if not detail:
         return None
     return float(detail["profit"])
+
+
+def resolve_pc28_group_settlement(
+    *, signal: Dict[str, Any], stake_amount: float, settlement_rule_id: Any,
+    draw_context: Any, snapshot: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """逐注核算，覆盖命中与整组财务结果分开；冻结内容优先于可变来源。"""
+    frozen = snapshot if isinstance(snapshot, dict) else {}
+    group = frozen.get("group")
+    if isinstance(group, dict) and group:
+        selection = normalize_group_selection(group.get("bet_type"), group.get("bet_value"), group)
+    else:
+        selection = group_selection_for_signal(signal)
+    if not selection:
+        raise ValueError("当前信号不是双组或杀组")
+    legs = group_stake_legs(selection, stake_amount)
+    if isinstance(group, dict) and group.get("legs") is not None and group["legs"] != legs:
+        raise ValueError("整组下注金额与冻结子注不一致")
+    rule_id = frozen.get("settlement_rule_id") or settlement_rule_id
+    rule = frozen.get("rule") if isinstance(frozen.get("rule"), dict) else get_settlement_rule(rule_id)
+    if not rule:
+        raise ValueError("双组、杀组必须使用有效的 PC28 结算规则")
+    draw_payload = dict(_to_object(draw_context))
+    # 冻结开奖结果的特殊标记在 special_flags 内；重算时保留无三球场景的判定。
+    draw_payload = {**_to_object(draw_payload.get("special_flags")), **draw_payload}
+    details = []
+    refunds = []
+    draw = None
+    for leg in legs:
+        resolved = resolve_pc28_result_for_signal(
+            signal=leg, settlement_rule_id=rule_id, draw_context=draw_payload, rule=rule,
+        )
+        draw = resolved["draw_snapshot"]
+        result_type = resolved["result_type"]
+        profit = 0.0
+        loss = leg["stake_amount"] if result_type == "miss" else 0.0
+        odds = None
+        if result_type == "hit":
+            payout = resolve_pc28_settled_hit_detail(
+                stake_amount=leg["stake_amount"], signal=leg, settlement_rule_id=rule_id,
+                draw_snapshot=draw, snapshot=frozen,
+            )
+            if not payout:
+                raise ValueError("组合子注缺少可核算的赔率")
+            profit, odds = payout["profit"], payout["odds"]
+        if resolved.get("refund_reason") and resolved["refund_reason"] not in refunds:
+            refunds.append(resolved["refund_reason"])
+        details.append({
+            **leg, "result_type": result_type, "refund_reason": resolved.get("refund_reason"),
+            "odds": odds, "profit_delta": profit, "loss_delta": loss,
+            "net_delta": round(profit - loss, 2),
+            "payout_amount": round(leg["stake_amount"] + profit - loss, 2),
+        })
+    profit = round(sum(leg["profit_delta"] for leg in details), 2)
+    loss = round(sum(leg["loss_delta"] for leg in details), 2)
+    net = round(profit - loss, 2)
+    prediction_hit = draw["combo"] in selection["selected_combos"]
+    result_type = "hit" if net > 0 else "miss" if net < 0 else "refund"
+    return {
+        "lottery_type": "pc28", "metric": selection["bet_type"],
+        "predicted_value": selection["bet_value"], "actual_value": draw["combo"],
+        "prediction_hit": prediction_hit, "result_type": result_type,
+        "refund_reason": "；".join(refunds) or None, "settlement_rule_id": rule_id,
+        "draw_snapshot": draw,
+        "group_settlement": {
+            **selection, "stake_amount": round(float(stake_amount), 2),
+            "per_combo_amount": legs[0]["stake_amount"], "legs": details,
+            "profit_delta": profit, "loss_delta": loss, "net_delta": net,
+            "payout_amount": round(float(stake_amount) + net, 2),
+            "prediction_hit": prediction_hit, "financial_result": result_type,
+        },
+    }

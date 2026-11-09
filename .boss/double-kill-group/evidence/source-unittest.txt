@@ -1,0 +1,5 @@
+2026-11-09 16:37:03 - ai_trading_simulator.runtime - INFO - {"event": "external_source_loop_started", "process_id": 1191768, "scheduler_name": "external-source-collector", "time_beijing": "2026-11-10 00:37:03"}
+----------------------------------------------------------------------
+Ran 285 tests in 93.594s
+
+OK

@@ -34,7 +34,7 @@
                                     <span>跟单玩法</span>
                                     <select id="subscriptionBetFilterModeSelect" class="text-input" name="bet_filter_mode">
                                         <option value="selected">只跟选中的玩法（推荐）</option>
-                                        <option value="all">跟随来源这次导出的全部玩法</option>
+                                        <option value="all">原有全部玩法（双组、杀组需勾选）</option>
                                     </select>
                                     <small id="subscriptionBetFilterHint" class="field-hint">建议先用自选玩法，只勾你真正想下的内容。</small>
                                 </label>
@@ -49,6 +49,8 @@
                                             <button class="row-button" type="button" data-play-filter-preset="big_small">只玩大小</button>
                                             <button class="row-button" type="button" data-play-filter-preset="odd_even">只玩单双</button>
                                             <button class="row-button" type="button" data-play-filter-preset="combo">只玩组合</button>
+                                            <button class="row-button" type="button" data-play-filter-preset="double_group">只玩双组</button>
+                                            <button class="row-button" type="button" data-play-filter-preset="kill_group">只玩杀组</button>
                                             <button class="row-button" type="button" data-play-filter-preset="custom">自己勾选</button>
                                         </div>
                                         <p id="subscriptionBetFilterSelectionSummary" class="subscription-play-filter-summary">当前还没选玩法</p>
@@ -94,6 +96,23 @@
                                             <span>小双</span>
                                         </label>
                                     </div>
+                                    <div class="subscription-play-filter-group">
+                                        <span class="subscription-play-filter-title">双组 · 同时下注两个组合</span>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="double_group:大单+大双"><span>大单＋大双</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="double_group:大单+小单"><span>大单＋小单</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="double_group:大单+小双"><span>大单＋小双</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="double_group:大双+小单"><span>大双＋小单</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="double_group:大双+小双"><span>大双＋小双</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="double_group:小单+小双"><span>小单＋小双</span></label>
+                                    </div>
+                                    <div class="subscription-play-filter-group">
+                                        <span class="subscription-play-filter-title">杀组 · 排除一个，下注其余三个</span>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="kill_group:大单"><span>杀大单</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="kill_group:大双"><span>杀大双</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="kill_group:小单"><span>杀小单</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="kill_group:小双"><span>杀小双</span></label>
+                                    </div>
+                                    <small class="field-hint">当前来源按组合预测派生大单＋小双或大双＋小单；其他双组搭配需来源直接提供。杀组排除原预测的对角组合。</small>
                                 </div>
                                 <label class="wide">
                                     <span>策略名称</span>
@@ -166,8 +185,9 @@
                                     <small class="field-hint">选择重开时，包含手动第一轮；用满后手动当天收工。自动规则独立计次。</small>
                                 </label>
                                 <input type="hidden" name="roll_close_scope" value="rule">
+                                <p id="subscriptionGroupStakeHint" class="field-hint wide" aria-live="polite" hidden></p>
                                 <label class="subscription-fixed-field">
-                                    <span>每期固定金额</span>
+                                    <span id="subscriptionFixedAmountLabel">每期固定金额</span>
                                     <input class="text-input" name="stake_amount" type="number" min="0.01" step="0.01" value="10">
                                 </label>
                                 <label class="wide subscription-follow-tip-field" hidden>
@@ -175,14 +195,14 @@
                                     <small class="field-hint">系统会直接使用来源信号里的金额，适合你想完全照抄来源金额时使用。</small>
                                 </label>
                                 <label class="subscription-martingale-field" hidden>
-                                    <span>起始金额</span>
+                                    <span id="subscriptionBaseAmountLabel">起始金额</span>
                                     <input class="text-input" name="base_stake" type="number" min="0.01" step="0.01" value="10">
                                     <small class="field-hint">第 1 手先下多少。</small>
                                 </label>
                                 <label class="subscription-martingale-field" hidden>
                                     <span>每次乘几倍</span>
                                     <input class="text-input" name="multiplier" type="number" min="1.01" step="0.01" value="2">
-                                    <small class="field-hint">未中后，下一手金额按这个倍数递增。</small>
+                                    <small class="field-hint">亏损后，下一手金额按这个倍数递增；双组、杀组按整组盈亏推进。</small>
                                 </label>
                                 <label class="subscription-martingale-field" hidden>
                                     <span>最多追几手</span>
@@ -297,11 +317,25 @@
                                                 <input class="text-input" name="risk_combo_loss_limit" type="number" min="0" step="0.01" placeholder="止损">
                                             </span>
                                         </label>
+                                        <label>
+                                            <span>双组</span>
+                                            <span class="subscription-risk-play-limit-inputs">
+                                                <input class="text-input" name="risk_double_group_profit_target" type="number" min="0" step="0.01" placeholder="止盈" aria-label="双组止盈">
+                                                <input class="text-input" name="risk_double_group_loss_limit" type="number" min="0" step="0.01" placeholder="止损" aria-label="双组止损">
+                                            </span>
+                                        </label>
+                                        <label>
+                                            <span>杀组</span>
+                                            <span class="subscription-risk-play-limit-inputs">
+                                                <input class="text-input" name="risk_kill_group_profit_target" type="number" min="0" step="0.01" placeholder="止盈" aria-label="杀组止盈">
+                                                <input class="text-input" name="risk_kill_group_loss_limit" type="number" min="0" step="0.01" placeholder="止损" aria-label="杀组止损">
+                                            </span>
+                                        </label>
                                     </div>
                                     <div class="wide subscription-risk-field subscription-risk-hit-rate-gate" hidden>
                                         <div class="subscription-risk-play-limit-header">
                                             <span>当日命中率熔断（直派专用）</span>
-                                            <small class="field-hint">当日直派已结算满 N 单且命中率低于阈值时，当天暂停继续直派，次日自动恢复。组合建议 25%，大小/单双建议 50%。</small>
+                                            <small class="field-hint">当日直派已结算满 N 单且命中率低于阈值时，当天暂停继续直派，次日自动恢复。双组、杀组按整组预测覆盖计一次命中；金额按各组合结算后汇总，预测命中也可能亏损。</small>
                                         </div>
                                         <label class="checkbox-line">
                                             <input name="risk_hit_rate_gate_enabled" type="checkbox">

@@ -4,12 +4,15 @@ from __future__ import annotations
 from typing import Any
 
 from pc28touzhu.domain.settlement_rules import derive_pc28_draw_snapshot
+from pc28touzhu.domain.pc28_group_play import COMBO_VALUES, DOUBLE_GROUP_VALUES, GROUP_PLAY_TYPES, normalize_group_selection
 
 
 DRAW_VALUES_BY_METRIC = {
     "big_small": ("大", "小"),
     "odd_even": ("单", "双"),
     "combo": ("大单", "大双", "小单", "小双"),
+    "double_group": DOUBLE_GROUP_VALUES,
+    "kill_group": COMBO_VALUES,
 }
 MAX_DRAW_STREAK = 100
 
@@ -38,6 +41,7 @@ def build_draw_streak_snapshot(items: list[dict], *, latest_issue_no: str, sourc
             draws[issue] = result
     if not draws or max(draws) != latest or draws.get(latest) is None:
         raise ValueError("draw_history_not_current")
+    snapshots = {issue: derive_pc28_draw_snapshot({"result_number": number}) for issue, number in draws.items() if number is not None}
 
     metrics = {}
     absent_metrics = {}
@@ -45,13 +49,15 @@ def build_draw_streak_snapshot(items: list[dict], *, latest_issue_no: str, sourc
         metrics[metric] = {}
         absent_metrics[metric] = {}
         for value in values:
+            selected_combos = normalize_group_selection(metric, value)["selected_combos"] if metric in GROUP_PLAY_TYPES else None
             for absent, target in ((False, metrics), (True, absent_metrics)):
                 issues = []
                 issue = latest
                 complete = False
                 while draws.get(issue) is not None:
-                    snapshot = derive_pc28_draw_snapshot({"result_number": draws[issue]})
-                    if (snapshot[metric] == value) == absent:
+                    snapshot = snapshots[issue]
+                    matches = snapshot["combo"] in selected_combos if selected_combos is not None else snapshot[metric] == value
+                    if matches == absent:
                         complete = True
                         break
                     issues.append(str(issue))

@@ -217,7 +217,7 @@
                                     <p class="panel-kicker">开始条件</p>
                                     <h3>任一条件命中即进入判断，越靠上优先级越高</h3>
                                     <p class="meta-line">“当前连中／连挂”按来源预测对错统计：不限方向时可以大、小交替；指定方向时，方向改变或对错状态改变就中断。</p>
-                                    <p class="meta-line">“连续开出／连续不出”按实际开奖统计，必须指定结果。例如“大双连续不出 3 期”允许其他组合交替出现，开出大双即归零。触发后押什么由跟单方案决定。使用过关策略时，触发后玩法选“保持原玩法”，路由投注选“继承跟单方案”。</p>
+                                    <p class="meta-line">“连续开出／连续不出”按实际开奖统计，必须指定结果。例如“大双连续不出 3 期”允许其他组合交替出现，开出大双即归零。触发后押什么由跟单方案决定。双组“连续开出”指连续落在所选两个组合内，杀组指连续未开出排除项；“连续不出”取相反条件。使用过关策略时，触发后玩法选“保持原玩法”，路由投注选“继承跟单方案”。</p>
                                 </div>
                                 <button id="addConditionBtn" class="secondary-btn" type="button">添加条件</button>
                             </div>
@@ -251,6 +251,8 @@
                                     <option value="big_small">大小</option>
                                     <option value="odd_even">单双</option>
                                     <option value="combo">组合</option>
+                                    <option value="double_group">双组</option>
+                                    <option value="kill_group">杀组</option>
                                 </select>
                             </label>
                             <label class="check-row">

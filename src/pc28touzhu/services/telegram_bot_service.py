@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 from uuid import uuid4
 
 from pc28touzhu.domain.subscription_strategy import upgrade_subscription_strategy
+from pc28touzhu.domain.pc28_play_filter import PLAY_FILTER_KEYS_BY_METRIC, PLAY_FILTER_LABELS
 from pc28touzhu.services.platform_service import (
     restart_subscription_cycle,
     update_subscription,
@@ -35,34 +36,33 @@ SUBSCRIPTION_PLAY_FILTER_PRESETS = {
     "大小": {"mode": "selected", "selected_keys": ["big_small:大", "big_small:小"]},
     "单双": {"mode": "selected", "selected_keys": ["odd_even:单", "odd_even:双"]},
     "组合": {"mode": "selected", "selected_keys": ["combo:大单", "combo:大双", "combo:小单", "combo:小双"]},
+    "双组": {"mode": "selected", "selected_keys": list(PLAY_FILTER_KEYS_BY_METRIC["double_group"])},
+    "杀组": {"mode": "selected", "selected_keys": list(PLAY_FILTER_KEYS_BY_METRIC["kill_group"])},
     "全部": {"mode": "all", "selected_keys": []},
 }
 SUBSCRIPTION_PLAY_FILTER_ALIASES = {
     "big_small": "大小",
     "odd_even": "单双",
     "combo": "组合",
+    "double_group": "双组",
+    "kill_group": "杀组",
     "all": "全部",
     "大小": "大小",
     "单双": "单双",
     "组合": "组合",
+    "双组": "双组",
+    "杀组": "杀组",
     "全部": "全部",
 }
 SUBSCRIPTION_PLAY_FILTER_CALLBACKS = {
     "bs": "大小",
     "oe": "单双",
     "cb": "组合",
+    "dg": "双组",
+    "kg": "杀组",
     "all": "全部",
 }
-SUBSCRIPTION_PLAY_FILTER_LABELS = {
-    "big_small:大": "大",
-    "big_small:小": "小",
-    "odd_even:单": "单",
-    "odd_even:双": "双",
-    "combo:大单": "大单",
-    "combo:大双": "大双",
-    "combo:小单": "小单",
-    "combo:小双": "小双",
-}
+SUBSCRIPTION_PLAY_FILTER_LABELS = PLAY_FILTER_LABELS
 SUBSCRIPTIONS_PAGE_SIZE = 5
 
 
@@ -247,7 +247,8 @@ def _build_help_text() -> str:
             "/subs 查看跟单方案列表",
             "/enable <订阅ID> 启动跟单方案",
             "/disable <订阅ID> 暂停跟单方案",
-            "/play <订阅ID> <大小|单双|组合|全部> 切换玩法",
+            "/play <订阅ID> <大小|单双|组合|双组|杀组|全部> 切换玩法",
+            "全部保留大小、单双、组合；双组/杀组金额按每个组合计算。",
             "/restart <订阅ID> 开始新一轮",
             "/status 查询当前跟单状态、待结算金额",
             "/status <方案名> 查询指定方案当前状态",
@@ -439,7 +440,7 @@ def _resolve_user_subscription_by_id(repository: Any, *, user_id: int, subscript
 def _normalize_play_preset_arg(raw_value: Any) -> str:
     normalized = SUBSCRIPTION_PLAY_FILTER_ALIASES.get(str(raw_value or "").strip())
     if not normalized:
-        raise ValueError("玩法仅支持：大小、单双、组合、全部")
+        raise ValueError("玩法仅支持：大小、单双、组合、双组、杀组、全部（原有三类）")
     return normalized
 
 
@@ -632,6 +633,10 @@ def _build_subscription_detail_keyboard(item: Dict[str, Any], *, page: int) -> D
                 _inline_button("全部", "play:%s:all:%s" % (subscription_id, page)),
             ]
         )
+        rows.append([
+            _inline_button("双组", "play:%s:dg:%s" % (subscription_id, page)),
+            _inline_button("杀组", "play:%s:kg:%s" % (subscription_id, page)),
+        ])
     rows.append(
         [
             _inline_button("返回列表", "subs:%s" % page),
@@ -1080,7 +1085,7 @@ def handle_telegram_command(
 
     if command == "/play":
         if len(args) < 2:
-            return "命令格式：/play <订阅ID> <大小|单双|组合|全部>"
+            return "命令格式：/play <订阅ID> <大小|单双|组合|双组|杀组|全部>"
         item = _resolve_user_subscription_by_id(repository, user_id=int(user["id"]), subscription_id=args[0])
         if str(item.get("status") or "") == "archived":
             return "该方案当前已归档，请先到网页端恢复后再切换玩法。"

@@ -223,7 +223,7 @@
             return [
                 "<tr>",
                 "<td>" + escapeHtml(String(item.id)) + "</td>",
-                "<td><div class=\"cell-stack\"><strong>" + escapeHtml(item.issue_no || "--") + "</strong><span class=\"cell-muted\">" + escapeHtml((item.bet_type || "--") + " / " + (item.bet_value || "--")) + "</span></div></td>",
+                "<td><div class=\"cell-stack\"><strong>" + escapeHtml(item.issue_no || "--") + "</strong><span class=\"cell-muted\">" + escapeHtml((({double_group: "双组", kill_group: "杀组", combo: "组合", big_small: "大小", odd_even: "单双"})[item.bet_type] || item.bet_type || "--") + " / " + (item.bet_value || "--")) + "</span>" + groupJobDetails(item) + "</div></td>",
                 "<td><div class=\"cell-stack\"><span class=\"mono-text\">" + escapeHtml(item.target_key || "--") + "</span><span class=\"cell-muted\">" + escapeHtml(item.target_name || "--") + "</span></div></td>",
                 "<td><div class=\"cell-stack\"><span>" + escapeHtml(item.telegram_account_label || "--") + '</span><span class="cell-muted">ID ' + escapeHtml(item.telegram_account_id == null ? "--" : String(item.telegram_account_id)) + "</span></div></td>",
                 "<td>" + renderPill(item.status || "--", statusClass) + "</td>",
@@ -243,7 +243,8 @@
                 : '<span class="cell-muted">当前不可重试</span>';
             return [
                 '<article class="records-job-card">',
-                '<div class="records-job-head"><div class="cell-stack"><strong>#' + escapeHtml(String(item.id)) + " · " + escapeHtml(item.issue_no || "--") + '</strong><span class="cell-muted">' + escapeHtml((item.bet_type || "--") + " / " + (item.bet_value || "--")) + "</span></div>" + renderPill(item.status || "--", statusClass) + "</div>",
+                '<div class="records-job-head"><div class="cell-stack"><strong>#' + escapeHtml(String(item.id)) + " · " + escapeHtml(item.issue_no || "--") + '</strong><span class="cell-muted">' + escapeHtml((({double_group: "双组", kill_group: "杀组", combo: "组合", big_small: "大小", odd_even: "单双"})[item.bet_type] || item.bet_type || "--") + " / " + (item.bet_value || "--")) + "</span></div>" + renderPill(item.status || "--", statusClass) + "</div>",
+                groupJobDetails(item),
                 '<div class="records-job-grid">',
                 '<div class="records-job-item"><span class="records-job-label">投递群组</span><strong>' + escapeHtml(item.target_name || item.target_key || "--") + '</strong><span class="mono-text">' + escapeHtml(item.target_key || "--") + "</span></div>",
                 '<div class="records-job-item"><span class="records-job-label">托管账号</span><strong>' + escapeHtml(item.telegram_account_label || "--") + '</strong><span class="cell-muted">ID ' + escapeHtml(item.telegram_account_id == null ? "--" : String(item.telegram_account_id)) + "</span></div>",
@@ -255,6 +256,24 @@
                 "</article>",
             ].join("");
         }).join("");
+    }
+
+    function groupJobDetails(item) {
+        const plan = item.stake_plan || {};
+        const group = plan.group_play;
+        if (!group) return "";
+        const selection = group.bet_type === "kill_group" ? "杀" + group.bet_value : String(group.bet_value || "").replace("+", "＋");
+        const money = function (value) { return Number(value || 0).toFixed(2); };
+        let body = '<span class="cell-muted">' + escapeHtml(selection + " · 每组合 " + money(plan.per_combo_amount) + " · 合计 " + money(plan.amount)) + '</span>' +
+            '<span class="mono-text">' + escapeHtml(item.planned_message_text || "") + '</span>';
+        const settled = item.group_settlement;
+        if (settled && item.progression_status === "settled") {
+            body += '<span class="cell-muted">' + escapeHtml("预测" + (item.prediction_hit ? "命中" : "未中") + " · 整组净盈亏 " + money(item.net_delta)) + '</span>';
+            body += '<span class="cell-muted">' + escapeHtml((settled.legs || []).map(function (leg) {
+                return leg.bet_value + " " + ({hit: "中奖", miss: "未中", refund: "退本"})[leg.result_type] + " " + money(leg.net_delta);
+            }).join(" / ")) + '</span>';
+        }
+        return '<div class="cell-stack">' + body + '</div>';
     }
 
     function renderAlerts() {

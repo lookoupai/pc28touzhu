@@ -32,13 +32,18 @@ def condition(value="大双", metric="combo", threshold=2, operator="gte"):
 
 
 class DrawStreakTests(unittest.TestCase):
-    def test_all_eight_results_and_special_numbers_use_raw_draws(self):
+    def test_all_directions_and_special_numbers_use_raw_draws(self):
         examples = {"大": 14, "小": 13, "单": 27, "双": 0, "大单": 27, "大双": 14, "小单": 13, "小双": 0}
+        group_examples = {
+            "double_group": {"大单+大双": 27, "大单+小单": 13, "大单+小双": 0, "大双+小单": 14, "大双+小双": 0, "小单+小双": 13},
+            "kill_group": {"大单": 0, "大双": 27, "小单": 14, "小双": 13},
+        }
         for metric, values in DRAW_VALUES_BY_METRIC.items():
             for value in values:
-                with self.subTest(value=value):
+                with self.subTest(metric=metric, value=value):
                     c = _normalize_conditions([condition(value, metric)])[0]
-                    snapshot = build_draw_streak_snapshot(draws(examples[value], examples[value]), latest_issue_no=str(LATEST))
+                    number = group_examples.get(metric, examples)[value]
+                    snapshot = build_draw_streak_snapshot(draws(number, number), latest_issue_no=str(LATEST))
                     match = _match_condition(c, {"draw_streak": snapshot})
                     self.assertEqual(match["actual_draw_streak"], 2)
 

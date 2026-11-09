@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pc28touzhu.domain.draw_streak import DRAW_VALUES_BY_METRIC
+from pc28touzhu.domain.pc28_group_play import COMBO_VALUES, GROUP_PLAY_TYPES, derive_group_selections, normalize_group_selection
 
 
 PREDICTION_STREAK_TYPES = {"hit_streak", "miss_streak"}
@@ -34,12 +35,24 @@ def build_prediction_direction_streaks(items: list[dict], *, latest_issue_no: st
             continue
         key = (metric, int(item["issue_no"]))
         value = item.get("bet_value")
+        if metric in GROUP_PLAY_TYPES:
+            try:
+                value = normalize_group_selection(metric, value)["bet_value"]
+            except ValueError:
+                value = None
         if value not in DRAW_VALUES_BY_METRIC[metric]:
             value = None
         if key in predictions and predictions[key] != value:
             predictions[key] = None
         else:
             predictions[key] = value
+
+    # 升级前保存的 combo 历史仍可派生方向；显式组信号（含冲突标记）优先。
+    for (metric, issue), value in list(predictions.items()):
+        if metric != "combo" or value not in COMBO_VALUES:
+            continue
+        for group in derive_group_selections(value):
+            predictions.setdefault((group["bet_type"], issue), group["bet_value"])
 
     result = {}
     for metric, values in DRAW_VALUES_BY_METRIC.items():

@@ -3,6 +3,10 @@ from __future__ import annotations
 
 from typing import Iterable, Optional
 
+from pc28touzhu.domain.pc28_group_play import (
+    COMBO_VALUES, DOUBLE_GROUP_VALUES, GROUP_PLAY_TYPES, normalize_group_selection,
+)
+
 
 PLAY_FILTER_LABELS = {
     "big_small:大": "大",
@@ -13,6 +17,13 @@ PLAY_FILTER_LABELS = {
     "combo:大双": "大双",
     "combo:小单": "小单",
     "combo:小双": "小双",
+}
+
+PLAY_FILTER_LABELS.update({"double_group:" + value: value.replace("+", "＋") for value in DOUBLE_GROUP_VALUES})
+PLAY_FILTER_LABELS.update({"kill_group:" + value: "杀" + value for value in COMBO_VALUES})
+PLAY_FILTER_KEYS_BY_METRIC = {
+    metric: [key for key in PLAY_FILTER_LABELS if key.startswith(metric + ":")]
+    for metric in ("big_small", "odd_even", "combo", *GROUP_PLAY_TYPES)
 }
 
 ALLOWED_PLAY_FILTER_KEYS = tuple(PLAY_FILTER_LABELS.keys())
@@ -29,6 +40,12 @@ def normalize_play_filter_keys(values: Optional[Iterable[str]]) -> list[str]:
     normalized: list[str] = []
     for value in values or []:
         text = str(value or "").strip()
+        metric, separator, direction = text.partition(":")
+        if separator and metric in GROUP_PLAY_TYPES:
+            try:
+                text = metric + ":" + normalize_group_selection(metric, direction)["bet_value"]
+            except ValueError:
+                continue
         if text in PLAY_FILTER_LABELS and text not in normalized:
             normalized.append(text)
     return normalized
@@ -37,6 +54,11 @@ def normalize_play_filter_keys(values: Optional[Iterable[str]]) -> list[str]:
 def resolve_signal_play_filter_key(*, bet_type: str, bet_value: str) -> Optional[str]:
     normalized_type = str(bet_type or "").strip().lower()
     normalized_value = str(bet_value or "").strip()
+    if normalized_type in GROUP_PLAY_TYPES:
+        try:
+            return normalized_type + ":" + normalize_group_selection(normalized_type, normalized_value)["bet_value"]
+        except ValueError:
+            return None
     if normalized_type == "combo" and normalized_value in {"大单", "大双", "小单", "小双"}:
         return "combo:" + normalized_value
     if normalized_type == "big_small" and normalized_value in {"大", "小"}:
@@ -54,7 +76,8 @@ def strategy_matches_signal(strategy: Optional[dict], signal: Optional[dict]) ->
     mode = normalize_play_filter_mode(bet_filter.get("mode"))
     selected_keys = normalize_play_filter_keys(bet_filter.get("selected_keys"))
     if mode != "selected" or not selected_keys:
-        return True
+        # 历史 all/空筛选保持原有范围；新玩法必须明确勾选。
+        return str((signal or {}).get("bet_type") or "").strip().lower() not in GROUP_PLAY_TYPES
     signal_key = resolve_signal_play_filter_key(
         bet_type=str((signal or {}).get("bet_type") or ""),
         bet_value=str((signal or {}).get("bet_value") or ""),

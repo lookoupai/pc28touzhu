@@ -1,5 +1,7 @@
 # AITradingSimulator -> pc28touzhu 信号协议草案
 
+2026-11-09 扩展：增加显式启用的 `double_group`、`kill_group` 组级信号；完整字段、派生版本、每组合金额与兼容规则见 [双组与杀组](GROUP_PLAYS.md)。原默认导出及旧订阅的玩法范围保持兼容。
+
 ## 1. 目标
 
 本文档定义 `AITradingSimulator` 向 `pc28touzhu` 输出预测信号时的推荐协议。

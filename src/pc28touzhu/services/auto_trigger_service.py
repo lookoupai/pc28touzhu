@@ -27,6 +27,8 @@ from pc28touzhu.domain.pc28_profit_rules import drop_matching_catalog_odds, norm
 from pc28touzhu.domain.pc28_issue_window import evaluate_pc28_issue_dispatch_window
 from pc28touzhu.domain.auto_trigger_cycle import normalize_cycle_policy, is_roll_subscription
 from pc28touzhu.domain.draw_streak import DRAW_VALUES_BY_METRIC, MAX_DRAW_STREAK, build_draw_streak_snapshot
+from pc28touzhu.domain.pc28_play_filter import PLAY_FILTER_KEYS_BY_METRIC
+from pc28touzhu.domain.pc28_group_play import GROUP_PLAY_TYPES, normalize_group_selection
 from pc28touzhu.domain.prediction_streak import (
     PREDICTION_STREAK_TYPES, build_prediction_direction_streaks, prediction_streak_count,
 )
@@ -36,7 +38,7 @@ from pc28touzhu.services.dispatch_service import dispatch_signal
 from pc28touzhu.services.pc28_draw_service import fetch_pc28_recent_draws_deep, get_pc28_draw_clock
 
 
-ALLOWED_METRICS = {"big_small", "odd_even", "combo"}
+ALLOWED_METRICS = set(PLAY_FILTER_KEYS_BY_METRIC)
 DRAW_CONDITION_TYPES = {"draw_streak", "draw_absence"}
 ALLOWED_CONDITION_TYPES = {"hit_rate"} | PREDICTION_STREAK_TYPES | DRAW_CONDITION_TYPES
 ALLOWED_OPERATORS = {"lt", "lte", "gt", "gte"}
@@ -56,11 +58,8 @@ METRIC_LABELS = {
     "big_small": "大小",
     "odd_even": "单双",
     "combo": "组合",
-}
-PLAY_FILTER_KEYS_BY_METRIC = {
-    "big_small": ["big_small:大", "big_small:小"],
-    "odd_even": ["odd_even:单", "odd_even:双"],
-    "combo": ["combo:大单", "combo:大双", "combo:小单", "combo:小双"],
+    "double_group": "双组",
+    "kill_group": "杀组",
 }
 EVENT_RETENTION_DAYS = {
     "skipped": 7,
@@ -188,7 +187,7 @@ def _normalize_conditions(value: Any) -> list[dict]:
             raise ValueError("conditions[%s] 必须为对象" % index)
         metric = str(item.get("metric") or "").strip()
         if metric not in ALLOWED_METRICS:
-            raise ValueError("conditions[%s].metric 仅支持 big_small、odd_even、combo" % index)
+            raise ValueError("conditions[%s].metric 仅支持 big_small、odd_even、combo、double_group、kill_group" % index)
         condition_type = str(item.get("type") or "hit_rate").strip() or "hit_rate"
         if condition_type not in ALLOWED_CONDITION_TYPES:
             raise ValueError("conditions[%s].type 仅支持 hit_rate、hit_streak、miss_streak、draw_streak 或 draw_absence" % index)
@@ -203,9 +202,13 @@ def _normalize_conditions(value: Any) -> list[dict]:
         if condition_type in PREDICTION_STREAK_TYPES and (threshold < 0 or not threshold.is_integer()):
             raise ValueError("conditions[%s].threshold 必须为非负整数" % index)
         prediction_value = str(item.get("prediction_value") or "").strip()
+        if condition_type in PREDICTION_STREAK_TYPES and prediction_value and metric in GROUP_PLAY_TYPES:
+            prediction_value = normalize_group_selection(metric, prediction_value)["bet_value"]
         if condition_type in PREDICTION_STREAK_TYPES and prediction_value and prediction_value not in DRAW_VALUES_BY_METRIC[metric]:
             raise ValueError("conditions[%s].prediction_value 必须为空（不限）或所选玩法的预测方向" % index)
         draw_value = str(item.get("bet_value") or "").strip()
+        if condition_type in DRAW_CONDITION_TYPES and draw_value and metric in GROUP_PLAY_TYPES:
+            draw_value = normalize_group_selection(metric, draw_value)["bet_value"]
         if condition_type in DRAW_CONDITION_TYPES:
             if draw_value not in DRAW_VALUES_BY_METRIC[metric]:
                 raise ValueError("conditions[%s].bet_value 必须是所选玩法的开奖结果" % index)

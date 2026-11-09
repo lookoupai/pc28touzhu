@@ -6,7 +6,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 from pc28touzhu.domain.auto_trigger_cycle import auto_roll_policy
-from pc28touzhu.domain.pc28_play_filter import strategy_matches_signal
+from pc28touzhu.domain.pc28_play_filter import PLAY_FILTER_KEYS_BY_METRIC, strategy_matches_signal
+from pc28touzhu.domain.pc28_group_play import group_selection_for_signal, group_stake_legs
 from pc28touzhu.domain.pc28_issue_window import evaluate_pc28_issue_dispatch_window
 from pc28touzhu.domain.settlement_rules import build_settlement_snapshot
 from pc28touzhu.domain.win_streak_roll import (
@@ -24,13 +25,6 @@ from pc28touzhu.domain.subscription_strategy import (
 )
 
 
-PLAY_FILTER_KEYS_BY_METRIC = {
-    "big_small": ["big_small:大", "big_small:小"],
-    "odd_even": ["odd_even:单", "odd_even:双"],
-    "combo": ["combo:大单", "combo:大双", "combo:小单", "combo:小双"],
-}
-
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
 
@@ -41,6 +35,8 @@ def _shanghai_today() -> str:
 
 
 def _staking_policy_mode(strategy: Dict[str, Any], signal: Dict[str, Any]) -> str:
+    if (strategy.get("staking_policy") or {}).get("mode") == MODE_WIN_STREAK_ROLL and group_selection_for_signal(signal):
+        raise ValueError("双组、杀组不能使用过关结构下注")
     runtime = resolve_staking_runtime_policy(strategy, signal.get("normalized_payload"))
     return str(runtime.get("mode") or "follow_source")
 
@@ -95,6 +91,18 @@ def _render_format(template_text: str, context: Dict[str, Any]) -> str:
 
 
 def _message_text_from_template(signal: Dict[str, Any], amount: float, template: Dict[str, Any] | None) -> str:
+    group = group_selection_for_signal(signal)
+    if group:
+        # 来源建议文案对应原始单注；整组逐注用用户的 combo 模板重新生成。
+        payload = dict(signal.get("normalized_payload") or {})
+        payload.pop("message_text", None)
+        return " ".join(
+            _message_text_from_template(
+                {**signal, "bet_type": "combo", "bet_value": leg["bet_value"], "normalized_payload": payload},
+                leg["stake_amount"], template,
+            )
+            for leg in group_stake_legs(group, amount)
+        )
     if not template or str(template.get("status") or "active") != "active":
         return _default_message_text(signal, amount)
 
@@ -190,7 +198,21 @@ def _subscription_hit_rate_gate_blocked(
     )
 
 
-def _build_stake_plan(strategy: Dict[str, Any], signal: Dict[str, Any], current_step: int = 1) -> Dict[str, Any]:
+def _frozen_group_signal(signal: Dict[str, Any], event: Dict[str, Any] | None) -> Dict[str, Any]:
+    group = ((event or {}).get("settlement_snapshot") or {}).get("group")
+    if not isinstance(group, dict) or not group:
+        return signal
+    return {
+        **signal, "bet_type": group["bet_type"], "bet_value": group["bet_value"],
+        "normalized_payload": dict(group),
+    }
+
+
+def _build_stake_plan(
+    strategy: Dict[str, Any], signal: Dict[str, Any], current_step: int = 1,
+    progression_event: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    signal = _frozen_group_signal(signal, progression_event)
     payload = signal.get("normalized_payload") or {}
     runtime_policy = resolve_staking_runtime_policy(strategy, payload)
     raw_mode = str(runtime_policy.get("mode") or "follow_source")
@@ -219,6 +241,16 @@ def _build_stake_plan(strategy: Dict[str, Any], signal: Dict[str, Any], current_
         "staking_policy_mode": raw_mode,
     }
     stake_plan["meta"] = {key: value for key, value in meta.items() if value is not None}
+    group = group_selection_for_signal(signal)
+    if group:
+        total = round(amount * group["unit_count"], 2)
+        stake_plan["base_stake"] = round(base_stake * group["unit_count"], 2)
+        if progression_event:
+            total = float(progression_event["stake_amount"])
+            for key in ("base_stake", "multiplier", "max_steps", "refund_action", "cap_action"):
+                stake_plan[key] = progression_event[key]
+        legs = group_stake_legs(group, total)
+        stake_plan.update(amount=total, per_combo_amount=legs[0]["stake_amount"], legs=legs, group_play=group)
     return stake_plan
 
 
@@ -257,6 +289,8 @@ def _route_effective_strategy(
             target_metric = str((matched_conditions[0] or {}).get("metric") or "").strip()
 
     if target_metric in PLAY_FILTER_KEYS_BY_METRIC:
+        if target_metric in {"double_group", "kill_group"} and (strategy.get("staking_policy") or {}).get("mode") == MODE_WIN_STREAK_ROLL:
+            raise ValueError("过关方案不能切换为双组、杀组下注，请使用普通跟单方案")
         strategy["play_filter"] = {
             "mode": "selected",
             "selected_keys": list(PLAY_FILTER_KEYS_BY_METRIC[target_metric]),
@@ -536,7 +570,7 @@ def _dispatch_signal_for_auto_trigger_routes(
             _skip_route(route, "target_already_dispatched", signal_id=int(route_signal["id"]))
             continue
 
-        if _staking_policy_mode(strategy, route_signal.get("normalized_payload")) == MODE_WIN_STREAK_ROLL:
+        if _staking_policy_mode(strategy, route_signal) == MODE_WIN_STREAK_ROLL:
             # 过关滚仓玩法：同期派两腿（主注+辅助），注码由玩法周期状态决定。
             template = None
             template_id = _route_template_id(route)
@@ -606,6 +640,7 @@ def _dispatch_signal_for_auto_trigger_routes(
                     resolved_from=str(settlement_policy.get("resolved_from") or ""),
                     signal=route_signal,
                     odds_overrides=settlement_policy.get("odds_overrides"),
+                    stake_amount=float(stake_plan_preview["amount"]),
                 ),
                 auto_trigger_rule_id=(
                     int(auto_trigger_context["rule_id"]) if auto_trigger_context.get("rule_id") else None
@@ -620,7 +655,7 @@ def _dispatch_signal_for_auto_trigger_routes(
             )
 
         current_step = int((progression_event or {}).get("progression_step") or 1)
-        stake_plan = _build_stake_plan(strategy, route_signal, current_step=current_step)
+        stake_plan = _build_stake_plan(strategy, route_signal, current_step=current_step, progression_event=progression_event)
         stake_plan.setdefault("meta", {})
         stake_plan["meta"].update({
             "progression_event_id": int(progression_event["id"]),
@@ -634,7 +669,7 @@ def _dispatch_signal_for_auto_trigger_routes(
         template_id = _route_template_id(route)
         if template_id is not None and hasattr(repository, "get_message_template"):
             template = repository.get_message_template(template_id)
-        planned_message_text = _message_text_from_template(route_signal, float(stake_plan["amount"]), template)
+        planned_message_text = _message_text_from_template(_frozen_group_signal(route_signal, progression_event), float(stake_plan["amount"]), template)
         execute_after = base_execute_after
         expire_at = _job_expire_at(execute_after, strategy, stake_plan, issue_window)
         idempotency_key = "signal:%s:rule:%s:route:%s:target:%s" % (
@@ -660,6 +695,7 @@ def _dispatch_signal_for_auto_trigger_routes(
             stake_plan=stake_plan,
             execute_after=_iso_z(execute_after),
             expire_at=_iso_z(expire_at),
+            leg_key="group" if stake_plan.get("group_play") else "",
         )
         jobs.append(created["job"])
         if created["created"]:
@@ -1199,7 +1235,7 @@ def _dispatch_signal(
             # 直派订阅当日命中率熔断：路由单有自己的规则/路由风控，不走这条闸。
             skipped_count += 1
             continue
-        if _staking_policy_mode(strategy, signal.get("normalized_payload")) == MODE_WIN_STREAK_ROLL:
+        if _staking_policy_mode(strategy, signal) == MODE_WIN_STREAK_ROLL:
             # 过关滚仓玩法：同期派两腿（主注+辅助），注码由玩法周期状态决定。
             template = None
             if candidate.get("template_id") is not None and hasattr(repository, "get_message_template"):
@@ -1266,6 +1302,7 @@ def _dispatch_signal(
                         resolved_from=str(settlement_policy.get("resolved_from") or ""),
                         signal=signal,
                         odds_overrides=settlement_policy.get("odds_overrides"),
+                        stake_amount=float(stake_plan_preview["amount"]),
                     ),
                     auto_trigger_rule_id=(
                         int(resolved_auto_trigger_context["rule_id"])
@@ -1286,7 +1323,7 @@ def _dispatch_signal(
                 )
             progression_events[subscription_id] = progression_event
         current_step = int((progression_event or {}).get("progression_step") or 1)
-        stake_plan = _build_stake_plan(strategy, signal, current_step=current_step)
+        stake_plan = _build_stake_plan(strategy, signal, current_step=current_step, progression_event=progression_event)
         if progression_event:
             stake_plan.setdefault("meta", {})
             stake_plan["meta"].update({
@@ -1296,7 +1333,7 @@ def _dispatch_signal(
         template = None
         if candidate.get("template_id") is not None and hasattr(repository, "get_message_template"):
             template = repository.get_message_template(int(candidate["template_id"]))
-        planned_message_text = _message_text_from_template(signal, float(stake_plan["amount"]), template)
+        planned_message_text = _message_text_from_template(_frozen_group_signal(signal, progression_event), float(stake_plan["amount"]), template)
         execute_after = base_execute_after
         expire_at = _job_expire_at(execute_after, strategy, stake_plan, issue_window)
         idempotency_key = "signal:%s:target:%s" % (signal_id, candidate["delivery_target_id"])
@@ -1316,6 +1353,7 @@ def _dispatch_signal(
             stake_plan=stake_plan,
             execute_after=_iso_z(execute_after),
             expire_at=_iso_z(expire_at),
+            leg_key="group" if stake_plan.get("group_play") else "",
         )
         jobs.append(created["job"])
         if created["created"]:

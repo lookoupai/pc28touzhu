@@ -11,8 +11,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from pc28touzhu.domain.pc28_play_filter import resolve_signal_play_filter_key
+from pc28touzhu.domain.pc28_group_play import GROUP_PLAY_TYPES, normalize_group_selection
 from pc28touzhu.domain.pc28_profit_rules import coerce_odds_overrides
-from pc28touzhu.domain.settlement_rules import build_settlement_snapshot, resolve_pc28_settled_hit_detail
+from pc28touzhu.domain.settlement_rules import build_settlement_snapshot, resolve_pc28_group_settlement, resolve_pc28_settled_hit_detail
 from pc28touzhu.domain.subscription_strategy import (
     hit_rate_gate_stop_reason,
     present_subscription_item,
@@ -324,6 +325,28 @@ def _progression_hit_profit_delta(
     return _round_money(float(stake_amount or 0) * float(fallback_profit_ratio or 1.0))
 
 
+def _prediction_stat_result(result_type: str, result_context: Optional[dict]) -> str:
+    hit = (result_context or {}).get("prediction_hit")
+    return ("hit" if hit else "miss") if isinstance(hit, bool) else result_type
+
+
+def _progression_money_deltas(
+    *, result_type: str, settlement_context: dict, signal: Optional[dict],
+    stake_amount: float, result_context: Optional[dict],
+) -> tuple[float, float, float]:
+    # group_settlement 只能来自 _settle_progression_event 根据冻结下注重新核算的结果。
+    group = (result_context or {}).get("group_settlement")
+    if isinstance(group, dict):
+        return tuple(_round_money(group[key]) for key in ("profit_delta", "loss_delta", "net_delta"))
+    if result_type == "hit":
+        profit = _progression_hit_profit_delta(
+            settlement_context=settlement_context, signal=signal,
+            stake_amount=stake_amount, result_context=result_context,
+        )
+        return profit, 0.0, profit
+    return (0.0, stake_amount, -stake_amount) if result_type == "miss" else (0.0, 0.0, 0.0)
+
+
 class DatabaseRepository:
     """最小可运行 SQLite schema + 执行器接口仓储。"""
 
@@ -497,6 +520,7 @@ class DatabaseRepository:
             leg_key TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'pending',
             resolved_result_type TEXT NOT NULL DEFAULT '',
+            prediction_hit INTEGER,
             settlement_rule_id TEXT NOT NULL DEFAULT '',
             profit_delta REAL NOT NULL DEFAULT 0,
             loss_delta REAL NOT NULL DEFAULT 0,
@@ -953,6 +977,7 @@ class DatabaseRepository:
         "CREATE INDEX IF NOT EXISTS idx_normalized_signals_source_id_desc ON normalized_signals(source_id, id DESC)",
         "CREATE INDEX IF NOT EXISTS idx_normalized_signals_source_issue_numeric ON normalized_signals(source_id, lottery_type, CAST(issue_no AS INTEGER))",
         "CREATE INDEX IF NOT EXISTS idx_normalized_signals_source_status ON normalized_signals(source_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_normalized_signals_source_issue_metric ON normalized_signals(source_id, lottery_type, issue_no, bet_type)",
         "CREATE INDEX IF NOT EXISTS idx_normalized_signals_raw_item ON normalized_signals(source_raw_item_id, id)",
         "CREATE INDEX IF NOT EXISTS idx_source_raw_items_source_external ON source_raw_items(source_id, external_item_id)",
         "CREATE INDEX IF NOT EXISTS idx_source_raw_items_source_issue_published ON source_raw_items(source_id, issue_no, published_at)",
@@ -1893,6 +1918,7 @@ class DatabaseRepository:
         rows = conn.execute("PRAGMA table_info(subscription_progression_events)").fetchall()
         existing_columns = {str(row["name"]) for row in rows}
         column_definitions = {
+            "prediction_hit": "ALTER TABLE subscription_progression_events ADD COLUMN prediction_hit INTEGER",
             "settlement_rule_id": "ALTER TABLE subscription_progression_events ADD COLUMN settlement_rule_id TEXT NOT NULL DEFAULT ''",
             "profit_delta": "ALTER TABLE subscription_progression_events ADD COLUMN profit_delta REAL NOT NULL DEFAULT 0",
             "loss_delta": "ALTER TABLE subscription_progression_events ADD COLUMN loss_delta REAL NOT NULL DEFAULT 0",
@@ -1960,6 +1986,7 @@ class DatabaseRepository:
                     cap_action TEXT NOT NULL DEFAULT 'reset',
                     status TEXT NOT NULL DEFAULT 'pending',
                     resolved_result_type TEXT NOT NULL DEFAULT '',
+                    prediction_hit INTEGER,
                     settlement_rule_id TEXT NOT NULL DEFAULT '',
                     profit_delta REAL NOT NULL DEFAULT 0,
                     loss_delta REAL NOT NULL DEFAULT 0,
@@ -2251,6 +2278,7 @@ class DatabaseRepository:
                 "pending_event_id": int(row["pending_event_id"]) if row.get("pending_event_id") is not None else None,
                 "pending_issue_no": str(row.get("pending_issue_no") or ""),
                 "pending_status": str(row.get("pending_status") or ""),
+                "pending_group": _safe_json_loads(row.get("pending_snapshot_json")).get("group"),
             }
         if "financial_realized_profit" in row:
             data["financial"] = {
@@ -2376,6 +2404,7 @@ class DatabaseRepository:
             "cap_action": str(row.get("cap_action") or "reset"),
             "status": str(row.get("status") or "pending"),
             "resolved_result_type": str(row.get("resolved_result_type") or ""),
+            "prediction_hit": bool(row["prediction_hit"]) if row.get("prediction_hit") is not None else None,
             "settlement_rule_id": str(row.get("settlement_rule_id") or ""),
             "profit_delta": _round_money(row.get("profit_delta")),
             "loss_delta": _round_money(row.get("loss_delta")),
@@ -2643,6 +2672,11 @@ class DatabaseRepository:
             "send_with_job_id": int(row["send_with_job_id"]) if row.get("send_with_job_id") is not None else None,
             "planned_message_text": str(row.get("planned_message_text") or ""),
             "stake_plan": _safe_json_loads(row.get("stake_plan_json")),
+            "progression_status": str(row.get("progression_status") or ""),
+            "prediction_hit": bool(row["prediction_hit"]) if row.get("prediction_hit") is not None else None,
+            "financial_result": str(row.get("financial_result") or ""),
+            "net_delta": _round_money(row.get("net_delta")),
+            "group_settlement": _safe_json_loads(row.get("progression_result_context_json")).get("group_settlement"),
             "execute_after": row.get("execute_after"),
             "expire_at": row.get("expire_at"),
             "status": str(row["status"]),
@@ -2700,6 +2734,8 @@ class DatabaseRepository:
             "delivery_target_id": int(row["delivery_target_id"]),
             "telegram_account_id": int(row["telegram_account_id"]) if row["telegram_account_id"] is not None else None,
             "job_status": str(row["job_status"]),
+            "progression_status": str(row.get("progression_status") or ""),
+            "expire_at": row.get("expire_at"),
             "planned_message_text": str(row.get("planned_message_text") or ""),
             "lottery_type": str(row.get("lottery_type") or ""),
             "issue_no": str(row.get("issue_no") or ""),
@@ -3672,7 +3708,24 @@ class DatabaseRepository:
         published_at: Optional[str] = None,
         status: str = "ready",
     ) -> int:
+        if bet_type in GROUP_PLAY_TYPES:
+            if lottery_type != "pc28":
+                raise ValueError("双组、杀组仅支持 PC28")
+            group = normalize_group_selection(bet_type, bet_value, normalized_payload)
+            bet_value = group["bet_value"]
+            normalized_payload = {**(normalized_payload or {}), **group}
         with self._connect() as conn:
+            if bet_type in GROUP_PLAY_TYPES:
+                if not conn.in_transaction:
+                    conn.execute("BEGIN IMMEDIATE")
+                previous = conn.execute(
+                    "SELECT id, bet_value FROM normalized_signals WHERE source_id = ? AND lottery_type = ? AND issue_no = ? AND bet_type = ? ORDER BY id LIMIT 1",
+                    (int(source_id), lottery_type, issue_no, bet_type),
+                ).fetchone()
+                if previous:
+                    if previous["bet_value"] != bet_value:
+                        raise ValueError("同源同一期的组玩法方向已冻结，不能用冲突信号覆盖或追加下注")
+                    return int(previous["id"])
             cur = conn.execute(
                 """
                 INSERT INTO normalized_signals(
@@ -3814,7 +3867,7 @@ class DatabaseRepository:
             FROM normalized_signals
             WHERE source_id = ? AND lottery_type = 'pc28'
               AND CAST(issue_no AS INTEGER) BETWEEN ? AND ?
-              AND bet_type IN ('big_small', 'odd_even', 'combo')
+              AND bet_type IN ('big_small', 'odd_even', 'combo', 'double_group', 'kill_group')
             """,
             (int(source_id), max(0, latest - max(1, int(periods)) + 1), latest),
         )
@@ -4262,7 +4315,8 @@ class DatabaseRepository:
                 sfs.updated_at AS financial_updated_at,
                 pending.id AS pending_event_id,
                 pending.issue_no AS pending_issue_no,
-                pending.status AS pending_status
+                pending.status AS pending_status,
+                pending.settlement_snapshot_json AS pending_snapshot_json
             FROM user_subscriptions us
             LEFT JOIN subscription_progression_state sps ON sps.subscription_id = us.id
             LEFT JOIN subscription_financial_state sfs ON sfs.subscription_id = us.id
@@ -4304,7 +4358,8 @@ class DatabaseRepository:
                 sfs.updated_at AS financial_updated_at,
                 pending.id AS pending_event_id,
                 pending.issue_no AS pending_issue_no,
-                pending.status AS pending_status
+                pending.status AS pending_status,
+                pending.settlement_snapshot_json AS pending_snapshot_json
             FROM user_subscriptions us
             LEFT JOIN subscription_progression_state sps ON sps.subscription_id = us.id
             LEFT JOIN subscription_financial_state sfs ON sfs.subscription_id = us.id
@@ -4361,7 +4416,8 @@ class DatabaseRepository:
                 sfs.updated_at AS financial_updated_at,
                 pending.id AS pending_event_id,
                 pending.issue_no AS pending_issue_no,
-                pending.status AS pending_status
+                pending.status AS pending_status,
+                pending.settlement_snapshot_json AS pending_snapshot_json
             FROM user_subscriptions us
             JOIN signal_sources ss ON ss.id = us.source_id
             LEFT JOIN subscription_progression_state sps ON sps.subscription_id = us.id
@@ -6933,9 +6989,9 @@ class DatabaseRepository:
                 """
                 SELECT
                     COALESCE(COUNT(1), 0) AS settled_event_count,
-                    COALESCE(SUM(CASE WHEN resolved_result_type = 'hit' THEN 1 ELSE 0 END), 0) AS hit_count,
-                    COALESCE(SUM(CASE WHEN resolved_result_type = 'miss' THEN 1 ELSE 0 END), 0) AS miss_count,
-                    COALESCE(SUM(CASE WHEN resolved_result_type = 'refund' THEN 1 ELSE 0 END), 0) AS refund_count
+                    COALESCE(SUM(CASE WHEN prediction_hit = 1 OR (prediction_hit IS NULL AND resolved_result_type = 'hit') THEN 1 ELSE 0 END), 0) AS hit_count,
+                    COALESCE(SUM(CASE WHEN prediction_hit = 0 OR (prediction_hit IS NULL AND resolved_result_type = 'miss') THEN 1 ELSE 0 END), 0) AS miss_count,
+                    COALESCE(SUM(CASE WHEN prediction_hit IS NULL AND resolved_result_type = 'refund' THEN 1 ELSE 0 END), 0) AS refund_count
                 FROM subscription_progression_events
                 WHERE subscription_id = ? AND user_id = ? AND auto_trigger_route_id IS NULL AND status = 'settled' AND settled_at >= ?
                 """,
@@ -6966,9 +7022,9 @@ class DatabaseRepository:
                 """
                 SELECT
                     COALESCE(COUNT(1), 0) AS settled_event_count,
-                    COALESCE(SUM(CASE WHEN resolved_result_type = 'hit' THEN 1 ELSE 0 END), 0) AS hit_count,
-                    COALESCE(SUM(CASE WHEN resolved_result_type = 'miss' THEN 1 ELSE 0 END), 0) AS miss_count,
-                    COALESCE(SUM(CASE WHEN resolved_result_type = 'refund' THEN 1 ELSE 0 END), 0) AS refund_count
+                    COALESCE(SUM(CASE WHEN prediction_hit = 1 OR (prediction_hit IS NULL AND resolved_result_type = 'hit') THEN 1 ELSE 0 END), 0) AS hit_count,
+                    COALESCE(SUM(CASE WHEN prediction_hit = 0 OR (prediction_hit IS NULL AND resolved_result_type = 'miss') THEN 1 ELSE 0 END), 0) AS miss_count,
+                    COALESCE(SUM(CASE WHEN prediction_hit IS NULL AND resolved_result_type = 'refund' THEN 1 ELSE 0 END), 0) AS refund_count
                 FROM subscription_progression_events
                 WHERE subscription_id = ? AND user_id = ? AND auto_trigger_route_id IS NULL AND status = 'settled'
                 """,
@@ -8456,6 +8512,7 @@ class DatabaseRepository:
         result_context: Optional[dict] = None,
     ) -> Dict[str, Any]:
         route_id = int(current_event["auto_trigger_route_id"])
+        stat_result = _prediction_stat_result(normalized_result, result_context)
         now = _utc_now_iso()
         signal = self.get_signal(int(current_event["signal_id"])) if current_event.get("signal_id") is not None else None
         auto_trigger_daily_risk: Dict[str, Any] = {}
@@ -8538,11 +8595,12 @@ class DatabaseRepository:
                 UPDATE subscription_progression_events
                 SET status = 'settled',
                     resolved_result_type = ?,
+                    prediction_hit = ?,
                     settled_at = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
-                (normalized_result, now, now, int(current_event["id"])),
+                (normalized_result, result_context.get("prediction_hit"), now, now, int(current_event["id"])),
             )
             if owns_current_financial:
                 self.upsert_auto_trigger_route_progression_state(
@@ -8564,20 +8622,11 @@ class DatabaseRepository:
                 signal=signal,
                 strategy=strategy,
             )
-            profit_delta = 0.0
-            loss_delta = 0.0
-            net_delta = 0.0
-            if normalized_result == "hit":
-                profit_delta = _progression_hit_profit_delta(
-                    settlement_context=settlement_context,
-                    signal=_leg_aware_signal(signal, result_context, current_event.get("result_context")),
-                    stake_amount=stake_amount,
-                    result_context=result_context,
-                )
-                net_delta = profit_delta
-            elif normalized_result == "miss":
-                loss_delta = stake_amount
-                net_delta = -stake_amount
+            profit_delta, loss_delta, net_delta = _progression_money_deltas(
+                result_type=normalized_result, settlement_context=settlement_context,
+                signal=_leg_aware_signal(signal, result_context, current_event.get("result_context")),
+                stake_amount=stake_amount, result_context=result_context,
+            )
 
             settlement_snapshot = dict(settlement_context.get("snapshot") or {})
             result_context_payload = {
@@ -8623,7 +8672,7 @@ class DatabaseRepository:
                 profit_delta=profit_delta,
                 loss_delta=loss_delta,
                 net_delta=net_delta,
-                result_type=normalized_result,
+                result_type=stat_result,
                 updated_at=now,
             )
             rule_daily_risk = self._apply_auto_trigger_rule_daily_risk(
@@ -8643,7 +8692,7 @@ class DatabaseRepository:
                 profit_delta=profit_delta,
                 loss_delta=loss_delta,
                 net_delta=net_delta,
-                result_type=normalized_result,
+                result_type=stat_result,
                 updated_at=now,
             )
 
@@ -8793,9 +8842,9 @@ class DatabaseRepository:
                     next_realized_loss,
                     next_net_profit,
                     int(active_run.get("settled_event_count") or 0) + 1,
-                    int(active_run.get("hit_count") or 0) + (1 if normalized_result == "hit" else 0),
-                    int(active_run.get("miss_count") or 0) + (1 if normalized_result == "miss" else 0),
-                    int(active_run.get("refund_count") or 0) + (1 if normalized_result == "refund" else 0),
+                    int(active_run.get("hit_count") or 0) + (1 if stat_result == "hit" else 0),
+                    int(active_run.get("miss_count") or 0) + (1 if stat_result == "miss" else 0),
+                    int(active_run.get("refund_count") or 0) + (1 if stat_result == "refund" else 0),
                     current_route_financial.get("baseline_reset_at"),
                     str(current_route_financial.get("baseline_reset_note") or ""),
                     now,
@@ -8910,6 +8959,26 @@ class DatabaseRepository:
         if current_status not in {"pending", "placed"}:
             raise ValueError("当前没有待结算的倍投状态")
 
+        event_snapshot = current_event.get("settlement_snapshot") or {}
+        event_signal = self.get_signal(int(current_event["signal_id"])) or {}
+        result_context = dict(result_context or {})
+        if event_snapshot.get("group") or event_signal.get("bet_type") in GROUP_PLAY_TYPES:
+            draw = result_context.get("draw_snapshot")
+            if not isinstance(draw, dict) or not draw:
+                raise ValueError("双组、杀组请提供开奖结果结算，不能只指定命中或未中")
+            resolved_group = resolve_pc28_group_settlement(
+                signal=event_signal, stake_amount=current_event["stake_amount"],
+                settlement_rule_id=current_event.get("settlement_rule_id"),
+                draw_context=draw, snapshot=event_snapshot,
+            )
+            normalized_result = resolved_group["result_type"]
+            result_context.update(resolved_group)
+        else:
+            # 普通单注不接收外部伪造的组级盈亏或覆盖命中字段。
+            result_context.pop("group_settlement", None)
+            result_context.pop("prediction_hit", None)
+        stat_result = _prediction_stat_result(normalized_result, result_context)
+
         step = int(current_event["progression_step"] or 1)
         max_steps = max(1, int(current_event.get("max_steps") or 1))
         refund_action = str(current_event.get("refund_action") or "hold")
@@ -8954,11 +9023,12 @@ class DatabaseRepository:
                 UPDATE subscription_progression_events
                 SET status = 'settled',
                     resolved_result_type = ?,
+                    prediction_hit = ?,
                     settled_at = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
-                (normalized_result, now, now, int(current_event["id"])),
+                (normalized_result, result_context.get("prediction_hit"), now, now, int(current_event["id"])),
             )
             conn.execute(
                 """
@@ -9008,20 +9078,11 @@ class DatabaseRepository:
                 strategy=strategy,
             )
             risk_control = _subscription_risk_control(strategy, signal)
-            profit_delta = 0.0
-            loss_delta = 0.0
-            net_delta = 0.0
-            if normalized_result == "hit":
-                profit_delta = _progression_hit_profit_delta(
-                    settlement_context=settlement_context,
-                    signal=_leg_aware_signal(signal, result_context, current_event.get("result_context")),
-                    stake_amount=stake_amount,
-                    result_context=result_context,
-                )
-                net_delta = profit_delta
-            elif normalized_result == "miss":
-                loss_delta = stake_amount
-                net_delta = -stake_amount
+            profit_delta, loss_delta, net_delta = _progression_money_deltas(
+                result_type=normalized_result, settlement_context=settlement_context,
+                signal=_leg_aware_signal(signal, result_context, current_event.get("result_context")),
+                stake_amount=stake_amount, result_context=result_context,
+            )
             settlement_snapshot = dict(settlement_context.get("snapshot") or {})
             result_context_payload = {
                 "result_type": normalized_result,
@@ -9154,9 +9215,9 @@ class DatabaseRepository:
                     next_realized_loss,
                     next_net_profit,
                     int(active_run.get("settled_event_count") or 0) + 1,
-                    int(active_run.get("hit_count") or 0) + (1 if normalized_result == "hit" else 0),
-                    int(active_run.get("miss_count") or 0) + (1 if normalized_result == "miss" else 0),
-                    int(active_run.get("refund_count") or 0) + (1 if normalized_result == "refund" else 0),
+                    int(active_run.get("hit_count") or 0) + (1 if stat_result == "hit" else 0),
+                    int(active_run.get("miss_count") or 0) + (1 if stat_result == "miss" else 0),
+                    int(active_run.get("refund_count") or 0) + (1 if stat_result == "refund" else 0),
                     current_financial.get("baseline_reset_at"),
                     str(current_financial.get("baseline_reset_note") or ""),
                     now,
@@ -9182,7 +9243,7 @@ class DatabaseRepository:
                     profit_delta=profit_delta,
                     loss_delta=loss_delta,
                     net_delta=net_delta,
-                    result_type=normalized_result,
+                    result_type=stat_result,
                     updated_at=now,
                 )
 
@@ -9197,7 +9258,7 @@ class DatabaseRepository:
                     profit_delta=profit_delta,
                     loss_delta=loss_delta,
                     net_delta=net_delta,
-                    result_type=normalized_result,
+                    result_type=stat_result,
                     updated_at=now,
                 )
                 auto_trigger_daily_risk = self._apply_auto_trigger_rule_daily_risk(
@@ -9451,7 +9512,7 @@ class DatabaseRepository:
         now = _utc_now_iso()
         # 合并发送失败时保留待结算状态供窗口内重试；窗口结束才统一作废。
         due_condition = """status IN ('pending', 'failed') AND expire_at <= ?
-            AND (status = 'pending' OR send_with_job_id IS NOT NULL OR EXISTS (
+            AND (status = 'pending' OR leg_key = 'group' OR send_with_job_id IS NOT NULL OR EXISTS (
                 SELECT 1 FROM execution_jobs companion WHERE companion.send_with_job_id = execution_jobs.id))"""
         with self._connect() as conn:
             events = conn.execute(
@@ -9523,6 +9584,10 @@ class DatabaseRepository:
                LIMIT 1""",
             (int(progression_event_id), now),
         ).fetchone()
+        retryable_group = bool(_safe_json_loads(event["settlement_snapshot_json"]).get("group")) and conn.execute(
+            "SELECT 1 FROM execution_jobs WHERE progression_event_id = ? AND status = 'failed' AND expire_at > ? LIMIT 1",
+            (int(progression_event_id), now),
+        ).fetchone()
         if delivered:
             # 成功回执可能晚于自动过期；已发送流水仍需结算，人工取消的流水不在此恢复。
             if event["status"] == "pending" or (
@@ -9535,6 +9600,7 @@ class DatabaseRepository:
         elif (
             event["status"] == "pending"
             and not retryable_combined
+            and not retryable_group
             and int(aggregate["total_count"] or 0) > 0
             and int(aggregate["terminal_count"] or 0) == int(aggregate["total_count"])
         ):
@@ -9583,6 +9649,11 @@ class DatabaseRepository:
                 s.issue_no,
                 s.bet_type,
                 s.bet_value,
+                progression.status AS progression_status,
+                progression.prediction_hit AS prediction_hit,
+                progression.resolved_result_type AS financial_result,
+                progression.net_delta AS net_delta,
+                progression.result_context_json AS progression_result_context_json,
                 t.target_key,
                 t.target_name,
                 a.label AS telegram_account_label,
@@ -9595,6 +9666,7 @@ class DatabaseRepository:
                 last_attempt.executor_instance_id AS last_executor_instance_id
             FROM execution_jobs j
             JOIN normalized_signals s ON s.id = j.signal_id
+            LEFT JOIN subscription_progression_events progression ON progression.id = j.progression_event_id
             JOIN delivery_targets t ON t.id = j.delivery_target_id
             LEFT JOIN telegram_accounts a ON a.id = j.telegram_account_id
             LEFT JOIN (
@@ -9877,6 +9949,8 @@ class DatabaseRepository:
                 j.delivery_target_id,
                 j.telegram_account_id,
                 j.status AS job_status,
+                j.expire_at,
+                progression.status AS progression_status,
                 j.planned_message_text,
                 s.lottery_type,
                 s.issue_no,
@@ -9895,6 +9969,7 @@ class DatabaseRepository:
                 fail_attempt.raw_result
             FROM execution_jobs j
             JOIN normalized_signals s ON s.id = j.signal_id
+            LEFT JOIN subscription_progression_events progression ON progression.id = j.progression_event_id
             JOIN delivery_targets t ON t.id = j.delivery_target_id
             LEFT JOIN telegram_accounts a ON a.id = j.telegram_account_id
             JOIN (
@@ -9936,6 +10011,8 @@ class DatabaseRepository:
                 j.id AS job_id,
                 j.execute_after,
                 j.expire_at,
+                j.leg_key,
+                j.progression_event_id,
                 attempt_stats.attempt_count,
                 last_attempt.executed_at AS last_executed_at,
                 last_attempt.delivery_status AS last_delivery_status
@@ -9978,6 +10055,12 @@ class DatabaseRepository:
                 window_seconds = max(30, int((expire_at - execute_after).total_seconds() or 120))
                 next_execute_after = _format_iso8601(now_dt)
                 next_expire_at = _format_iso8601(now_dt + timedelta(seconds=window_seconds))
+                if row["leg_key"] == "group":
+                    event = conn.execute("SELECT status FROM subscription_progression_events WHERE id = ?", (row["progression_event_id"],)).fetchone()
+                    confirmed = conn.execute("SELECT 1 FROM execution_attempts WHERE job_id = ? AND delivery_status = 'delivered' LIMIT 1", (row["job_id"],)).fetchone()
+                    if now_dt >= expire_at or not event or event["status"] != "pending" or confirmed:
+                        continue
+                    next_expire_at = row["expire_at"]
                 if len(delivery_job_ids) > 1:
                     # 合并投注使用原封盘时间；不会通过重试延长下注窗口。
                     if now_dt >= expire_at or not self._combined_delivery_can_retry(conn, delivery_job_ids):
@@ -10572,6 +10655,13 @@ class DatabaseRepository:
 
         with self._connect() as conn:
             delivery_job_ids = self._delivery_job_ids(conn, int(job_id))
+            group_plan = _safe_json_loads(current.get("stake_plan_json")).get("group_play")
+            if group_plan:
+                event = conn.execute("SELECT status FROM subscription_progression_events WHERE id = ?", (current.get("progression_event_id"),)).fetchone()
+                confirmed = conn.execute("SELECT 1 FROM execution_attempts WHERE job_id = ? AND delivery_status = 'delivered' LIMIT 1", (int(job_id),)).fetchone()
+                if current_status != "failed" or now_dt >= expire_at or not event or event["status"] != "pending" or confirmed:
+                    raise ValueError("组合整组投注只能在原发送窗口内重试明确失败的任务")
+                next_expire_at = current["expire_at"]
             if len(delivery_job_ids) > 1:
                 if current_status != "failed" or now_dt >= expire_at or not self._combined_delivery_can_retry(conn, delivery_job_ids):
                     raise ValueError("合并投注只能在原发送窗口内重试明确失败的任务")
@@ -10612,8 +10702,10 @@ class DatabaseRepository:
             conn = unit._transaction_connection
             delivery_job_ids = self._delivery_job_ids(conn, int(normalized_job_id))
             for delivery_job_id in delivery_job_ids:
+                job_plan_row = conn.execute("SELECT stake_plan_json FROM execution_jobs WHERE id = ?", (delivery_job_id,)).fetchone()
+                group_delivery = bool(job_plan_row and _safe_json_loads(job_plan_row["stake_plan_json"]).get("group_play"))
                 # 共享发送已确认后，迟到的失败回执不能将其重新置为可重试。
-                if len(delivery_job_ids) > 1 and delivery_status != "delivered" and conn.execute(
+                if (len(delivery_job_ids) > 1 or group_delivery) and delivery_status != "delivered" and conn.execute(
                     "SELECT 1 FROM execution_attempts WHERE job_id = ? AND delivery_status = 'delivered' LIMIT 1",
                     (delivery_job_id,),
                 ).fetchone():

@@ -84,7 +84,11 @@
         big_small: ["big_small:大", "big_small:小"],
         odd_even: ["odd_even:单", "odd_even:双"],
         combo: ["combo:大单", "combo:大双", "combo:小单", "combo:小双"],
+        double_group: ["大单+大双", "大单+小单", "大单+小双", "大双+小单", "大双+小双", "小单+小双"].map(function (value) { return "double_group:" + value; }),
+        kill_group: ["大单", "大双", "小单", "小双"].map(function (value) { return "kill_group:" + value; }),
     };
+    SUBSCRIPTION_PLAY_FILTER_PRESETS.double_group.forEach(function (key) { SUBSCRIPTION_PLAY_FILTER_LABELS[key] = "双组 " + key.split(":")[1].replace("+", "＋"); });
+    SUBSCRIPTION_PLAY_FILTER_PRESETS.kill_group.forEach(function (key) { SUBSCRIPTION_PLAY_FILTER_LABELS[key] = "杀" + key.split(":")[1]; });
     const SUBSCRIPTION_RISK_PLAY_LIMIT_FIELDS = {
         big_small: {
             label: "大小",
@@ -101,6 +105,8 @@
             profit: "risk_combo_profit_target",
             loss: "risk_combo_loss_limit",
         },
+        double_group: {label: "双组", profit: "risk_double_group_profit_target", loss: "risk_double_group_loss_limit"},
+        kill_group: {label: "杀组", profit: "risk_kill_group_profit_target", loss: "risk_kill_group_loss_limit"},
     };
     const SUBSCRIPTION_SETTLEMENT_RULE_LABELS = {
         follow_signal: "跟随来源规则",
@@ -288,6 +294,8 @@
             odd_even: "单双",
             big_small: "大小",
             combo: "组合",
+            double_group: "双组",
+            kill_group: "杀组",
         };
         if (urlObject.pathname === "/api/export/consensus/pc28/best-pair-signals") {
             const ids = urlObject.searchParams.get("predictor_ids");
@@ -1250,6 +1258,17 @@
     }
 
     function templatePreviewResult(signal, amount, template) {
+        const combos = signalGroupCombos(signal);
+        if (combos.length) {
+            const payload = Object.assign({}, signal.normalized_payload || {});
+            delete payload.message_text;
+            return {
+                text: combos.map(function (value) {
+                    return templatePreviewResult(Object.assign({}, signal, {bet_type: "combo", bet_value: value, normalized_payload: payload}), amount, template).text;
+                }).join(" "),
+                meta: "每组合 " + amountText(amount) + "，共 " + combos.length + " 注，整组 " + amountText(amount * combos.length) + "；逐注使用组合模板。",
+            };
+        }
         const fallbackText = defaultMessageText(signal, amount);
         if (!template) {
             return {
@@ -1459,6 +1478,8 @@
         return {
             big_small: {betType: "big_small", betValue: "大", amount: "10", issueNo: "20260410001", payload: ""},
             combo: {betType: "combo", betValue: "大单", amount: "20", issueNo: "20260410001", payload: ""},
+            double_group: {betType: "double_group", betValue: "大单+小双", amount: "10", issueNo: "20260410001", payload: ""},
+            kill_group: {betType: "kill_group", betValue: "小双", amount: "10", issueNo: "20260410001", payload: ""},
             number_sum: {betType: "number_sum", betValue: "0", amount: "100", issueNo: "20260410001", payload: ""},
             abc: {betType: "abc", betValue: "大", amount: "10", issueNo: "20260410001", payload: '{"position":"A"}'},
             special: {betType: "special", betValue: "豹子", amount: "10", issueNo: "20260410001", payload: ""},
@@ -1750,8 +1771,6 @@
         }
         const mode = currentSubscriptionBetFilterMode();
         const isSelectedMode = mode === "selected";
-        const selectedSource = sourceById(subscriptionForm.elements.source_id.value);
-        const isAiTradingSimulatorSource = Boolean(selectedSource) && selectedSource.source_type === "ai_trading_simulator_export";
         const selectedKeys = selectedSubscriptionBetFilterKeys();
         if (subscriptionBetFilterFields instanceof HTMLElement) {
             subscriptionBetFilterFields.hidden = !isSelectedMode;
@@ -1787,10 +1806,8 @@
             button.classList.toggle("is-active", isActive);
         });
         if (subscriptionBetFilterHint instanceof HTMLElement) {
-            if (!isSelectedMode && isAiTradingSimulatorSource) {
-                subscriptionBetFilterHint.textContent = "这个来源通常会同时导出大小、单双、组合等多条信号。全部都跟风险很高，不建议普通用户这样用。";
-            } else if (!isSelectedMode) {
-                subscriptionBetFilterHint.textContent = "不过滤玩法，来源这次导出什么就会跟什么。";
+            if (!isSelectedMode) {
+                subscriptionBetFilterHint.textContent = "保留原有玩法范围。双组、杀组需要切换到自选并明确勾选。";
             } else if (selectedKeys.length) {
                 subscriptionBetFilterHint.textContent = "只会跟你勾选的玩法，其他信号会自动跳过。当前已选 " + selectedKeys.length + " 项。";
             } else {
@@ -1799,7 +1816,7 @@
         }
         if (subscriptionBetFilterSelectionSummary instanceof HTMLElement) {
             if (!isSelectedMode) {
-                subscriptionBetFilterSelectionSummary.textContent = "当前设置：不过滤玩法，来源这次导出什么就跟什么。";
+                subscriptionBetFilterSelectionSummary.textContent = "当前设置：原有全部玩法，不包含双组、杀组。";
             } else if (!selectedKeys.length) {
                 subscriptionBetFilterSelectionSummary.textContent = "当前还没选玩法。可以直接点上面的快捷按钮。";
             } else {
@@ -1808,6 +1825,47 @@
                 }).join(" / ");
             }
         }
+        syncGroupStakeHint();
+    }
+
+    function signalGroupCombos(signal) {
+        const all = ["大单", "大双", "小单", "小双"];
+        const metric = String(signal && signal.bet_type || "");
+        let value = String(signal && signal.bet_value || "");
+        if (metric === "kill_group") {
+            value = value.replace(/^杀/, "");
+            return all.includes(value) ? all.filter(function (combo) { return combo !== value; }) : [];
+        }
+        if (metric === "double_group") {
+            value = ({"单组": "大单+小双", "双组": "大双+小单"})[value] || value;
+            const values = value.split(/[+＋/、,，]/).map(function (part) { return part.trim(); });
+            return values.length === 2 && new Set(values).size === 2 && values.every(function (combo) { return all.includes(combo); })
+                ? all.filter(function (combo) { return values.includes(combo); }) : [];
+        }
+        return [];
+    }
+
+    function syncGroupStakeHint() {
+        if (!subscriptionForm) return;
+        const keys = currentSubscriptionBetFilterMode() === "selected" ? selectedSubscriptionBetFilterKeys() : [];
+        const double = keys.some(function (key) { return key.startsWith("double_group:"); });
+        const kill = keys.some(function (key) { return key.startsWith("kill_group:"); });
+        const hasGroup = double || kill;
+        const fixedLabel = document.getElementById("subscriptionFixedAmountLabel");
+        const baseLabel = document.getElementById("subscriptionBaseAmountLabel");
+        const hint = document.getElementById("subscriptionGroupStakeHint");
+        if (fixedLabel) fixedLabel.textContent = hasGroup ? "每组合固定金额" : "每期固定金额";
+        if (baseLabel) baseLabel.textContent = hasGroup ? "每组合起始金额" : "起始金额";
+        if (!hint) return;
+        hint.hidden = !hasGroup;
+        const mode = currentSubscriptionStrategyMode();
+        const amount = Number((mode === "martingale" ? subscriptionForm.elements.base_stake : subscriptionForm.elements.stake_amount).value || 0);
+        const totals = [];
+        if (double) totals.push("双组共 " + amountText(amount * 2));
+        if (kill) totals.push("杀组共 " + amountText(amount * 3));
+        hint.textContent = mode === "win_streak_roll" ? "双组、杀组请使用均注、来源金额或倍投，不能与过关结构同时使用。"
+            : mode === "follow_source" ? "来源金额按每个组合使用，双组总额为 2 倍，杀组总额为 3 倍。整组盈亏结算后再推进策略。"
+            : "每组合 " + amountText(amount) + "，" + totals.join("，") + (mode === "martingale" ? "（第 1 手）" : "（本期）") + "。预测命中不等于盈利，按整组实际盈亏推进策略。";
     }
 
     function currentSubscriptionStrategyMode() {
@@ -1934,6 +1992,7 @@
                 subscriptionStrategyModeHint.textContent = "倍投会按当前手数自动放大金额；更多设置里还能调整回本后和追顶后的处理方式。";
             }
         }
+        syncGroupStakeHint();
     }
 
     function settlementRulePreset(ruleId) {
@@ -2523,6 +2582,11 @@
         return mode;
     }
 
+    function hasGroupSelection(strategy) {
+        const filter = strategy && (strategy.play_filter || strategy.bet_filter) || {};
+        return filter.mode === "selected" && (filter.selected_keys || []).some(function (key) { return key.startsWith("double_group:") || key.startsWith("kill_group:"); });
+    }
+
     function summarizeBetFilter(strategy) {
         const payload = strategy && typeof strategy === "object" ? strategy : {};
         const betFilter = payload.bet_filter && typeof payload.bet_filter === "object" ? payload.bet_filter : {};
@@ -2531,7 +2595,7 @@
             ? betFilter.selected_keys.filter(function (key) { return Boolean(SUBSCRIPTION_PLAY_FILTER_LABELS[key]); })
             : [];
         if (mode !== "selected" || !selectedKeys.length) {
-            return "全部玩法";
+            return "原有全部玩法（不含双组、杀组）";
         }
         return selectedKeys.map(function (key) {
             return SUBSCRIPTION_PLAY_FILTER_LABELS[key];
@@ -2616,10 +2680,10 @@
             }
         }
         if (payload.base_stake != null && String(payload.base_stake).trim() !== "") {
-            parts.push("起始金额 " + payload.base_stake);
+            parts.push((hasGroupSelection(payload) ? "每组合起始 " : "起始金额 ") + payload.base_stake);
         }
         if (payload.stake_amount != null && String(payload.stake_amount).trim() !== "") {
-            parts.push("每期 " + payload.stake_amount);
+            parts.push((hasGroupSelection(payload) ? "每组合 " : "每期 ") + payload.stake_amount);
         } else if (modeLabel !== "倍投" && !(payload.win_streak_roll && typeof payload.win_streak_roll === "object")) {
             parts.push("金额 跟随来源");
         }
@@ -2675,7 +2739,7 @@
         }
         const parts = ["当前手数 " + String(progression.current_step || 1)];
         if (progression.last_result_type) {
-            parts.push("最近结果 " + progressionResultText(progression.last_result_type));
+            parts.push("最近资金结果 " + (hasGroupSelection(subscription.strategy_v2 || subscription.strategy) ? ({hit: "盈利", miss: "亏损", refund: "持平"})[progression.last_result_type] || progressionResultText(progression.last_result_type) : progressionResultText(progression.last_result_type)));
         }
         if (progression.pending_event_id) {
             parts.push("待结算 " + (progression.pending_issue_no || "--"));
@@ -2906,7 +2970,7 @@
             ? playFilter.selected_keys.filter(function (key) { return Boolean(SUBSCRIPTION_PLAY_FILTER_LABELS[key]); })
             : [];
         if (mode !== "selected" || !selectedKeys.length) {
-            return Object.keys(playFilter).length ? "全部玩法" : "未记录";
+            return Object.keys(playFilter).length ? "原有全部玩法（不含双组、杀组）" : "未记录";
         }
         return selectedKeys.map(function (key) {
             return SUBSCRIPTION_PLAY_FILTER_LABELS[key];
@@ -3366,11 +3430,16 @@
     function subscriptionPreviewForTarget(subscription, targetItem) {
         const template = templateById(targetItem && targetItem.template_id);
         const account = accountById(targetItem && targetItem.telegram_account_id);
-        const signal = sampleSignalForTemplate(template);
+        let signal = sampleSignalForTemplate(template);
+        const filter = (subscription.strategy_v2 || {}).play_filter || (subscription.strategy || {}).bet_filter || {};
+        const selected = filter.mode === "selected" && (filter.selected_keys || []).find(function (key) { return key.startsWith("double_group:") || key.startsWith("kill_group:"); });
+        if (selected) {
+            signal = Object.assign({}, signal, {bet_type: selected.split(":")[0], bet_value: selected.split(":")[1], normalized_payload: {}});
+        }
         const sampleAmount = subscriptionPreviewAmount(subscription, signal);
         return {
             signal: signal,
-            amount: sampleAmount,
+            amount: sampleAmount * (signalGroupCombos(signal).length || 1),
             currentStep: Math.max(1, Number(subscription && subscription.progression && subscription.progression.current_step || 1)),
             strategyMode: summarizeStrategyMode(subscription && subscription.strategy),
             account: account,
@@ -4346,7 +4415,7 @@
                     '</div>',
                 ].join("")
                 : "";
-            const progressionActions = progression && progression.pending_event_id && String(progression.pending_status || "") === "placed"
+            const progressionActions = progression && !progression.pending_group && progression.pending_event_id && String(progression.pending_status || "") === "placed"
                 ? [
                     '<button class="ghost-btn settle-progression-btn" type="button" data-subscription-id="' + item.id + '" data-progression-event-id="' + progression.pending_event_id + '" data-result-type="hit">命中</button>',
                     '<button class="ghost-btn settle-progression-btn" type="button" data-subscription-id="' + item.id + '" data-progression-event-id="' + progression.pending_event_id + '" data-result-type="refund">回本</button>',
@@ -5715,6 +5784,9 @@
                 throw new Error("自选玩法模式下，请至少勾选一个玩法");
             }
             const strategyMode = currentSubscriptionStrategyMode();
+            if (strategyMode === "win_streak_roll" && selectedBetFilterKeys.some(function (key) { return key.startsWith("double_group:") || key.startsWith("kill_group:"); })) {
+                throw new Error("双组、杀组请使用均注、来源金额或倍投，不能与过关结构同时使用");
+            }
             const subscriptionName = String(form.subscription_name.value || "").trim();
             const stakeAmount = strategyMode === "fixed" ? Number(form.stake_amount.value || 0) : null;
             const baseStake = strategyMode === "martingale" ? Number(form.base_stake.value || 0) : null;
@@ -6167,7 +6239,9 @@
                     const nextItem = subscriptionById(subscriptionId) || refreshed;
                     const resolved = payload && payload.resolved && typeof payload.resolved === "object" ? payload.resolved : {};
                     const refundReason = String(resolved.refund_reason || "").trim();
-                    const resultLabel = progressionResultText(resolved.result_type);
+                    const resultLabel = typeof resolved.prediction_hit === "boolean"
+                        ? "预测" + (resolved.prediction_hit ? "命中" : "未中") + "，整组" + ({hit: "盈利", miss: "亏损", refund: "持平"})[resolved.result_type]
+                        : progressionResultText(resolved.result_type);
                     const prefix = refundReason
                         ? ("自动结算完成，结果为" + resultLabel + "（" + refundReason + "），")
                         : ("自动结算完成，结果为" + resultLabel + "，");
@@ -6353,6 +6427,13 @@
             applySubscriptionPlayFilterPreset(button.getAttribute("data-play-filter-preset"));
         });
     });
+
+    if (subscriptionForm) {
+        ["stake_amount", "base_stake"].forEach(function (name) {
+            const input = subscriptionForm.elements[name];
+            if (input) input.addEventListener("input", syncGroupStakeHint);
+        });
+    }
 
     if (subscriptionRiskControlEnabledCheckbox instanceof HTMLInputElement) {
         subscriptionRiskControlEnabledCheckbox.addEventListener("change", function () {
