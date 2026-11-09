@@ -81,6 +81,7 @@
         "combo:小双": "小双",
     };
     const SUBSCRIPTION_PLAY_FILTER_PRESETS = {
+        number: Array.from({length:28}, (_, i) => "number:" + i),
         big_small: ["big_small:大", "big_small:小"],
         odd_even: ["odd_even:单", "odd_even:双"],
         combo: ["combo:大单", "combo:大双", "combo:小单", "combo:小双"],
@@ -89,6 +90,7 @@
     };
     SUBSCRIPTION_PLAY_FILTER_PRESETS.double_group.forEach(function (key) { SUBSCRIPTION_PLAY_FILTER_LABELS[key] = "双组 " + key.split(":")[1].replace("+", "＋"); });
     SUBSCRIPTION_PLAY_FILTER_PRESETS.kill_group.forEach(function (key) { SUBSCRIPTION_PLAY_FILTER_LABELS[key] = "杀" + key.split(":")[1]; });
+    SUBSCRIPTION_PLAY_FILTER_PRESETS.number.forEach(key => { SUBSCRIPTION_PLAY_FILTER_LABELS[key] = "号码 " + key.split(":")[1]; });
     const SUBSCRIPTION_RISK_PLAY_LIMIT_FIELDS = {
         big_small: {
             label: "大小",
@@ -1859,6 +1861,7 @@
         if (!hint) return;
         hint.hidden = !hasGroup;
         const mode = currentSubscriptionStrategyMode();
+        if (mode === "win_streak_roll" && subscriptionForm.elements.roll_structure.value === "single_play") { hint.hidden = true; return; }
         const amount = Number((mode === "martingale" ? subscriptionForm.elements.base_stake : subscriptionForm.elements.stake_amount).value || 0);
         const totals = [];
         if (double) totals.push("双组共 " + amountText(amount * 2));
@@ -1873,6 +1876,27 @@
             return "fixed";
         }
         return normalizeSubscriptionStrategyMode(subscriptionStrategyModeSelect.value);
+    }
+
+    function syncGenericRollPlayUI() {
+        if (!subscriptionForm || !subscriptionForm.elements.roll_play_type) return;
+        const form = subscriptionForm.elements;
+        const active = currentSubscriptionStrategyMode() === "win_streak_roll" && form.roll_structure.value === "single_play";
+        const values = {big_small: ["大", "小"], odd_even: ["单", "双"], combo: ["大单", "大双", "小单", "小双"],
+            kill_group: ["大单", "大双", "小单", "小双"], number: Array.from({length: 28}, (_, i) => String(i)),
+            double_group: ["大单+大双", "大单+小单", "大单+小双", "大双+小单", "大双+小双", "小单+小双"]};
+        const previous = form.roll_fixed_value.value;
+        form.roll_fixed_value.innerHTML = (values[form.roll_play_type.value] || []).map(value =>
+            '<option value="' + escapeHtml(value) + '">' + escapeHtml((form.roll_play_type.value === 'kill_group' ? '杀' : '') + value) + '</option>').join('');
+        if ((values[form.roll_play_type.value] || []).includes(previous)) form.roll_fixed_value.value = previous;
+        const showValue = active && form.roll_selection_mode.value !== "follow";
+        subscriptionForm.querySelectorAll('.subscription-roll-play-field').forEach(el => { el.hidden = !active; });
+        subscriptionForm.querySelectorAll('.subscription-roll-value-field').forEach(el => { el.hidden = !showValue; });
+        form.roll_play_type.disabled = !active;
+        form.roll_selection_mode.disabled = !active;
+        form.roll_fixed_value.disabled = !showValue;
+        subscriptionForm.querySelectorAll('.subscription-play-filter-mode-field').forEach(el => { el.hidden = active; });
+        if (subscriptionBetFilterFields) subscriptionBetFilterFields.hidden = active || currentSubscriptionBetFilterMode() !== "selected";
     }
 
     function syncSubscriptionPresetUI() {
@@ -1993,6 +2017,7 @@
             }
         }
         syncGroupStakeHint();
+        syncGenericRollPlayUI();
     }
 
     function settlementRulePreset(ruleId) {
@@ -2589,6 +2614,11 @@
 
     function summarizeBetFilter(strategy) {
         const payload = strategy && typeof strategy === "object" ? strategy : {};
+        if (payload.win_streak_roll?.structure === 'single_play') {
+            const roll = payload.win_streak_roll;
+            return ({big_small:'大小',odd_even:'单双',combo:'组合',number:'号码',double_group:'双组',kill_group:'杀组'}[roll.play_type] || roll.play_type) +
+                (roll.selection_mode === 'fixed' ? ' · 固定买 ' + roll.fixed_value : roll.selection_mode === 'filter' ? ' · 只跟 ' + roll.fixed_value : ' · 跟随预测');
+        }
         const betFilter = payload.bet_filter && typeof payload.bet_filter === "object" ? payload.bet_filter : {};
         const mode = normalizeSubscriptionBetFilterMode(betFilter.mode);
         const selectedKeys = Array.isArray(betFilter.selected_keys)
@@ -2660,7 +2690,10 @@
                 parts.push("每轮起始注 " + roll.base_amount);
             }
             const structureLabels = { A: "单+小双", B: "单+大双", C: "双+小单", D: "双+大单", follow_signal: "跟随信号" };
-            if (roll.structure) {
+            if (roll.structure === "single_play") {
+                const labels = {big_small: '大小', odd_even: '单双', combo: '组合', number: '号码', double_group: '双组', kill_group: '杀组'};
+                parts.push((labels[roll.play_type] || roll.play_type) + ' · ' + ({follow: '跟随预测', fixed: '固定买', filter: '只跟'}[roll.selection_mode || 'follow']) + (roll.fixed_value == null ? '' : ' ' + roll.fixed_value));
+            } else if (roll.structure) {
                 parts.push("组合 " + (structureLabels[roll.structure] || roll.structure));
             }
             if (roll.roll_mode) {
@@ -5780,11 +5813,12 @@
 
             const betFilterMode = currentSubscriptionBetFilterMode();
             const selectedBetFilterKeys = selectedSubscriptionBetFilterKeys();
-            if (betFilterMode === "selected" && !selectedBetFilterKeys.length) {
+            const genericRoll = currentSubscriptionStrategyMode() === "win_streak_roll" && form.roll_structure.value === "single_play";
+            if (!genericRoll && betFilterMode === "selected" && !selectedBetFilterKeys.length) {
                 throw new Error("自选玩法模式下，请至少勾选一个玩法");
             }
             const strategyMode = currentSubscriptionStrategyMode();
-            if (strategyMode === "win_streak_roll" && selectedBetFilterKeys.some(function (key) { return key.startsWith("double_group:") || key.startsWith("kill_group:"); })) {
+            if (strategyMode === "win_streak_roll" && !genericRoll && selectedBetFilterKeys.some(function (key) { return key.startsWith("double_group:") || key.startsWith("kill_group:"); })) {
                 throw new Error("双组、杀组请使用均注、来源金额或倍投，不能与过关结构同时使用");
             }
             const subscriptionName = String(form.subscription_name.value || "").trim();
@@ -5851,7 +5885,7 @@
                 if (!Number.isFinite(baseAmount) || baseAmount <= 0) {
                     throw new Error("过关滚仓模式下，请填写大于 0 的每轮起始注");
                 }
-                if (!["A", "B", "C", "D", "follow_signal"].includes(rollStructure)) {
+                if (!["A", "B", "C", "D", "follow_signal", "single_play"].includes(rollStructure)) {
                     throw new Error("过关滚仓模式下，请选择押哪种组合");
                 }
                 if (!["chain", "all_in"].includes(rollMode)) {
@@ -5901,8 +5935,8 @@
             const strategyPayload = {
                 name: subscriptionName,
                 play_filter: {
-                    mode: betFilterMode,
-                    selected_keys: selectedBetFilterKeys,
+                    mode: genericRoll ? "all" : betFilterMode,
+                    selected_keys: genericRoll ? [] : selectedBetFilterKeys,
                 },
                 staking_policy: {
                     mode: strategyMode,
@@ -5918,6 +5952,7 @@
                         aux_share: 0.30,
                         target_streak: targetStreak,
                         structure: rollStructure,
+                        ...(genericRoll ? {play_type: form.roll_play_type.value, selection_mode: form.roll_selection_mode.value, fixed_value: form.roll_selection_mode.value === "follow" ? null : form.roll_fixed_value.value} : {}),
                         roll_mode: rollMode,
                         reset_scope: "daily",
                         stop_policy: {
@@ -6094,6 +6129,12 @@
                 subscriptionForm.elements.roll_structure.value = rollSettings && rollSettings.structure
                     ? String(rollSettings.structure)
                     : "A";
+                if (subscriptionForm.elements.roll_play_type) {
+                    subscriptionForm.elements.roll_play_type.value = rollSettings?.play_type || 'big_small';
+                    subscriptionForm.elements.roll_selection_mode.value = rollSettings?.selection_mode || 'follow';
+                    syncGenericRollPlayUI();
+                    if (rollSettings?.fixed_value != null) subscriptionForm.elements.roll_fixed_value.value = String(rollSettings.fixed_value);
+                }
                 subscriptionForm.elements.roll_mode.value = rollSettings && rollSettings.roll_mode
                     ? String(rollSettings.roll_mode)
                     : "chain";
@@ -6361,6 +6402,10 @@
         refreshSourceSelects();
         setFormEditingState(subscriptionForm, document.getElementById("createSubscriptionBtn"), cancelSubscriptionEditBtn, false, "新建跟单策略");
         resetSubscriptionStrategyFormState();
+    });
+
+    ['roll_structure', 'roll_play_type', 'roll_selection_mode'].forEach(function (name) {
+        if (subscriptionForm?.elements[name]) subscriptionForm.elements[name].addEventListener('change', syncGenericRollPlayUI);
     });
 
     if (subscriptionStrategyModeSelect instanceof HTMLSelectElement) {

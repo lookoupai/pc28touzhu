@@ -379,6 +379,8 @@ def _has_abc_zero_or_nine(triplet: Optional[tuple[int, int, int]]) -> bool:
 def _resolve_metric_from_signal(signal: Dict[str, Any]) -> Optional[str]:
     bet_type = str(signal.get("bet_type") or "").strip().lower()
     bet_value = str(signal.get("bet_value") or "").strip()
+    if bet_type == 'number' and bet_value.isdigit() and 0 <= int(bet_value) <= 27:
+        return 'number'
     if bet_type == "combo" and bet_value in {"大单", "大双", "小单", "小双"}:
         return "combo"
     if bet_type == "odd_even" and bet_value in {"单", "双"}:
@@ -441,6 +443,7 @@ def derive_pc28_draw_snapshot(draw_context: Any, *, straight_wraparound: bool = 
     return {
         "sum_value": int(sum_value) if sum_value is not None else None,
         "result_number": int(sum_value) if sum_value is not None else None,
+        "number": int(sum_value) if sum_value is not None else None,
         "triplet": list(triplet) if triplet else None,
         "big_small": big_small or None,
         "odd_even": odd_even or None,

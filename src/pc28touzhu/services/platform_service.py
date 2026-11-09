@@ -2576,7 +2576,7 @@ def list_execution_jobs(
 
 def _execution_job_can_retry(item: Dict[str, Any]) -> bool:
     status = item.get("status") or item.get("job_status")
-    if (item.get("stake_plan") or {}).get("group_play") or item.get("bet_type") in GROUP_PLAY_TYPES:
+    if (item.get("stake_plan") or {}).get("group_play") or item.get("bet_type") in GROUP_PLAY_TYPES or (item.get('stake_plan') or {}).get('mode') == 'win_streak_roll':
         expire_at = _parse_iso8601(item.get("expire_at"))
         return bool(status == "failed" and item.get("progression_status") == "pending" and expire_at and expire_at > datetime.now(timezone.utc))
     return status in RETRYABLE_EXECUTION_JOB_STATUSES

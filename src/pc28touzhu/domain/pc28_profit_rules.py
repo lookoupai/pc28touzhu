@@ -300,6 +300,8 @@ def merge_implemented_odds(implemented_odds: Any, overrides: Any) -> Dict[str, A
         "combo": dict(implemented.get("combo") or {}) if isinstance(implemented.get("combo"), dict) else {},
     }
     overlay = coerce_odds_overrides(overrides)
+    if 'number' in implemented:
+        merged['number'] = dict(implemented['number'])
     if "big_small" in overlay:
         merged["big_small"] = overlay["big_small"]
         if "odd_even" not in overlay:
@@ -316,6 +318,8 @@ def merge_implemented_odds(implemented_odds: Any, overrides: Any) -> Dict[str, A
 def _resolve_metric_from_bet(bet_type: str, bet_value: str) -> Optional[str]:
     normalized_type = str(bet_type or "").strip().lower()
     normalized_value = str(bet_value or "").strip()
+    if normalized_type == 'number' and normalized_value.isdigit() and 0 <= int(normalized_value) <= 27:
+        return 'number'
     if normalized_type == "combo" and normalized_value in {"大单", "大双", "小单", "小双"}:
         return "combo"
     if normalized_type == "odd_even" and normalized_value in {"单", "双"}:
@@ -357,6 +361,16 @@ def catalog_odds_for_bet(
     metric = _resolve_metric_from_bet(bet_type, bet_value)
     if metric is None:
         return None
+    if metric == 'number':
+        rule = normalize_profit_rule_id(profit_rule_id)
+        if str(profit_rule_id or '').startswith('pc28_fullpay_'):
+            return float(HOUSE_NUMBER_ODDS[int(bet_value)])
+        if str(odds_profile or 'regular') == 'abc':
+            return 9.9 if rule == 'pc28_high' else 9.8
+        values = ([1000,300,141,72,55,42,28,22,18,15,14,13,12,12,12,12,13,14,15,18,22,28,42,55,72,141,300,1000]
+                  if rule == 'pc28_high' else
+                  [888,280,138,58,48,32,25,20,17,15,14,13,12,12,12,12,13,14,15,17,20,25,32,48,58,138,280,888])
+        return float(values[int(bet_value)])
     metric_profile = _metric_profile(str(profit_rule_id or ""), metric, str(odds_profile or ""))
     if metric == "combo":
         combo_group = _resolve_combo_group(str(bet_value or "").strip())
@@ -373,6 +387,7 @@ def catalog_odds_for_bet(
 def catalog_implemented_odds(profit_rule_id: Optional[str], odds_profile: Optional[str] = None) -> Dict[str, Any]:
     profile_key = normalize_odds_profile(odds_profile)
     return {
+        'number': {str(i): catalog_odds_for_bet(bet_type='number', bet_value=str(i), profit_rule_id=profit_rule_id, odds_profile=profile_key) for i in range(28)},
         "big_small": float(
             catalog_odds_for_bet(
                 bet_type="big_small",
@@ -434,6 +449,10 @@ def catalog_implemented_odds(profit_rule_id: Optional[str], odds_profile: Option
 
 def _lookup_odds_map(odds_map: Any, *, metric: str, bet_value: str) -> Optional[float]:
     payload = odds_map if isinstance(odds_map, dict) else {}
+    if metric == 'number':
+        values = payload.get('number') or {}
+        raw = values.get(str(int(bet_value)), values.get(int(bet_value)))
+        return float(raw) if raw is not None else None
     if metric == "combo":
         combo = payload.get("combo") if isinstance(payload.get("combo"), dict) else {}
         raw = combo.get(bet_value)

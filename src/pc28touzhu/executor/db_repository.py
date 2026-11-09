@@ -10012,6 +10012,7 @@ class DatabaseRepository:
                 j.execute_after,
                 j.expire_at,
                 j.leg_key,
+                j.stake_plan_json,
                 j.progression_event_id,
                 attempt_stats.attempt_count,
                 last_attempt.executed_at AS last_executed_at,
@@ -10055,7 +10056,7 @@ class DatabaseRepository:
                 window_seconds = max(30, int((expire_at - execute_after).total_seconds() or 120))
                 next_execute_after = _format_iso8601(now_dt)
                 next_expire_at = _format_iso8601(now_dt + timedelta(seconds=window_seconds))
-                if row["leg_key"] == "group":
+                if row["leg_key"] == "group" or (_safe_json_loads(row['stake_plan_json']).get('mode') == 'win_streak_roll' and len(delivery_job_ids) == 1):
                     event = conn.execute("SELECT status FROM subscription_progression_events WHERE id = ?", (row["progression_event_id"],)).fetchone()
                     confirmed = conn.execute("SELECT 1 FROM execution_attempts WHERE job_id = ? AND delivery_status = 'delivered' LIMIT 1", (row["job_id"],)).fetchone()
                     if now_dt >= expire_at or not event or event["status"] != "pending" or confirmed:
@@ -10655,8 +10656,9 @@ class DatabaseRepository:
 
         with self._connect() as conn:
             delivery_job_ids = self._delivery_job_ids(conn, int(job_id))
-            group_plan = _safe_json_loads(current.get("stake_plan_json")).get("group_play")
-            if group_plan:
+            current_plan = _safe_json_loads(current.get("stake_plan_json"))
+            group_plan = current_plan.get("group_play")
+            if group_plan or (current_plan.get('mode') == 'win_streak_roll' and len(delivery_job_ids) == 1):
                 event = conn.execute("SELECT status FROM subscription_progression_events WHERE id = ?", (current.get("progression_event_id"),)).fetchone()
                 confirmed = conn.execute("SELECT 1 FROM execution_attempts WHERE job_id = ? AND delivery_status = 'delivered' LIMIT 1", (int(job_id),)).fetchone()
                 if current_status != "failed" or now_dt >= expire_at or not event or event["status"] != "pending" or confirmed:

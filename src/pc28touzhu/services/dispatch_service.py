@@ -8,6 +8,7 @@ from typing import Any, Dict
 from pc28touzhu.domain.auto_trigger_cycle import auto_roll_policy
 from pc28touzhu.domain.pc28_play_filter import PLAY_FILTER_KEYS_BY_METRIC, strategy_matches_signal
 from pc28touzhu.domain.pc28_group_play import group_selection_for_signal, group_stake_legs
+from pc28touzhu.domain.roll_play import SINGLE_PLAY
 from pc28touzhu.domain.pc28_issue_window import evaluate_pc28_issue_dispatch_window
 from pc28touzhu.domain.settlement_rules import build_settlement_snapshot
 from pc28touzhu.domain.win_streak_roll import (
@@ -35,7 +36,7 @@ def _shanghai_today() -> str:
 
 
 def _staking_policy_mode(strategy: Dict[str, Any], signal: Dict[str, Any]) -> str:
-    if (strategy.get("staking_policy") or {}).get("mode") == MODE_WIN_STREAK_ROLL and group_selection_for_signal(signal):
+    if (strategy.get("staking_policy") or {}).get("mode") == MODE_WIN_STREAK_ROLL and (strategy.get('staking_policy') or {}).get('structure') != SINGLE_PLAY and group_selection_for_signal(signal):
         raise ValueError("双组、杀组不能使用过关结构下注")
     runtime = resolve_staking_runtime_policy(strategy, signal.get("normalized_payload"))
     return str(runtime.get("mode") or "follow_source")
@@ -289,8 +290,10 @@ def _route_effective_strategy(
             target_metric = str((matched_conditions[0] or {}).get("metric") or "").strip()
 
     if target_metric in PLAY_FILTER_KEYS_BY_METRIC:
-        if target_metric in {"double_group", "kill_group"} and (strategy.get("staking_policy") or {}).get("mode") == MODE_WIN_STREAK_ROLL:
+        if target_metric in {"double_group", "kill_group"} and (strategy.get("staking_policy") or {}).get("mode") == MODE_WIN_STREAK_ROLL and (strategy.get('staking_policy') or {}).get('structure') != SINGLE_PLAY:
             raise ValueError("过关方案不能切换为双组、杀组下注，请使用普通跟单方案")
+        if (strategy.get('staking_policy') or {}).get('structure') == SINGLE_PLAY and strategy['staking_policy'].get('play_type') != target_metric:
+            strategy['staking_policy'] = {**strategy['staking_policy'], 'play_type': target_metric, 'selection_mode':'follow', 'fixed_value':None}
         strategy["play_filter"] = {
             "mode": "selected",
             "selected_keys": list(PLAY_FILTER_KEYS_BY_METRIC[target_metric]),
@@ -524,6 +527,8 @@ def _dispatch_signal_for_auto_trigger_routes(
         signal_substitution: Dict[str, Any] | None = None
         if not strategy_matches_signal(strategy, signal):
             route_metric = _route_play_filter_fixed_metric(route)
+            if (strategy.get('staking_policy') or {}).get('structure') == SINGLE_PLAY:
+                route_metric = strategy['staking_policy']['play_type']
             if not route_metric:
                 rule_action = (
                     auto_trigger_context.get("rule_action")
@@ -905,7 +910,7 @@ def _dispatch_win_streak_roll_legs(
         runtime = resolve_staking_runtime_policy(strategy, signal.get("normalized_payload"))
         policy = {
             key: runtime[key]
-            for key in ("base_amount", "main_share", "aux_share", "target_streak", "structure", "roll_mode", "reset_scope", "stop_policy")
+            for key in ("base_amount", "main_share", "aux_share", "target_streak", "structure", "roll_mode", "reset_scope", "stop_policy", 'play_type', 'selection_mode', 'fixed_value')
             if key in runtime
         }
     previous_state = None
@@ -942,10 +947,7 @@ def _dispatch_win_streak_roll_legs(
     base_execute_after = max(_parse_iso_z(signal.get("published_at")), now)
     execute_after = base_execute_after
 
-    legs = [
-        {"leg_key": "main", "bet_type": "odd_even", "bet_value": plan["main"]["bet_value"], "stake": plan["main"]["stake"]},
-        {"leg_key": "aux", "bet_type": "combo", "bet_value": plan["aux"]["bet_value"], "stake": plan["aux"]["stake"]},
-    ]
+    legs = [{**plan[key], 'leg_key': key} for key in ('main', 'aux') if key in plan]
     leg_event_ids: list[int] = []
     jobs = []
     created_count = 0
@@ -955,7 +957,7 @@ def _dispatch_win_streak_roll_legs(
         leg_signal["bet_type"] = leg["bet_type"]
         leg_signal["bet_value"] = leg["bet_value"]
         leg_signal["normalized_payload"] = {
-            **(signal.get("normalized_payload") or {}),
+            **(leg.get('normalized_payload') if 'normalized_payload' in leg else (signal.get('normalized_payload') or {})),
             "bet_type": leg["bet_type"],
             "bet_value": leg["bet_value"],
         }
@@ -968,6 +970,7 @@ def _dispatch_win_streak_roll_legs(
             resolved_from=str(settlement_policy.get("resolved_from") or ""),
             signal=leg_signal,
             odds_overrides=settlement_policy.get("odds_overrides"),
+            stake_amount=float(leg['stake']),
         )
         progression_event = repository.create_progression_event_record(
             subscription_id=subscription_id,
@@ -1027,6 +1030,10 @@ def _dispatch_win_streak_roll_legs(
                 "cycle_stat_date": today,
             },
         }
+        if settlement_snapshot.get('group'):
+            group = settlement_snapshot['group']
+            stake_plan.update(group_play=group, legs=group['legs'], unit_count=group['unit_count'],
+                              per_combo_amount=group['legs'][0]['stake_amount'], stake_basis='per_combo')
         if route_id is not None:
             stake_plan["meta"]["auto_trigger_route_id"] = int(route_id)
         planned_message_text = _message_text_from_template(leg_signal, float(leg["stake"]), template)
@@ -1060,8 +1067,9 @@ def _dispatch_win_streak_roll_legs(
             existing_count += 1
 
     # 两笔账保持独立；执行器只领取主注，并携带完整的合并文案。
-    repository.combine_roll_execution_jobs([int(job["id"]) for job in jobs])
-    jobs[1]["send_with_job_id"] = int(jobs[0]["id"])
+    if len(jobs) == 2:
+        repository.combine_roll_execution_jobs([int(job["id"]) for job in jobs])
+        jobs[1]["send_with_job_id"] = int(jobs[0]["id"])
 
     pending_plan = {
         "signal_id": int(signal["id"]),
@@ -1198,6 +1206,13 @@ def _dispatch_signal(
         if subscription_id is not None and hasattr(repository, "list_dispatch_candidates_for_subscription")
         else repository.list_dispatch_candidates(signal_id)
     )
+    for item in raw_candidates:
+        current_strategy = item.get('strategy_json') or {}
+        if (current_strategy.get('staking_policy') or {}).get('mode') == MODE_WIN_STREAK_ROLL and hasattr(repository, 'get_subscription_cycle_state'):
+            manual_state = repository.get_subscription_cycle_state(subscription_id=int(item['subscription_id'])) or {}
+            frozen_policy = manual_state.get('policy') or {}
+            if frozen_policy.get('structure') == SINGLE_PLAY:
+                item['strategy_json'] = {**current_strategy, 'staking_policy': {**current_strategy.get('staking_policy', {}), **frozen_policy}}
     candidates = [
         item for item in raw_candidates
         if strategy_matches_signal(item.get("strategy_json"), signal)

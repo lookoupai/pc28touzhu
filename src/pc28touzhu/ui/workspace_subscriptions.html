@@ -49,6 +49,7 @@
                                             <button class="row-button" type="button" data-play-filter-preset="big_small">只玩大小</button>
                                             <button class="row-button" type="button" data-play-filter-preset="odd_even">只玩单双</button>
                                             <button class="row-button" type="button" data-play-filter-preset="combo">只玩组合</button>
+                                            <button class="row-button" type="button" data-play-filter-preset="number">只玩号码</button>
                                             <button class="row-button" type="button" data-play-filter-preset="double_group">只玩双组</button>
                                             <button class="row-button" type="button" data-play-filter-preset="kill_group">只玩杀组</button>
                                             <button class="row-button" type="button" data-play-filter-preset="custom">自己勾选</button>
@@ -96,6 +97,36 @@
                                             <span>小双</span>
                                         </label>
                                     </div>
+                                    <details class="subscription-play-filter-group"><summary>号码 0–27（可展开自选）</summary>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:0"><span>0</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:1"><span>1</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:2"><span>2</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:3"><span>3</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:4"><span>4</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:5"><span>5</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:6"><span>6</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:7"><span>7</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:8"><span>8</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:9"><span>9</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:10"><span>10</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:11"><span>11</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:12"><span>12</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:13"><span>13</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:14"><span>14</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:15"><span>15</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:16"><span>16</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:17"><span>17</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:18"><span>18</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:19"><span>19</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:20"><span>20</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:21"><span>21</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:22"><span>22</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:23"><span>23</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:24"><span>24</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:25"><span>25</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:26"><span>26</span></label>
+                                        <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="number:27"><span>27</span></label>
+                                    </details>
                                     <div class="subscription-play-filter-group">
                                         <span class="subscription-play-filter-title">双组 · 同时下注两个组合</span>
                                         <label class="subscription-play-filter-chip"><input type="checkbox" name="bet_filter_key" value="double_group:大单+大双"><span>大单＋大双</span></label>
@@ -140,16 +171,37 @@
                                     <small class="field-hint">每轮从这里开始滚。注码按整数下，不足 1 的尾差留在仓里；自动规则继承该起始金额。</small>
                                 </label>
                                 <label class="subscription-roll-field">
-                                    <span>押哪种组合</span>
+                                    <span>过关投注结构</span>
                                     <select class="text-input" name="roll_structure">
+                                        <option value="single_play">所选玩法过关（单注／双组／杀组）</option>
                                         <option value="A">单 + 小双（放弃大双）</option>
                                         <option value="B">单 + 大双（放弃小双）</option>
                                         <option value="C">双 + 小单（放弃大单）</option>
                                         <option value="D">双 + 大单（放弃小单）</option>
                                         <option value="follow_signal">跟随信号自动选</option>
                                     </select>
-                                    <small class="field-hint">每期总注 = 当前余额，主注押单双占 70%，辅助注押组合占 30%。</small>
+                                    <small class="field-hint">单玩法使用所选投注内容；旧组合结构保留单双 70%＋组合 30%。不同玩法可建立独立方案。</small>
                                 </label>
+                                <label class="subscription-roll-play-field">
+                                    <span>过关玩法</span>
+                                    <select class="text-input" name="roll_play_type">
+                                        <option value="big_small">大小</option><option value="odd_even">单双</option>
+                                        <option value="combo">组合</option><option value="number">号码</option>
+                                        <option value="double_group">双组</option><option value="kill_group">杀组</option>
+                                    </select>
+                                </label>
+                                <label class="subscription-roll-play-field">
+                                    <span>投注方向</span>
+                                    <select class="text-input" name="roll_selection_mode">
+                                        <option value="follow">跟随来源预测</option><option value="fixed">固定买所选方向</option>
+                                        <option value="filter">只跟来源的所选方向</option>
+                                    </select>
+                                </label>
+                                <label class="subscription-roll-value-field">
+                                    <span>固定／筛选方向</span>
+                                    <select class="text-input" name="roll_fixed_value"></select>
+                                </label>
+                                <p class="wide subscription-roll-play-field field-hint">起始注是整期总金额。双组、杀组均分成整数子注，尾差留仓；整组净盈利才加一关。多玩法请分别建立方案，各自独立过关。</p>
                                 <label class="subscription-roll-field">
                                     <span>赢了怎么滚</span>
                                     <select class="text-input" name="roll_mode">

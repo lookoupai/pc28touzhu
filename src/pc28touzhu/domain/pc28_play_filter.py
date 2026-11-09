@@ -6,6 +6,7 @@ from typing import Iterable, Optional
 from pc28touzhu.domain.pc28_group_play import (
     COMBO_VALUES, DOUBLE_GROUP_VALUES, GROUP_PLAY_TYPES, normalize_group_selection,
 )
+from pc28touzhu.domain.roll_play import SINGLE_PLAY, selected_play_signal
 
 
 PLAY_FILTER_LABELS = {
@@ -21,9 +22,10 @@ PLAY_FILTER_LABELS = {
 
 PLAY_FILTER_LABELS.update({"double_group:" + value: value.replace("+", "＋") for value in DOUBLE_GROUP_VALUES})
 PLAY_FILTER_LABELS.update({"kill_group:" + value: "杀" + value for value in COMBO_VALUES})
+PLAY_FILTER_LABELS.update({'number:' + str(value): str(value) for value in range(28)})
 PLAY_FILTER_KEYS_BY_METRIC = {
     metric: [key for key in PLAY_FILTER_LABELS if key.startswith(metric + ":")]
-    for metric in ("big_small", "odd_even", "combo", *GROUP_PLAY_TYPES)
+    for metric in ("big_small", "odd_even", "combo", "number", *GROUP_PLAY_TYPES)
 }
 
 ALLOWED_PLAY_FILTER_KEYS = tuple(PLAY_FILTER_LABELS.keys())
@@ -54,6 +56,8 @@ def normalize_play_filter_keys(values: Optional[Iterable[str]]) -> list[str]:
 def resolve_signal_play_filter_key(*, bet_type: str, bet_value: str) -> Optional[str]:
     normalized_type = str(bet_type or "").strip().lower()
     normalized_value = str(bet_value or "").strip()
+    if normalized_type == 'number' and normalized_value.isdigit() and 0 <= int(normalized_value) <= 27:
+        return 'number:' + str(int(normalized_value))
     if normalized_type in GROUP_PLAY_TYPES:
         try:
             return normalized_type + ":" + normalize_group_selection(normalized_type, normalized_value)["bet_value"]
@@ -70,6 +74,13 @@ def resolve_signal_play_filter_key(*, bet_type: str, bet_value: str) -> Optional
 
 def strategy_matches_signal(strategy: Optional[dict], signal: Optional[dict]) -> bool:
     payload = strategy if isinstance(strategy, dict) else {}
+    staking = payload.get('staking_policy') or payload.get('win_streak_roll') or {}
+    if staking.get('structure') == SINGLE_PLAY and staking.get('mode', 'win_streak_roll') == 'win_streak_roll':
+        try:
+            selected_play_signal(staking, signal)
+            return True
+        except ValueError:
+            return False
     bet_filter = payload.get("bet_filter") if isinstance(payload.get("bet_filter"), dict) else {}
     if not bet_filter and isinstance(payload.get("play_filter"), dict):
         bet_filter = payload.get("play_filter") or {}

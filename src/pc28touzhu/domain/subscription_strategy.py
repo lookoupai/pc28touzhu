@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 
 from pc28touzhu.domain.pc28_play_filter import normalize_play_filter_keys, normalize_play_filter_mode
 from pc28touzhu.domain.pc28_group_play import GROUP_PLAY_TYPES
+from pc28touzhu.domain.roll_play import SINGLE_PLAY
 from pc28touzhu.domain.pc28_profit_rules import coerce_odds_overrides, drop_matching_catalog_odds, normalize_odds_overrides
 from pc28touzhu.domain.win_streak_roll import normalize_stop_policy, normalize_win_streak_roll_policy
 from pc28touzhu.domain.settlement_rules import (
@@ -349,7 +350,7 @@ def normalize_subscription_strategy_input(value: Any) -> Dict[str, Any]:
             "risk_control": _normalize_risk_control_v2(payload.get("risk_control")),
             "dispatch": _normalize_dispatch_v2(payload.get("dispatch")),
         }
-        if normalized["staking_policy"]["mode"] == "win_streak_roll" and any(
+        if normalized["staking_policy"]["mode"] == "win_streak_roll" and normalized['staking_policy'].get('structure') != SINGLE_PLAY and any(
             key.partition(":")[0] in GROUP_PLAY_TYPES for key in normalized["play_filter"]["selected_keys"]
         ):
             raise ValueError("双组、杀组支持固定金额、来源金额或倍投，请勿与过关结构同时使用")
@@ -460,6 +461,7 @@ def project_subscription_strategy_v1(value: Any) -> Dict[str, Any]:
         projected["mode"] = "follow"
         projected["stake_amount"] = round(float(staking_policy.get("base_amount") or 0), 2)
         projected["win_streak_roll"] = {
+            **{key: staking_policy[key] for key in ('play_type', 'selection_mode', 'fixed_value') if key in staking_policy},
             "base_amount": round(float(staking_policy.get("base_amount") or 0), 2),
             "main_share": round(float(staking_policy.get("main_share") or 0.70), 4),
             "aux_share": round(float(staking_policy.get("aux_share") or 0.30), 4),
@@ -619,6 +621,7 @@ def resolve_staking_runtime_policy(strategy: Any, signal_payload: Any) -> Dict[s
         }
     if mode == "win_streak_roll":
         return {
+            **{key: policy[key] for key in ('play_type', 'selection_mode', 'fixed_value') if key in policy},
             "mode": "win_streak_roll",
             "base_amount": round(float(policy.get("base_amount") or 100.0), 2),
             "main_share": round(float(policy.get("main_share") or 0.70), 4),

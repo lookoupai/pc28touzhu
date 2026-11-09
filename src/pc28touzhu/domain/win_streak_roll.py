@@ -44,12 +44,17 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
+import math
+
+from pc28touzhu.domain.roll_play import SINGLE_PLAY, normalize_roll_play, selected_play_signal, single_play_stake, play_unit_count
 
 from pc28touzhu.domain.settlement_rules import (
     get_settlement_rule,
     resolve_pc28_result_for_signal,
     resolve_pc28_settled_hit_detail,
+    resolve_pc28_group_settlement,
 )
+from pc28touzhu.domain.pc28_group_play import GROUP_PLAY_TYPES
 from pc28touzhu.domain.split_roll_strategy import (
     DEFAULT_SETTLEMENT_RULE_ID,
     MIN_PLACEABLE_TOTAL,
@@ -140,7 +145,7 @@ def _to_positive_float(value: Any, field: str, default: float) -> float:
         parsed = float(value)
     except (TypeError, ValueError):
         raise ValueError("%s 必须为数字" % field)
-    if parsed <= 0:
+    if not math.isfinite(parsed) or parsed <= 0:
         raise ValueError("%s 必须大于 0" % field)
     return parsed
 
@@ -195,8 +200,8 @@ def normalize_win_streak_roll_policy(payload: Any, field_prefix: str = "staking_
         raise ValueError("%s.main_share + aux_share 必须等于 1" % field_prefix)
 
     structure = str(data.get("structure") or "A").strip()
-    if structure == STRUCTURE_FOLLOW_SIGNAL:
-        normalized_structure = STRUCTURE_FOLLOW_SIGNAL
+    if structure in (STRUCTURE_FOLLOW_SIGNAL, SINGLE_PLAY):
+        normalized_structure = structure
     else:
         try:
             normalized_structure = normalize_structure(structure)
@@ -211,7 +216,11 @@ def normalize_win_streak_roll_policy(payload: Any, field_prefix: str = "staking_
     if reset_scope not in ALLOWED_RESET_SCOPES:
         raise ValueError("%s.reset_scope 仅支持 daily" % field_prefix)
 
+    extra = normalize_roll_play(data) if normalized_structure == SINGLE_PLAY else {}
+    if extra and base_amount < play_unit_count({'structure': SINGLE_PLAY, **extra}):
+        raise ValueError('起始金额不足以覆盖每笔至少 1 的投注')
     return {
+        **extra,
         "base_amount": round(base_amount, 2),
         "main_share": round(main_share, 4),
         "aux_share": round(aux_share, 4),
@@ -315,6 +324,15 @@ def build_period_plan(
     available = _round_money(state.get("balance") if roll_mode == "all_in" else state.get("cycle_stake"))
     if available <= 0:
         raise ValueError("当期无可投注余额")
+    if policy.get('structure') == SINGLE_PLAY:
+        selected = selected_play_signal(policy, signal)
+        stake = single_play_stake(available, policy)
+        if stake <= 0:
+            raise ValueError('当期资金不足以下注')
+        return {'state': state, 'roll_mode': roll_mode, 'structure': SINGLE_PLAY,
+                'label': selected['bet_value'], 'stake_total': stake,
+                'main': {'bet_type': selected['bet_type'], 'bet_value': selected['bet_value'], 'stake': stake,
+                         'normalized_payload': selected['normalized_payload']}}
     # 注码按整数下（平台最小注 1）：总额向下取整，主注按占比向下取整，尾差留在仓里
     stakes = split_integer_stakes(available, policy.get("main_share"))
     if stakes["total"] <= 0:
@@ -356,6 +374,13 @@ def _settle_leg(
     if not get_settlement_rule(rule_id):
         raise ValueError("未知结算规则: %s" % rule_id)
     signal = {"lottery_type": "pc28", "bet_type": bet_type, "bet_value": bet_value}
+    if bet_type in GROUP_PLAY_TYPES:
+        result = resolve_pc28_group_settlement(signal=signal, stake_amount=stake,
+            settlement_rule_id=rule_id, draw_context=draw_context)
+        return {'bet_type': bet_type, 'bet_value': bet_value, 'stake': stake,
+                'result_type': result['result_type'], 'refund_reason': result['refund_reason'],
+                'odds': None, 'payout': result['group_settlement']['payout_amount'],
+                'prediction_hit': result['prediction_hit'], 'group_settlement': result['group_settlement']}
     result = resolve_pc28_result_for_signal(
         signal=signal,
         settlement_rule_id=rule_id,
@@ -407,14 +432,14 @@ def apply_period_outcome(
         balance = _round_money(float(state.get("balance") or 0) + net_pnl)
         day_pnl: Optional[float] = _round_money(float(state.get("day_pnl") or 0) + net_pnl)
         cycle_stake: Optional[float] = payout
-        risk_capital = cycle_stake if float(cycle_stake or 0) >= MIN_PLACEABLE_TOTAL else 0.0
+        risk_capital = cycle_stake if float(cycle_stake or 0) >= play_unit_count(policy) else 0.0
     else:
         # 整数注码可能小于余额，没押出去的尾差要留在账户里，不能随本期结果丢掉
         unbet_remainder = max(0.0, _round_money(float(state.get("balance") or 0) - stake_amount))
         balance = _round_money(payout + unbet_remainder)
         day_pnl = None
         cycle_stake = None
-        risk_capital = balance if float(balance or 0) >= MIN_PLACEABLE_TOTAL else 0.0
+        risk_capital = balance if float(balance or 0) >= play_unit_count(policy) else 0.0
     if balance < 0:
         balance = 0.0
 
@@ -498,13 +523,13 @@ def settle_period(
         bet_value=plan["aux"]["bet_value"],
         draw_context=draw_context,
         settlement_rule_id=settlement_rule_id,
-    )
-    payout_total = _round_money(main_result["payout"] + aux_result["payout"])
+    ) if 'aux' in plan else None
+    payout_total = _round_money(main_result["payout"] + (aux_result["payout"] if aux_result else 0))
     new_state = apply_period_outcome(policy, working, stake_total=plan["stake_total"], payout_total=payout_total)
     net_pnl = _round_money(payout_total - plan["stake_total"])
     return {
         "state": new_state,
-        "plan": {key: plan[key] for key in ("structure", "label", "roll_mode", "stake_total", "main", "aux")},
+        "plan": {key: plan[key] for key in ("structure", "label", "roll_mode", "stake_total", "main", "aux") if key in plan},
         "main_result": main_result,
         "aux_result": aux_result,
         "payout_total": payout_total,
