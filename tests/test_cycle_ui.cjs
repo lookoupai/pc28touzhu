@@ -30,7 +30,7 @@ async function until(predicate, description) {
 function localDate() {
     return new Intl.DateTimeFormat('en-CA', {timeZone: 'Asia/Shanghai'}).format(new Date());
 }
-const policy = {mode: 'rule', max_starts_per_day: 3, on_target: 'wait_condition', on_bust: 'close_day'};
+const policy = {mode: 'rule', max_starts_per_day: 3, max_starts_per_window: 1, on_target: 'wait_condition', on_bust: 'close_day'};
 const subscription = {id: 18, source_id: 17, name: '过关方案', status: 'standby',
     strategy: {win_streak_roll: {structure: 'B', base_amount: 10, target_streak: 3}},
     strategy_v2: {staking_policy: {mode: 'win_streak_roll', structure: 'B', base_amount: 10, target_streak: 3}},
@@ -69,12 +69,13 @@ async function domChecks() {
     let rules = [fixtureRule(11, {cycle_runtime: [runtime]}), fixtureRule(12, {cycle_policy: {mode: 'legacy'}})];
     const writes = [];
     let rejectResume = false;
+    let windowLimitsSupported = true;
     const fetcher = async (requestPath, opts = {}) => {
         let data = {items: []};
         let ok = true;
         if (requestPath === '/api/auth/me') data = {user: {id: 1, username: 'local-test'}};
         else if (requestPath === '/api/platform/sources') data = {items: [{id: 17, name: '来源', status: 'active'}]};
-        else if (requestPath === '/api/platform/subscriptions/summary') data = {items: [subscription]};
+        else if (requestPath === '/api/platform/subscriptions/summary') data = {items: [subscription], launch_workflow: 'explicit_start_v1'};
         else if (requestPath.startsWith('/api/platform/auto-trigger-rules')) {
             if (opts.method === 'POST') {
                 const body = JSON.parse(opts.body);
@@ -90,7 +91,7 @@ async function domChecks() {
                     else rules.push(next);
                     data = {item: next};
                 }
-            } else data = {items: rules};
+            } else data = {items: rules, cycle_window_limits: windowLimitsSupported};
         }
         return {ok, status: ok ? 200 : 400, json: async () => data};
     };
@@ -118,8 +119,27 @@ async function domChecks() {
         change(w, form.elements.cycle_on_target, 'new_cycle');
         submit(w);
         await until(() => writes.length === 1 && !d.getElementById('saveRuleBtn').disabled, 'rule saved');
-        assert.deepEqual(writes[0].body.cycle_policy, {mode: 'rule', max_starts_per_day: 4, on_target: 'new_cycle', on_bust: 'close_day'});
+        assert.deepEqual(writes[0].body.cycle_policy, {mode: 'rule', max_starts_per_day: 4, max_starts_per_window: 1, on_target: 'new_cycle', on_bust: 'close_day'});
         assert.equal(form.elements.cycle_max_starts.value, '4');
+        change(w, form.elements.trigger_mode, 'schedule');
+        assert.equal(d.getElementById('cycleWindowQuotaField').hidden, false);
+        assert.match(d.getElementById('cycleOnTargetHint').textContent, /直接续开也占时段次数/);
+        change(w, form.elements.cycle_on_target, 'wait_condition');
+        assert.equal(form.elements.cycle_on_target.selectedOptions[0].textContent, '等待下一个可用时段');
+        change(w, form.elements.cycle_window_max_starts, '0');
+        assert.match(d.getElementById('scheduleModeHint').textContent, /不限轮数/);
+        for (const invalid of ['', '-1', '1.5', '1001']) {
+            change(w, form.elements.cycle_window_max_starts, invalid);
+            const before = writes.length;
+            submit(w);
+            await tick();
+            assert.equal(writes.length, before, 'invalid window limit must not be submitted');
+            assert.equal(form.elements.cycle_window_max_starts.getAttribute('aria-invalid'), 'true');
+        }
+        change(w, form.elements.cycle_window_max_starts, '1');
+        change(w, form.elements.trigger_mode, 'condition');
+        assert.equal(d.getElementById('cycleWindowQuotaField').hidden, true);
+
         for (const invalid of ['', '0', '1.5', '1001']) {
             change(w, form.elements.cycle_max_starts, invalid);
             const before = writes.length;
@@ -186,6 +206,13 @@ async function domChecks() {
         await tick(); await tick();
         assert.equal(d.querySelector('.resume-cycle-btn'), null, 'historical views cannot restore current cycles');
         assert.match(d.getElementById('ruleList').textContent, /切回今天操作/);
+        windowLimitsSupported = false;
+        await refresh();
+        d.querySelector('.edit-rule-btn[data-id="11"]').click();
+        const countBeforeOldBackend = writes.length;
+        submit(w);
+        await until(() => d.getElementById('statusMessage').textContent.includes('时段启动次数设置尚未在服务端生效'), 'old backend capability message');
+        assert.equal(writes.length, countBeforeOldBackend, 'old backend must not silently ignore the window limit');
         console.log('PASS UI forms: defaults, editing, strict limits, legacy preservation, scoped resume, quota and history.');
     } finally { dom.window.close(); }
 }
@@ -205,7 +232,7 @@ async function manualDomChecks() {
         let data = {items: []};
         if (url === '/api/auth/me') data = {user: {id: 1, username: 'local-test'}};
         else if (opts.method === 'POST') {writes.push({url, body: JSON.parse(opts.body)}); data = {item};}
-        else if (url.startsWith('/api/platform/subscriptions')) data = {items: [item]};
+        else if (url.startsWith('/api/platform/subscriptions')) data = {items: [item], launch_workflow: 'explicit_start_v1'};
         else if (url.startsWith('/api/platform/sources')) data = {items: [{id: 17, name: '来源', status: 'active', source_type: 'internal_ai'}]};
         return {ok: true, status: 200, json: async () => data};
     };
@@ -272,6 +299,8 @@ async function realApiChecks() {
         change(w, form.elements.cycle_max_starts, '3');
         change(w, form.elements.cycle_on_bust, 'new_cycle');
         change(w, form.elements.trigger_mode, 'condition_schedule');
+        change(w, form.elements.cycle_window_max_starts, '2');
+        assert.equal(d.getElementById('cycleWindowQuotaField').hidden, false);
         assert.equal(d.getElementById('scheduleFields').hidden, false);
         assert.equal(d.getElementById('conditionPanel').hidden, false);
         assert.equal(d.getElementById('guardPanel').hidden, false);
@@ -296,10 +325,11 @@ async function realApiChecks() {
         assert.equal(created.conditions[0].prediction_value, '大');
         assert.equal(created.guard_groups[0].conditions[0].type, 'draw_absence');
         assert.equal(created.guard_groups[0].conditions[0].bet_value, '大双');
-        assert.deepEqual(created.cycle_policy, {mode: 'rule', max_starts_per_day: 3, on_target: 'wait_condition', on_bust: 'new_cycle'});
+        assert.deepEqual(created.cycle_policy, {mode: 'rule', max_starts_per_day: 3, max_starts_per_window: 2, on_target: 'wait_condition', on_bust: 'new_cycle'});
         assert.ok(Array.isArray(created.cycle_runtime));
         assert.equal(created.cycle_runtime[0].starts_today, 0);
         assert.equal(created.trigger_mode, 'condition_schedule');
+        assert.equal(created.cycle_policy.max_starts_per_window, 2);
         assert.ok(created.conditions.length);
         assert.equal(created.schedule.windows[0].end, '24:00');
         assert.equal(d.querySelector('.schedule-window-end').value, '', '24:00 returns as an empty end field');
@@ -374,6 +404,9 @@ async function browserChecks(info) {
             assert.ok(await page.locator('#guardPanel').isVisible());
             await page.locator('.schedule-window-end').first().fill('');
             await page.getByLabel('每个方案每天最多启动（轮）', {exact: true}).fill('5');
+            await page.getByLabel('每个方案每个时段最多启动（轮）', {exact: true}).fill('0');
+            await page.locator('#cycleOnTargetSelect').selectOption('new_cycle');
+            assert.match(await page.locator('#cycleOnTargetHint').innerText(), /每个时段不限轮数/);
             await page.getByLabel('过关成功后', {exact: true}).selectOption('new_cycle');
             await page.getByText(/过关运行 ·/).first().click();
             const conditionRow = page.locator('#conditionRows .condition-row').first();
@@ -413,13 +446,13 @@ async function streakDomChecks() {
         let data = {items: []};
         if (requestPath === '/api/auth/me') data = {user: {id: 1, username: 'local-test'}};
         else if (requestPath === '/api/platform/sources') data = {items: [{id: 17, name: '来源', status: 'active'}]};
-        else if (requestPath === '/api/platform/subscriptions/summary') data = {items: [subscription]};
+        else if (requestPath === '/api/platform/subscriptions/summary') data = {items: [subscription], launch_workflow: 'explicit_start_v1'};
         else if (requestPath.startsWith('/api/platform/auto-trigger-rules')) {
             if (opts.method === 'POST') {
                 writes.push(JSON.parse(opts.body));
                 rule = {...rule, ...writes.at(-1)};
                 data = {item: rule};
-            } else data = {items: [rule]};
+            } else data = {items: [rule], cycle_window_limits: true};
         } else if (requestPath.startsWith('/api/platform/auto-trigger-events')) {
             data = {items: [{status: 'triggered', latest_issue_no: '4000000', matched_conditions: [
                 {type: 'hit_streak', metric: 'big_small', prediction_value: '大', operator: 'gte', threshold: 3, actual_hit_streak: 3},

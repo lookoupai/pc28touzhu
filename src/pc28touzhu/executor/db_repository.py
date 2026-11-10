@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from pc28touzhu.domain.pc28_play_filter import resolve_signal_play_filter_key
+from pc28touzhu.domain.auto_trigger_cycle import schedule_window_start_counts
 from pc28touzhu.domain.pc28_group_play import GROUP_PLAY_TYPES, normalize_group_selection
 from pc28touzhu.domain.pc28_profit_rules import coerce_odds_overrides
 from pc28touzhu.domain.settlement_rules import build_settlement_snapshot, resolve_pc28_group_settlement, resolve_pc28_settled_hit_detail
@@ -1515,6 +1516,15 @@ class DatabaseRepository:
                 reason = 'cycle_issue_already_started'
             elif unit._fetch_one('''SELECT 1 FROM auto_trigger_cycle_states WHERE rule_id=? AND subscription_id=? AND pending_plan_json != '' LIMIT 1''', (int(rule_id),int(subscription_id))):
                 reason = 'cycle_pending_settlement'
+            # 与日额度、run 及派单共用同一写事务；并发或进程重启不能重复占用时段。
+            window_limit = 1 if policy.get('mode') == 'legacy' else policy.get('max_starts_per_window', 1)
+            if isinstance(window_limit, bool) or not isinstance(window_limit, int) or not 0 <= window_limit <= 1000:
+                raise ValueError('每个时段最多启动次数必须为 0 到 1000 的整数，0 表示不限')
+            if not reason and window_id and rule.get('trigger_mode') in {'schedule', 'condition_schedule'} and window_limit:
+                counts = schedule_window_start_counts(unit.list_auto_trigger_rule_runs_for_subscription_date(
+                    rule_id=rule_id, subscription_id=subscription_id, stat_date=stat_date))
+                if counts.get(str(window_id), 0) >= window_limit:
+                    reason = 'schedule_window_limit'
             if reason:
                 return {'claimed': False, 'reason': reason, 'run': None, 'starts_count': int(daily['starts_count'])}
             ordinal = int(daily['starts_count']) + 1
@@ -1684,12 +1694,18 @@ class DatabaseRepository:
             maximum = (rule.get('cycle_policy') or {}).get('max_starts_per_day')
             if maximum is None:
                 maximum = (session.get('legacy_policy') or {}).get('max_cycles_per_day',1)
+            window_limit = (rule.get('cycle_policy') or {}).get('max_starts_per_window', 1)
+            window_counts = schedule_window_start_counts(self.list_auto_trigger_rule_runs_for_subscription_date(
+                rule_id=int(rule['id']), subscription_id=int(sub['id']), stat_date=str(stat_date)))
             items.append({
                 'subscription_id':int(sub['id']),'subscription_name':str(sub.get('name') or ''),'stat_date':str(stat_date),
                 'starts_today':int(daily['starts_count']),'max_starts_per_day':int(maximum),'status':str(session.get('status') or 'waiting'),
                 'active_run_id':session.get('active_run_id'),'start_stat_date':str(session.get('start_stat_date') or ''),
                 'last_completed_issue':str(session.get('last_completed_issue') or ''),'stop_reason':str(session.get('stop_reason') or ''), 'routes':routes,
                 'outside_scope': bool(outside_scope),
+                'max_starts_per_window':int(window_limit),
+                'window_starts':[{**window, 'starts_count':window_counts.get(str(window['id']), 0)}
+                    for window in (rule.get('schedule') or {}).get('windows', [])],
             })
         return items
 

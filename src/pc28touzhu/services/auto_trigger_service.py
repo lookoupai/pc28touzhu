@@ -25,7 +25,7 @@ from pc28touzhu.domain.subscription_strategy import (
 )
 from pc28touzhu.domain.pc28_profit_rules import drop_matching_catalog_odds, normalize_odds_overrides
 from pc28touzhu.domain.pc28_issue_window import evaluate_pc28_issue_dispatch_window
-from pc28touzhu.domain.auto_trigger_cycle import normalize_cycle_policy, is_roll_subscription
+from pc28touzhu.domain.auto_trigger_cycle import normalize_cycle_policy, is_roll_subscription, schedule_window_start_counts
 from pc28touzhu.domain.draw_streak import DRAW_VALUES_BY_METRIC, MAX_DRAW_STREAK, build_draw_streak_snapshot
 from pc28touzhu.domain.pc28_play_filter import PLAY_FILTER_KEYS_BY_METRIC
 from pc28touzhu.domain.pc28_group_play import GROUP_PLAY_TYPES, normalize_group_selection
@@ -888,7 +888,7 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = N
                 for day_run in day_runs:
                     if day_run and str(day_run.get("status") or "") != "blocked":
                         started = True
-                        started_window_ids.add(str(day_run.get("window_id") or ""))
+                started_window_ids.update(schedule_window_start_counts(day_runs))
                 # 方案/来源未就绪时定时开不了轮：按当前状态直接判定，比翻事件记录更可靠。
                 if not schedule_blocker_reason:
                     state = subscription_states.get(int(sub_id)) if sub_id is not None else None
@@ -963,7 +963,7 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = N
                 "cycle_runtime": repository.list_auto_trigger_cycle_runtime(rule_id=int(rule["id"]), user_id=normalized_user_id, stat_date=resolved_stat_date) if hasattr(repository, "list_auto_trigger_cycle_runtime") else [],
             }
         )
-    return {"items": items}
+    return {"items": items, "cycle_window_limits": True}
 
 
 def list_auto_trigger_events(repository: Any, *, user_id: Any, rule_id: Any = None, status: Any = None, limit: Any = 50) -> Dict[str, Any]:

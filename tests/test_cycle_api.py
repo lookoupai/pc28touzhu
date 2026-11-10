@@ -28,8 +28,8 @@ class CycleApiTests(CycleFixture):
         code,result=self.request('/api/platform/auto-trigger-rules',self.payload())
         self.assertEqual(code,200,result)
         rule=result['item']
-        self.assertEqual(rule.get('cycle_policy'),{'mode':'rule','max_starts_per_day':1,'on_target':'wait_condition','on_bust':'wait_condition'})
-        policy={'mode':'rule','max_starts_per_day':3,'on_target':'new_cycle','on_bust':'close_day'}
+        self.assertEqual(rule.get('cycle_policy'),{'mode':'rule','max_starts_per_day':1,'max_starts_per_window':1,'on_target':'wait_condition','on_bust':'wait_condition'})
+        policy={'mode':'rule','max_starts_per_day':3,'max_starts_per_window':2,'on_target':'new_cycle','on_bust':'close_day'}
         code,result=self.request('/api/platform/auto-trigger-rules/%s'%rule['id'],{'cycle_policy':policy})
         self.assertEqual(code,200,result)
         code,result=self.request('/api/platform/auto-trigger-rules')

@@ -1,6 +1,7 @@
 (function () {
     const state = {
         supportsExplicitStart: false,
+        supportsWindowLimits: false,
         user: null,
         rules: [],
         events: [],
@@ -116,6 +117,9 @@
     }
 
     async function request(path, options) {
+        if (options?.method === 'POST' && options?.body?.cycle_policy?.max_starts_per_window != null && !state.supportsWindowLimits) {
+            throw new Error('时段启动次数设置尚未在服务端生效，请重启跟单服务后刷新页面。');
+        }
         const changesLaunch = options?.method === 'POST' && /^\/api\/platform\/(subscriptions|auto-trigger-rules)(\/|$)/.test(path);
         const pausesOnly = path.endsWith('/status') && ['inactive', 'archived'].includes(options?.body?.status);
         if (changesLaunch && !pausesOnly && !state.supportsExplicitStart) {
@@ -290,6 +294,7 @@
             outside_schedule_window: "当前不在定时窗口内。",
             schedule_weekday_blocked: "今天未启用定时触发。",
             schedule_day_already_started: "该定时窗口今日已经启动过一轮。",
+            schedule_window_limit: "本方案在当前时段的启动次数已用完，等待下一个可用时段。",
             schedule_previous_run_active: "上一轮仍在运行（尚未达到停止条件），后续窗口不再重复触发；结束后可在尚未结束的窗口开新一轮。",
             schedule_signal_not_found: "定时窗口内没有可用的新信号。",
             schedule_signal_stale: "最新信号已超过允许延迟。",
@@ -521,6 +526,7 @@
                 '<div class="cycle-runtime-head"><strong>' + escapeHtml(name) + '</strong><span class="cycle-state">' + escapeHtml(cycleStatusLabels[runtime.status] || "状态未知") + '</span></div>' +
                 (runtime.outside_scope ? '<p class="meta-line">已移出规则范围，仅保留运行记录</p>' : '') +
                 '<p class="meta-line">' + escapeHtml(runtime.stat_date || state.statDate) + ' · 所选日已启动 ' + escapeHtml(cycleNumber(runtime.starts_today)) + ' / ' + escapeHtml(cycleNumber(runtime.max_starts_per_day)) + ' 轮</p>' +
+                ((runtime.window_starts || []).length ? '<p class="meta-line">各时段已启动：' + escapeHtml(runtime.window_starts.map(window => window.start + ' ' + window.starts_count + ' / ' + (runtime.max_starts_per_window === 0 ? '不限' : runtime.max_starts_per_window)).join('；')) + '</p>' : '') +
                 (startDate ? '<p class="meta-line">当前或最近一轮启动日：' + escapeHtml(startDate) + (runtime.status === "running" && startDate < todayDateString() ? ' · 上一日启动，当前仍在运行' : '') + '</p>' : '') +
                 (reason ? '<p class="meta-line">' + escapeHtml(reason) + '</p>' : '') +
                 (routes.length ? '<ul class="cycle-route-states">' + routeMarkup + '</ul>' : '<p class="meta-line">尚未启动过关轮次。</p>') +
@@ -566,7 +572,8 @@
         const timing = windows ? ('北京时间 ' + windows) : '满足配置条件时';
         const hasRoll = state.subscriptions.some(sub => (rule.scope_mode === 'all_subscriptions' || (rule.subscription_ids || []).includes(Number(sub.id))) && sub.strategy_v2?.staking_policy?.mode === 'win_streak_roll');
         const quota = hasRoll && rule.cycle_policy?.mode === 'rule' ? ' · 过关每个方案每日最多 ' + rule.cycle_policy.max_starts_per_day + ' 轮。' : ' · 按配置的条件、时段和冷却启动。';
-        box.textContent = ruleLaunchSummary(rule) + '\n' + timing + quota +
+        const windowQuota = hasRoll && windows && rule.cycle_policy?.mode === 'rule' ? ((rule.cycle_policy.max_starts_per_window ?? 1) === 0 ? ' 每个时段不限轮数。' : ' 每个时段最多 ' + (rule.cycle_policy.max_starts_per_window ?? 1) + ' 轮。') : '';
+        box.textContent = ruleLaunchSummary(rule) + '\n' + timing + quota + windowQuota +
             (rule.status === 'active' ? '规则已启用；保存编辑不会重新启动当前轮次。' : '启用时会同时将关联方案设为自动待命；若当前时段和条件满足，可能立即开始。');
     }
 
@@ -602,7 +609,7 @@
             const schedule = rule.schedule || {};
             const scheduleText = hasSchedule ? ((isCombined ? "条件检查时段：" : "定时触发：") + ((schedule.windows || []).map(function (item) {
                 return String(item.start || "") + "-" + String(item.end || "");
-            }).join(" / ") || "未配置") + (isCombined ? "；时段内满足条件才开轮" : ((rule.cycle_policy || {}).mode === "rule" ? "；过关轮次按每日上限控制" : "，每个窗口每天最多1轮"))) : "";
+            }).join(" / ") || "未配置") + (isCombined ? "；时段内满足条件才开轮" : "") + ((rule.cycle_policy || {}).mode === "rule" ? ((rule.cycle_policy.max_starts_per_window ?? 1) === 0 ? "；过关每时段不限轮数" : "；过关每时段最多 " + (rule.cycle_policy.max_starts_per_window ?? 1) + " 轮") : "；过关沿用原有设置")) : "";
             const guardGroups = (rule.guard_groups || []).map(function (group, index) {
                 const groupConditions = (group.conditions || []).map(conditionText).join("；") || "--";
                 return "条件区" + String(index + 1) + "：" + groupConditions;
@@ -1023,6 +1030,8 @@
         state.editingCyclePolicy = cyclePolicy;
         form.elements.cycle_mode.innerHTML = options(cyclePolicy.mode === "legacy" ? [["legacy", "沿用原有结束设置"], ["rule", "由本规则控制"]] : [["rule", "由本规则控制"]], cyclePolicy.mode || "rule");
         form.elements.cycle_max_starts.value = String(cyclePolicy.max_starts_per_day == null ? 1 : cyclePolicy.max_starts_per_day);
+        form.elements.cycle_window_max_starts.value = String(cyclePolicy.max_starts_per_window ?? 1);
+        form.elements.cycle_window_max_starts.removeAttribute("aria-invalid");
         form.elements.cycle_on_target.value = cyclePolicy.on_target || "wait_condition";
         form.elements.cycle_on_bust.value = cyclePolicy.on_bust || "wait_condition";
         form.elements.cycle_max_starts.removeAttribute("aria-invalid");
@@ -1104,11 +1113,18 @@
         $("cycleScopeHint").textContent = scoped.some(isRollSubscription) ? "" : "当前范围没有过关方案；这些设置将在选用过关方案时生效。";
         const isSchedule = form.elements.trigger_mode.value === "schedule";
         const isCombined = form.elements.trigger_mode.value === "condition_schedule";
+        const timed = isSchedule || isCombined;
+        $('cycleWindowQuotaField').hidden = legacy || !timed;
+        form.elements.cycle_window_max_starts.disabled = legacy;
+        const windowLimit = Number(form.elements.cycle_window_max_starts.value);
+        const windowHint = windowLimit === 0 ? '每个时段不限轮数，仍受每日上限约束。' : '每个时段最多 ' + windowLimit + ' 轮，用完后等待下一个时段。';
+        const waitOption = timed && windowLimit === 1 ? '等待下一个可用时段' : '等待下次条件满足';
+        ['cycle_on_target', 'cycle_on_bust'].forEach(name => {
+            form.elements[name].querySelector('option[value="wait_condition"]').textContent = waitOption;
+        });
         const hints = {
-            wait_condition: isSchedule
-                ? "本轮结束后等待新一期，且处于允许的定时窗口；同一窗口可再次启动。"
-                : "本轮结束后回到待命，使用结束后的新一期重新判断条件，仍受冷却期数限制。" + (isCombined ? "只能在允许时段内重新开轮。" : ""),
-            new_cycle: "不重新等待开始条件和触发冷却，按方案起始金额开启下一轮；仍计入每日上限并受日风控限制。" + (isSchedule || isCombined ? "直接续开也必须处于允许时段。" : ""),
+            wait_condition: (isSchedule ? '本轮结束后，等待允许时段内的新一期和冷却结束。' : '本轮结束后回到待命，使用新一期重新判断条件，仍受冷却期数限制。') + (timed ? windowHint : ''),
+            new_cycle: '不重新等待开始条件和触发冷却，按方案起始金额开启下一轮；仍受每日上限和日风控限制。' + (timed ? '直接续开也占时段次数。' + windowHint : ''),
             close_day: "本轮结束后停止本规则下该方案当天的过关启动。",
         };
         [["cycle_on_target", "cycleOnTargetHint"], ["cycle_on_bust", "cycleOnBustHint"]].forEach(function (entry) {
@@ -1116,11 +1132,9 @@
             $(entry[1]).textContent = (hints[action] || "结束处理不可用，请重新选择。") +
                 (Number(form.elements.cycle_max_starts.value) === 1 && action !== "close_day" ? " 当前每天最多 1 轮，本轮结束后会因额度用完收工。" : "");
         });
-        $("scheduleModeHint").textContent = isCombined
-            ? "只有在所选星期和时段内才检查开始条件与附加条件区；到点后条件未满足会继续等待。时段仅限制开新轮，已开始的轮次继续按原停止条件运行。再次开轮仍受冷却、风控和过关每日次数限制，不额外限制每个窗口一轮；不会补发窗口外旧信号。"
-            : !legacy
-            ? "过关方案在上轮结束后，可用新一期在同一允许窗口再次启动，受本规则每日次数限制。普通均注、倍投仍是每个窗口每天最多一轮。所有方案均不会补发窗口外旧信号。"
-            : "每个定时任务在窗口开始后尝试启动一轮，每个窗口每天最多一轮；上一轮未结束时不重复开轮。窗口结束后不会补发旧信号。";
+        $("scheduleModeHint").textContent = (isCombined ? '允许时段内满足条件才开新轮。' : '在允许时段内尝试开新轮。') +
+            (scoped.some(isRollSubscription) && !legacy ? windowHint : (isSchedule ? '普通均注、倍投每个时段每天最多启动一轮。' : '普通方案再次触发仍受冷却和风控限制。')) +
+            '时段仅限制新轮启动，已经运行的轮次可跨时段继续完成；结束后不补发错过时段的轮次。';
     }
 
     function collectCyclePolicy() {
@@ -1138,6 +1152,17 @@
             input.focus();
             throw new Error("每日启动轮数请输入 1–1000 的整数。");
         }
+        const windowInput = form.elements.cycle_window_max_starts;
+        const windowValue = String(windowInput.value).trim();
+        const windowLimit = Number(windowValue);
+        if (!/^\d+$/.test(windowValue) || !Number.isSafeInteger(windowLimit) || windowLimit < 0 || windowLimit > 1000) {
+            windowInput.setAttribute('aria-invalid', 'true');
+            $('cyclePolicyError').textContent = '每个时段启动轮数请输入 0–1000 的整数，0 表示不限。';
+            $('cyclePolicyError').hidden = false;
+            windowInput.focus();
+            throw new Error('每个时段启动轮数请输入 0–1000 的整数，0 表示不限。');
+        }
+        windowInput.removeAttribute('aria-invalid');
         const onTarget = form.elements.cycle_on_target.value;
         const onBust = form.elements.cycle_on_bust.value;
         if (!cycleActionLabels[onTarget] || !cycleActionLabels[onBust]) {
@@ -1145,7 +1170,7 @@
         }
         input.removeAttribute("aria-invalid");
         $("cyclePolicyError").hidden = true;
-        return {mode: "rule", max_starts_per_day: limit, on_target: onTarget, on_bust: onBust};
+        return {mode: "rule", max_starts_per_day: limit, max_starts_per_window: windowLimit, on_target: onTarget, on_bust: onBust};
     }
 
     function collectConditions(container) {
@@ -1324,6 +1349,7 @@
         state.deliveryTargets = (payloads[2].items || []).filter(function (item) { return item.status !== "archived"; });
         state.templates = (payloads[3].items || []).filter(function (item) { return item.status !== "archived"; });
         state.rules = payloads[4].items || [];
+        state.supportsWindowLimits = payloads[4].cycle_window_limits === true;
         state.events = payloads[5].items || [];
         renderSummary();
         renderRuleList();
@@ -1410,12 +1436,13 @@
             if (this.value === "rule" && (state.editingCyclePolicy || {}).mode === "legacy") {
                 const form = $("ruleForm");
                 form.elements.cycle_max_starts.value = "1";
+                form.elements.cycle_window_max_starts.value = "1";
                 form.elements.cycle_on_target.value = "wait_condition";
                 form.elements.cycle_on_bust.value = "wait_condition";
             }
             updateCyclePolicyVisibility();
         });
-        ["cycleMaxStartsInput", "cycleOnTargetSelect", "cycleOnBustSelect", "subscriptionSelect"].forEach(function (id) {
+        ["cycleMaxStartsInput", "cycleWindowMaxStartsInput", "cycleOnTargetSelect", "cycleOnBustSelect", "subscriptionSelect"].forEach(function (id) {
             $(id).addEventListener("change", updateCyclePolicyVisibility);
         });
         $("ruleForm").addEventListener("submit", saveRule);

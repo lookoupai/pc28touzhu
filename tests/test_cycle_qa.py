@@ -325,10 +325,10 @@ class CycleRuntimeQATests(runtime_fixture.CycleFixture):
         self.assertEqual(code, 400, payload)
         self.assertEqual(self.session(rule), before)
 
-    def test_scheduled_roll_can_restart_inside_same_window_with_new_evidence(self):
+    def test_scheduled_roll_can_restart_inside_window_when_budget_allows(self):
         rule = self.rule(targets=[self.targets[1]], limit=2)
         rule = update_auto_trigger_rule(self.repo, rule_id=rule['id'], user_id=self.user_id,
-            payload={'trigger_mode': 'schedule', 'schedule': {'timezone': 'Asia/Shanghai',
+            payload={'cycle_policy': {'max_starts_per_window': 2}, 'trigger_mode': 'schedule', 'schedule': {'timezone': 'Asia/Shanghai',
                 'windows': [{'id': 'evening', 'start': '18:00', 'end': '19:00'}],
                 'signal_max_age_seconds': 300}})['item']
         self.signal()

@@ -190,6 +190,11 @@
                                     <input id="cycleMaxStartsInput" name="cycle_max_starts" class="text-input" type="number" min="1" max="1000" step="1" value="1" required aria-describedby="cycleQuotaHint cyclePolicyError">
                                 </label>
                                 <p id="cycleQuotaHint" class="meta-line cycle-rule-field">按北京时间启动日计数，首次启动也计 1 轮；跨日继续运行的旧轮不占今天新开额度。同一轮投递到多个群只计一次。</p>
+                                <label id="cycleWindowQuotaField" class="field cycle-rule-field" hidden>
+                                    <span>每个方案每个时段最多启动（轮）</span>
+                                    <input id="cycleWindowMaxStartsInput" name="cycle_window_max_starts" class="text-input" type="number" min="0" max="1000" step="1" value="1" aria-label="每个方案每个时段最多启动（轮）" aria-describedby="cycleWindowQuotaHint cyclePolicyError">
+                                    <small id="cycleWindowQuotaHint" class="meta-line">默认 1；填 0 表示不限。立即续开也占次数。未成功开轮不占次数。</small>
+                                </label>
                                 <label class="field cycle-rule-field">
                                     <span>过关成功后</span>
                                     <select id="cycleOnTargetSelect" name="cycle_on_target" class="text-input" aria-label="过关成功后" aria-describedby="cycleOnTargetHint">
@@ -200,8 +205,8 @@
                                     <small id="cycleOnTargetHint" class="meta-line"></small>
                                 </label>
                                 <label class="field cycle-rule-field">
-                                    <span>本轮资金耗尽后</span>
-                                    <select id="cycleOnBustSelect" name="cycle_on_bust" class="text-input" aria-label="本轮资金耗尽后" aria-describedby="cycleOnBustHint">
+                                    <span>本轮资金不足以继续下注后</span>
+                                    <select id="cycleOnBustSelect" name="cycle_on_bust" class="text-input" aria-label="本轮资金不足以继续下注后" aria-describedby="cycleOnBustHint">
                                         <option value="wait_condition">等待下次条件满足</option>
                                         <option value="new_cycle">下一可投注期直接续开</option>
                                         <option value="close_day">当天收工</option>
@@ -210,7 +215,7 @@
                                 </label>
                                 <p id="cyclePolicyError" class="cycle-policy-error wide" role="alert" hidden></p>
                             </div>
-                            <p class="meta-line">正在运行的轮次按开轮时设置完成。保存配置不会解除当天收工，也不会清空已用次数和历史盈亏。</p>
+                            <p class="meta-line">亏损后只清零连续盈利关数；本轮资金仍可下注就继续同一轮，不占新启动次数。达到目标或资金不足时才结束本轮。保存配置不会清空已用次数和历史盈亏。</p>
                         </section>
 
                         <div id="conditionPanel" class="condition-panel">

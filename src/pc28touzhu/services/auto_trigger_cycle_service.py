@@ -5,7 +5,7 @@ import copy
 from datetime import datetime, timezone
 from typing import Any
 
-from pc28touzhu.domain.auto_trigger_cycle import auto_roll_policy, is_roll_subscription, subscription_strategy
+from pc28touzhu.domain.auto_trigger_cycle import auto_roll_policy, is_roll_subscription, subscription_strategy, schedule_window_start_counts
 from pc28touzhu.domain.pc28_issue_window import evaluate_pc28_issue_dispatch_window
 from pc28touzhu.domain.win_streak_roll import create_cycle_state, normalize_stop_policy, CYCLE_DAY_STOP_REASONS
 
@@ -132,6 +132,13 @@ def evaluate_roll_rule(repository: Any, rule: dict, subscriptions: list[dict], *
             time_gate = ats._rule_time_gate(rule, now=now)
             if not time_gate['allowed']:
                 raise StartSkipped(time_gate['reason'])
+            cycle_policy = rule.get('cycle_policy') or {'mode': 'legacy'}
+            window_limit = 1 if cycle_policy.get('mode') == 'legacy' else cycle_policy.get('max_starts_per_window', 1)
+            if timed and window_limit:
+                counts = schedule_window_start_counts(repository.list_auto_trigger_rule_runs_for_subscription_date(
+                    rule_id=int(rule['id']), subscription_id=int(sub['id']), stat_date=day))
+                if counts.get(str(time_gate.get('window_id') or ''), 0) >= window_limit:
+                    raise StartSkipped('schedule_window_limit')
             continuation = session.get('status') == 'continuation'
             clock = draw_clock
             if scheduled or continuation:
@@ -213,12 +220,6 @@ def evaluate_roll_rule(repository: Any, rule: dict, subscriptions: list[dict], *
                         if not signal_gate['allowed']:
                             raise StartSkipped(signal_gate['reason'])
                 cycle_policy = current_rule.get('cycle_policy') or {'mode': 'legacy'}
-                if scheduled and cycle_policy.get('mode') == 'legacy' and not continuation:
-                    for previous_run in unit.list_auto_trigger_rule_runs_for_subscription_date(
-                        rule_id=int(rule['id']), subscription_id=int(sub['id']), stat_date=day):
-                        old_window = str(previous_run.get('window_id') or '')
-                        if old_window == window_id or old_window.endswith(':' + window_id):
-                            raise StartSkipped('schedule_day_already_started')
                 strategy = subscription_strategy(current_sub)
                 legacy_policy = session.get('legacy_policy') or normalize_stop_policy(strategy.get('staking_policy', {}).get('stop_policy'))
                 if cycle_policy.get('mode') == 'legacy' and not session.get('legacy_policy'):

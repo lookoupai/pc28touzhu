@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any
 
 from pc28touzhu.domain.subscription_strategy import upgrade_subscription_strategy
@@ -9,7 +10,8 @@ from pc28touzhu.domain.win_streak_roll import normalize_stop_policy, normalize_w
 
 
 END_ACTIONS = {'wait_condition', 'new_cycle', 'close_day'}
-DEFAULT_CYCLE_POLICY = {'mode': 'rule', 'max_starts_per_day': 1, 'on_target': 'wait_condition', 'on_bust': 'wait_condition'}
+DEFAULT_CYCLE_POLICY = {'mode': 'rule', 'max_starts_per_day': 1, 'max_starts_per_window': 1,
+                        'on_target': 'wait_condition', 'on_bust': 'wait_condition'}
 
 
 def normalize_cycle_policy(value: Any, *, current: dict | None = None, creating: bool = False) -> dict:
@@ -28,10 +30,29 @@ def normalize_cycle_policy(value: Any, *, current: dict | None = None, creating:
     limit = merged.get('max_starts_per_day')
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
         raise ValueError('每个方案每天最多启动次数必须为 1 到 1000 的整数')
+    window_limit = merged.get('max_starts_per_window')
+    if isinstance(window_limit, bool) or not isinstance(window_limit, int) or not 0 <= window_limit <= 1000:
+        raise ValueError('每个时段最多启动次数必须为 0 到 1000 的整数，0 表示不限')
     for field in ('on_target', 'on_bust'):
         if merged.get(field) not in END_ACTIONS:
             raise ValueError('cycle_policy.%s 仅支持 wait_condition、new_cycle 或 close_day' % field)
     return {key: merged[key] for key in DEFAULT_CYCLE_POLICY}
+
+
+def schedule_window_start_counts(runs: list[dict]) -> dict[str, int]:
+    """从持久化轮次统计时段用量，兼容普通窗口和 roll:序号:窗口。"""
+    counts: dict[str, int] = {}
+    for run in runs:
+        if run.get('status') == 'blocked' and not run.get('started_issue_no'):
+            continue  # 历史跨日空占位不是实际开轮。
+        key = re.sub(r'(?:#reopened-\d+)+$', '', str(run.get('window_id') or ''))
+        if re.fullmatch(r'roll:\d+', key):
+            continue  # 无时段的条件轮。
+        match = re.fullmatch(r'roll:\d+:(.+)', key)
+        window_id = match.group(1) if match else key
+        if window_id:
+            counts[window_id] = counts.get(window_id, 0) + 1
+    return counts
 
 
 def subscription_strategy(subscription: dict) -> dict:
