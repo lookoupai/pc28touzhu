@@ -7,6 +7,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
+from tests.launch_fixtures import create_legacy_rule
 from pc28touzhu.api.app import PlatformApiApplication, build_testing_environ
 from pc28touzhu.auth import SESSION_COOKIE_NAME, build_session_cookie_value
 from pc28touzhu.domain.draw_streak import DRAW_VALUES_BY_METRIC, build_draw_streak_snapshot
@@ -14,7 +15,6 @@ from pc28touzhu.executor.db_repository import DatabaseRepository
 from pc28touzhu.services.auto_trigger_service import (
     _match_condition,
     _normalize_conditions,
-    create_auto_trigger_rule,
     run_auto_trigger_cycle,
     update_auto_trigger_rule,
 )
@@ -113,7 +113,7 @@ class DrawStreakTriggerTests(unittest.TestCase):
         self.addCleanup(draw_patch.stop)
 
     def create_rule(self, *, conditions=None, dispatch=True, routes=None, guard_groups=None):
-        return create_auto_trigger_rule(self.repo, user_id=self.user_id, payload={
+        return create_legacy_rule(self.repo, user_id=self.user_id, payload={
             "name": "连续开奖启动", "scope_mode": "selected_subscriptions", "subscription_ids": [self.subscription["id"]],
             "cooldown_issues": 0, "conditions": conditions or [condition()],
             "guard_groups": guard_groups or [], "action": {"dispatch_latest_signal": dispatch, "play_filter_action": "keep"},
@@ -335,6 +335,8 @@ class DrawStreakTriggerTests(unittest.TestCase):
             "conditions": [condition("小单")], "action": {"dispatch_latest_signal": True},
         })["item"]
         self.assertEqual(request("/api/platform/auto-trigger-rules")["items"][0]["conditions"][0]["bet_value"], "小单")
+        self.assertEqual(rule["status"], "inactive")
+        request("/api/platform/auto-trigger-rules/%s/status" % rule["id"], {"status": "active"})
         request("/api/platform/auto-trigger-rules/%s" % rule["id"], {
             "conditions": [{"type": "hit_streak", "metric": "big_small", "prediction_value": "大", "operator": "gte", "threshold": 3},
                            {**condition("小双"), "type": "draw_absence"}],

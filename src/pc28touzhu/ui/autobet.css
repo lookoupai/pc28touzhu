@@ -1837,3 +1837,7 @@
 .manual-cycle-settings-copy strong {
     color: var(--text);
 }
+/* Saving configuration and explicitly starting it are separate actions. */
+.subscription-launch-actions { margin: 18px 0; padding: 18px; border: 1px solid var(--line, #dbe3ef); border-radius: 14px; }
+.subscription-launch-actions[hidden] { display: none; }
+.subscription-launch-actions p { margin: 8px 0 14px; line-height: 1.6; }

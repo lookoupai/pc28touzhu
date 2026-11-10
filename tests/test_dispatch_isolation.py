@@ -9,9 +9,9 @@ from datetime import datetime, timedelta, timezone
 from threading import Barrier
 from unittest.mock import patch
 
+from tests.launch_fixtures import create_legacy_rule
 from pc28touzhu.executor.db_repository import DatabaseRepository
 from pc28touzhu.services.auto_trigger_service import (
-    create_auto_trigger_rule,
     list_auto_trigger_rules,
     run_auto_trigger_cycle,
     stop_auto_trigger_rule_current_run,
@@ -60,7 +60,7 @@ class DispatchIsolationTests(unittest.TestCase):
         )
 
     def _rule(self, *, target=None, subscriptions=None, risk=None):
-        return create_auto_trigger_rule(
+        return create_legacy_rule(
             self.repo, user_id=self.user_id,
             payload={
                 "name": "独立路由",

@@ -405,9 +405,11 @@
                                 </div>
                             </div>
                             <div class="form-actions">
-                                <button id="createSubscriptionBtn" class="primary-btn" type="submit">新建跟单策略</button>
+                                <button id="createSubscriptionBtn" class="primary-btn" type="submit">保存方案</button>
                                 <button id="cancelSubscriptionEditBtn" class="ghost-btn" type="button" hidden>取消编辑</button>
                             </div>
+                            <p class="field-hint">保存只记录配置。保存后可选择配置自动规则，或明确开始直接跟单。</p>
                         </form>
+                        <div id="subscriptionSavedActions" class="subscription-launch-actions" hidden role="status"></div>
                         <div id="subscriptionList" class="config-list"></div>
                     </section>

@@ -1065,6 +1065,7 @@ class DatabaseRepository:
             self._ensure_progression_event_leg_column(conn)
             self._ensure_user_subscription_columns(conn)
             self._rebuild_user_subscriptions_without_source_unique(conn)
+            self._ensure_subscription_launch_columns(conn)
             self._ensure_subscription_runtime_run_columns(conn)
             self._ensure_auto_trigger_rule_columns(conn)
             self._ensure_auto_trigger_rule_run_columns(conn)
@@ -1832,6 +1833,15 @@ class DatabaseRepository:
             if column_name not in existing_columns:
                 conn.execute(ddl)
 
+    def _ensure_subscription_launch_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row['name'] for row in conn.execute('PRAGMA table_info(user_subscriptions)')}
+        for name, ddl in {
+            'launch_mode': "ALTER TABLE user_subscriptions ADD COLUMN launch_mode TEXT NOT NULL DEFAULT 'legacy'",
+            'direct_after_signal_id': 'ALTER TABLE user_subscriptions ADD COLUMN direct_after_signal_id INTEGER NOT NULL DEFAULT 0',
+        }.items():
+            if name not in columns:
+                conn.execute(ddl)
+
     def _ensure_user_subscription_columns(self, conn: sqlite3.Connection) -> None:
         try:
             columns = {
@@ -2264,6 +2274,8 @@ class DatabaseRepository:
             "source_id": int(row["source_id"]),
             "name": str(row.get("name") or ""),
             "status": str(row["status"]),
+            "launch_mode": str(row.get('launch_mode') or 'legacy'),
+            "direct_after_signal_id": int(row.get('direct_after_signal_id') or 0),
             "strategy": _safe_json_loads(row.get("strategy_json")),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
@@ -6781,6 +6793,34 @@ class DatabaseRepository:
             "closed_rule_run_count": closed_rule_runs,
         }
 
+    def set_subscription_launch_mode(self, *, subscription_id: int, user_id: int, mode: str) -> None:
+        if mode not in {'unstarted', 'direct', 'automatic'}:
+            raise ValueError('启动方式无效')
+        with self._connect() as conn:
+            conn.execute('''UPDATE user_subscriptions SET launch_mode=?,
+                direct_after_signal_id=CASE WHEN ?='direct' THEN
+                    COALESCE((SELECT MAX(id) FROM normalized_signals WHERE source_id=user_subscriptions.source_id),0)
+                    ELSE direct_after_signal_id END WHERE id=? AND user_id=?''',
+                (mode, mode, int(subscription_id), int(user_id)))
+
+    def subscription_has_manual_pending(self, *, subscription_id: int, user_id: int) -> bool:
+        row = self._fetch_one('''SELECT 1 FROM subscription_progression_events
+            WHERE subscription_id=? AND user_id=? AND auto_trigger_rule_id IS NULL
+              AND status IN ('pending','placed') LIMIT 1''', (int(subscription_id),int(user_id)))
+        return row is not None
+
+    def list_subscription_automatic_activity(self, user_id: int) -> list[dict]:
+        return self._fetch_all('''SELECT rr.subscription_id, rr.rule_id, r.name AS rule_name,
+            r.status AS rule_status, rr.status AS run_status, rr.stat_date, rr.id AS run_id,
+            cs.route_id, cs.status AS cycle_status, cs.win_streak, cs.target_streak,
+            cs.pending_plan_json, cs.policy_json, cs.day_closed,
+            session.status AS session_status, session.start_stat_date
+            FROM auto_trigger_rule_runs rr JOIN auto_trigger_rules r ON r.id=rr.rule_id
+            LEFT JOIN auto_trigger_cycle_states cs ON cs.rule_run_id=rr.id AND cs.subscription_id=rr.subscription_id
+            LEFT JOIN auto_trigger_cycle_sessions session ON session.rule_id=rr.rule_id AND session.subscription_id=rr.subscription_id
+            WHERE rr.user_id=? AND (rr.status='active' OR rr.stat_date=date('now','+8 hours'))
+            ORDER BY rr.id DESC LIMIT 500''', (int(user_id),))
+
     def update_subscription_status(self, *, subscription_id: int, user_id: int, status: str) -> Optional[Dict[str, Any]]:
         now = _utc_now_iso()
         with self._connect() as conn:
@@ -10120,6 +10160,8 @@ class DatabaseRepository:
             WHERE s.id = ?
               AND s.status = 'ready'
               AND us.status = 'active'
+              AND us.launch_mode IN ('legacy','direct')
+              AND s.id > us.direct_after_signal_id
               AND (
                   COALESCE(sfs.threshold_status, '') = ''
                   OR COALESCE(sfs.threshold_scope, 'subscription') <> 'subscription'
@@ -10199,6 +10241,7 @@ class DatabaseRepository:
             WHERE s.id = ?
               AND s.status = 'ready'
               AND us.status IN ('active', 'standby')
+              AND us.launch_mode IN ('legacy','automatic')
               AND rule.status = 'active'
               AND rr.status = 'active'
               AND r.status = 'active'
@@ -10259,7 +10302,8 @@ class DatabaseRepository:
             JOIN auto_trigger_rules rule ON rule.id = run.rule_id AND rule.status = 'active'
             JOIN normalized_signals s ON s.source_id = us.source_id
             WHERE run.status = 'active'
-              AND us.status IN ('active', 'standby') AND r.status = 'active'
+              AND us.status IN ('active', 'standby')
+              AND us.launch_mode IN ('legacy','automatic') AND r.status = 'active'
               AND s.status = 'ready' AND s.lottery_type = 'pc28'
               AND s.created_at >= ? AND s.id >= COALESCE(run.started_signal_id, 0)
               AND NOT EXISTS (
@@ -10307,6 +10351,8 @@ class DatabaseRepository:
               AND us.id = ?
               AND s.status = 'ready'
               AND us.status = 'active'
+              AND us.launch_mode IN ('legacy','direct')
+              AND s.id > us.direct_after_signal_id
               AND (
                   COALESCE(sfs.threshold_status, '') = ''
                   OR COALESCE(sfs.threshold_scope, 'subscription') <> 'subscription'

@@ -6,6 +6,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+from tests.launch_fixtures import create_legacy_rule
 from pc28touzhu.executor.db_repository import DatabaseRepository
 from pc28touzhu.executor import ExecutorStateStore, run_executor_cycle_concurrent
 from pc28touzhu.services.job_service import pull_jobs, report_job
@@ -328,7 +329,7 @@ class WinStreakRollDispatchTests(unittest.TestCase):
         )
         issue_no = "20261103500"
 
-        rule_a = create_auto_trigger_rule(
+        rule_a = create_legacy_rule(
             self.repo, user_id=self.user_id,
             payload={
                 "name": "过三关规则", "cooldown_issues": 0,
@@ -341,7 +342,7 @@ class WinStreakRollDispatchTests(unittest.TestCase):
                              "route_risk_mode": "disabled", "subscription_risk_mode": "disabled"}],
             },
         )["item"]
-        rule_b = create_auto_trigger_rule(
+        rule_b = create_legacy_rule(
             self.repo, user_id=self.user_id,
             payload={
                 "name": "普通规则", "cooldown_issues": 0,

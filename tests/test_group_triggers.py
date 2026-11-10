@@ -5,6 +5,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
+from tests.launch_fixtures import create_legacy_rule
 from pc28touzhu.domain.draw_streak import build_draw_streak_snapshot
 from pc28touzhu.domain.prediction_streak import build_prediction_direction_streaks
 from pc28touzhu.executor.db_repository import DatabaseRepository
@@ -57,7 +58,7 @@ class GroupTriggerTests(unittest.TestCase):
     def test_fixed_group_route_dispatches_and_settles_once(self):
         for metric, value in (("kill_group", "小双"), ("combo", "大单")):
             self.repo.create_signal_record(source_id=self.source["id"], lottery_type="pc28", issue_no="1002", bet_type=metric, bet_value=value)
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user, payload={
+        rule = create_legacy_rule(self.repo, user_id=self.user, payload={
             "name": "杀组路由", "scope_mode": "selected_subscriptions", "subscription_ids": [self.sub["id"]], "cooldown_issues": 0,
             "conditions": [{"type": "hit_rate", "metric": "kill_group", "operator": "gte", "threshold": 60, "min_sample_count": 20, "window_size": 20}],
             "action": {"dispatch_latest_signal": True, "play_filter_action": "keep"},

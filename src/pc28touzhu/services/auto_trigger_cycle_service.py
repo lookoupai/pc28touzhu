@@ -82,6 +82,8 @@ def _session_gate(repository, rule, sub, session, day):
         return 'rule_not_active'
     if sub.get('status') not in {'active', 'standby'}:
         return 'subscription_not_active'
+    if sub.get('launch_mode', 'legacy') not in {'legacy','automatic'}:
+        return 'subscription_not_automatic'
     source = repository.get_source(int(sub['source_id']))
     if not source or source.get('status') != 'active':
         return 'source_not_active'

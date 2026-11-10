@@ -8,11 +8,11 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+from tests.launch_fixtures import create_legacy_rule
 from pc28touzhu.executor.db_repository import DatabaseRepository
 from pc28touzhu.services.dispatch_service import dispatch_signal
 from pc28touzhu.services.auto_trigger_service import (
     clear_auto_trigger_performance_cache,
-    create_auto_trigger_rule,
     delete_auto_trigger_rule,
     list_auto_trigger_rules,
     resume_auto_trigger_rule_day,
@@ -161,7 +161,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
             published_at="2026-09-02T10:04:30Z",
         )
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
         with patch("pc28touzhu.services.auto_trigger_service._http_json_fetch") as fetch:
             result = run_auto_trigger_cycle(
                 self.repo, user_id=self.user_id, rule_id=rule["id"],
@@ -180,7 +180,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
             published_at="2026-09-02T10:04:30Z",
         )
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
         first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc))
         second = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 12, 5, tzinfo=timezone.utc))
         self.assertEqual(first["rules"][0]["summary"]["triggered_count"], 1)
@@ -195,7 +195,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
             published_at="2026-09-02T00:04:30Z",
         )
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._multi_window_payload())["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=self._multi_window_payload())["item"]
         first = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 0, 5, tzinfo=timezone.utc))
         self.assertEqual(first["rules"][0]["summary"]["triggered_count"], 1)
         started_event = self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]
@@ -235,7 +235,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             {"start": "15:00", "end": "15:30"},
             {"id": "w1", "start": "08:00", "end": "08:30"},
         ]
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=payload)["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=payload)["item"]
         windows = rule["schedule"]["windows"]
         self.assertEqual([item["id"] for item in windows], ["w1", "w2"])
         self.assertEqual([item["start"] for item in windows], ["08:00", "15:00"])
@@ -248,10 +248,10 @@ class AutoTriggerServiceTests(unittest.TestCase):
             {"id": "w1", "start": "15:00", "end": "15:30"},
         ]
         with self.assertRaises(ValueError):
-            create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=payload)
+            create_legacy_rule(self.repo, user_id=self.user_id, payload=payload)
 
     def test_schedule_status_surfaces_disabled_subscription(self):
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
         self.repo.update_subscription_status(
             subscription_id=self.subscription["id"], user_id=self.user_id, status="inactive",
         )
@@ -268,7 +268,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertNotEqual(target["schedule_status"], "跟单方案未启用，定时无法启动")
 
     def test_schedule_status_surfaces_disabled_source(self):
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
         self.repo.update_source_status(
             source_id=self.source["id"], owner_user_id=self.user_id, status="inactive",
         )
@@ -374,7 +374,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
             published_at="2026-09-02T10:00:30Z",
         )
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
         primary = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 10, 10, tzinfo=timezone.utc))
         self.assertEqual(primary["rules"][0]["summary"]["triggered_count"], 0)
         self.assertEqual(self.repo.list_auto_trigger_events(user_id=self.user_id, limit=1)[0]["reason"], "schedule_signal_stale")
@@ -394,7 +394,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
             published_at="2026-09-02T09:58:00Z",
         )
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
         carried_over = run_auto_trigger_cycle(
             self.repo, user_id=self.user_id, rule_id=rule["id"],
             now=datetime(2026, 9, 2, 10, 0, 30, tzinfo=timezone.utc),
@@ -419,10 +419,10 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(started["snapshot"]["signal_issue_no"], "20260902102")
 
     def test_schedule_weekday_and_cross_day_wait_without_daily_claim(self):
-        weekday_rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload(weekdays=["Mon", "Tue", "Thu", "Fri", "Sat", "Sun"]))["item"]
+        weekday_rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload(weekdays=["Mon", "Tue", "Thu", "Fri", "Sat", "Sun"]))["item"]
         blocked = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=weekday_rule["id"], now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc))
         self.assertEqual(blocked["rules"][0]["summary"]["skipped_count"], 1)
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
         self.repo.ensure_auto_trigger_rule_run(rule_id=rule["id"], user_id=self.user_id, subscription_id=self.subscription["id"], stat_date="2026-09-01", started_issue_no="old")
         cross_day = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc))
         self.assertEqual(cross_day["rules"][0]["summary"]["skipped_count"], 1)
@@ -433,7 +433,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         ))
 
     def test_schedule_without_routes_can_start_after_overnight_stop(self):
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
         old_run = self.repo.ensure_auto_trigger_rule_run(
             rule_id=rule["id"], user_id=self.user_id, subscription_id=self.subscription["id"],
             stat_date="2026-09-07", started_issue_no="20260907001",
@@ -455,7 +455,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(result["summary"]["triggered_count"], 1)
 
     def test_manual_stop_current_run_reopens_today_window(self):
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
         self.repo.ensure_auto_trigger_rule_run(
             rule_id=rule["id"], user_id=self.user_id,
             subscription_id=self.subscription["id"], stat_date="2026-09-01", started_issue_no="old",
@@ -516,7 +516,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         target = self.repo.list_delivery_targets(self.user_id)[0]
         payload = self._schedule_payload()
         payload["routes"] = [{"delivery_target_id": target["id"], "name": "定时路由"}]
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=payload)["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=payload)["item"]
         route_id = rule["routes"][0]["id"]
         self.repo.create_signal_record(
             source_id=self.source["id"], lottery_type="pc28", issue_no="20260902401",
@@ -553,7 +553,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertIsNone(self.repo.get_progression_event(direct_result["jobs"][0]["progression_event_id"])["auto_trigger_rule_id"])
 
     def test_manual_stop_without_active_run_is_noop(self):
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
         result = stop_auto_trigger_rule_current_run(self.repo, rule_id=rule["id"], user_id=self.user_id)
         self.assertFalse(result["stopped"])
         self.assertEqual(result["runs"], [])
@@ -562,12 +562,12 @@ class AutoTriggerServiceTests(unittest.TestCase):
 
     def test_manual_stop_rejects_foreign_rule(self):
         other_user_id = self.repo.create_user("auto-trigger-other")
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
         with self.assertRaises(ValueError):
             stop_auto_trigger_rule_current_run(self.repo, rule_id=rule["id"], user_id=other_user_id)
 
     def test_list_auto_trigger_rules_exposes_active_runs(self):
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
         self.repo.ensure_auto_trigger_rule_run(
             rule_id=rule["id"], user_id=self.user_id,
             subscription_id=self.subscription["id"], stat_date="2026-09-01", started_issue_no="old",
@@ -703,7 +703,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             {"delivery_target_id": item, "name": "定时路由 %s" % index}
             for index, item in enumerate(extra_targets or [], start=2)
         ]
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=payload)["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=payload)["item"]
         self.repo.create_signal_record(
             source_id=self.source["id"], lottery_type="pc28", issue_no="20260902401",
             bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
@@ -747,7 +747,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
             published_at="2026-09-02T10:04:30Z",
         )
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
         with patch("pc28touzhu.services.auto_trigger_service.dispatch_signal", return_value={"created_count": 0, "existing_count": 0, "jobs": []}):
             failed_dispatch = run_auto_trigger_cycle(self.repo, user_id=self.user_id, rule_id=rule["id"], now=datetime(2026, 9, 2, 10, 5, tzinfo=timezone.utc))
         self.assertEqual(failed_dispatch["rules"][0]["summary"]["skipped_count"], 1)
@@ -757,7 +757,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
 
     def test_default_performance_fetcher_reuses_successful_cache(self):
         for name in ["规则 A", "规则 B"]:
-            create_auto_trigger_rule(
+            create_legacy_rule(
                 self.repo,
                 user_id=self.user_id,
                 payload={
@@ -785,7 +785,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertIn("/api/export/predictors/5/performance", fetch.call_args[0][0])
 
     def test_default_performance_fetcher_retries_transient_failure(self):
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -815,7 +815,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(event["snapshot"]["performance_fetch"]["source"], "network")
 
     def test_default_performance_fetcher_uses_recent_success_when_fetch_fails(self):
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -864,7 +864,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(event["snapshot"]["performance_fetch"]["error"], "timed out")
 
     def test_default_performance_fetcher_skips_network_during_failure_cooldown(self):
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -900,7 +900,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             status="standby",
         )
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -931,7 +931,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             status="standby",
         )
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -970,7 +970,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             status="standby",
         )
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -1002,7 +1002,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
 
     def test_manual_stop_during_condition_fetch_does_not_reset_route_financials(self):
         target = self.repo.list_delivery_targets(self.user_id)[0]
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload={
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload={
             "name": "条件查询期间停轮", "scope_mode": "selected_subscriptions",
             "subscription_ids": [self.subscription["id"]], "cooldown_issues": 0,
             "conditions": [{"metric": "big_small", "operator": "lt", "threshold": 40, "min_sample_count": 100}],
@@ -1063,7 +1063,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             normalized_payload={"message_text": "小双10"},
             published_at="2026-04-18T09:35:00Z",
         )
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -1098,7 +1098,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
 
     def test_route_rule_daily_risk_blocks_restart_and_active_continuation(self):
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -1179,7 +1179,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             status="standby",
         )
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -1251,13 +1251,13 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(runtime_history[0]["status"], "closed")
         self.assertEqual(runtime_history[0]["end_reason"], "profit_target_hit")
 
-    def test_update_profit_target_resumes_stopped_rule_day_when_threshold_allows(self):
+    def test_update_profit_target_requires_explicit_resume_when_threshold_allows(self):
         self.repo.update_subscription_status(
             subscription_id=self.subscription["id"],
             user_id=self.user_id,
             status="standby",
         )
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -1304,7 +1304,11 @@ class AutoTriggerServiceTests(unittest.TestCase):
             },
         )
 
-        self.assertTrue(updated["daily_risk_resume"]["resumed"])
+        self.assertFalse(updated["daily_risk_resume"]["resumed"])
+        self.assertEqual(self.repo.get_auto_trigger_rule_daily_stat(
+            rule_id=rule['id'], user_id=self.user_id, stat_date=event['auto_trigger_stat_date'])['status'], 'stopped')
+        resume_auto_trigger_rule_day(self.repo, rule_id=rule['id'], user_id=self.user_id,
+                                    stat_date=event['auto_trigger_stat_date'])
         stat = self.repo.get_auto_trigger_rule_daily_stat(
             rule_id=rule["id"],
             user_id=self.user_id,
@@ -1335,7 +1339,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(second["summary"]["triggered_count"], 1)
 
     def test_manual_resume_rejects_when_current_threshold_still_hit(self):
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -1371,9 +1375,9 @@ class AutoTriggerServiceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             resume_auto_trigger_rule_day(self.repo, rule_id=rule["id"], user_id=self.user_id, stat_date=today)
 
-    def test_update_disabling_daily_risk_resumes_rule_and_route_days(self):
+    def test_update_disabling_daily_risk_requires_explicit_resume(self):
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -1426,7 +1430,11 @@ class AutoTriggerServiceTests(unittest.TestCase):
                 "daily_risk_control": {"enabled": False, "profit_target": 0, "loss_limit": 0},
             },
         )
-        self.assertTrue(updated["daily_risk_resume"]["resumed"])
+        self.assertFalse(updated["daily_risk_resume"]["resumed"])
+        self.assertEqual(self.repo.get_auto_trigger_rule_daily_stat(
+            rule_id=rule['id'], user_id=self.user_id, stat_date=event['auto_trigger_stat_date'])['status'], 'stopped')
+        resume_auto_trigger_rule_day(self.repo, rule_id=rule['id'], user_id=self.user_id,
+                                    stat_date=event['auto_trigger_stat_date'])
         self.assertEqual(
             self.repo.get_auto_trigger_rule_daily_stat(
                 rule_id=rule["id"], user_id=self.user_id, stat_date=stat_date,
@@ -1465,7 +1473,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             status="active",
         )
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -1573,7 +1581,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(len(route_b_jobs), 2)
 
     def test_auto_trigger_profit_uses_event_stat_date_when_settled_after_midnight(self):
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -1629,7 +1637,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(previous_day["net_profit"], 10)
 
     def test_list_auto_trigger_rules_supports_selected_stat_date(self):
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -1690,7 +1698,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             status="standby",
         )
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -1730,7 +1738,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             status="standby",
         )
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -1763,7 +1771,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             self.repo.create_signal_record(source_id=self.source["id"], lottery_type="pc28", issue_no=str(20260418000 - offset),
                                            bet_type="big_small", bet_value=value)
         selected = {"type": "hit_streak", "metric": "big_small", "prediction_value": "大", "operator": "gte", "threshold": 3}
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload={
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload={
             "name": "连中方向", "scope_mode": "selected_subscriptions", "subscription_ids": [self.subscription["id"]],
             "conditions": [selected], "cooldown_issues": 0, "action": {"dispatch_latest_signal": False},
         })["item"]
@@ -1786,7 +1794,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         other = self.repo.create_source_record(owner_user_id=self.user_id, source_type="internal_ai", name="另一来源", status="active")
         self.repo.create_signal_record(source_id=other["id"], lottery_type="pc28", issue_no="20260418000", bet_type="big_small", bet_value="小")
         guard = {"type": "miss_streak", "metric": "big_small", "prediction_value": "大", "operator": "gte", "threshold": 2}
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload={
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload={
             "name": "指定方向附加条件", "scope_mode": "selected_subscriptions", "subscription_ids": [self.subscription["id"]],
             "conditions": [{"metric": "big_small", "operator": "lt", "threshold": 40}],
             "guard_groups": [{"conditions": [guard]}], "action": {"dispatch_latest_signal": False},
@@ -1802,7 +1810,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
 
     def test_absence_triggers_regular_subscription_and_rejects_duplicate_draw(self):
         self.repo.update_subscription_status(subscription_id=self.subscription["id"], user_id=self.user_id, status="standby")
-        create_auto_trigger_rule(self.repo, user_id=self.user_id, payload={
+        create_legacy_rule(self.repo, user_id=self.user_id, payload={
             "name": "连续不出", "scope_mode": "selected_subscriptions", "subscription_ids": [self.subscription["id"]],
             "conditions": [{"type": "draw_absence", "metric": "combo", "bet_value": "大双", "operator": "gte", "threshold": 3}],
             "cooldown_issues": 0, "action": {"dispatch_latest_signal": False},
@@ -1829,7 +1837,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             status="standby",
         )
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -1915,7 +1923,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
                 },
             },
         )
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -1998,7 +2006,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
 
     def test_route_daily_hit_rate_gate_stops_route_day(self):
         target = self.repo.list_delivery_targets(self.user_id)[0]
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2081,7 +2089,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         from datetime import timedelta
         from pc28touzhu.services.auto_trigger_service import list_auto_trigger_rules
 
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2193,7 +2201,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             status="standby",
         )
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2231,7 +2239,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             status="standby",
         )
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2275,7 +2283,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             status="standby",
         )
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2314,7 +2322,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             status="standby",
         )
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2362,7 +2370,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             status="standby",
         )
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2399,7 +2407,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             status="standby",
         )
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2437,7 +2445,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             status="standby",
         )
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2469,7 +2477,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             status="standby",
         )
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2494,7 +2502,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(skipped_events[0]["reason"], "subscription_has_open_run")
 
     def test_repeated_failed_event_is_deduplicated(self):
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2521,7 +2529,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(failed_events[0]["reason"], "performance_unavailable")
 
     def test_auto_trigger_cycle_prunes_expired_events(self):
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2593,7 +2601,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             status="standby",
         )
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2630,7 +2638,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             user_id=self.user_id,
             status="standby",
         )
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2656,7 +2664,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(updated["strategy_v2"]["play_filter"]["selected_keys"], ["odd_even:单", "odd_even:双"])
 
     def test_active_subscription_without_open_run_can_trigger(self):
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2720,7 +2728,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
                 ),
             )
 
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2766,7 +2774,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             status="active",
         )
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2840,7 +2848,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             status="active",
         )
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2908,7 +2916,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
 
     def test_route_dispatch_allows_signal_matching_performance_issue(self):
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -2947,7 +2955,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
 
     def test_route_open_run_skip_uses_specific_reason_and_deduplicates(self):
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -3000,7 +3008,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
                 (self.subscription["id"], self.user_id, "2026-04-18T09:20:00Z", "2026-04-18T09:20:00Z"),
             )
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -3036,7 +3044,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
 
     def test_active_route_continues_when_global_subscription_threshold_is_stopped(self):
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -3135,7 +3143,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             published_at="2026-04-18T09:35:00Z",
         )
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -3199,7 +3207,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             status="active",
         )
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -3322,7 +3330,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             status="active",
         )
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -3445,7 +3453,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             strategy=strategy,
         )
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -3532,7 +3540,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         # 跨天延续保护：路由级轮次仍在 active 且未达止盈/止损时，
         # 新一次自动触发不应提前 reset 旧轮、开新一轮（修复"净盈亏为正却被 auto_trigger_restart 打断"）。
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -3620,7 +3628,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
 
     def test_active_route_cycle_keeps_started_stat_date_after_midnight(self):
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -3736,7 +3744,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
 
     def test_stopped_started_route_day_closes_stale_active_run_and_uses_today(self):
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -3838,7 +3846,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
     def test_route_runtime_history_lists_route_scoped_runs(self):
         # 方案挂了路由时，轮次历史应读取路由级 runtime_run，并带上 route_name / scope=route。
         first_target = self.repo.list_delivery_targets(self.user_id)[0]
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -3886,7 +3894,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(runs[0]["end_reason"], "profit_target_hit")
 
     def test_delete_rule_requires_archived_and_clears_runtime_tables(self):
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
         with self.assertRaises(ValueError) as ctx:
             delete_auto_trigger_rule(self.repo, rule_id=rule["id"], user_id=self.user_id)
         self.assertIn("请先归档", str(ctx.exception))
@@ -3897,7 +3905,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         self.assertEqual(self.repo.list_auto_trigger_rules(user_id=self.user_id), [])
 
     def test_delete_rule_blocks_when_pending_settlement_exists(self):
-        rule = create_auto_trigger_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
+        rule = create_legacy_rule(self.repo, user_id=self.user_id, payload=self._schedule_payload())["item"]
         self.repo.create_signal_record(
             source_id=self.source["id"], lottery_type="pc28", issue_no="20260418002",
             bet_type="big_small", bet_value="大", normalized_payload={"message_text": "大1"},
@@ -3936,7 +3944,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
         )
         target = self.repo.list_delivery_targets(self.user_id)[0]
         self._multi_metric_signals_for_issue("20260418002", "2026-04-18T09:35:00Z")
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -3998,7 +4006,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
                 bet_type=bet_type, bet_value=bet_value,
                 normalized_payload={"message_text": text}, published_at="2026-04-18T09:35:00Z",
             )
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -4057,7 +4065,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             bet_type="combo", bet_value="小双",
             normalized_payload={"message_text": "小双1"}, published_at="2026-04-18T09:35:00Z",
         )
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={
@@ -4110,7 +4118,7 @@ class AutoTriggerServiceTests(unittest.TestCase):
             },
         )
         self._multi_metric_signals_for_issue("20260418002", "2026-04-18T09:35:00Z")
-        create_auto_trigger_rule(
+        create_legacy_rule(
             self.repo,
             user_id=self.user_id,
             payload={

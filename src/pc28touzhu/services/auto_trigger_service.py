@@ -546,7 +546,7 @@ def normalize_rule_payload(payload: Dict[str, Any], *, current: Optional[Dict[st
     name = str(payload.get("name", source.get("name") or "") or "").strip()
     if not name:
         raise ValueError("name 不能为空")
-    status = str(payload.get("status", source.get("status") or "active") or "active").strip()
+    status = str(source.get('status') or 'inactive')
     if status not in {"active", "inactive", "archived"}:
         raise ValueError("status 仅支持 active、inactive、archived")
     scope_mode = str(payload.get("scope_mode", source.get("scope_mode") or "selected_subscriptions") or "").strip()
@@ -674,38 +674,6 @@ def _has_stopped_route_days(repository: Any, *, rule: Dict[str, Any], stat_date:
     return False
 
 
-def _resume_stopped_rule_day_if_allowed(
-    repository: Any,
-    *,
-    rule: Dict[str, Any],
-    daily_risk_control: Dict[str, Any],
-    stat_date: str,
-) -> Optional[Dict[str, Any]]:
-    stat = repository.get_auto_trigger_rule_daily_stat(
-        rule_id=int(rule["id"]),
-        user_id=int(rule["user_id"]),
-        stat_date=stat_date,
-    )
-    stop_reason = _rule_day_stop_reason(daily_risk_control, stat=stat)
-    if not stop_reason:
-        stop_reason = _route_day_gate_stop_reason(repository, rule=rule, stat_date=stat_date)
-    if stop_reason:
-        return None
-    if not hasattr(repository, "resume_auto_trigger_rule_day"):
-        return None
-    # 规则级停了、或只是路由级停了（如路由独立风控先触顶），都要把当日恢复，
-    # 否则路由级 stopped 会让评估一直以 route_daily_risk_stopped 跳过。
-    rule_day_stopped = str(stat.get("status") or "") == "stopped"
-    route_day_stopped = _has_stopped_route_days(repository, rule=rule, stat_date=stat_date)
-    if not rule_day_stopped and not route_day_stopped:
-        return None
-    return repository.resume_auto_trigger_rule_day(
-        rule_id=int(rule["id"]),
-        user_id=int(rule["user_id"]),
-        stat_date=stat_date,
-    )
-
-
 def _validate_rule_routes(repository: Any, *, user_id: int, routes: list[dict]) -> None:
     for route in routes or []:
         target = repository.get_delivery_target(int(route["delivery_target_id"]))
@@ -725,23 +693,17 @@ def _validate_rule_routes(repository: Any, *, user_id: int, routes: list[dict]) 
 def update_auto_trigger_rule(repository: Any, *, rule_id: Any, user_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     normalized_rule_id = _to_positive_int(rule_id, "rule_id")
     normalized_user_id = _to_positive_int(user_id, "user_id")
-    current = repository.get_auto_trigger_rule(normalized_rule_id)
-    if not current or int(current.get("user_id") or 0) != normalized_user_id:
-        raise ValueError("rule_id 对应的自动触发规则不存在")
-    normalized = normalize_rule_payload(payload, current=current)
-    _validate_rule_routes(repository, user_id=normalized_user_id, routes=normalized.get("routes") or [])
-    item = repository.update_auto_trigger_rule_record(rule_id=normalized_rule_id, user_id=normalized_user_id, **normalized)
-    if not item:
-        raise ValueError("rule_id 对应的自动触发规则不存在")
-    daily_risk_control = normalized["daily_risk_control"]
-    stat_date = _today_stat_date(timezone_name=str(daily_risk_control.get("timezone") or "Asia/Shanghai"))
-    resumed_stat = _resume_stopped_rule_day_if_allowed(
-        repository,
-        rule=item,
-        daily_risk_control=daily_risk_control,
-        stat_date=stat_date,
-    )
-    return {"item": item, "daily_risk_resume": {"resumed": bool(resumed_stat), "stat": resumed_stat}}
+    with repository.transaction() as repository:
+        current = repository.get_auto_trigger_rule(normalized_rule_id)
+        if not current or int(current.get("user_id") or 0) != normalized_user_id:
+            raise ValueError("rule_id 对应的自动触发规则不存在")
+        normalized = normalize_rule_payload(payload, current=current)
+        _validate_rule_routes(repository, user_id=normalized_user_id, routes=normalized.get("routes") or [])
+        item = repository.update_auto_trigger_rule_record(rule_id=normalized_rule_id, user_id=normalized_user_id, **normalized)
+        if not item:
+            raise ValueError("rule_id 对应的自动触发规则不存在")
+        # 保存配置不会自动解除当日停止；恢复使用专用入口。
+        return {"item": item, "daily_risk_resume": {"resumed": False, "stat": None}}
 
 
 def resume_auto_trigger_rule_day(repository: Any, *, rule_id: Any, user_id: Any, stat_date: Any = None) -> Dict[str, Any]:
@@ -816,11 +778,27 @@ def update_auto_trigger_rule_status(repository: Any, *, rule_id: Any, user_id: A
     normalized_status = str(status or "").strip()
     if normalized_status not in {"active", "inactive", "archived"}:
         raise ValueError("status 仅支持 active、inactive、archived")
-    item = repository.update_auto_trigger_rule_status(
-        rule_id=normalized_rule_id,
-        user_id=normalized_user_id,
-        status=normalized_status,
-    )
+    with repository.transaction() as unit:
+        current = unit.get_auto_trigger_rule(normalized_rule_id)
+        if not current or int(current['user_id']) != normalized_user_id:
+            raise ValueError('rule_id 对应的自动触发规则不存在')
+        if normalized_status == 'active':
+            selected = current.get('subscription_ids') if current.get('scope_mode') == 'selected_subscriptions' else None
+            subscriptions = unit.list_subscriptions(user_id=normalized_user_id)
+            scoped = [sub for sub in subscriptions if (selected is None and sub['status'] != 'archived') or (selected is not None and sub['id'] in selected)]
+            if not scoped or (selected is not None and set(selected) != {sub['id'] for sub in scoped}):
+                raise ValueError('请先关联有效且属于自己的跟单方案')
+            _validate_rule_routes(unit, user_id=normalized_user_id, routes=current.get('routes') or [])
+            for sub in scoped:
+                if sub['status'] == 'archived':
+                    raise ValueError('关联方案已归档，请先取消归档：%s' % sub.get('name',sub['id']))
+                if sub.get('launch_mode') != 'automatic' and unit.subscription_has_manual_pending(subscription_id=sub['id'],user_id=normalized_user_id):
+                    raise ValueError('方案 %s 有直接跟单的待发送或待结算投注，处理完成后再启用自动规则' % (sub.get('name') or sub['id']))
+            for sub in scoped:
+                unit.set_subscription_launch_mode(subscription_id=sub['id'],user_id=normalized_user_id,mode='automatic')
+                if sub['status'] != 'standby':
+                    unit.update_subscription_status(subscription_id=sub['id'],user_id=normalized_user_id,status='standby')
+        item = unit.update_auto_trigger_rule_status(rule_id=normalized_rule_id,user_id=normalized_user_id,status=normalized_status)
     if not item:
         raise ValueError("rule_id 对应的自动触发规则不存在")
     return {"item": item}
@@ -2120,7 +2098,7 @@ def _evaluate_scheduled_auto_trigger_rule(
                 summary["skipped_count"] += 1
                 continue
             subscription_status = str(subscription.get("status") or "")
-            if subscription_status not in {"active", "standby"}:
+            if subscription_status not in {"active", "standby"} or subscription.get("launch_mode", "legacy") not in {"legacy", "automatic"}:
                 events.append(_record_event(
                     repository, rule=rule, subscription=subscription, performance=None,
                     status="skipped", reason="subscription_not_active", stat_date=stat_date,
@@ -2425,6 +2403,27 @@ def evaluate_auto_trigger_rule(
     draw_clock: Optional[Dict[str, Any]] = None,
     draw_fetcher=None, _draw_data_cache: Optional[dict] = None, _skip_roll: bool = False,
 ) -> Dict[str, Any]:
+    # 新自动模式的均注/倍投也使用独立路由，避免旧无路由流程将待命改为直接启用。
+    if not rule.get('routes') and not rule.get('_implicit_launch_dispatch'):
+        candidates = repository.list_auto_trigger_candidate_subscriptions(user_id=int(rule['user_id']),
+            subscription_ids=rule.get('subscription_ids') if rule.get('scope_mode') == 'selected_subscriptions' else None)
+        if any(item.get('launch_mode') == 'automatic' and not is_roll_subscription(item) for item in candidates):
+            from pc28touzhu.services.auto_trigger_cycle_service import _routes
+            combined = {'summary': {'checked_count':0,'triggered_count':0,'skipped_count':0,'failed_count':0}, 'events':[]}
+            for sub in candidates:
+                scoped = {**rule, 'scope_mode':'selected_subscriptions', 'subscription_ids':[int(sub['id'])], '_implicit_launch_dispatch': True}
+                if sub.get('launch_mode') == 'automatic' and not is_roll_subscription(sub):
+                    scoped['routes'] = _routes(repository,rule,sub)
+                    if not scoped['routes']:
+                        combined['summary']['checked_count'] += 1
+                        combined['summary']['skipped_count'] += 1
+                        continue
+                outcome = evaluate_auto_trigger_rule(repository,scoped,fetcher=fetcher,now=now,draw_clock=draw_clock,
+                    draw_fetcher=draw_fetcher,_draw_data_cache=_draw_data_cache,_skip_roll=_skip_roll)
+                for key in combined['summary']:
+                    combined['summary'][key] += outcome['summary'].get(key,0)
+                combined['events'].extend(outcome['events'])
+            return combined
     if not _skip_roll and hasattr(repository, "get_auto_trigger_cycle_session"):
         candidates = repository.list_auto_trigger_candidate_subscriptions(
             user_id=int(rule["user_id"]),
@@ -2503,7 +2502,7 @@ def evaluate_auto_trigger_rule(
                 summary["skipped_count"] += 1
                 continue
             subscription_status = str(subscription.get("status") or "")
-            if subscription_status not in {"active", "standby"}:
+            if subscription_status not in {"active", "standby"} or subscription.get("launch_mode", "legacy") not in {"legacy", "automatic"}:
                 events.append(_record_event(repository, rule=rule, subscription=subscription, performance=None, status="skipped", reason="subscription_not_active"))
                 summary["skipped_count"] += 1
                 continue

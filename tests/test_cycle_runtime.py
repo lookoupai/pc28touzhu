@@ -8,8 +8,9 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+from tests.launch_fixtures import create_legacy_rule
 from pc28touzhu.executor.db_repository import DatabaseRepository
-from pc28touzhu.services.auto_trigger_service import create_auto_trigger_rule, run_auto_trigger_cycle, update_auto_trigger_rule
+from pc28touzhu.services.auto_trigger_service import run_auto_trigger_cycle, update_auto_trigger_rule
 from pc28touzhu.services.dispatch_service import dispatch_signal
 from pc28touzhu.services.pc28_auto_settlement_service import _resolve_pending_win_streak_cycles
 from pc28touzhu.services.platform_service import resolve_pending_pc28_progressions_from_draws, restart_subscription_cycle
@@ -41,7 +42,7 @@ class CycleFixture(unittest.TestCase):
         return self.repo.create_signal_record(source_id=self.source['id'], lottery_type='pc28', issue_no=str(issue or self.latest + 1), bet_type='combo', bet_value='小单', published_at=self.now.isoformat())
 
     def rule(self, *, targets=None, limit=2, on_target='wait_condition', on_bust='wait_condition', dispatch=True, cooldown=0, subscriptions=None):
-        return create_auto_trigger_rule(self.repo, user_id=self.user_id, payload={'name': '条件过关', 'scope_mode': 'selected_subscriptions', 'subscription_ids': subscriptions or [self.sub['id']], 'conditions': [{'type': 'miss_streak', 'metric': 'combo', 'operator': 'gte', 'threshold': 2}], 'cooldown_issues': cooldown, 'action': {'dispatch_latest_signal': dispatch, 'play_filter_action': 'keep'}, 'routes': [{'delivery_target_id': target['id']} for target in (targets or [])], 'cycle_policy': {'mode': 'rule', 'max_starts_per_day': limit, 'on_target': on_target, 'on_bust': on_bust}})['item']
+        return create_legacy_rule(self.repo, user_id=self.user_id, payload={'name': '条件过关', 'scope_mode': 'selected_subscriptions', 'subscription_ids': subscriptions or [self.sub['id']], 'conditions': [{'type': 'miss_streak', 'metric': 'combo', 'operator': 'gte', 'threshold': 2}], 'cooldown_issues': cooldown, 'action': {'dispatch_latest_signal': dispatch, 'play_filter_action': 'keep'}, 'routes': [{'delivery_target_id': target['id']} for target in (targets or [])], 'cycle_policy': {'mode': 'rule', 'max_starts_per_day': limit, 'on_target': on_target, 'on_bust': on_bust}})['item']
 
     def cycle(self, rule=None, *, matches=True):
         performance = {'latest_settled_issue': str(self.latest), 'metrics': {'combo': {'streaks': {'current_miss_streak': 2 if matches else 0}}}}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 import re
 import sys
 import unittest
@@ -572,6 +573,28 @@ class FakeRepository:
             "refund_count": sum(int(item.get("refund_count") or 0) for item in stats),
             "plan_count": len(stats),
         }
+
+    def transaction(self):
+        return nullcontext(self)
+
+    def list_auto_trigger_rules(self, *, user_id=None, status=None):
+        return []
+
+    def list_subscription_automatic_activity(self, user_id):
+        return []
+
+    def subscription_has_manual_pending(self, *, subscription_id, user_id):
+        return any(event['subscription_id'] == subscription_id and
+                   event['user_id'] == user_id and not event.get('auto_trigger_rule_id') and
+                   event['status'] in {'pending', 'placed'} for event in self.progression_events)
+
+    def set_subscription_launch_mode(self, *, subscription_id, user_id, mode):
+        for item in self.subscriptions:
+            if item['id'] == subscription_id and item['user_id'] == user_id:
+                item['launch_mode'] = mode
+                if mode == 'direct':
+                    item['direct_after_signal_id'] = max(
+                        (signal['id'] for signal in self.signals if signal['source_id'] == item['source_id']), default=0)
 
     def create_subscription_record(self, **kwargs):
         item = {

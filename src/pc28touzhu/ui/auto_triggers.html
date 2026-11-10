@@ -18,7 +18,7 @@
                 <div>
                     <p class="eyebrow">策略管理</p>
                     <h1>自动触发</h1>
-                    <p class="head-copy">独立管理触发条件、冷却和动作。规则命中后，只有跟单方案处于待命触发，或本轮已经触发止盈/止损，才会开始新一轮。</p>
+                    <p class="head-copy">先保存配置，再启用规则并让方案待命。启用后只由规则启动；时段和条件满足时可能立即开始。</p>
                 </div>
                 <div class="rule-page-actions"><button id="refreshBtn" class="ghost-btn" type="button">刷新</button></div>
                 <div id="summaryGrid" class="summary-grid"></div>
@@ -55,21 +55,23 @@
                             <div class="form-actions">
                                 <button id="cancelEditBtn" class="ghost-btn" type="button" hidden>取消</button>
                                 <button id="saveRuleBtn" class="primary-btn" type="submit">保存规则</button>
+                                <button id="enableSavedRuleBtn" class="ghost-btn" type="button" hidden>启用规则并让方案待命</button>
                             </div>
                         </div>
 
                         <div id="statusMessage" class="status-message" role="status"></div>
+                        <div id="ruleLaunchPreview" class="rule-launch-preview" aria-live="polite"></div>
 
                         <div class="form-grid">
                             <label class="field wide">
                                 <span>规则名称</span>
                                 <input class="text-input" name="name" type="text" placeholder="例如：低命中自动跟单" required>
                             </label>
-                            <label class="field">
+                            <label class="field" hidden>
                                 <span>状态</span>
                                 <select class="text-input" name="status">
+                                    <option value="inactive">未启用</option>
                                     <option value="active">启用</option>
-                                    <option value="inactive">停用</option>
                                     <option value="archived">归档</option>
                                 </select>
                             </label>

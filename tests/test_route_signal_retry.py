@@ -8,8 +8,9 @@ from datetime import datetime, timedelta, timezone
 from threading import Barrier
 from unittest.mock import patch
 
+from tests.launch_fixtures import create_legacy_rule
 from pc28touzhu.executor.db_repository import DatabaseRepository
-from pc28touzhu.services.auto_trigger_service import create_auto_trigger_rule, stop_auto_trigger_rule_current_run
+from pc28touzhu.services.auto_trigger_service import stop_auto_trigger_rule_current_run
 from pc28touzhu.services.dispatch_service import dispatch_signal
 from pc28touzhu.services.source_sync_service import run_source_sync_cycle
 
@@ -59,7 +60,7 @@ class RouteSignalRetryTests(unittest.TestCase):
         return self.now.isoformat().replace("+00:00", "Z")
 
     def _rule(self, target):
-        return create_auto_trigger_rule(self.repo, user_id=self.user_id, payload={
+        return create_legacy_rule(self.repo, user_id=self.user_id, payload={
             "name": "多数票定时跟单", "trigger_mode": "schedule",
             "scope_mode": "selected_subscriptions", "subscription_ids": [self.sub["id"]],
             "daily_risk_control": {"enabled": False},

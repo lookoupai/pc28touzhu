@@ -1,5 +1,6 @@
 (function () {
     const state = {
+        supportsExplicitStart: false,
         currentUser: null,
         sources: [],
         rawItems: [],
@@ -412,6 +413,7 @@
 
     function formatErrorMessage(message) {
         const rawMessage = String(message || "").trim() || "操作失败";
+        if (rawMessage.includes('保存与启动分离尚未在服务端生效')) return rawMessage;
         if (rawMessage.indexOf("发生了什么：") >= 0) {
             return rawMessage;
         }
@@ -562,6 +564,11 @@
     }
 
     async function request(path, options) {
+        const changesLaunch = options?.method === 'POST' && /^\/api\/platform\/(subscriptions|auto-trigger-rules)(\/|$)/.test(path);
+        const pausesOnly = path.endsWith('/status') && ['inactive', 'archived'].includes(options?.body?.status);
+        if (changesLaunch && !pausesOnly && !state.supportsExplicitStart) {
+            throw new Error('保存与启动分离尚未在服务端生效，请重启跟单服务后刷新页面。');
+        }
         const response = await fetch(path, {
             method: options && options.method ? options.method : "GET",
             credentials: "same-origin",
@@ -4351,7 +4358,7 @@
                 balance_depleted: "本轮资金耗尽", win_streak_target: "达到过关目标",
                 cycle_balance_depleted: "本轮资金耗尽", cycle_target_hit: "达到过关目标", manual_stop: "手动停止",
             }[String(cycle.stop_reason || "")] || (cycle.stop_reason ? "已停止，详见运行记录" : "");
-            const status = cycle.day_closed ? "手动当天收工" : ({running: "手动进行中", stopped: "手动已停止", waiting: "手动待命", blocked: "手动状态需核对"}[cycle.status] || "手动状态未知");
+            const status = !cycle.periods && !cycle.pending_issue && subscription.status !== "active" ? "尚未直接启动" : cycle.day_closed ? "手动当天收工" : ({running: "手动进行中", stopped: "手动已停止", waiting: "手动待命", blocked: "手动状态需核对"}[cycle.status] || "手动状态未知");
             content = '<p>' + escapeHtml(status) + (reason ? ' · ' + escapeHtml(reason) : '') + '</p>' +
                 '<p>余额 ' + escapeHtml(number(cycle.balance, true)) + ' · 当前关数 ' + escapeHtml(number(cycle.win_streak)) + ' / ' + escapeHtml(number(cycle.target_streak)) + '</p>' +
                 '<p>' + escapeHtml(cycle.stat_date || "—") + ' · 当天已重开 ' + escapeHtml(number(cycle.cycles_today)) + ' 次</p>' +
@@ -4359,6 +4366,27 @@
         }
         return '<section class="manual-cycle-state" aria-label="手动过关状态"><strong>手动过关状态</strong>' + content +
             '<a href="/auto-triggers?subscription_id=' + encodeURIComponent(subscription.id) + '">查看自动规则</a></section>';
+    }
+
+    function showSavedSubscriptionActions(item) {
+        const box = document.getElementById('subscriptionSavedActions');
+        if (!box || !item) return;
+        box.hidden = false;
+        box.dataset.subscriptionId = item.id;
+        box.innerHTML = '<strong>' + escapeHtml(item.name || '方案') + '已保存，尚未启动</strong><p>配置自动规则后等待条件，或从下一条新信号开始直接跟单。</p>' +
+            '<div class="config-list-actions"><a class="primary-btn" href="/auto-triggers?subscription_id=' + encodeURIComponent(item.id) + '">配置自动规则</a>' +
+            '<button class="ghost-btn saved-subscription-start" type="button" data-id="' + item.id + '">开始直接跟单</button></div>';
+        box.querySelector('button').addEventListener('click', async function () {
+            this.disabled = true;
+            try {
+                await updateEntityStatus('/api/platform/subscriptions/', item.id, 'active', '已开始直接跟单，从下一条新信号开始。');
+                box.hidden = true;
+            } catch (error) { setStatus(error.message, true); } finally { this.disabled = false; }
+        });
+    }
+
+    function subscriptionLaunchLabel(item) {
+        return item.launch_view?.status_label || (item.status === 'standby' ? '等待自动规则' : item.status === 'active' ? '直接跟单中' : item.status === 'archived' ? '已归档' : '未启动／已暂停');
     }
 
     function renderSubscriptionCards() {
@@ -4370,15 +4398,16 @@
             renderSubscriptionWorkspaceSummary();
             return;
         }
+        const savedActions = document.getElementById('subscriptionSavedActions');
+        const savedItem = savedActions && subscriptionById(savedActions.dataset.subscriptionId);
+        if (savedActions && savedItem && savedItem.launch_mode !== 'unstarted') savedActions.hidden = true;
         subscriptionCards.innerHTML = state.subscriptions.map(function (item) {
             const source = sourceById(item.source_id);
-            const statusAction = entityStatusAction(item.status, "暂停跟单", "恢复跟单");
+            const copyAction = '<button class="ghost-btn copy-subscription-btn" type="button" data-subscription-id="' + item.id + '">复制为未启动方案</button>';
+            const statusAction = entityStatusAction(item.status, "暂停直接跟单", "开始直接跟单");
+            if (item.launch_mode === "automatic" && item.status !== "archived") { statusAction.nextStatus = item.status === "standby" ? "inactive" : "standby"; statusAction.actionText = item.status === "standby" ? "暂停自动待命" : "恢复自动待命"; }
             const normalizedStatus = String(item.status || "inactive");
-            const standbyAction = !isArchivedItem(item)
-                ? (normalizedStatus === "standby"
-                    ? '<button class="ghost-btn toggle-subscription-btn" type="button" data-subscription-id="' + item.id + '" data-next-status="inactive">停用待命</button>'
-                    : '<button class="ghost-btn standby-subscription-btn" type="button" data-subscription-id="' + item.id + '">待命触发</button>')
-                : "";
+            const standbyAction = "";
             const archiveAction = isArchivedItem(item)
                 ? '<button class="ghost-btn danger-btn delete-subscription-btn" type="button" data-subscription-id="' + item.id + '">删除策略</button>'
                 : '<button class="ghost-btn archive-subscription-btn" type="button" data-subscription-id="' + item.id + '">归档策略</button>';
@@ -4457,7 +4486,7 @@
                 : "";
             const isRollPlanRow = isWinStreakRollSubscription(item);
             const resetActionText = (isSubscriptionRiskBlocked(item) || isRollPlanRow) ? "手动开始新一轮" : "重置手动盈亏";
-            const resetAction = '<button class="ghost-btn reset-subscription-runtime-btn" type="button" data-subscription-id="' + item.id + '">' + resetActionText + '</button>';
+            const resetAction = item.launch_mode === "automatic" || item.launch_mode === "unstarted" ? "" : '<button class="ghost-btn reset-subscription-runtime-btn" type="button" data-subscription-id="' + item.id + '">' + resetActionText + '</button>';
             const stoppedReasonMarkup = financial && financial.stopped_reason
                 ? ('<div class="config-card-note subscription-runtime-note">' + escapeHtml(financial.stopped_reason) + '</div>')
                 : "";
@@ -4476,9 +4505,10 @@
                 title: (item.name && String(item.name).trim()) || (source ? source.name : ("#" + item.source_id)),
                 cardClassName: "subscription-card-item",
                 headerBadges: [
-                    renderStatusPill(item.status),
+                    '<span class="config-status-pill">' + escapeHtml(subscriptionLaunchLabel(item)) + '</span>',
                 ],
                 summaryMarkup: renderConfigSummaryGrid([
+                    renderConfigSummaryItem("启动方式", item.launch_mode === "automatic" || item.status === "standby" ? "自动规则" : item.launch_mode === "unstarted" ? "尚未选择" : "直接跟单"),
                     renderConfigSummaryItem("策略方式", summarizeStrategyMode(item.strategy || {})),
                     renderConfigSummaryItem("当日净盈亏", signedAmountText(subscriptionDailyNet(item)), subscriptionDailyNet(item) >= 0 ? "amount-positive" : "amount-negative"),
                     renderConfigSummaryItem("当前轮次", signedAmountText(subscriptionRuntimeNet(item)), subscriptionRuntimeNet(item) >= 0 ? "amount-positive" : "amount-negative"),
@@ -4486,6 +4516,10 @@
                 ]),
                 detailMarkup: [
                     renderConfigDetailRows([
+                        renderConfigDetailRow("方案默认结算", summarizeSettlementPolicy(item.strategy_v2 || {}, item.strategy || {})),
+                        renderConfigDetailRow("自动规则结算配置", (item.launch_view?.automatic_settlements || []).map(entry => entry.rule_name + (entry.rule_status === 'active' ? '：' : '（未启用）：') + summarizeSettlementPolicy({settlement_policy:entry.policy}, {}) + (entry.source === 'route_override' ? '（路由覆盖）' : '（继承方案）')).join('；') || '未关联自动规则'),
+                        renderConfigDetailRow("关联规则", (item.launch_view?.rules || []).map(rule => rule.name + (rule.status === 'active' ? '（已启用）' : '（未启用）')).join('；') || '未关联'),
+                        renderConfigDetailRow("自动运行", (item.launch_view?.running || []).map(run => run.rule_name + (run.target_streak ? ' · ' + run.win_streak + '/' + run.target_streak + ' 关' : '') + (run.settlement_policy ? ' · 本轮' + summarizeSettlementPolicy({settlement_policy:run.settlement_policy}, {}) : '')).join('；') || '暂无进行中的自动轮次'),
                         renderConfigDetailRow("跟单进度", summarizeProgression(item)),
                         renderConfigDetailRow("当日盈亏", summarizeDailyFinancial(item)),
                         renderConfigDetailRow("投递概况", "命中 " + String(chainState.effectiveTargets.length) + " 个群组 · 已配置 " + String(chainState.configuredTargets.length) + " 个群组"),
@@ -4495,7 +4529,7 @@
                     settlementPanelMarkup,
                     expandedDetailMarkup,
                 ].join(""),
-                footerMarkup: "<div class=\"config-list-actions\"><button class=\"ghost-btn subscription-detail-toggle-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\">" + detailToggleText + "</button><button class=\"ghost-btn edit-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\">编辑</button><button class=\"ghost-btn toggle-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\" data-next-status=\"" + statusAction.nextStatus + "\">" + statusAction.actionText + "</button>" + standbyAction + resetAction + archiveAction + progressionActions + '<a class="ghost-btn link-btn" href="/auto-triggers?subscription_id=' + encodeURIComponent(item.id) + '">关联自动规则</a></div>',
+                footerMarkup: "<div class=\"config-list-actions\"><button class=\"ghost-btn subscription-detail-toggle-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\">" + detailToggleText + "</button><button class=\"ghost-btn edit-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\">编辑</button><button class=\"ghost-btn toggle-subscription-btn\" type=\"button\" data-subscription-id=\"" + item.id + "\" data-next-status=\"" + statusAction.nextStatus + "\">" + statusAction.actionText + "</button>" + standbyAction + resetAction + archiveAction + copyAction + progressionActions + '<a class="ghost-btn link-btn" href="/auto-triggers?subscription_id=' + encodeURIComponent(item.id) + '">配置自动规则</a></div>',
             });
         }).join("");
         renderSubscriptionWorkspaceSummary();
@@ -4540,7 +4574,7 @@
             messageTemplateForm.elements.template_text.value = "{{bet_value}}{{amount}}";
             applyTemplateConfigToForm(pc28TemplateExampleConfig());
         }
-        setFormEditingState(subscriptionForm, document.getElementById("createSubscriptionBtn"), cancelSubscriptionEditBtn, false, "新建跟单策略");
+        setFormEditingState(subscriptionForm, document.getElementById("createSubscriptionBtn"), cancelSubscriptionEditBtn, false, "保存方案");
         resetSubscriptionStrategyFormState();
         refreshSourceSelects();
         refreshAccountSelects();
@@ -4623,6 +4657,7 @@
                     : "/api/platform/subscriptions/summary";
                 return request(endpoint + subscriptionStatDateQuery).then(function (payload) {
                     state.subscriptions = payload.items || [];
+                    state.supportsExplicitStart = payload.launch_workflow === "explicit_start_v1";
                     state.subscriptionStatDate = payload.stat_date || state.subscriptionStatDate || todayDateString();
                     state.subscriptionDailySummary = payload.daily_summary || null;
                 });
@@ -5988,8 +6023,9 @@
             if (!strategyPayload.dispatch.delivery_target_ids.length) {
                 throw new Error("请至少选择一个发送群组");
             }
+            let savedSubscription;
             if (editId) {
-                await request("/api/platform/subscriptions/" + editId, {
+                savedSubscription = await request("/api/platform/subscriptions/" + editId, {
                     method: "POST",
                     body: {
                         source_id: Number(sourceId),
@@ -5998,7 +6034,7 @@
                     },
                 });
             } else {
-                await request("/api/platform/subscriptions", {
+                savedSubscription = await request("/api/platform/subscriptions", {
                     method: "POST",
                     body: {
                         source_id: Number(sourceId),
@@ -6008,14 +6044,15 @@
                 });
             }
             form.reset();
-            setFormEditingState(form, submitButton, cancelSubscriptionEditBtn, false, "新建跟单策略");
+            setFormEditingState(form, submitButton, cancelSubscriptionEditBtn, false, "保存方案");
             resetSubscriptionStrategyFormState();
             await refreshAll();
-            setStatus(editId ? "跟单策略已更新。" : "跟单策略已创建。", false);
+            if (!editId) showSavedSubscriptionActions(savedSubscription.item);
+            setStatus(editId ? "方案配置已保存，启动状态和在途投注保持原样。" : "方案已保存，尚未启动。请选择自动规则或直接跟单。", false);
         } catch (error) {
             setStatus(error.message, true);
         } finally {
-            setButtonBusy(document.getElementById("createSubscriptionBtn"), false, "新建跟单策略");
+            setButtonBusy(document.getElementById("createSubscriptionBtn"), false, "保存方案");
         }
     });
 
@@ -6081,6 +6118,8 @@
                 return;
             }
             if (target instanceof HTMLElement && target.classList.contains("edit-subscription-btn")) {
+                const savedActions = document.getElementById('subscriptionSavedActions');
+                if (savedActions) savedActions.hidden = true;
                 const subscriptionId = target.getAttribute("data-subscription-id");
                 const item = subscriptionById(subscriptionId);
                 if (!item) {
@@ -6297,6 +6336,17 @@
             if (!(target instanceof HTMLElement)) {
                 return;
             }
+            if (target.classList.contains('copy-subscription-btn')) {
+                const original = subscriptionById(target.dataset.subscriptionId);
+                if (!original) return;
+                target.disabled = true;
+                try {
+                    const saved = await request('/api/platform/subscriptions', {method:'POST', body:{source_id:original.source_id, name:(original.name || '方案') + ' 副本', strategy_v2:original.strategy_v2, require_delivery_targets:true}});
+                    await refreshAll(); showSavedSubscriptionActions(saved.item);
+                    setStatus('副本已保存为未启动，原方案保持原运行状态。', false);
+                } catch (error) { setStatus(error.message, true); } finally { target.disabled = false; }
+                return;
+            }
             if (target.classList.contains("archive-subscription-btn")) {
                 const subscriptionId = target.getAttribute("data-subscription-id");
                 if (!subscriptionId || !confirmDangerousAction("归档后该跟单策略不会再参与自动投注；如需彻底删除，需在归档后再手动删除。确认继续吗？")) {
@@ -6400,7 +6450,7 @@
     if (cancelSubscriptionEditBtn) cancelSubscriptionEditBtn.addEventListener("click", function () {
         subscriptionForm.reset();
         refreshSourceSelects();
-        setFormEditingState(subscriptionForm, document.getElementById("createSubscriptionBtn"), cancelSubscriptionEditBtn, false, "新建跟单策略");
+        setFormEditingState(subscriptionForm, document.getElementById("createSubscriptionBtn"), cancelSubscriptionEditBtn, false, "保存方案");
         resetSubscriptionStrategyFormState();
     });
 

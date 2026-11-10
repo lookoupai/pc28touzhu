@@ -13,13 +13,14 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+from tests.launch_fixtures import create_legacy_rule
 from pc28touzhu.domain.win_streak_roll import (
     CYCLE_STOP_REASON_BUST,
     CYCLE_STOP_REASON_TARGET,
     normalize_stop_policy,
 )
 from pc28touzhu.executor.db_repository import DatabaseRepository
-from pc28touzhu.services.auto_trigger_service import create_auto_trigger_rule, update_auto_trigger_rule
+from pc28touzhu.services.auto_trigger_service import update_auto_trigger_rule
 from pc28touzhu.services.dispatch_service import dispatch_signal
 from pc28touzhu.services.pc28_auto_settlement_service import (
     TERMINAL_CYCLE_LEG_STATUSES,
@@ -190,7 +191,7 @@ class CycleStopPolicyTests(CycleSettlementTimingTests):
         roll_subscription = self.repo.create_subscription_record(
             user_id=self.user_id, source_id=self.source["id"], strategy=strategy, name=name,
         )
-        rule = create_auto_trigger_rule(
+        rule = create_legacy_rule(
             self.repo, user_id=self.user_id,
             payload={
                 "name": name, "cooldown_issues": 0,

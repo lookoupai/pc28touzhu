@@ -1487,10 +1487,49 @@ def _guard_manual_cycle_reset(repository: Any, *, subscription_id: int, user_id:
             raise ValueError("手动过关仍有待结算任务，暂不能重置")
 
 
+def _attach_launch_views(repository: Any, items: list[dict], user_id: int) -> None:
+    rules = repository.list_auto_trigger_rules(user_id=user_id)
+    activity = repository.list_subscription_automatic_activity(user_id)
+    for item in items:
+        associated = [rule for rule in rules if rule.get('status') != 'archived' and
+            (rule.get('scope_mode') == 'all_subscriptions' or int(item['id']) in rule.get('subscription_ids', []))]
+        running = [entry for entry in activity if entry['subscription_id'] == item['id'] and entry['run_status'] == 'active']
+        mode = item.get('launch_mode', 'legacy')
+        manual = _manual_cycle_view(repository,int(item['id'])) or {}
+        if item['status'] == 'archived': label = '已归档'
+        elif item['status'] == 'inactive': label = '未启动' if mode == 'unstarted' else '已暂停'
+        elif running and (mode == 'automatic' or item['status'] == 'standby'):
+            label = '自动规则运行中' if any(row['rule_status'] == 'active' for row in running) else '规则已暂停，等待在途结算'
+        elif mode == 'automatic' or item['status'] == 'standby':
+            today = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d')
+            enabled = [rule for rule in associated if rule['status']=='active']
+            closed_ids = {entry['rule_id'] for entry in activity if entry['subscription_id']==item['id'] and
+                ((entry['session_status']=='day_closed' and entry['start_stat_date']==today) or
+                 (not entry['session_status'] and entry['day_closed'] and entry['stat_date']==today))}
+            label = '今日已收工' if enabled and all(rule['id'] in closed_ids for rule in enabled) else ('等待时间窗口／条件' if enabled else '等待启用自动规则')
+        elif manual.get('day_closed') and manual.get('stat_date') == datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d'): label = '今日已收工'
+        else: label = '直接跟单中'
+        settlement = (item.get('strategy_v2') or {}).get('settlement_policy') or {}
+        automatic_settlements = []
+        for rule in associated:
+            routes = [route for route in rule.get('routes', []) if route.get('status') == 'active']
+            for route in (routes if rule.get('routes') else [None]):
+                override = route is not None and route.get('settlement_mode') == 'override'
+                automatic_settlements.append({'rule_name':rule['name'], 'rule_status':rule['status'],
+                    'route_name':(route or {}).get('name') or '', 'source':'route_override' if override else 'subscription',
+                    'policy':route.get('settlement_policy') or {} if override else settlement})
+        item['launch_view'] = {'mode':mode, 'status_label':label,
+            'rules':[{'id':rule['id'],'name':rule['name'],'status':rule['status']} for rule in associated],
+            'running':[{'rule_id':row['rule_id'],'rule_name':row['rule_name'],'win_streak':row['win_streak'],'target_streak':row['target_streak'],
+                'settlement_policy':(json.loads(row['policy_json'] or '{}').get('_strategy_snapshot') or {}).get('settlement_policy')} for row in running],
+            'settlement_policy':settlement, 'automatic_settlements':automatic_settlements}
+
+
 def list_subscriptions(repository: Any, user_id: Any, stat_date: Any = None) -> Dict[str, Any]:
     normalized_user_id = _to_positive_int(user_id, "user_id")
     resolved_stat_date = _normalize_stat_date(stat_date)
     items = _present_subscription_items(repository.list_subscriptions(user_id=normalized_user_id))
+    _attach_launch_views(repository, items, normalized_user_id)
     daily_stats = repository.list_user_daily_subscription_stats(user_id=normalized_user_id, stat_date=resolved_stat_date)
     daily_stats_by_subscription = {
         int(item["subscription_id"]): item
@@ -1518,6 +1557,7 @@ def list_subscriptions(repository: Any, user_id: Any, stat_date: Any = None) -> 
         for item in items
     ]
     return {
+        "launch_workflow": "explicit_start_v1",
         "items": enriched_items,
         "stat_date": resolved_stat_date,
         "daily_summary": repository.get_user_daily_profit_summary(user_id=normalized_user_id, stat_date=resolved_stat_date),
@@ -1528,6 +1568,7 @@ def list_subscription_summaries(repository: Any, user_id: Any, stat_date: Any = 
     normalized_user_id = _to_positive_int(user_id, "user_id")
     resolved_stat_date = _normalize_stat_date(stat_date)
     items = _present_subscription_items(repository.list_subscriptions(user_id=normalized_user_id))
+    _attach_launch_views(repository, items, normalized_user_id)
     daily_stats = repository.list_user_daily_subscription_stats(user_id=normalized_user_id, stat_date=resolved_stat_date)
     daily_stats_by_subscription = {
         int(item["subscription_id"]): item
@@ -1535,6 +1576,7 @@ def list_subscription_summaries(repository: Any, user_id: Any, stat_date: Any = 
         if item.get("subscription_id") is not None
     }
     return {
+        "launch_workflow": "explicit_start_v1",
         "items": [
             {
                 **item,
@@ -1601,28 +1643,18 @@ def create_subscription(repository: Any, payload: Dict[str, Any]) -> Dict[str, A
         strategy=strategy,
         require_explicit=bool(payload.get("require_delivery_targets")),
     )
-    item = repository.create_subscription_record(
-        user_id=user_id,
-        source_id=source_id,
-        status=_normalize_subscription_status(payload.get("status") or "active"),
-        strategy=strategy,
-        name=name,
-    )
-    # 过关滚仓玩法：创建即初始化周期状态，列表/详情马上能看到
-    staking_policy = strategy.get("staking_policy") if isinstance(strategy.get("staking_policy"), dict) else {}
-    if str(staking_policy.get("mode") or "") == "win_streak_roll" and hasattr(repository, "upsert_subscription_cycle_state"):
-        from pc28touzhu.domain.win_streak_roll import create_cycle_state
-        from datetime import datetime, timedelta, timezone
-        today = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
-        cycle_state = create_cycle_state(staking_policy, stat_date=today)
-        repository.upsert_subscription_cycle_state(
-            subscription_id=int(item["id"]),
+    with repository.transaction() as repository:
+        item = repository.create_subscription_record(
             user_id=user_id,
-            state=cycle_state,
-            policy=staking_policy,
-            pending_plan=None,
+            source_id=source_id,
+            status='inactive',
+            strategy=strategy,
+            name=name,
         )
-    return {"item": present_subscription_item(item)}
+        # 草稿不创建运行周期；首次发单时使用最后保存的配置初始化。
+        repository.set_subscription_launch_mode(subscription_id=int(item['id']), user_id=user_id, mode='unstarted')
+        item = repository.get_subscription(int(item['id']))
+        return {"item": present_subscription_item(item)}
 
 
 def update_subscription(repository: Any, *, subscription_id: Any, user_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1630,40 +1662,50 @@ def update_subscription(repository: Any, *, subscription_id: Any, user_id: Any, 
     normalized_user_id = _to_positive_int(user_id, "user_id")
     source_id = _to_positive_int(payload.get("source_id"), "source_id")
     _ensure_source_exists(repository, source_id)
-    current = repository.get_subscription(normalized_subscription_id)
-    if not current or int(current["user_id"]) != normalized_user_id:
-        raise ValueError("subscription_id 对应的订阅不存在")
-    strategy = _normalize_subscription_strategy(_subscription_strategy_input_from_payload(payload))
-    _ensure_subscription_delivery_targets(
-        repository,
-        user_id=normalized_user_id,
-        strategy=strategy,
-        require_explicit=bool(payload.get("require_delivery_targets")),
-    )
-    strategy_v2_input = payload.get("strategy_v2") if isinstance(payload.get("strategy_v2"), dict) else {}
-    name = str(payload.get("name") or strategy_v2_input.get("name") or "").strip()[:60] or str(current.get("name") or "")
-    item = repository.update_subscription_record(
-        subscription_id=normalized_subscription_id,
-        user_id=normalized_user_id,
-        source_id=source_id,
-        strategy=strategy,
-        status=current["status"],
-        name=name,
-    )
-    if not item:
-        raise ValueError("subscription_id 对应的订阅不存在")
-    return {"item": present_subscription_item(item)}
+    with repository.transaction() as repository:
+        current = repository.get_subscription(normalized_subscription_id)
+        if not current or int(current["user_id"]) != normalized_user_id:
+            raise ValueError("subscription_id 对应的订阅不存在")
+        strategy = _normalize_subscription_strategy(_subscription_strategy_input_from_payload(payload))
+        _ensure_subscription_delivery_targets(
+            repository,
+            user_id=normalized_user_id,
+            strategy=strategy,
+            require_explicit=bool(payload.get("require_delivery_targets")),
+        )
+        strategy_v2_input = payload.get("strategy_v2") if isinstance(payload.get("strategy_v2"), dict) else {}
+        name = str(payload.get("name") or strategy_v2_input.get("name") or "").strip()[:60] or str(current.get("name") or "")
+        item = repository.update_subscription_record(
+            subscription_id=normalized_subscription_id,
+            user_id=normalized_user_id,
+            source_id=source_id,
+            strategy=strategy,
+            status=current["status"],
+            name=name,
+        )
+        if not item:
+            raise ValueError("subscription_id 对应的订阅不存在")
+        return {"item": present_subscription_item(item)}
 
 
 def update_subscription_status(repository: Any, *, subscription_id: Any, user_id: Any, status: Any) -> Dict[str, Any]:
     normalized_subscription_id = _to_positive_int(subscription_id, "subscription_id")
     normalized_user_id = _to_positive_int(user_id, "user_id")
     normalized_status = _normalize_subscription_status(status)
-    item = repository.update_subscription_status(
-        subscription_id=normalized_subscription_id,
-        user_id=normalized_user_id,
-        status=normalized_status,
-    )
+    with repository.transaction() as unit:
+        current = unit.get_subscription(normalized_subscription_id)
+        if not current or int(current['user_id']) != normalized_user_id:
+            raise ValueError('subscription_id 对应的订阅不存在')
+        launch_mode = 'direct' if normalized_status == 'active' else 'automatic'
+        if normalized_status in {'active', 'standby'} and (normalized_status != current['status'] or current.get('launch_mode') != launch_mode):
+            if normalized_status == 'standby' and unit.subscription_has_manual_pending(subscription_id=normalized_subscription_id, user_id=normalized_user_id):
+                raise ValueError('当前有直接跟单的待发送或待结算投注，处理完成后再切换自动待命')
+            if normalized_status == 'active' and current.get('launch_mode') == 'automatic':
+                raise ValueError('该方案采用自动规则启动；请新建或复制一个直接跟单方案，避免两种启动方式同时发单')
+            unit.set_subscription_launch_mode(subscription_id=normalized_subscription_id, user_id=normalized_user_id,
+                mode=launch_mode)
+        item = unit.update_subscription_status(subscription_id=normalized_subscription_id,
+            user_id=normalized_user_id, status=normalized_status)
     if not item:
         raise ValueError("subscription_id 对应的订阅不存在")
     return {"item": present_subscription_item(item)}
@@ -2071,36 +2113,41 @@ def reset_win_streak_roll_cycle_for_restart(
 def restart_subscription_cycle(repository: Any, *, subscription_id: Any, user_id: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     normalized_subscription_id = _to_positive_int(subscription_id, "subscription_id")
     normalized_user_id = _to_positive_int(user_id, "user_id")
-    _guard_manual_cycle_reset(repository, subscription_id=normalized_subscription_id, user_id=normalized_user_id)
-    current = repository.get_subscription(normalized_subscription_id)
-    if not current or int(current.get("user_id") or 0) != normalized_user_id:
-        raise ValueError("subscription_id 对应的订阅不存在")
-    if str(current.get("status") or "") == "archived":
-        raise ValueError("已归档的跟单策略不能直接开始新一轮，请先恢复后再试")
+    with repository.transaction() as repository:
+        _guard_manual_cycle_reset(repository, subscription_id=normalized_subscription_id, user_id=normalized_user_id)
+        current = repository.get_subscription(normalized_subscription_id)
+        if not current or int(current.get("user_id") or 0) != normalized_user_id:
+            raise ValueError("subscription_id 对应的订阅不存在")
+        if str(current.get("status") or "") == "archived":
+            raise ValueError("已归档的跟单策略不能直接开始新一轮，请先恢复后再试")
+        if current.get('launch_mode') == 'automatic':
+            raise ValueError('该方案由自动规则启动，请在对应规则中恢复待命或开始新轮')
 
-    # 手动开始新一轮只重置订阅直派轮次；route 跟单的 rule_run 与在途单归规则体系管，不得波及
-    note = str(payload.get("note") or "").strip()
-    result = repository.reset_subscription_runtime(
-        subscription_id=normalized_subscription_id,
-        user_id=normalized_user_id,
-        note=note,
-        close_rule_runs=False,
-    )
-    item = repository.update_subscription_status(
-        subscription_id=normalized_subscription_id,
-        user_id=normalized_user_id,
-        status="active",
-    )
-    if not item:
-        raise ValueError("subscription_id 对应的订阅不存在")
-    # 过关玩法：开始新一轮同时重置过关周期并解封玩法当日收工
-    result["cycle_reset"] = reset_win_streak_roll_cycle_for_restart(
-        repository, subscription=item, user_id=normalized_user_id, note=note,
-    )
-    result["rule_runs_reopened"] = []
-    result["item"] = present_subscription_item(item)
-    result["restarted"] = True
-    return result
+        # 手动开始新一轮只重置订阅直派轮次；route 跟单的 rule_run 与在途单归规则体系管，不得波及
+        note = str(payload.get("note") or "").strip()
+        result = repository.reset_subscription_runtime(
+            subscription_id=normalized_subscription_id,
+            user_id=normalized_user_id,
+            note=note,
+            close_rule_runs=False,
+        )
+        item = repository.update_subscription_status(
+            subscription_id=normalized_subscription_id,
+            user_id=normalized_user_id,
+            status="active",
+        )
+        repository.set_subscription_launch_mode(subscription_id=normalized_subscription_id, user_id=normalized_user_id, mode='direct')
+        item = repository.get_subscription(normalized_subscription_id)
+        if not item:
+            raise ValueError("subscription_id 对应的订阅不存在")
+        # 过关玩法：开始新一轮同时重置过关周期并解封玩法当日收工
+        result["cycle_reset"] = reset_win_streak_roll_cycle_for_restart(
+            repository, subscription=item, user_id=normalized_user_id, note=note,
+        )
+        result["rule_runs_reopened"] = []
+        result["item"] = present_subscription_item(item)
+        result["restarted"] = True
+        return result
 
 
 def _group_targets_by_template(targets: list[Dict[str, Any]]) -> Dict[int, list[Dict[str, Any]]]:

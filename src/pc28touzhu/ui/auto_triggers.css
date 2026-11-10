@@ -921,3 +921,5 @@ select[multiple].text-input {
         justify-self: end;
     }
 }
+.rule-launch-preview { white-space: pre-line; line-height: 1.7; margin: 12px 0; padding: 14px; border: 1px solid var(--line, #dbe3ef); border-radius: 12px; font-size: 13px; }
+.rule-settlement-summary { overflow-wrap: anywhere; }

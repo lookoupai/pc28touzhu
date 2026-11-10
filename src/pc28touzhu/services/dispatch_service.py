@@ -431,6 +431,9 @@ def _dispatch_signal_for_auto_trigger_routes(
         if str(subscription.get("status") or "") not in {"active", "standby"}:
             _skip_route(route, "subscription_not_active", subscription_status=str(subscription.get("status") or ""))
             continue
+        if subscription.get('launch_mode', 'legacy') not in {'legacy', 'automatic'}:
+            _skip_route(route, 'subscription_not_automatic')
+            continue
         route_id = int(route["id"])
         if hasattr(repository, "get_auto_trigger_rule_route"):
             current_route = repository.get_auto_trigger_rule_route(route_id)

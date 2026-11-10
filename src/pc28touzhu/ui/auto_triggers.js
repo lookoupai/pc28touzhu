@@ -1,5 +1,6 @@
 (function () {
     const state = {
+        supportsExplicitStart: false,
         user: null,
         rules: [],
         events: [],
@@ -115,6 +116,11 @@
     }
 
     async function request(path, options) {
+        const changesLaunch = options?.method === 'POST' && /^\/api\/platform\/(subscriptions|auto-trigger-rules)(\/|$)/.test(path);
+        const pausesOnly = path.endsWith('/status') && ['inactive', 'archived'].includes(options?.body?.status);
+        if (changesLaunch && !pausesOnly && !state.supportsExplicitStart) {
+            throw new Error('保存与启动分离尚未在服务端生效，请重启跟单服务后刷新页面。');
+        }
         const response = await fetch(path, {
             credentials: "same-origin",
             headers: {"Content-Type": "application/json"},
@@ -527,6 +533,49 @@
             (historical ? '<button class="ghost-btn cycle-today-btn" type="button">切回今天操作</button>' : '') + '</details>';
     }
 
+    function ruleLaunchSummary(rule) {
+        const subs = state.subscriptions.filter(item => rule.scope_mode === 'all_subscriptions' ? item.status !== 'archived' : (rule.subscription_ids || []).includes(Number(item.id)));
+        const labels = Object.fromEntries(settlementRuleOptions);
+        return subs.map(sub => {
+            const routes = (rule.routes || []).filter(route => route.status === 'active');
+            const details = (rule.routes?.length ? routes : [null]).map(route => {
+                const stakingOverride = route?.staking_mode === 'override';
+                const staking = stakingOverride ? route.staking_policy || {} : sub.strategy_v2?.staking_policy || {};
+                const base = staking.base_amount || staking.fixed_amount || staking.base_stake;
+                const cycle = staking.mode === 'win_streak_roll' ? '过 ' + staking.target_streak + ' 关 · ' : '';
+                const amount = base != null ? '起始 ' + base : '跟随来源金额';
+                const override = route?.settlement_mode === 'override';
+                const policy = override ? route.settlement_policy || {} : sub.strategy_v2?.settlement_policy || {};
+                const text = policy.rule_source === 'follow_signal' || !policy.settlement_rule_id ? '跟随来源赔率' : labels[policy.settlement_rule_id] || policy.settlement_rule_id;
+                const custom = Object.keys(policy.odds_overrides || {}).length ? '（含自定义赔率）' : '';
+                return (route?.name ? route.name + '：' : '') + cycle + amount + (stakingOverride ? '（路由金额）' : '') +
+                    ' · 新轮结算：' + text + custom + (override ? '（路由覆盖）' : '（继承方案）');
+            }).join('；');
+            return (sub.name || '方案 #' + sub.id) + ' · ' + (details || '尚无启用的投递路由');
+        }).join('\n');
+    }
+
+    function renderLaunchPreview(rule) {
+        const box = $('ruleLaunchPreview');
+        const button = $('enableSavedRuleBtn');
+        if (!box || !button) return;
+        button.hidden = !rule?.id || rule.status === 'active' || rule.status === 'archived';
+        button.disabled = false;
+        if (!rule?.id) { box.textContent = '保存规则不会启动。保存后可启用规则并让关联方案待命。'; return; }
+        const windows = rule.trigger_mode === 'condition' ? '' : (rule.schedule?.windows || []).map(w => w.start + '–' + w.end).join(' / ');
+        const timing = windows ? ('北京时间 ' + windows) : '满足配置条件时';
+        const hasRoll = state.subscriptions.some(sub => (rule.scope_mode === 'all_subscriptions' || (rule.subscription_ids || []).includes(Number(sub.id))) && sub.strategy_v2?.staking_policy?.mode === 'win_streak_roll');
+        const quota = hasRoll && rule.cycle_policy?.mode === 'rule' ? ' · 过关每个方案每日最多 ' + rule.cycle_policy.max_starts_per_day + ' 轮。' : ' · 按配置的条件、时段和冷却启动。';
+        box.textContent = ruleLaunchSummary(rule) + '\n' + timing + quota +
+            (rule.status === 'active' ? '规则已启用；保存编辑不会重新启动当前轮次。' : '启用时会同时将关联方案设为自动待命；若当前时段和条件满足，可能立即开始。');
+    }
+
+    async function enableRule(ruleId) {
+        await request('/api/platform/auto-trigger-rules/' + ruleId + '/status', {method:'POST',body:{status:'active'}});
+        await loadData();
+        setStatus('规则已启用，关联方案已进入自动待命；后续只由规则启动。', false);
+    }
+
     function renderRuleList() {
         const list = $("ruleList");
         const subscriptionFilter = $("ruleSubscriptionFilter");
@@ -581,6 +630,7 @@
                     (blockedSubscriptions.length ? '<p class="meta-line">未就绪：' + escapeHtml(blockedSubscriptions.join("；")) + '</p>' : '') +
                     (hasSchedule && rule.schedule_status ? '<p class="meta-line">' + escapeHtml(isCombined ? "当前" : (rule.stat_date || "当前统计日")) + ' 定时状态：' + escapeHtml(rule.schedule_status) + '</p>' : '') +
                     (guardGroups ? '<p class="meta-line">同时达成：' + escapeHtml(guardGroups) + '</p>' : '') +
+                    '<p class="meta-line rule-settlement-summary">' + escapeHtml(ruleLaunchSummary(rule)).replace(/\n/g, '<br>') + '</p>' +
                     '<p class="meta-line">' + escapeHtml(actionText(rule.action)) + '</p>' +
                     (routeCount ? '<p class="meta-line">投注路由：' + escapeHtml(routeCount) + ' 条' + (stoppedRouteCount ? '，今日已停 ' + escapeHtml(stoppedRouteCount) + ' 条' : '') + '</p>' : '') +
                     (dailyRiskText(rule) ? '<p class="meta-line">' + escapeHtml(dailyRiskText(rule)) + '</p>' : '') +
@@ -592,10 +642,11 @@
                     cycleRuntimeHtml(rule) +
                     '<div class="rule-actions">' +
                         '<button class="tiny-btn edit-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">编辑</button>' +
+                        '<button class="tiny-btn copy-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">复制为未启用规则</button>' +
                         '<button class="tiny-btn run-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">检查</button>' +
                         (isDailyRiskStopped(rule) || stoppedRouteCount ? '<button class="tiny-btn resume-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">恢复规则日风控</button>' : '') +
                         (ruleActiveRuns(rule).length ? '<button class="tiny-btn stop-run-btn" type="button" data-id="' + escapeHtml(rule.id) + '">结束本规则当前轮次</button>' : '') +
-                        '<button class="tiny-btn status-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '" data-status="' + (rule.status === "active" ? "inactive" : "active") + '">' + (rule.status === "active" ? "停用" : "启用") + '</button>' +
+                        '<button class="tiny-btn status-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '" data-status="' + (rule.status === "active" ? "inactive" : "active") + '">' + (rule.status === "active" ? "暂停规则" : "启用规则并让方案待命") + '</button>' +
                         (rule.status === "archived" ? '' : '<button class="tiny-btn status-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '" data-status="archived">归档</button>') +
                         (rule.status === "archived" ? '<button class="tiny-btn danger-btn delete-rule-btn" type="button" data-id="' + escapeHtml(rule.id) + '">删除</button>' : '') +
                     '</div>' +
@@ -964,7 +1015,7 @@
         state.editingRuleId = item.id ? String(item.id) : "";
         form.elements.rule_id.value = state.editingRuleId;
         form.elements.name.value = item.name || "";
-        form.elements.status.value = item.status || "active";
+        form.elements.status.value = item.status || "inactive";
         form.elements.scope_mode.value = item.scope_mode || "selected_subscriptions";
         form.elements.cooldown_issues.value = String(item.cooldown_issues == null ? 10 : item.cooldown_issues);
         form.elements.trigger_mode.value = item.trigger_mode || "condition";
@@ -997,7 +1048,7 @@
         form.elements.daily_hit_rate_threshold.value = String(dailyGate.threshold || 50);
         form.elements.daily_hit_rate_min_settled.value = String(dailyGate.min_settled_count || 20);
         form.elements.daily_cancel_pending_jobs.checked = dailyRisk.cancel_pending_jobs !== false;
-        renderSubscriptionOptions(item.subscription_ids || []);
+        renderSubscriptionOptions(item.subscription_ids || (state.linkedSubscriptionId ? [Number(state.linkedSubscriptionId)] : []));
         renderConditions(item.conditions || []);
         renderGuardGroups(item.guard_groups || []);
         renderRoutes(item.routes || []);
@@ -1009,6 +1060,7 @@
         updateDailyRiskVisibility();
         updateCyclePolicyVisibility();
         renderRuleList();
+        renderLaunchPreview(item);
         setStatus("", false);
         if (window.PlatformNavigation) {
             window.PlatformNavigation.markClean(form);
@@ -1200,7 +1252,7 @@
         const form = $("ruleForm");
         return {
             name: form.elements.name.value.trim(),
-            status: form.elements.status.value,
+
             scope_mode: form.elements.scope_mode.value,
             subscription_ids: Array.from($("subscriptionSelect").selectedOptions).map(function (option) { return Number(option.value); }),
             cooldown_issues: Number(form.elements.cooldown_issues.value || 0),
@@ -1268,6 +1320,7 @@
         if (dataToken !== dataLoadToken) return;
         state.sources = payloads[0].items || [];
         state.subscriptions = payloads[1].items || [];
+        state.supportsExplicitStart = payloads[1].launch_workflow === "explicit_start_v1";
         state.deliveryTargets = (payloads[2].items || []).filter(function (item) { return item.status !== "archived"; });
         state.templates = (payloads[3].items || []).filter(function (item) { return item.status !== "archived"; });
         state.rules = payloads[4].items || [];
@@ -1321,7 +1374,7 @@
             state.editingRuleId = String((saved.item || {}).id || ruleId);
             if (window.PlatformNavigation) window.PlatformNavigation.markClean(form);
             await loadData();
-            setStatus("规则已保存。正在运行的轮次保持原设置。", false);
+            setStatus(ruleId ? "规则配置已保存，启用状态和在途轮次保持原设置。" : "规则已保存，尚未启用。核对下方启动摘要后，可启用规则并让方案待命。", false);
         } catch (error) {
             setStatus(error.message, true);
         } finally {
@@ -1338,6 +1391,16 @@
     }
 
     function attachEvents() {
+        $('enableSavedRuleBtn').addEventListener('click', async function () {
+            if (!state.editingRuleId) return;
+            this.disabled = true;
+            try { await enableRule(state.editingRuleId); } catch (error) { setStatus(error.message, true); this.disabled = false; }
+        });
+        ['input', 'change'].forEach(name => $('ruleForm').addEventListener(name, () => {
+            $('enableSavedRuleBtn').disabled = true;
+            if (!$('enableSavedRuleBtn').hidden) $('ruleLaunchPreview').textContent = '配置已修改，请先保存后再启用。';
+        }));
+
         if ($("ruleSubscriptionFilter")) $("ruleSubscriptionFilter").addEventListener("change", function () {
             state.linkedSubscriptionId = this.value;
             if (window.PlatformNavigation) window.PlatformNavigation.setQuery({subscription_id: state.linkedSubscriptionId});
@@ -1615,12 +1678,23 @@
                 }
                 return;
             }
+            if (target.classList.contains('copy-rule-btn')) {
+                const original = state.rules.find(rule => String(rule.id) === target.dataset.id);
+                if (!original) return;
+                resetForm({...original, id:null, name:original.name + ' 副本', status:'inactive',
+                    routes:(original.routes || []).map(route => ({...route,id:undefined}))});
+                setStatus('已复制到表单。保存后仍为未启用。', false);
+                return;
+            }
             if (target.classList.contains("status-rule-btn")) {
                 try {
-                    await request("/api/platform/auto-trigger-rules/" + target.dataset.id + "/status", {
-                        method: "POST",
-                        body: {status: target.dataset.status},
-                    });
+                    if (target.dataset.status === 'active') {
+                        await enableRule(target.dataset.id);
+                    } else {
+                        await request("/api/platform/auto-trigger-rules/" + target.dataset.id + "/status", {
+                            method: "POST", body: {status: target.dataset.status},
+                        });
+                    }
                     await loadData();
                 } catch (error) {
                     setStatus(error.message, true);

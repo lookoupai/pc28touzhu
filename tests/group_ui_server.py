@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import threading
@@ -44,7 +45,7 @@ def main():
         def local_app(environ, start_response):
             endpoint = environ.get("PATH_INFO", "")
             method = environ.get("REQUEST_METHOD")
-            allowed_write = endpoint == "/api/platform/subscriptions" or endpoint == "/api/platform/auto-trigger-rules"
+            allowed_write = re.fullmatch(r"/api/platform/(subscriptions|auto-trigger-rules)(/\d+(/status)?)?", endpoint) is not None
             if method != "GET" and not allowed_write:
                 start_response("403 Forbidden", [("Content-Type", "application/json")])
                 return [b'{"error":"only local configuration writes are allowed"}']
