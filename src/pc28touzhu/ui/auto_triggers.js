@@ -2,6 +2,7 @@
     const state = {
         supportsExplicitStart: false,
         supportsWindowLimits: false,
+        supportsSignalCarry: false,
         user: null,
         rules: [],
         events: [],
@@ -117,6 +118,9 @@
     }
 
     async function request(path, options) {
+        if (options?.method === 'POST' && options?.body?.schedule?.allow_pre_window_signal && !state.supportsSignalCarry) {
+            throw new Error('时段前信号设置尚未在服务端生效，请重启跟单服务后刷新页面。');
+        }
         if (options?.method === 'POST' && options?.body?.cycle_policy?.max_starts_per_window != null && !state.supportsWindowLimits) {
             throw new Error('时段启动次数设置尚未在服务端生效，请重启跟单服务后刷新页面。');
         }
@@ -573,7 +577,8 @@
         const hasRoll = state.subscriptions.some(sub => (rule.scope_mode === 'all_subscriptions' || (rule.subscription_ids || []).includes(Number(sub.id))) && sub.strategy_v2?.staking_policy?.mode === 'win_streak_roll');
         const quota = hasRoll && rule.cycle_policy?.mode === 'rule' ? ' · 过关每个方案每日最多 ' + rule.cycle_policy.max_starts_per_day + ' 轮。' : ' · 按配置的条件、时段和冷却启动。';
         const windowQuota = hasRoll && windows && rule.cycle_policy?.mode === 'rule' ? ((rule.cycle_policy.max_starts_per_window ?? 1) === 0 ? ' 每个时段不限轮数。' : ' 每个时段最多 ' + (rule.cycle_policy.max_starts_per_window ?? 1) + ' 轮。') : '';
-        box.textContent = ruleLaunchSummary(rule) + '\n' + timing + quota + windowQuota +
+        const carryHint = windows ? (rule.schedule?.allow_pre_window_signal ? ' 允许时段前仍有效信号。' : ' 仅时段内新信号。') : '';
+        box.textContent = ruleLaunchSummary(rule) + '\n' + timing + quota + windowQuota + carryHint +
             (rule.status === 'active' ? '规则已启用；保存编辑不会重新启动当前轮次。' : '启用时会同时将关联方案设为自动待命；若当前时段和条件满足，可能立即开始。');
     }
 
@@ -1038,6 +1043,7 @@
         $("cyclePolicyError").hidden = true;
         const schedule = item.schedule || {};
         form.elements.schedule_timezone.value = schedule.timezone || "Asia/Shanghai";
+        form.elements.schedule_allow_pre_window_signal.checked = Boolean(schedule.allow_pre_window_signal);
         form.elements.schedule_signal_max_age_seconds.value = String(schedule.signal_max_age_seconds || 300);
         const weekdays = new Set(schedule.weekdays || ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
         form.querySelectorAll('input[name="schedule_weekday"]').forEach(function (input) {
@@ -1287,6 +1293,7 @@
                 weekdays: Array.from(form.querySelectorAll('input[name="schedule_weekday"]:checked')).map(function (input) { return input.value; }),
                 windows: collectScheduleWindows(),
                 signal_max_age_seconds: Number(form.elements.schedule_signal_max_age_seconds.value || 300),
+                allow_pre_window_signal: form.elements.schedule_allow_pre_window_signal.checked,
             },
             condition_mode: "any",
             cycle_policy: collectCyclePolicy(),
@@ -1350,6 +1357,7 @@
         state.templates = (payloads[3].items || []).filter(function (item) { return item.status !== "archived"; });
         state.rules = payloads[4].items || [];
         state.supportsWindowLimits = payloads[4].cycle_window_limits === true;
+        state.supportsSignalCarry = payloads[4].schedule_signal_carry === true;
         state.events = payloads[5].items || [];
         renderSummary();
         renderRuleList();

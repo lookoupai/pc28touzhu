@@ -300,6 +300,7 @@ async function realApiChecks() {
         change(w, form.elements.cycle_on_bust, 'new_cycle');
         change(w, form.elements.trigger_mode, 'condition_schedule');
         change(w, form.elements.cycle_window_max_starts, '2');
+        form.elements.schedule_allow_pre_window_signal.checked = true;
         assert.equal(d.getElementById('cycleWindowQuotaField').hidden, false);
         assert.equal(d.getElementById('scheduleFields').hidden, false);
         assert.equal(d.getElementById('conditionPanel').hidden, false);
@@ -330,6 +331,7 @@ async function realApiChecks() {
         assert.equal(created.cycle_runtime[0].starts_today, 0);
         assert.equal(created.trigger_mode, 'condition_schedule');
         assert.equal(created.cycle_policy.max_starts_per_window, 2);
+        assert.equal(created.schedule.allow_pre_window_signal, true);
         assert.ok(created.conditions.length);
         assert.equal(created.schedule.windows[0].end, '24:00');
         assert.equal(d.querySelector('.schedule-window-end').value, '', '24:00 returns as an empty end field');
@@ -399,6 +401,8 @@ async function browserChecks(info) {
             await page.getByRole('heading', {name: '单独控制本规则启动的过关轮次'}).waitFor();
             await page.getByRole('button', {name: '编辑', exact: true}).first().waitFor();
             await page.locator('#triggerModeSelect').selectOption('condition_schedule');
+            await page.locator('[name="schedule_allow_pre_window_signal"]').check();
+            assert.equal(await page.locator('[name="schedule_allow_pre_window_signal"]').isChecked(), true);
             assert.ok(await page.locator('#scheduleFields').isVisible());
             assert.ok(await page.locator('#conditionPanel').isVisible());
             assert.ok(await page.locator('#guardPanel').isVisible());

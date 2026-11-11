@@ -216,7 +216,7 @@ def evaluate_roll_rule(repository: Any, rule: dict, subscriptions: list[dict], *
                     if not verdict.get('allowed'):
                         raise StartSkipped(str(verdict.get('reason') or 'signal_not_dispatchable'))
                     if timed:
-                        signal_gate = ats._scheduled_signal_gate(current_rule, signal, now=now)
+                        signal_gate = ats._scheduled_signal_gate(current_rule, signal, now=now, draw_clock=clock)
                         if not signal_gate['allowed']:
                             raise StartSkipped(signal_gate['reason'])
                 cycle_policy = current_rule.get('cycle_policy') or {'mode': 'legacy'}

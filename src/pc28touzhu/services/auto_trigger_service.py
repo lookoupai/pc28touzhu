@@ -373,7 +373,11 @@ def _normalize_schedule(value: Any) -> dict:
         payload.get("signal_max_age_seconds") if payload.get("signal_max_age_seconds") not in (None, "") else 300,
         "schedule.signal_max_age_seconds",
     )
+    allow_pre_window = payload.get("allow_pre_window_signal", False)
+    if not isinstance(allow_pre_window, bool):
+        raise ValueError("schedule.allow_pre_window_signal 必须为布尔值")
     return {
+        "allow_pre_window_signal": allow_pre_window,
         "timezone": timezone_name,
         "weekdays": normalized_weekdays,
         "windows": windows,
@@ -963,7 +967,7 @@ def list_auto_trigger_rules(repository: Any, *, user_id: Any, stat_date: Any = N
                 "cycle_runtime": repository.list_auto_trigger_cycle_runtime(rule_id=int(rule["id"]), user_id=normalized_user_id, stat_date=resolved_stat_date) if hasattr(repository, "list_auto_trigger_cycle_runtime") else [],
             }
         )
-    return {"items": items, "cycle_window_limits": True}
+    return {"items": items, "cycle_window_limits": True, "schedule_signal_carry": True}
 
 
 def list_auto_trigger_events(repository: Any, *, user_id: Any, rule_id: Any = None, status: Any = None, limit: Any = 50) -> Dict[str, Any]:
@@ -1556,7 +1560,7 @@ def _condition_dispatch_gate(
             "latest_settled_issue_no": str(latest_settled_issue_no or ""),
         }
     if rule.get("trigger_mode") == "condition_schedule":
-        time_gate = _scheduled_signal_gate(rule, signal, now=now)
+        time_gate = _scheduled_signal_gate(rule, signal, now=now, draw_clock=draw_clock)
         if not time_gate["allowed"]:
             return time_gate
     verdict = evaluate_pc28_issue_dispatch_window(
@@ -1801,19 +1805,28 @@ def _rule_time_gate(rule: Dict[str, Any], *, now: Optional[datetime] = None) -> 
     }
 
 
-def _scheduled_signal_gate(rule: Dict[str, Any], signal: dict, *, now: Optional[datetime] = None) -> dict:
+def _scheduled_signal_gate(rule: Dict[str, Any], signal: dict, *, now: Optional[datetime] = None, draw_clock: Optional[dict] = None) -> dict:
     gate = _rule_time_gate(rule, now=now)
     if not gate["allowed"]:
         return gate
     schedule = _normalize_schedule(rule.get("schedule") or {})
     local_now = _schedule_now(now, schedule["timezone"])
+    published = _parse_signal_published_at(signal)
+    if published is None or (not schedule['allow_pre_window_signal'] and published < datetime.fromisoformat(gate["window_start_at"])):
+        return {**gate, "allowed": False, "reason": "schedule_signal_before_window"}
     age = _schedule_signal_age_seconds(signal, local_now)
     if age is None or age > schedule["signal_max_age_seconds"]:
         return {**gate, "allowed": False, "reason": "schedule_signal_stale"}
-    published = _parse_signal_published_at(signal)
-    if published is None or published < datetime.fromisoformat(gate["window_start_at"]):
-        return {**gate, "allowed": False, "reason": "schedule_signal_before_window"}
-    return gate
+    if schedule['allow_pre_window_signal']:
+        # 放宽发布时间不能放宽封盘边界；缺少可靠开奖时钟时等待下一次检查。
+        if not draw_clock or draw_clock.get('stale'):
+            return {**gate, 'allowed':False, 'reason':'draw_clock_unavailable'}
+        verdict = evaluate_pc28_issue_dispatch_window(issue_no=signal.get('issue_no'), draw_clock=draw_clock, now=now)
+        if verdict.get('reason') != 'ok':
+            return {**gate, 'allowed':False, 'reason':verdict.get('reason') if not verdict['allowed'] else 'draw_clock_unavailable'}
+    return {**gate, 'allow_pre_window_signal':schedule['allow_pre_window_signal'],
+            'signal_age_seconds':age, 'signal_published_at':published.isoformat()}
+
 
 
 def _parse_signal_published_at(signal: Dict[str, Any]) -> Optional[datetime]:
@@ -2203,23 +2216,14 @@ def _evaluate_scheduled_auto_trigger_rule(
                     if signal_published_at else ""
                 ),
             }
-            # 只接受窗口开始之后新发布的信号：窗口开始前就已存在的信号送达时，
-            # 目标期号往往已经封盘，投注会被顺延记到下一期，导致结算期号整体错位。
-            if signal_published_at is None or window_start_at is None or signal_published_at < window_start_at:
+            signal_gate = _scheduled_signal_gate(rule, signal, now=now, draw_clock=draw_clock)
+            if not signal_gate['allowed']:
                 events.append(_record_event(
                     repository, rule=rule, subscription=subscription, performance=None,
-                    status="skipped", reason="schedule_signal_before_window", stat_date=stat_date,
-                    latest_issue_no=signal_issue_no, schedule_snapshot=signal_snapshot,
+                    status='skipped', reason=signal_gate['reason'], stat_date=stat_date,
+                    latest_issue_no=signal_issue_no, schedule_snapshot={**signal_snapshot, **signal_gate},
                 ))
-                summary["skipped_count"] += 1
-                continue
-            if signal_age is None or signal_age > int(schedule["signal_max_age_seconds"]):
-                events.append(_record_event(
-                    repository, rule=rule, subscription=subscription, performance=None,
-                    status="skipped", reason="schedule_signal_stale", stat_date=stat_date,
-                    latest_issue_no=signal_issue_no, schedule_snapshot=signal_snapshot,
-                ))
-                summary["skipped_count"] += 1
+                summary['skipped_count'] += 1
                 continue
             if _is_in_cooldown(repository, rule, int(subscription["id"]), signal_issue_no):
                 events.append(_record_event(

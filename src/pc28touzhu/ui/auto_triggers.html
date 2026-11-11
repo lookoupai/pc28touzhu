@@ -112,6 +112,11 @@
                                             <label><input type="checkbox" name="schedule_weekday" value="Sun" checked>周日</label>
                                         </div>
                                     </div>
+                                    <label class="check-row wide">
+                                        <input name="schedule_allow_pre_window_signal" type="checkbox">
+                                        <span>允许使用时段开始前发布的有效信号</span>
+                                    </label>
+                                    <p class="meta-line">开启后仍要求信号未过期、目标期尚可投注，并保留开奖前投递余量；关闭时只使用时段内新发布的信号。</p>
                                     <div class="field schedule-window-field">
                                         <span>定时任务（窗口）</span>
                                         <div id="scheduleWindowRows" class="schedule-window-rows"></div>
