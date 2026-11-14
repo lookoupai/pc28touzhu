@@ -63,8 +63,8 @@ METRIC_LABELS = {
 }
 EVENT_RETENTION_DAYS = {
     "skipped": 7,
-    "triggered": 30,
-    "failed": 30,
+    "triggered": 180,
+    "failed": 180,
 }
 PERFORMANCE_CACHE_TTL_SECONDS = 60
 PERFORMANCE_STALE_TTL_SECONDS = 90
