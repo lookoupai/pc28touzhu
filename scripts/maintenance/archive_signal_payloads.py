@@ -1,213 +1,380 @@
 #!/usr/bin/env python3
-"""normalized_signals / source_raw_items 载荷瘦身维护。
+"""增量归档并清空过期正文，保留记录、关联字段和所有历史归档。
 
-背景：这两张表没有清理机制、默认累积（2026-11 时合计 ~1.9GB）。
-行本身必须保留（去重幂等、账本外键、UI 历史），但行内的载荷正文在
-N 天后只剩归档价值。
-
-三步：
-  1. --archive  把 cutoff 之前的载荷导出为 gzip CSV（先归档后动手）；
-  2. --apply    分批把 cutoff 之前的载荷置空（保留全部行与元数据），
-     每批短事务，间隔 sleep，避免阻塞线上写入（应用 busy_timeout=30s）；
-  3. --vacuum   VACUUM 回收磁盘（独占锁数分钟，务必低峰期执行）。
-
-安全设计：
-  - 默认 dry-run，只打印将影响的行数与可释放字节数；
-  - --apply 前必须存在对应表的成功归档（除非 --force）；
-  - 归档后校验行数一致才允许瘦身；
-  - 不删除任何行，只清空两个载荷列，所有外键/去重/按 id 回查不受影响。
+默认只预览；--archive --apply 先持久化、校验每批归档，再清空相同版本的正文。
+--apply 只恢复 pending/ 中的新格式归档，不接受旧 CSV 或跳过归档校验。
+--vacuum 是独立的人工维护操作，自动任务不执行数据库压缩。
 """
+from __future__ import annotations
+
 import argparse
-import csv
+import fcntl
 import gzip
+import hashlib
+import json
+import math
 import os
+from pathlib import Path
 import sqlite3
 import sys
+import tempfile
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 DEFAULT_DB = "/www/wwwroot/pc28touzhu/pc28touzhu.db"
 DEFAULT_ARCHIVE_DIR = "/www/wwwroot/pc28touzhu/backups/payload_archive"
-BATCH_SIZE = 5000
-BATCH_SLEEP = 0.25
+FORMAT = "pc28-payload-archive-v2"
+MAX_BATCH_SIZE = 500
+MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
+TABLES = {
+    "normalized_signals": ("published_at", ("normalized_payload", "dispatch_block_verdict_json")),
+    "source_raw_items": ("created_at", ("raw_payload",)),
+}
+OPEN_EVENTS = "status NOT IN ('settled', 'void', 'cancelled', 'reset')"
+# failed jobs can be retried, so keep their signal payloads conservatively.
+OPEN_JOBS = "status NOT IN ('delivered', 'expired', 'skipped', 'cancelled')"
+OPEN_RUNS = "status <> 'closed'"
 
-NORMALIZED_COLUMNS = ["id", "source_id", "issue_no", "bet_type", "bet_value",
-                      "published_at", "normalized_payload", "dispatch_block_verdict_json"]
-RAW_COLUMNS = ["id", "source_id", "external_item_id", "issue_no", "published_at",
-               "raw_payload", "created_at"]
 
-
-def connect(db_path):
-    conn = sqlite3.connect(db_path, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 30000")
-    return conn
+def utc_now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def cutoff_iso(days):
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
-        "+00:00", "Z") if False else (datetime.now(timezone.utc) - timedelta(days=days)
-                                      ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if days < 1:
+        raise ValueError("保留天数必须大于 0")
+    return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def stats(conn, cutoff, table, date_col, payload_cols):
-    """分片聚合（避免长读事务阻塞线上写入）。"""
-    cond = " OR ".join("COALESCE(%s,'') != ''" % c for c in payload_cols)
-    len_sum = "COALESCE(SUM(%s),0)" % " + ".join(
-        "LENGTH(COALESCE(%s,''))" % c for c in payload_cols)
-    lo = conn.execute("SELECT MIN(id) FROM %s WHERE %s < ?" % (table, date_col), (cutoff,)).fetchone()[0]
-    hi = conn.execute("SELECT MAX(id) FROM %s WHERE %s < ?" % (table, date_col), (cutoff,)).fetchone()[0]
-    if lo is None:
-        return 0, 0
-    total_n = 0
-    total_b = 0
-    window = 200000
-    cur = lo
-    while cur <= hi:
-        agg = conn.execute(
-            "SELECT COUNT(1) AS n, %s AS b FROM %s "
-            "WHERE id >= ? AND id < ? AND %s < ? AND (%s)"
-            % (len_sum, table, date_col, cond),
-            (cur, cur + window, cutoff),
-        ).fetchone()
-        total_n += agg["n"]
-        total_b += agg["b"]
+def connect(db_path, *, readonly=False):
+    path = Path(db_path).resolve(strict=True)
+    conn = sqlite3.connect(path.as_uri() + ("?mode=ro" if readonly else "?mode=rw"),
+                           uri=True, timeout=5, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
+    if readonly:
+        conn.execute("PRAGMA query_only = ON")
+    return conn
+
+
+def database_identity(conn):
+    path = Path(conn.execute("PRAGMA database_list").fetchone()[2]).resolve(strict=True)
+    info = path.stat()
+    return {"path": str(path), "device": info.st_dev, "inode": info.st_ino}
+
+
+@contextmanager
+def maintenance_lock(db_path):
+    # One lock per canonical database path, even with different archive directories.
+    path = str(Path(db_path).resolve(strict=True)) + ".payload-maintenance.lock"
+    with open(path, "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("同一数据库已有正文维护任务运行") from None
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def has_payload(table, alias=""):
+    prefix = alias + "." if alias else ""
+    return "(" + " OR ".join("COALESCE(%s%s, '') <> ''" % (prefix, c)
+                              for c in TABLES[table][1]) + ")"
+
+
+def signal_is_idle(alias):
+    parts = []
+    for table, column, condition in (
+        ("subscription_progression_events", "signal_id", OPEN_EVENTS),
+        ("execution_jobs", "signal_id", OPEN_JOBS),
+        ("subscription_runtime_runs", "started_signal_id", OPEN_RUNS),
+        ("auto_trigger_route_subscription_runtime_runs", "started_signal_id", OPEN_RUNS),
+    ):
+        parts.append("NOT EXISTS (SELECT 1 FROM %s WHERE %s = %s.id AND %s)"
+                     % (table, column, alias, condition))
+    return " AND ".join(parts)
+
+
+def eligibility(table):
+    date_col = TABLES[table][0]
+    clauses = [has_payload(table, "t"), "t.%s < :cutoff" % date_col,
+               "julianday(t.%s) < julianday(:cutoff)" % date_col,
+               "julianday(t.created_at) < julianday(:cutoff)"]
+    if table == "normalized_signals":
+        clauses.append(signal_is_idle("t"))
+    else:
+        clauses.extend([
+            "t.parse_status = 'parsed'",
+            "NOT EXISTS (SELECT 1 FROM normalized_signals s WHERE s.source_raw_item_id = t.id "
+            "AND (NOT (%s) OR julianday(s.created_at) >= julianday(:cutoff)))" % signal_is_idle("s"),
+        ])
+    return " AND ".join(clauses)
+
+
+def prepare_indexes(conn):
+    """Partial indexes remove emptied rows from future scans. Bound each initial build."""
+    definitions = [
+        ("payload_signals_due_v2", "normalized_signals", "published_at, id", has_payload("normalized_signals")),
+        ("payload_raw_due_v2", "source_raw_items", "created_at, id", has_payload("source_raw_items") + " AND parse_status = 'parsed'"),
+        ("payload_open_events_v2", "subscription_progression_events", "signal_id", OPEN_EVENTS),
+        ("payload_open_jobs_v2", "execution_jobs", "signal_id", OPEN_JOBS),
+        ("payload_open_runs_v2", "subscription_runtime_runs", "started_signal_id", OPEN_RUNS),
+        ("payload_open_route_runs_v2", "auto_trigger_route_subscription_runtime_runs", "started_signal_id", OPEN_RUNS),
+    ]
+    for name, table, columns, condition in definitions:
+        deadline = time.monotonic() + 10
+        conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS %s ON %s(%s) WHERE %s"
+                         % (name, table, columns, condition))
+        finally:
+            conn.set_progress_handler(None, 0)
+
+
+def candidate_batches(conn, table, cutoff, batch_size=MAX_BATCH_SIZE, max_rows=50000):
+    date_col = TABLES[table][0]
+    after_date, after_id = "", 0
+    remaining = max_rows
+    while remaining > 0:
+        rows = conn.execute(
+            "SELECT t.* FROM %s t WHERE %s AND (t.%s, t.id) > (:after_date, :after_id) "
+            "ORDER BY t.%s, t.id LIMIT :limit" % (table, eligibility(table), date_col, date_col),
+            {"cutoff": cutoff, "after_date": after_date, "after_id": after_id,
+             "limit": min(batch_size, remaining)},
+        ).fetchall()
+        if not rows:
+            return
+        batch = [dict(row) for row in rows]
+        after_date, after_id = batch[-1][date_col], batch[-1]["id"]
+        remaining -= len(batch)
+        yield batch
+
+
+def json_line(value):
+    return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def sync_directory(path):
+    fd = os.open(str(path), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def durable_directory(path):
+    path = Path(path)
+    if not path.exists():
+        durable_directory(path.parent)
+        path.mkdir(mode=0o770)
+        sync_directory(path.parent)
+
+
+def publish_file(temporary, destination):
+    """A hard link publishes a complete file atomically and refuses to overwrite."""
+    os.link(str(temporary), str(destination))
+    sync_directory(destination.parent)
+    temporary.unlink()
+    sync_directory(temporary.parent)
+
+
+def archive_batch(conn, archive_dir, table, cutoff, rows):
+    if not rows or len(rows) > MAX_BATCH_SIZE:
+        raise ValueError("归档批次行数无效")
+    pending = Path(archive_dir) / "pending"
+    durable_directory(pending)
+    batch_id = uuid4().hex
+    destination = pending / (table + "_" + batch_id + ".jsonl.gz")
+    header = {"format": FORMAT, "batch_id": batch_id, "database": database_identity(conn),
+              "table": table, "cutoff": cutoff, "created_at": utc_now(), "columns": sorted(rows[0])}
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=pending, prefix=".partial-", delete=False) as out:
+            temporary = Path(out.name)
+            # Preserve group access for manual root runs and the www systemd service.
+            os.fchmod(out.fileno(), 0o660)
+            digest = hashlib.sha256()
+            with gzip.GzipFile(fileobj=out, mode="wb", mtime=0) as gz:
+                gz.write(json_line(header))
+                for row in rows:
+                    line = json_line(row)
+                    digest.update(line)
+                    gz.write(line)
+                gz.write(json_line({"rows": len(rows), "sha256": digest.hexdigest()}))
+            out.flush()
+            os.fsync(out.fileno())
+        publish_file(temporary, destination)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+    return destination
+
+
+def read_archive(conn, path):
+    # Read to EOF before any database mutation: validates gzip CRC and rejects truncation.
+    with gzip.open(path, "rb") as archive:
+        data = archive.read(MAX_ARCHIVE_BYTES + 1)
+    if len(data) > MAX_ARCHIVE_BYTES:
+        raise ValueError("归档批次超过安全大小限制")
+    lines = data.splitlines(keepends=True)
+    if len(lines) < 3 or len(lines) > MAX_BATCH_SIZE + 2:
+        raise ValueError("归档结构或行数无效")
+    header, footer = json.loads(lines[0]), json.loads(lines[-1])
+    if not isinstance(header, dict) or not isinstance(footer, dict):
+        raise ValueError("归档头尾格式无效")
+    if header.get("format") != FORMAT or header.get("database") != database_identity(conn):
+        raise ValueError("归档格式或数据库归属不匹配，拒绝清理")
+    table = header.get("table")
+    if table not in TABLES:
+        raise ValueError("归档表不受支持")
+    columns = sorted(row[1] for row in conn.execute("PRAGMA table_info(%s)" % table))
+    if header.get("columns") != columns:
+        raise ValueError("归档与当前数据库字段不匹配")
+    datetime.strptime(header["cutoff"], "%Y-%m-%dT%H:%M:%SZ")
+    if header["cutoff"] >= utc_now():
+        raise ValueError("归档截止时间必须早于当前时间")
+    digest = hashlib.sha256(b"".join(lines[1:-1])).hexdigest()
+    if footer != {"rows": len(lines) - 2, "sha256": digest}:
+        raise ValueError("归档行数或 SHA256 校验失败")
+    rows = [json.loads(line) for line in lines[1:-1]]
+    ids = set()
+    for row in rows:
+        if not isinstance(row, dict) or sorted(row) != columns or type(row.get("id")) is not int or row["id"] <= 0 or row["id"] in ids:
+            raise ValueError("归档记录字段或 ID 无效")
+        ids.add(row["id"])
+    return header, rows
+
+
+def apply_batch(conn, path, *, cutoff=None):
+    header, rows = read_archive(conn, path)
+    table = header["table"]
+    effective_cutoff = min(header["cutoff"], cutoff or header["cutoff"])
+    payload_cols = TABLES[table][1]
+    result = {"cleared": 0, "already_empty": 0, "changed": 0, "protected": 0}
+    # Archive compression/fsync happens outside this transaction. Recheck both row
+    # contents and business state under the same write lock as the UPDATE.
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for archived in rows:
+            current = conn.execute("SELECT * FROM %s WHERE id = ?" % table, (archived["id"],)).fetchone()
+            if current is not None and all(not current[c] for c in payload_cols):
+                result["already_empty"] += 1
+                continue
+            if current is None or dict(current) != archived:
+                result["changed"] += 1
+                continue
+            eligible = conn.execute("SELECT 1 FROM %s t WHERE t.id = :id AND %s" % (table, eligibility(table)),
+                                    {"id": archived["id"], "cutoff": effective_cutoff}).fetchone()
+            if not eligible:
+                result["protected"] += 1
+                continue
+            conn.execute("UPDATE %s SET %s WHERE id = ?" % (table, ", ".join(c + " = ''" for c in payload_cols)),
+                         (archived["id"],))
+            result["cleared"] += 1
         conn.commit()
-        cur += window
-        time.sleep(0.2)
-    return total_n, total_b
+    except BaseException:
+        conn.rollback()
+        raise
+    return result
 
 
-def archive_table(conn, cutoff, table, date_col, columns, out_path, batch_sleep=0.25):
-    """分片读 + 每片短事务（DELETE 日志模式下长读会阻塞线上写入）。"""
-    sel = ", ".join("COALESCE(%s,'') AS %s" % (c, c) for c in columns)
-    n = conn.execute("SELECT COUNT(1) FROM %s WHERE %s < ?" % (table, date_col), (cutoff,)).fetchone()[0]
-    lo = conn.execute("SELECT MIN(id) FROM %s WHERE %s < ?" % (table, date_col), (cutoff,)).fetchone()[0]
-    hi = conn.execute("SELECT MAX(id) FROM %s WHERE %s < ?" % (table, date_col), (cutoff,)).fetchone()[0]
-    written = 0
-    chunk = 20000
-    if lo is None:
-        return 0, 0
-    with gzip.open(out_path, "wt", encoding="utf-8", newline="", compresslevel=6) as gz:
-        writer = csv.writer(gz)
-        writer.writerow(columns)
-        cur_id = lo
-        while cur_id <= hi:
-            rows = conn.execute(
-                "SELECT %s FROM %s WHERE id >= ? AND id < ? AND %s < ? ORDER BY id"
-                % (sel, table, date_col), (cur_id, cur_id + chunk, cutoff),
-            ).fetchall()
-            for row in rows:
-                writer.writerow([row[c] for c in columns])
-                written += 1
-            conn.commit()
-            cur_id += chunk
-            time.sleep(batch_sleep)
-    if written != n:
-        raise RuntimeError("归档行数不一致 %s: 期望 %d 实际 %d" % (table, n, written))
-    return written, os.path.getsize(out_path)
+def complete_batch(path):
+    path = Path(path)
+    complete = path.parent.parent / "complete"
+    durable_directory(complete)
+    destination = complete / path.name
+    if destination.exists():
+        if not os.path.samefile(path, destination):
+            raise ValueError("完成目录存在不同的同名归档，拒绝覆盖")
+        path.unlink()  # Recovery after link succeeded but unlink was interrupted.
+        sync_directory(path.parent)
+    else:
+        publish_file(path, destination)
 
 
-def slim_table(conn, cutoff, table, date_col, payload_cols, batch_sleep):
-    total_freed = 0
-    total_rows = 0
-    lo = conn.execute("SELECT MIN(id) FROM %s WHERE %s < ?" % (table, date_col), (cutoff,)).fetchone()[0]
-    hi = conn.execute("SELECT MAX(id) FROM %s WHERE %s < ?" % (table, date_col), (cutoff,)).fetchone()[0]
-    if lo is None:
-        return 0, 0
-    cur_id = lo
-    sets = ", ".join("%s=''" % c for c in payload_cols)
-    cond = " OR ".join("COALESCE(%s,'') != ''" % c for c in payload_cols)
-    while cur_id <= hi:
-        cur = conn.execute(
-            "UPDATE %s SET %s WHERE id >= ? AND id < ? AND %s < ? AND (%s)"
-            % (table, sets, date_col, cond),
-            (cur_id, cur_id + BATCH_SIZE, cutoff),
-        )
-        conn.commit()
-        total_rows += cur.rowcount or 0
-        cur_id += BATCH_SIZE
+def run_maintenance(conn, archive_dir, *, cutoff, archive=False, apply=False,
+                    batch_size=MAX_BATCH_SIZE, max_rows=50000, batch_sleep=0.25):
+    summary = {"started_at": utc_now(), "cutoff": cutoff, "archived": 0, "resumed_batches": 0,
+               "cleared": 0, "already_empty": 0, "changed": 0, "protected": 0}
+    def finish(path, resumed=False):
+        started = time.monotonic()
+        result = apply_batch(conn, path, cutoff=cutoff)
+        complete_batch(path)
+        for key, value in result.items():
+            summary[key] += value
+        summary["resumed_batches"] += int(resumed)
+        print(json.dumps({"batch": path.name, "seconds": round(time.monotonic() - started, 3), **result},
+                         ensure_ascii=False), flush=True)
         time.sleep(batch_sleep)
-    # 释放字节数按行统计
-    return total_rows, -1
+
+    if apply:
+        for path in sorted((Path(archive_dir) / "pending").glob("*.jsonl.gz")):
+            finish(path, resumed=True)
+    if archive:
+        for table in TABLES:
+            for rows in candidate_batches(conn, table, cutoff, batch_size, max_rows):
+                path = archive_batch(conn, archive_dir, table, cutoff, rows)
+                read_archive(conn, path)
+                summary["archived"] += len(rows)
+                if apply:
+                    finish(path)
+                else:
+                    time.sleep(batch_sleep)
+    summary["finished_at"] = utc_now()
+    return summary
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--db", default=DEFAULT_DB)
-    ap.add_argument("--days", type=int, default=90, help="保留最近 N 天的载荷（默认90）")
+    ap.add_argument("--days", type=int, default=90)
     ap.add_argument("--archive-dir", default=DEFAULT_ARCHIVE_DIR)
-    ap.add_argument("--archive", action="store_true", help="导出 cutoff 前载荷到 gzip CSV")
-    ap.add_argument("--apply", action="store_true", help="执行瘦身（需先成功归档）")
-    ap.add_argument("--force", action="store_true", help="跳过归档校验直接瘦身（不建议）")
-    ap.add_argument("--vacuum", action="store_true", help="VACUUM 回收磁盘（独占锁数分钟，低峰期执行）")
-    ap.add_argument("--batch-sleep", type=float, default=BATCH_SLEEP)
-    args = ap.parse_args()
-
+    ap.add_argument("--archive", action="store_true")
+    ap.add_argument("--apply", action="store_true", help="恢复 pending/ 中通过校验的批次")
+    ap.add_argument("--vacuum", action="store_true", help="独立压缩数据库，需自行安排维护窗口")
+    ap.add_argument("--batch-size", type=int, default=MAX_BATCH_SIZE)
+    ap.add_argument("--batch-sleep", type=float, default=0.25)
+    ap.add_argument("--max-rows", type=int, default=50000, help="每张表本次最多归档行数")
+    args = ap.parse_args(argv)
+    if args.days < 1 or not 1 <= args.batch_size <= MAX_BATCH_SIZE or args.max_rows < 1 or not math.isfinite(args.batch_sleep) or args.batch_sleep < 0:
+        ap.error("days/max-rows 必须为正数，batch-size 为 1–500，batch-sleep 必须非负且有限")
+    if args.vacuum and (args.archive or args.apply):
+        ap.error("VACUUM 必须单独执行，不能与归档清理合并")
+    os.umask(0o007)
     cutoff = cutoff_iso(args.days)
-    stamp = cutoff[:10].replace("-", "")
-    conn = connect(args.db)
-    print("cutoff = %s (%d 天前)，库 = %s" % (cutoff, args.days, args.db))
-    for table, date_col, cols in (
-        ("normalized_signals", "published_at", ["normalized_payload", "dispatch_block_verdict_json"]),
-        ("source_raw_items", "created_at", ["raw_payload"]),
-    ):
-        n, b = stats(conn, cutoff, table, date_col, cols)
-        print("  %-22s 将影响 %8d 行，可释放约 %.1f MB" % (table, n, b / 1048576))
-
-    page_count = conn.execute("PRAGMA page_count").fetchone()[0]
-    freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
-    page_size = conn.execute("PRAGMA page_size").fetchone()[0]
-    print("  文件大小 %.2f GB，空闲页 %.2f GB（VACUUM 可回收）" % (
-        page_count * page_size / 1073741824, freelist * page_size / 1073741824))
-
-    archive_meta = {}
-    if args.archive:
-        os.makedirs(args.archive_dir, exist_ok=True)
-        jobs = [
-            ("normalized_signals", "published_at", NORMALIZED_COLUMNS,
-             os.path.join(args.archive_dir, "normalized_signals_payload_upto_%s.csv.gz" % stamp)),
-            ("source_raw_items", "created_at", RAW_COLUMNS,
-             os.path.join(args.archive_dir, "source_raw_items_payload_upto_%s.csv.gz" % stamp)),
-        ]
-        for table, date_col, cols, path in jobs:
-            n, size = archive_table(conn, cutoff, table, date_col, cols, path)
-            archive_meta[table] = path
-            print("归档 %s：%d 行 → %s（%.1f MB）" % (table, n, path, size / 1048576))
-
-    if args.apply:
-        if not args.force:
-            for table, date_col, cols in (
-                ("normalized_signals", "published_at", ["normalized_payload", "dispatch_block_verdict_json"]),
-                ("source_raw_items", "created_at", ["raw_payload"]),
-            ):
-                n_before, _ = stats(conn, cutoff, table, date_col, cols)
-                path = archive_meta.get(table) or (
-                    os.path.join(args.archive_dir, "*%s*" % table))
-                import glob
-                hits = glob.glob(os.path.join(args.archive_dir, "%s_payload_upto_%s.csv.gz" % (table, stamp)))
-                if not hits:
-                    raise SystemExit("缺少 %s 的归档文件，拒绝瘦身（--force 可跳过）" % table)
-        for table, date_col, cols in (
-            ("normalized_signals", "published_at", ["normalized_payload", "dispatch_block_verdict_json"]),
-            ("source_raw_items", "created_at", ["raw_payload"]),
-        ):
-            t0 = time.time()
-            rows, _ = slim_table(conn, cutoff, table, date_col, cols, args.batch_sleep)
-            print("瘦身 %s：%d 行，耗时 %.0f 秒" % (table, rows, time.time() - t0))
-
-    if args.vacuum:
-        print("开始 VACUUM（独占锁，期间线上写入会失败，预计数分钟）...")
-        t0 = time.time()
-        conn.execute("VACUUM")
-        print("VACUUM 完成，耗时 %.0f 秒" % (time.time() - t0))
-
-    page_count = conn.execute("PRAGMA page_count").fetchone()[0]
-    freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
-    print("结束：文件 %.2f GB，空闲页 %.2f GB" % (
-        page_count * page_size / 1073741824, freelist * page_size / 1073741824))
-    conn.close()
+    readonly = not (args.archive or args.apply or args.vacuum)
+    conn = connect(args.db, readonly=readonly)
+    try:
+        if readonly:
+            for table in TABLES:
+                rows_count, byte_count = 0, 0
+                for rows in candidate_batches(conn, table, cutoff, args.batch_size, args.max_rows):
+                    rows_count += len(rows)
+                    byte_count += sum(len((row[c] or "").encode("utf-8")) for row in rows for c in TABLES[table][1])
+                print("预览 %s：可归档 %s 行，正文 %.2f MiB（每表最多预览 %s 行）" %
+                      (table, rows_count, byte_count / 1048576, args.max_rows))
+            return 0
+        with maintenance_lock(args.db):
+            if args.vacuum:
+                conn.execute("VACUUM")
+                print("VACUUM 完成")
+                return 0
+            prepare_indexes(conn)
+            summary = run_maintenance(conn, args.archive_dir, cutoff=cutoff, archive=args.archive, apply=args.apply,
+                                      batch_size=args.batch_size, max_rows=args.max_rows, batch_sleep=args.batch_sleep)
+            print(json.dumps(summary, ensure_ascii=False), flush=True)
+            return 0
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, RuntimeError, sqlite3.Error, EOFError) as exc:
+        print("正文维护失败，未完成批次将在下次运行时重试：%s" % exc, file=sys.stderr)
+        sys.exit(1)

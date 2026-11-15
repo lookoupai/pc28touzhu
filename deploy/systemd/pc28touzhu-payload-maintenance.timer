@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily pc28touzhu Payload Maintenance
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 Asia/Shanghai
+Persistent=true
+AccuracySec=1min
+Unit=pc28touzhu-payload-maintenance.service
+
+[Install]
+WantedBy=timers.target

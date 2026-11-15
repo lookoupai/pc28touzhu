@@ -51,6 +51,7 @@ data/
 
 # 本地数据库备份目录
 backups/
+*.payload-maintenance.lock
 
 # spec-workflow 工具目录
 .spec-workflow/

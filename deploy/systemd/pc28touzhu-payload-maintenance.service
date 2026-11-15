@@ -1,0 +1,22 @@
+[Unit]
+Description=pc28touzhu Incremental Payload Archive
+StartLimitIntervalSec=1h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=www
+Group=www
+UMask=0007
+WorkingDirectory=/www/wwwroot/pc28touzhu
+ExecStart=/usr/bin/python3 -B -u /www/wwwroot/pc28touzhu/scripts/maintenance/archive_signal_payloads.py --archive --apply --days 90 --batch-size 200
+TimeoutStartSec=20min
+Restart=on-failure
+RestartSec=5min
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/www/wwwroot/pc28touzhu

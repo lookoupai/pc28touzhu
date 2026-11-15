@@ -2,6 +2,8 @@
 
 这个目录只提供 unit 文件模板，不会自动改系统配置。
 
+正文归档使用独立的 `pc28touzhu-payload-maintenance.timer`，每天北京时间 04:30 执行。安装权限、重试和恢复说明见 [正文归档维护](../../scripts/maintenance/README.md)；仅复制 `.service` 文件不会启用此定时器。
+
 ## 简化入口
 
 推荐直接用仓库内脚本统一管理：
