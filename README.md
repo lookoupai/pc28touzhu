@@ -401,6 +401,17 @@ TG_REPORT_TIMEZONE=Asia/Shanghai
 
 当前测试目录为 `tests/`，基于 `unittest discover`。
 
+### 来源条件请求
+
+`ai_trading_simulator_export` 来源会记录上游 `ETag`，后续带 `If-None-Match` 拉取。
+收到 `304` 时跳过重复 JSON 和已解析信号的处理，日志中的 `not_modified` 表示本轮命中次数。
+缓存按来源、URL、请求头和抓取配置隔离，有容量上限，最多 60 秒后主动做一次完整验证；
+重启后从完整响应恢复。上游不支持 `ETag` 时沿用原有流程。
+
+无信号的空结果也会重新向上游验证，同一期晚到的预测可在下一轮获得。尚未解析成功的
+本地记录继续重试，封盘拦截补派和路由补派不受 `304` 影响。轮询间隔与信号去重规则保持原样。
+先升级 AITradingSimulator 的条件请求支持，再重启来源同步 worker 即可启用。
+
 ## 部署
 
 `systemd` 模板与说明见：

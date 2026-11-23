@@ -2,6 +2,12 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import time
+from collections import OrderedDict
+from dataclasses import dataclass
+from threading import RLock
+from weakref import WeakKeyDictionary
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -15,6 +21,54 @@ DEFAULT_FETCH_HEADERS = {
         "Chrome/123.0.0.0 Safari/537.36"
     ),
 }
+
+
+@dataclass
+class _HTTPJSONResult:
+    payload: Any = None
+    etag: Optional[str] = None
+    not_modified: bool = False
+
+
+class _ValidatorCache:
+    def __init__(self):
+        self.entries = OrderedDict()
+        self.lock = RLock()
+
+    def get(self, key):
+        with self.lock:
+            entry = self.entries.get(key)
+            if entry and entry['expires_at'] > time.monotonic():
+                self.entries.move_to_end(key)
+                return dict(entry)
+            self.entries.pop(key, None)
+            return None
+
+    def put(self, key, entry):
+        with self.lock:
+            if not entry or not entry.get('etag'):
+                self.entries.pop(key, None)
+                return
+            self.entries[key] = dict(entry)
+            self.entries.move_to_end(key)
+            while len(self.entries) > 128:
+                self.entries.popitem(last=False)
+
+
+_validator_caches = WeakKeyDictionary()
+_validator_lock = RLock()
+
+
+def _validator_cache_for(repository):
+    with _validator_lock:
+        if repository not in _validator_caches:
+            _validator_caches[repository] = _ValidatorCache()
+        return _validator_caches[repository]
+
+
+def _unchanged_source_result(source):
+    return {'source': source, 'raw_item': None, 'created': False,
+            'skipped': True, 'skipped_reason': 'upstream_not_modified'}
 
 
 def _utc_now_iso() -> str:
@@ -53,13 +107,20 @@ def _read_http_error_body(error: urllib.error.HTTPError) -> str:
     return body[:280]
 
 
-def _default_fetch_json(url: str, *, headers: Optional[Dict[str, str]] = None, timeout: int = 10) -> Any:
+def _default_fetch_json(url: str, *, headers: Optional[Dict[str, str]] = None, timeout: int = 10, include_metadata: bool = False) -> Any:
     request = urllib.request.Request(url, headers=_merge_headers(headers), method="GET")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             charset = response.headers.get_content_charset() or "utf-8"
-            return json.loads(response.read().decode(charset))
+            payload = json.loads(response.read().decode(charset))
+            if include_metadata:
+                return _HTTPJSONResult(payload=payload, etag=response.headers.get('ETag'))
+            return payload
     except urllib.error.HTTPError as exc:
+        if exc.code == 304 and include_metadata:
+            etag = exc.headers.get('ETag') if exc.headers else None
+            exc.close()
+            return _HTTPJSONResult(etag=etag, not_modified=True)
         body = _read_http_error_body(exc)
         message = "上游接口返回 HTTP %s %s" % (exc.code, exc.reason)
         if body:
@@ -182,11 +243,55 @@ def fetch_source_to_raw_item(repository: Any, source_id: int, fetcher=None) -> D
 
     headers = _merge_headers(fetch_config.get("headers") if isinstance(fetch_config.get("headers"), dict) else {})
     timeout = int(fetch_config.get("timeout") or 10)
-    payload = (fetcher or _default_fetch_json)(url, headers=headers, timeout=timeout)
+    validator_cache = None
+    validator_key = None
+    response_etag = None
+    if fetcher is None and source_type == 'ai_trading_simulator_export':
+        validator_cache = _validator_cache_for(repository)
+        # Isolate URLs, credentials and adapter settings. A source/config change
+        # must never reuse another source's validator or already-parsed marker.
+        validator_key = (int(source_id), hashlib.sha256(json.dumps(
+            [url, headers, fetch_config], sort_keys=True, ensure_ascii=False
+        ).encode('utf-8')).hexdigest())
+        cached = validator_cache.get(validator_key)
+        conditional_headers = {k: v for k, v in headers.items() if k.lower() != 'if-none-match'}
+        if cached:
+            conditional_headers['If-None-Match'] = cached['etag']
+        response = _default_fetch_json(url, headers=conditional_headers, timeout=timeout, include_metadata=True)
+        if response.not_modified:
+            if cached and (cached['raw_item_id'] is None or cached['parsed']):
+                return _unchanged_source_result(source)
+            if cached:
+                raw_item = repository.get_raw_item(cached['raw_item_id'])
+                if raw_item:
+                    # Preserve retries when a previous normalize step failed.
+                    if raw_item.get('parse_status') == 'parsed':
+                        cached['parsed'] = True
+                        validator_cache.put(validator_key, cached)
+                        return _unchanged_source_result(source)
+                    return {'source': source, 'raw_item': raw_item, 'created': False}
+            # A pruned raw item or missing local state needs a full response.
+            conditional_headers.pop('If-None-Match', None)
+            response = _default_fetch_json(url, headers=conditional_headers, timeout=timeout, include_metadata=True)
+            if response.not_modified:
+                raise ValueError('上游在未携带缓存版本时仍返回 HTTP 304')
+        payload, response_etag = response.payload, response.etag
+    else:
+        payload = (fetcher or _default_fetch_json)(url, headers=headers, timeout=timeout)
+
+    def remember(raw_item=None):
+        if validator_cache is not None:
+            validator_cache.put(validator_key, {
+                'etag': response_etag,
+                'raw_item_id': raw_item.get('id') if raw_item else None,
+                'parsed': raw_item.get('parse_status') == 'parsed' if raw_item else True,
+                'expires_at': time.monotonic() + 60,
+            })
 
     # 共识类来源没有满足门槛的期号时用空 items 表示“本期无信号”，这是正常状态。
     # 不创建 raw_item，避免后续标准化把空结果误报成来源故障。
     if source_type == "ai_trading_simulator_export" and isinstance(payload, dict) and payload.get("items") == []:
+        remember()
         return {
             "source": source,
             "raw_item": None,
@@ -200,4 +305,5 @@ def fetch_source_to_raw_item(repository: Any, source_id: int, fetcher=None) -> D
         if source_type == "ai_trading_simulator_export"
         else _create_http_json_raw_item(repository, source_id, fetch_config, payload)
     )
+    remember(raw_item)
     return {"source": source, "raw_item": raw_item, "created": created}
