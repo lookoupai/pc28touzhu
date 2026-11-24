@@ -1155,6 +1155,9 @@ def _dispatch_signal(
         draw_clock=draw_clock,
         now=_utc_now(),
     )
+    if issue_window.get('allowed') and issue_window.get('send_before'):
+        if (_parse_iso_z(issue_window['send_before'])-_utc_now()).total_seconds()<10:
+            issue_window={**issue_window,'allowed':False,'reason':'insufficient_send_budget'}
     if not issue_window["allowed"] or (retry_active_routes_only and issue_window["reason"] != "ok"):
         # 拦截落标记供重试扫描补派（典型场景：开奖接口 countdown 字段在开奖后短暂未跳新值，
         # 余量被低估）；verdict 快照一并落库留作核查凭据

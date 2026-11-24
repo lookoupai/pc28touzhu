@@ -47,6 +47,25 @@
                                         注意：<code>@userinfobot</code> 属于第三方机器人，介意隐私的群请谨慎添加；如果群组有 <code>@username</code>，也可以直接尝试填写 <code>@username</code>。
                                     </small>
                                 </label>
+                                <label>
+                                    <span>投注确认协议</span>
+                                    <select class="text-input" name="betting_mode">
+                                        <option value="legacy">兼容旧流程（不核对受理）</option>
+                                        <option value="announcement">开盘公告 + 投注回执</option>
+                                        <option value="delay">开奖后等待 + 投注回执</option>
+                                        <option value="receipt_only">私聊回执（明确期号）</option>
+                                    </select>
+                                    <small class="field-hint">确认协议支持大小、单双、组合的“投注成功 / 已经封盘”回复。其他格式需接入对应协议。</small>
+                                </label>
+                                <label>
+                                    <span>受理机器人数字 ID</span>
+                                    <input class="text-input" name="betting_bot_id" type="number" min="1" placeholder="只识别这个机器人的公告和回复">
+                                </label>
+                                <label>
+                                    <span>开奖后等待秒数</span>
+                                    <input class="text-input" name="betting_delay" type="number" min="0" max="150" value="0">
+                                    <small class="field-hint">仅“开奖后等待”模式使用，不会延长原发送截止时间。</small>
+                                </label>
                             </div>
                             <div class="form-actions">
                                 <button id="createTargetBtn" class="primary-btn" type="submit">新增投递群组</button>

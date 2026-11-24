@@ -194,7 +194,7 @@
         const deliveredCount = state.jobs.filter(function (item) { return item.status === "delivered"; }).length;
         const pendingCount = state.jobs.filter(function (item) { return item.status === "pending"; }).length;
         const issueCount = state.jobs.filter(function (item) {
-            return item.status === "failed" || item.status === "expired" || item.status === "skipped";
+            return ["failed", "expired", "skipped", "rejected", "unconfirmed"].includes(item.status);
         }).length;
         const retryableCount = state.jobs.filter(function (item) { return Boolean(item.can_retry); }).length;
 
@@ -215,7 +215,7 @@
 
         recordsTableBody.innerHTML = state.jobs.map(function (item) {
             const statusClass = "job-pill is-" + escapeHtml(String(item.status || "pending"));
-            const errorText = item.last_error_message || item.error_message || "--";
+            const errorText = item.last_error_message || item.error_message || (item.acceptance_status === "accepted" ? "投注受理已确认" : "--");
             const retryCell = item.can_retry
                 ? '<button class="ghost-btn retry-job-btn" type="button" data-job-id="' + item.id + '">重试</button>'
                 : '<span class="cell-muted">--</span>';
@@ -237,7 +237,7 @@
 
         recordsCardList.innerHTML = state.jobs.map(function (item) {
             const statusClass = "job-pill is-" + escapeHtml(String(item.status || "pending"));
-            const errorText = item.last_error_message || item.error_message || "--";
+            const errorText = item.last_error_message || item.error_message || (item.acceptance_status === "accepted" ? "投注受理已确认" : "--");
             const retryAction = item.can_retry
                 ? '<button class="ghost-btn retry-job-btn" type="button" data-job-id="' + item.id + '">重试任务</button>'
                 : '<span class="cell-muted">当前不可重试</span>';

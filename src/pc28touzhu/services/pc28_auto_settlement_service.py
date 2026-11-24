@@ -97,7 +97,8 @@ def _resolve_pending_win_streak_cycles(repository: Any) -> Dict[str, Any]:
                 float(event.get("stake_amount") or 0) + float(event.get("net_delta") or 0)
                 for event in leg_events
             ), 2)
-            new_state = apply_period_outcome(policy, snapshot_state, stake_total=stake_total, payout_total=payout_total)
+            all_void = all(event['status']=='void' for event in leg_events)
+            new_state = dict(snapshot_state) if all_void else apply_period_outcome(policy, snapshot_state, stake_total=stake_total, payout_total=payout_total)
             day_close = resolve_day_close_action(policy, new_state)
             close_result: Dict[str, Any] = {"closed": False}
             if day_close.get("close_day") and (not automatic or (policy.get("_cycle_policy") or {}).get("mode", "legacy") == "legacy"):

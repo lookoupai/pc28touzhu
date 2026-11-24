@@ -5399,6 +5399,11 @@
             }
             const submitButton = document.getElementById("createTargetBtn");
             const templateId = String(form.template_id.value || "").trim();
+            const bettingProtocol = {
+                mode: form.betting_mode ? form.betting_mode.value : "legacy",
+                bot_id: form.betting_bot_id ? Number(form.betting_bot_id.value || 0) : 0,
+                opening_delay_seconds: form.betting_delay ? Number(form.betting_delay.value || 0) : 0,
+            };
             setButtonBusy(submitButton, true, editId ? "保存中..." : "创建中...");
             if (editId) {
                 await request("/api/platform/delivery-targets/" + editId, {
@@ -5410,6 +5415,7 @@
                         target_name: form.target_name.value,
                         template_id: templateId ? Number(templateId) : null,
                         dispatch_mode: form.dispatch_mode.value,
+                        betting_protocol: bettingProtocol,
                     },
                 });
             } else {
@@ -5422,6 +5428,7 @@
                         target_name: form.target_name.value,
                         template_id: templateId ? Number(templateId) : null,
                         dispatch_mode: form.dispatch_mode.value,
+                        betting_protocol: bettingProtocol,
                     },
                 });
             }
@@ -5454,6 +5461,10 @@
                 targetForm.elements.template_id.value = item.template_id == null ? "" : String(item.template_id);
                 targetForm.elements.target_name.value = item.target_name || "";
                 targetForm.elements.dispatch_mode.value = item.dispatch_mode || "shared";
+                const protocol = item.betting_protocol || {};
+                targetForm.elements.betting_mode.value = protocol.mode || "legacy";
+                targetForm.elements.betting_bot_id.value = protocol.bot_id || "";
+                targetForm.elements.betting_delay.value = protocol.opening_delay_seconds || 0;
                 targetForm.elements.target_key.value = item.target_key || "";
                 syncTargetKeyPreview();
                 setFormEditingState(targetForm, document.getElementById("createTargetBtn"), cancelTargetEditBtn, true, "保存群组");

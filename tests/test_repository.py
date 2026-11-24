@@ -317,7 +317,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
             planned_message_text="大10",
             stake_plan={"mode": "flat", "amount": 10},
             execute_after=now,
-            expire_at=utc_now_iso(),
+            expire_at=(datetime.now(timezone.utc)+timedelta(minutes=2)).isoformat().replace("+00:00","Z"),
             status="failed",
         )
         self.repo.report_job_result(
@@ -381,11 +381,9 @@ class DatabaseRepositoryTests(unittest.TestCase):
             error_message="telethon timeout",
         )
 
-        retried = self.repo.retry_execution_job(job_id=job_id, user_id=user_id)
-        self.assertEqual(retried["status"], "pending")
-        self.assertIsNone(retried["error_message"])
-        self.assertGreaterEqual(_parse_dt(retried["expire_at"]), _parse_dt(retried["execute_after"]))
-        self.assertGreaterEqual(_parse_dt(retried["execute_after"]), now_dt)
+        # An unclassified timeout cannot be safely re-sent.
+        with self.assertRaises(ValueError):
+            self.repo.retry_execution_job(job_id=job_id, user_id=user_id)
 
     def test_requeue_auto_retry_jobs_reschedules_failed_job_after_backoff(self):
         user_id = self.repo.create_user("auto-retry-user")
@@ -427,11 +425,9 @@ class DatabaseRepositoryTests(unittest.TestCase):
         )
 
         requeued = self.repo.requeue_auto_retry_jobs(max_attempts=3, base_delay_seconds=30, limit=10)
-        self.assertEqual(len(requeued), 1)
-        job = self.repo.get_execution_job(job_id)
-        self.assertIsNotNone(job)
-        self.assertEqual(job["status"], "pending")
-        self.assertIsNone(job["error_message"])
+        # An expired original deadline must never be extended by automatic retry.
+        self.assertEqual(requeued, [])
+        self.assertEqual(self.repo.get_execution_job(job_id)["status"], "expired")
 
     def test_upsert_executor_heartbeat_is_idempotent(self):
         now = utc_now_iso()

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+import os
+from pathlib import Path
 
 from pc28touzhu.config import get_runtime_config
 from pc28touzhu.services.pc28_draw_service import get_pc28_draw_clock
@@ -20,13 +22,14 @@ def main() -> int:
         token=executor.executor_api_token,
         executor_id=executor.executor_id,
     )
-    state_store = ExecutorStateStore()
+    state_store = ExecutorStateStore(os.getenv('EXECUTOR_STATE_PATH', str(Path(config.platform.database_path).parent / ('executor-state-' + executor.executor_id + '.db'))))
     sender_pool = TelethonSenderPool(
         api_id=executor.telegram_api_id,
         api_hash=executor.telegram_api_hash,
         default_phone=executor.telegram_phone,
         default_session=executor.telegram_session,
         draw_clock_provider=get_pc28_draw_clock,
+        job_validator=api_client.validate_claim,
     )
 
     try:
@@ -39,16 +42,17 @@ def main() -> int:
                     executor_id=executor.executor_id,
                     limit=executor.pull_limit,
                     max_concurrent=4,
-                    version="telegram-executor/0.4.0",
+                    version="telegram-executor/0.5.0",
                     capabilities={
                         "send": True,
                         "provider": "telethon",
                         "account_scoped_concurrency": True,
                         "send_window_guard": True,
+                        "betting_acceptance_v1": True,
                     },
                 )
                 print(
-                    "cycle pulled=%s delivered=%s failed=%s expired=%s skipped=%s replayed=%s"
+                    "cycle pulled=%s delivered=%s failed=%s expired=%s skipped=%s replayed=%s waiting=%s rejected=%s unconfirmed=%s"
                     % (
                         result["pulled_count"],
                         result["delivered_count"],
@@ -56,6 +60,7 @@ def main() -> int:
                         result["expired_count"],
                         result["skipped_count"],
                         result["replayed_count"],
+                        result['waiting_count'], result['rejected_count'], result['unconfirmed_count'],
                     ),
                     flush=True,
                 )

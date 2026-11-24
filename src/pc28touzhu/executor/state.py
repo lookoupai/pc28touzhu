@@ -1,15 +1,56 @@
 from __future__ import annotations
 
 import threading
+import json
+import os
+import sqlite3
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
 
 class ExecutorStateStore:
-    def __init__(self):
+    def __init__(self, path=None):
         self._records: Dict[str, Dict[str, Optional[str]]] = {}
         self._attempts: Dict[str, int] = {}
         self._lock = threading.RLock()
+        self._path = str(path) if path else None
+        if self._path:
+            Path(self._path).parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(self._path, os.O_CREAT | os.O_RDWR, 0o600)
+            os.close(fd)
+            with sqlite3.connect(self._path) as conn:
+                conn.execute('CREATE TABLE IF NOT EXISTS send_records(identity TEXT PRIMARY KEY,payload TEXT NOT NULL)')
+                for identity, payload in conn.execute('SELECT identity,payload FROM send_records'):
+                    record=json.loads(payload);self._records[identity]=record
+                    self._attempts[identity]=int(record.get('attempt_no') or 0)
+
+    def _save(self, identity):
+        if self._path:
+            with sqlite3.connect(self._path) as conn:
+                conn.execute('INSERT INTO send_records VALUES (?,?) ON CONFLICT(identity) DO UPDATE SET payload=excluded.payload',
+                             (identity,json.dumps(self._records[identity],ensure_ascii=False)))
+
+    def prepare(self, job, executor_id, attempt_no):
+        with self._lock:
+            self._records[job.idempotency_key]={'delivery_status':'sending','executor_id':executor_id,
+                'job_id':job.job_id,'attempt_no':attempt_no,'attempt_token':job.attempt_token,
+                'executed_at':datetime.now(timezone.utc).isoformat()}
+            self._save(job.idempotency_key)
+
+    def store_result(self, job, payload):
+        with self._lock:
+            self._records[job.idempotency_key]={**payload,'job_id':job.job_id,'pending_report':True}
+            self._save(job.idempotency_key)
+
+    def pending_reports(self):
+        with self._lock:
+            return [(key,dict(value)) for key,value in self._records.items() if value.get('pending_report')]
+
+    def reported(self, identity):
+        with self._lock:
+            self._records[identity]['pending_report']=False
+            self._save(identity)
 
     def has_delivered(self, idempotency_key: str) -> bool:
         with self._lock:

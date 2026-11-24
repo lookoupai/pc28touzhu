@@ -1334,6 +1334,13 @@ class PlatformApiApplication:
             return _json_response(start_response, 200, payload)
 
         report_prefix = "/api/executor/jobs/"
+        if path.startswith(report_prefix) and path.endswith('/validate'):
+            if method != 'POST':
+                return _json_response(start_response,405,{'error':'method not allowed'})
+            job_id=path[len(report_prefix):-len('/validate')]
+            body=_read_json_body(environ)
+            return _json_response(start_response,200,self.repository.validate_execution_claim(
+                job_id=job_id,executor_id=str(environ.get('HTTP_X_EXECUTOR_ID') or ''),token=body.get('attempt_token')))
         if path.startswith(report_prefix) and path.endswith("/report"):
             if method != "POST":
                 return _json_response(start_response, 405, {"error": "method not allowed"})

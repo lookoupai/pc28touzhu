@@ -802,7 +802,7 @@ class FakeRepository:
                 return item
         return None
 
-    def update_delivery_target_record(self, *, delivery_target_id, user_id, telegram_account_id, executor_type, target_key, target_name="", template_id=None, dispatch_mode=None):
+    def update_delivery_target_record(self, *, delivery_target_id, user_id, telegram_account_id, executor_type, target_key, target_name="", template_id=None, dispatch_mode=None, betting_protocol=None):
         for item in self.targets:
             if item["id"] == int(delivery_target_id) and item["user_id"] == int(user_id):
                 item["telegram_account_id"] = telegram_account_id
@@ -830,7 +830,7 @@ class FakeRepository:
                 return True
         return False
 
-    def update_delivery_target_record(self, *, delivery_target_id, user_id, telegram_account_id, executor_type, target_key, target_name="", template_id=None, dispatch_mode=None):
+    def update_delivery_target_record(self, *, delivery_target_id, user_id, telegram_account_id, executor_type, target_key, target_name="", template_id=None, dispatch_mode=None, betting_protocol=None):
         for item in self.targets:
             if item["id"] == int(delivery_target_id) and item["user_id"] == int(user_id):
                 item["telegram_account_id"] = telegram_account_id
@@ -4838,7 +4838,7 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(status, "200 OK")
         self.assertEqual(len(payload["items"]), 1)
         self.assertEqual(payload["items"][0]["status"], "failed")
-        self.assertTrue(payload["items"][0]["can_retry"])
+        self.assertFalse(payload["items"][0]["can_retry"])
         self.assertEqual(payload["items"][0]["last_error_message"], "network timeout")
 
     def test_retry_execution_job_endpoint_resets_status(self):
@@ -5017,9 +5017,9 @@ class PlatformApiApplicationTests(unittest.TestCase):
         self.assertEqual(len(payload["items"]), 1)
         self.assertEqual(payload["items"][0]["job_id"], 11)
         self.assertEqual(payload["items"][0]["executor_instance_id"], "executor-001")
-        self.assertTrue(payload["items"][0]["can_retry"])
-        self.assertIn(payload["items"][0]["auto_retry_state"], {"scheduled", "due"})
-        self.assertTrue(payload["items"][0]["auto_retry_enabled"])
+        self.assertFalse(payload["items"][0]["can_retry"])
+        self.assertEqual(payload["items"][0]["auto_retry_state"], "blocked")
+        self.assertFalse(payload["items"][0]["auto_retry_enabled"])
 
     def test_list_alerts_returns_executor_and_retry_exhausted_alerts(self):
         self.repository.upsert_executor_heartbeat(

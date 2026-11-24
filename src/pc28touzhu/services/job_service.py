@@ -15,7 +15,7 @@ from pc28touzhu.domain.models import (
 from pc28touzhu.services.protocols import JobRepositoryProtocol
 
 
-ALLOWED_DELIVERY_STATUSES = {"delivered", "failed", "expired", "skipped"}
+ALLOWED_DELIVERY_STATUSES = {"delivered", "failed", "expired", "skipped", "pending", "unconfirmed", "rejected"}
 
 
 def utc_now_iso() -> str:
@@ -106,9 +106,17 @@ def pull_jobs(
         base_delay_seconds=auto_retry_base_delay_seconds,
         limit=limit * 5,
     )
-    rows = repository.pull_ready_jobs(executor_id=executor_id, limit=limit)
+    pull = getattr(repository, 'claim_ready_jobs', repository.pull_ready_jobs)
+    rows = pull(executor_id=executor_id, limit=limit)
+    items = [item.to_dict() for item in parse_job_pull_items(rows)]
+    for item, row in zip(items, rows):
+        if (row.get('target') or {}).get('metadata'):
+            item['target']['metadata'] = row['target']['metadata']
+        for key in ('attempt_token','attempt_no','telegram_random_id'):
+            if key in row:
+                item[key] = row[key]
     return {
-        "items": [item.to_dict() for item in parse_job_pull_items(rows)],
+        "items": items,
         "auto_retried_count": retry_result["requeued_count"],
         "auto_retried_job_ids": retry_result["job_ids"],
     }

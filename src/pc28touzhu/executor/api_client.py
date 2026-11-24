@@ -41,3 +41,7 @@ class ExecutorApiClient:
     def report_job(self, *, job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._request("POST", "/api/executor/jobs/%s/report" % job_id, payload=payload)
 
+    def validate_claim(self, job):
+        return self._request('POST','/api/executor/jobs/%s/validate' % job.job_id,
+                             payload={'attempt_token':job.attempt_token})
+

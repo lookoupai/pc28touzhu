@@ -180,7 +180,7 @@ class DispatchIsolationTests(unittest.TestCase):
         self.assertEqual(self.repo.get_progression_event(jobs[0]["progression_event_id"])["status"], "pending")
         self.now += timedelta(minutes=4)
 
-        self.assertEqual(self.repo.expire_due_jobs(), 1)
+        self.assertEqual(self.repo.expire_due_jobs(), 2)
         self.assertEqual(self.repo.get_progression_event(jobs[0]["progression_event_id"])["status"], "void")
 
     def test_late_delivery_report_restores_auto_expired_event_for_settlement(self):

@@ -85,8 +85,27 @@ class WinStreakRollDispatchTests(unittest.TestCase):
         return dispatch_signal(self.repo, self._signal()["id"], subscription_id=self.subscription["id"])
 
     def _report(self, job, status, *, executed_at=None):
-        return self.repo.report_job_result(str(job["id"]), "test-executor", 1, status,
-            "message-1" if status == "delivered" else None, executed_at or self._iso_now(), {}, None)
+        self.repo.upsert_executor_heartbeat("test-executor", "test", {"betting_acceptance_v1": True}, "online", self._iso_now())
+        current = self.repo.get_execution_job(job['id'])
+        claims = self.repo.claim_ready_jobs('test-executor',1) if current['status']=='pending' else []
+        leader = next((c for c in claims if int(c['job_id']) == (job.get('send_with_job_id') or job['id'])),None)
+        with self.repo._connect() as conn:
+            row=conn.execute('SELECT claim_token FROM execution_jobs WHERE id=?',(job['id'],)).fetchone()
+        raw={'attempt_token':row['claim_token']} if row['claim_token'] else {}
+        if status=='failed': raw.update(retryable=True,failure_stage='connect')
+        return self.repo.report_job_result(str(job["id"]), "test-executor", (leader or {}).get('attempt_no',1), status,
+            "message-1" if status == "delivered" else None, executed_at or self._iso_now(), raw, None)
+
+    def test_rejected_roll_message_does_not_advance_real_bet_counters(self):
+        jobs=self._dispatch()['jobs']
+        before=self.repo.get_subscription_cycle_state(subscription_id=self.subscription['id'])
+        frozen=before['pending_plan']['state']
+        self._report(jobs[0],'rejected')
+        self.assertEqual(_resolve_pending_win_streak_cycles(self.repo)['resolved_count'],1)
+        after=self.repo.get_subscription_cycle_state(subscription_id=self.subscription['id'])
+        for key in ('balance','periods','win_streak','cycle_stake','day_pnl'):
+            self.assertEqual(after.get(key),frozen.get(key),key)
+        self.assertFalse(after.get('pending_plan'))
 
     def test_all_structures_combine_correct_stakes_even_with_source_text_and_limit_one(self):
         for structure, expected in {"A": "单70 小双30", "B": "单70 大双30", "C": "双70 小单30", "D": "双70 大单30"}.items():
@@ -134,7 +153,7 @@ class WinStreakRollDispatchTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "report unavailable"):
             run_executor_cycle_concurrent(**args)
         replay = run_executor_cycle_concurrent(**args)
-        self.assertEqual(replay["replayed_count"], 1)
+        self.assertEqual(replay["pulled_count"], 0)
         self.assertEqual(sent, ["单70 小双30"])
         self.assertEqual(self.repo.pull_ready_jobs("test-executor"), [])
         jobs = self.repo.list_execution_jobs(user_id=self.user_id)
@@ -155,7 +174,7 @@ class WinStreakRollDispatchTests(unittest.TestCase):
         with patch.object(self.repo, "_sync_progression_event_delivery_status", side_effect=fail_second):
             with self.assertRaisesRegex(RuntimeError, "second leg failed"):
                 self._report(result["jobs"][0], "delivered")
-        self.assertEqual({j["status"] for j in self.repo.list_execution_jobs(user_id=self.user_id)}, {"pending"})
+        self.assertEqual({j["status"] for j in self.repo.list_execution_jobs(user_id=self.user_id)}, {"sending"})
         self.assertEqual({self.repo.get_progression_event(j["progression_event_id"])["status"] for j in result["jobs"]}, {"pending"})
         self.assertEqual({j["attempt_count"] for j in self.repo.list_execution_jobs(user_id=self.user_id)}, {0})
 
@@ -198,7 +217,7 @@ class WinStreakRollDispatchTests(unittest.TestCase):
         for status in ("expired", "skipped"):
             with self.subTest(status=status):
                 self._report(jobs[0], status)
-                with self.assertRaisesRegex(ValueError, "合并投注只能"):
+                with self.assertRaisesRegex(ValueError, "任务不支持安全重试"):
                     self.repo.retry_execution_job(job_id=jobs[1]["id"], user_id=self.user_id)
                 self.assertEqual(self.repo.pull_ready_jobs("test-executor"), [])
 
@@ -225,7 +244,7 @@ class WinStreakRollDispatchTests(unittest.TestCase):
         self._report(jobs[0], "failed", executed_at=past)
         self.repo.reset_subscription_runtime(subscription_id=self.subscription["id"], user_id=self.user_id)
         self.assertEqual(self.repo.requeue_auto_retry_jobs(max_attempts=3, base_delay_seconds=5), [])
-        with self.assertRaisesRegex(ValueError, "合并投注只能"):
+        with self.assertRaisesRegex(ValueError, "任务不支持安全重试"):
             self.repo.retry_execution_job(job_id=jobs[1]["id"], user_id=self.user_id)
         self.assertEqual(self.repo.pull_ready_jobs("test-executor"), [])
 

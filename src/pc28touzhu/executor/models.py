@@ -17,6 +17,14 @@ class JobSendUnconfirmed(RuntimeError):
         self.details = dict(details or {})
 
 
+class JobSendDeferred(JobSendBlocked):
+    """No RPC was sent; return this job to the queue without consuming an attempt."""
+
+
+class JobSendRetryable(JobSendBlocked):
+    """A classified transient failure with a stable transport identity."""
+
+
 def _parse_iso8601(value: str | datetime) -> datetime:
     if isinstance(value, datetime):
         if value.tzinfo is None:
@@ -69,6 +77,9 @@ class ExecutorJob:
     idempotency_key: str
     execute_after: datetime
     expire_at: datetime
+    attempt_token: Optional[str] = None
+    attempt_no: int = 0
+    telegram_random_id: Optional[int] = None
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "ExecutorJob":
@@ -110,6 +121,9 @@ class ExecutorJob:
             idempotency_key=str(payload["idempotency_key"]),
             execute_after=_parse_iso8601(payload["execute_after"]),
             expire_at=_parse_iso8601(payload["expire_at"]),
+            attempt_token=payload.get('attempt_token'),
+            attempt_no=int(payload.get('attempt_no') or 0),
+            telegram_random_id=int(payload['telegram_random_id']) if payload.get('telegram_random_id') else None,
         )
 
 

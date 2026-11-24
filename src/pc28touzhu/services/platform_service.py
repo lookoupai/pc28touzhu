@@ -30,8 +30,7 @@ from pc28touzhu.services.telegram_target_key import normalize_telegram_target_ke
 from pc28touzhu.runtime_environment import remove_telethon_session_file
 
 
-ALLOWED_EXECUTION_JOB_STATUSES = {"pending", "delivered", "failed", "expired", "skipped"}
-RETRYABLE_EXECUTION_JOB_STATUSES = {"failed", "expired", "skipped"}
+ALLOWED_EXECUTION_JOB_STATUSES = {"pending", "delivered", "failed", "expired", "skipped", "sending", "unconfirmed", "rejected"}
 FAILED_DELIVERY_STATUSES = {"failed", "expired", "skipped"}
 ALLOWED_ENTITY_STATUSES = {"active", "inactive", "archived"}
 ALLOWED_SUBSCRIPTION_STATUSES = ALLOWED_ENTITY_STATUSES | {"standby"}
@@ -1874,6 +1873,8 @@ def collect_pending_pc28_progressions(repository: Any, *, user_id: int) -> list[
     signal_cache: Dict[int, Dict[str, Any]] = {}
     pending_entries = []
     for event in open_events:
+        if (event.get('result_context') or {}).get('delivery_state') == 'unconfirmed':
+            continue
         signal_id = int(event.get("signal_id") or 0)
         if signal_id <= 0:
             continue
@@ -2388,6 +2389,7 @@ def create_delivery_target(repository: Any, payload: Dict[str, Any]) -> Dict[str
         template_id=template_id,
         status="inactive",
         dispatch_mode=_target_dispatch_mode(payload.get("dispatch_mode")),
+        betting_protocol=payload.get('betting_protocol'),
     )
     return {"item": item}
 
@@ -2413,6 +2415,7 @@ def update_delivery_target(repository: Any, *, delivery_target_id: Any, user_id:
         target_name=str(payload.get("target_name") or "").strip(),
         template_id=template_id,
         dispatch_mode=_target_dispatch_mode(payload.get("dispatch_mode", current.get("dispatch_mode"))),
+        betting_protocol=payload.get('betting_protocol',current.get('betting_protocol')),
     )
     if not item:
         raise ValueError("delivery_target_id 对应的投递目标不存在")
@@ -2623,10 +2626,11 @@ def list_execution_jobs(
 
 def _execution_job_can_retry(item: Dict[str, Any]) -> bool:
     status = item.get("status") or item.get("job_status")
-    if (item.get("stake_plan") or {}).get("group_play") or item.get("bet_type") in GROUP_PLAY_TYPES or (item.get('stake_plan') or {}).get('mode') == 'win_streak_roll':
-        expire_at = _parse_iso8601(item.get("expire_at"))
-        return bool(status == "failed" and item.get("progression_status") == "pending" and expire_at and expire_at > datetime.now(timezone.utc))
-    return status in RETRYABLE_EXECUTION_JOB_STATUSES
+    if int(item.get('retry_policy_version') or 0)==1:
+        expiry=_parse_iso8601(item.get('expire_at'))
+        return bool(status=='failed' and item.get('retry_eligible') and expiry
+                    and (expiry-datetime.now(timezone.utc)).total_seconds()>=10)
+    return False
 
 
 def retry_execution_job(repository: Any, *, job_id: Any, user_id: Any) -> Dict[str, Any]:
@@ -2691,7 +2695,7 @@ def list_recent_execution_failures(
                 base_delay_seconds=auto_retry_base_delay_seconds,
             )
         )
-        if item.get("bet_type") in GROUP_PLAY_TYPES and not item["can_retry"]:
+        if not item["can_retry"] and item["auto_retry_state"] != "exhausted":
             item.update(auto_retry_enabled=False, auto_retry_state="blocked", next_retry_at=None)
     return {"items": items}
 

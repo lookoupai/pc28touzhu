@@ -10,7 +10,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterator
 
-from .models import ExecutorJob, JobSendBlocked, JobSendUnconfirmed
+from .models import ExecutorJob, JobSendBlocked, JobSendUnconfirmed, JobSendDeferred, JobSendRetryable
+from ..domain.betting_protocol import normalize_protocol, target_readiness, parse_acceptance
 from ..domain.pc28_issue_window import evaluate_pc28_issue_dispatch_window
 from ..runtime_environment import (
     build_telethon_missing_message,
@@ -204,6 +205,7 @@ class TelethonMessageSender:
         self, target_key: str, message_text: str, *,
         before_send: Callable[[], None] | None = None,
         deadline: datetime | None = None,
+        random_id: int | None = None,
     ) -> Dict[str, Any]:
         if self._client is None:
             raise RuntimeError("Telethon client 尚未连接")
@@ -218,9 +220,16 @@ class TelethonMessageSender:
                 raise JobSendBlocked("任务已超过发送截止时间", details={"reason": "expired_before_rpc"})
             timeout = min(timeout, remaining)
         try:
-            message = _telegram_call(
-                self._client, lambda: self._client.send_message(entity, message_text), timeout=timeout,
-            )
+            if random_id is None:
+                message = _telegram_call(self._client, lambda: self._client.send_message(entity, message_text), timeout=timeout)
+            else:
+                from telethon.tl.functions.messages import SendMessageRequest
+                from telethon.tl.types import UpdateShortSentMessage
+                request = SendMessageRequest(peer=entity, message=message_text, random_id=random_id, no_webpage=True)
+                response = _telegram_call(self._client, lambda: self._client(request), timeout=timeout)
+                message = response if isinstance(response, UpdateShortSentMessage) else self._client._get_response_message(request, response, entity)
+                if not message or not getattr(message, 'id', None):
+                    raise JobSendUnconfirmed('Telegram 回执缺少消息标识，需核对', details={'reason':'send_unconfirmed'})
         except (TimeoutError, ConnectionError, OSError) as exc:
             # 请求可能已送达，回执不明时不得自动重发，避免重复消息或跨期补发。
             raise JobSendUnconfirmed(
@@ -228,6 +237,14 @@ class TelethonMessageSender:
                 details={"reason": "send_unconfirmed", "stage": "send_message",
                          "cause": str(exc) or exc.__class__.__name__, "send_started_at": started.isoformat()},
             ) from exc
+        except Exception as exc:
+            if isinstance(exc, JobSendUnconfirmed):
+                raise
+            from telethon.errors import RpcCallFailError, ServerError
+            if random_id is not None and isinstance(exc, (RpcCallFailError, ServerError)):
+                raise JobSendRetryable(str(exc), details={'retryable':True, 'failure_stage':'send_rpc',
+                    'exception_type':exc.__class__.__name__, 'telegram_random_id':str(random_id)}) from exc
+            raise
         return {
             "message_id": getattr(message, "id", None),
             "chat_id": getattr(message, "chat_id", None),
@@ -240,6 +257,13 @@ class TelethonMessageSender:
             ),
         }
 
+    def read_target_messages(self, target_key, *, after_id=0):
+        entity = self._resolve_entity(target_key)
+        messages = _telegram_call(self._client, lambda: self._client.get_messages(entity, limit=100, min_id=after_id), timeout=3)
+        return [{'id':m.id, 'sender_id':m.sender_id, 'text':m.raw_text or '',
+                 'reply_to':getattr(m, 'reply_to_msg_id', None), 'date':m.date.isoformat()}
+                for m in messages]
+
 
 class TelethonSenderPool:
     """Reuse sender objects while opening a session only for one send operation."""
@@ -247,12 +271,14 @@ class TelethonSenderPool:
     def __init__(
         self, *, api_id: int, api_hash: str, default_phone: str = "", default_session: str = "telegram-session",
         draw_clock_provider: Callable[[], Dict[str, Any] | None] | None = None,
+        job_validator=None,
     ):
         self.api_id = int(api_id)
         self.api_hash = str(api_hash or "").strip()
         self.default_phone = str(default_phone or "").strip()
         self.default_session = str(default_session or "").strip() or "telegram-session"
         self.draw_clock_provider = draw_clock_provider
+        self.job_validator = job_validator
         self._senders: Dict[str, TelethonMessageSender] = {}
         self._account_locks: Dict[str, threading.RLock] = {}
         self._pool_lock = threading.Lock()
@@ -304,21 +330,74 @@ class TelethonSenderPool:
     def send_text(self, job: ExecutorJob) -> Dict[str, Any]:
         sender, account_lock = self._get_sender_and_lock(job)
         window_snapshot: Dict[str, Any] = {}
+        protocol = normalize_protocol((job.target.metadata or {}).get('betting_protocol'))
+        opening = {}
 
         def before_send() -> None:
+            if self.job_validator and job.attempt_token:
+                try:
+                    verdict=self.job_validator(job)
+                except Exception as exc:
+                    raise JobSendDeferred('等待任务资格复核',details={'reason':'claim_validation_unavailable'}) from exc
+                if not verdict.get('allowed'):
+                    raise JobSendBlocked('任务已停止或领取失效',details=verdict)
             window_snapshot.update(self._ensure_send_window(job))
 
         with account_lock:
             try:
                 before_send()
                 preparation_started = datetime.now(timezone.utc)
-                sender.connect()
+                try:
+                    sender.connect()
+                except (TimeoutError, ConnectionError, OSError) as exc:
+                    raise JobSendRetryable(str(exc) or type(exc).__name__, details={'retryable':True,'failure_stage':'connect'}) from exc
                 connection_ready = datetime.now(timezone.utc)
                 before_send()
-                if self.draw_clock_provider is not None:
-                    result = sender.send_text(job.target.key, job.message_text, before_send=before_send, deadline=job.expire_at)
+                if protocol['mode'] != 'legacy':
+                    if protocol['mode'] == 'delay':
+                        clock = self.draw_clock_provider() if self.draw_clock_provider else None
+                        if not clock or not clock.get('latest_open_time'):
+                            raise JobSendDeferred('等待可信开奖时钟', details={'reason':'clock_unavailable'})
+                        previous = datetime.fromisoformat(clock['latest_open_time'].replace('Z','+00:00'))
+                        offset = int(job.issue_no) - int(clock['latest_issue_no']) - 1
+                        earliest = previous.timestamp() + offset * 210 + protocol['opening_delay_seconds']
+                        if datetime.now(timezone.utc).timestamp() < earliest:
+                            raise JobSendDeferred('等待目标配置的发送时间', details={'reason':'opening_delay'})
+                    try:
+                        messages = sender.read_target_messages(job.target.key) if protocol['mode'] == 'announcement' else []
+                    except Exception as exc:
+                        raise JobSendDeferred('暂时无法读取开盘状态', details={'reason':'target_status_unavailable'}) from exc
+                    opening = target_readiness(messages, protocol, job.issue_no, datetime.now(timezone.utc), job.expire_at)
+                    if opening['state'] == 'wait':
+                        raise JobSendDeferred('等待目标开放本期投注', details=opening)
+                    if opening['state'] == 'blocked':
+                        raise JobSendBlocked('本期发送窗口不足', details=opening)
+                    if opening.get('send_before'):
+                        job.expire_at = min(job.expire_at, datetime.fromisoformat(opening['send_before']))
+                    before_send()
+                if self.draw_clock_provider is not None or job.attempt_token:
+                    options = {'before_send':before_send, 'deadline':job.expire_at}
+                    if job.telegram_random_id is not None:
+                        options['random_id'] = job.telegram_random_id
+                    result = sender.send_text(job.target.key, job.message_text, **options)
                 else:
                     result = sender.send_text(job.target.key, job.message_text)
+                if protocol['mode'] != 'legacy':
+                    acceptance = {'state':'unconfirmed','reason':'acceptance_reply_missing'}
+                    ack_deadline = time.monotonic() + protocol['ack_timeout_seconds']
+                    while time.monotonic() < ack_deadline:
+                        try:
+                            replies = sender.read_target_messages(job.target.key, after_id=int(result['message_id']))
+                            current = target_readiness(sender.read_target_messages(job.target.key), protocol, job.issue_no,
+                                datetime.now(timezone.utc), job.expire_at) if protocol['mode'] == 'announcement' else {}
+                            acceptance = parse_acceptance(replies, protocol, result['message_id'], job.issue_no, job.message_text, opening, current)
+                            if acceptance['state'] != 'unconfirmed' or acceptance['reason'] != 'acceptance_reply_missing':
+                                break
+                        except Exception:
+                            acceptance = {'state':'unconfirmed','reason':'acceptance_read_failed'}
+                            break
+                        time.sleep(.5)
+                    result['acceptance'] = acceptance
                 result["telegram_account_id"] = job.telegram_account.id if job.telegram_account else None
                 result["preparation_started_at"] = preparation_started.isoformat()
                 result["connection_ready_at"] = connection_ready.isoformat()

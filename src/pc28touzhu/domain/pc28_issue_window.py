@@ -91,7 +91,8 @@ def evaluate_pc28_issue_dispatch_window(
     remaining: Optional[int] = None
     latest_open_time = _parse_iso_z(clock.get("latest_open_time"))
     if latest_open_time is not None:
-        remaining = int(latest_open_time.timestamp() + PC28_ISSUE_INTERVAL_SECONDS * offset - reference.timestamp())
+        expected_open_time = latest_open_time + timedelta(seconds=PC28_ISSUE_INTERVAL_SECONDS * offset)
+        remaining = int((expected_open_time - reference).total_seconds())
         verdict["remaining_source"] = "open_time"
     else:
         countdown_seconds = clock.get("countdown_seconds")
@@ -105,11 +106,12 @@ def evaluate_pc28_issue_dispatch_window(
         remaining = int(
             float(countdown_seconds) - elapsed + PC28_ISSUE_INTERVAL_SECONDS * (offset - 1)
         )
+        expected_open_time = fetched_at + timedelta(seconds=float(countdown_seconds) + PC28_ISSUE_INTERVAL_SECONDS * (offset - 1))
         verdict["remaining_source"] = "countdown"
     verdict["remaining_seconds"] = remaining
     verdict["checked_at"] = reference.astimezone(timezone.utc).isoformat()
     verdict["send_before"] = (
-        reference + timedelta(seconds=remaining - threshold)
+        expected_open_time - timedelta(seconds=threshold)
     ).astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     if remaining <= 0:

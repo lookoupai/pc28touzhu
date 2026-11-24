@@ -135,9 +135,11 @@ class GroupDispatchTests(unittest.TestCase):
 
     def test_group_failed_send_retries_whole_message_without_new_event(self):
         _, job = self.dispatch()
+        self.repo.upsert_executor_heartbeat('offline','test',{'betting_acceptance_v1':True},'online',datetime.now(timezone.utc).isoformat())
+        claim=self.repo.claim_ready_jobs('offline',1)[0]
         self.repo.report_job_result(
             job_id=str(job["id"]), executor_id="offline", attempt_no=1, delivery_status="failed",
-            remote_message_id=None, executed_at=datetime.now(timezone.utc).isoformat(), raw_result={}, error_message="offline failure",
+            remote_message_id=None, executed_at=datetime.now(timezone.utc).isoformat(), raw_result={'attempt_token':claim['attempt_token'],'retryable':True,'failure_stage':'connect'}, error_message="offline failure",
         )
         self.repo.retry_execution_job(job_id=job["id"], user_id=self.user)
         pulled = self.repo.pull_ready_jobs(executor_id="offline")
@@ -179,9 +181,11 @@ class GroupDispatchTests(unittest.TestCase):
 
     def test_auto_retry_preserves_deadline_and_waits_for_unsettled_group(self):
         _, job = self.dispatch()
+        self.repo.upsert_executor_heartbeat('offline','test',{'betting_acceptance_v1':True},'online',datetime.now(timezone.utc).isoformat())
+        claim=self.repo.claim_ready_jobs('offline',1)[0]
         self.repo.report_job_result(
             job_id=str(job["id"]), executor_id="offline", attempt_no=1, delivery_status="failed",
-            remote_message_id=None, executed_at=(datetime.now(timezone.utc) - timedelta(seconds=40)).isoformat(), raw_result={}, error_message="failure",
+            remote_message_id=None, executed_at=(datetime.now(timezone.utc) - timedelta(seconds=40)).isoformat(), raw_result={'attempt_token':claim['attempt_token'],'retryable':True,'failure_stage':'connect'}, error_message="failure",
         )
         self.assertTrue(list_execution_jobs(self.repo, user_id=self.user)["items"][0]["can_retry"])
         self.assertTrue(list_recent_execution_failures(self.repo, user_id=self.user)["items"][0]["can_retry"])
