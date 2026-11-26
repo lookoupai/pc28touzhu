@@ -10,6 +10,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from pc28touzhu.domain.rule_lab import build_features, match_condition, settle_bet
+from pc28touzhu.domain.rule_lab_comparison import evidence_step
 from pc28touzhu.services.rule_lab_source import RuleLabSource
 from pc28touzhu.services.rule_lab_store import RuleLabError, RuleLabStore
 
@@ -65,8 +66,26 @@ class RuleLabWorker:
         self._commit(work, progress={'status': 'resource_paused' if resource else 'error', 'error': message})
         self._result.update(state='resource_paused' if resource else 'error', message=message)
 
-    def _history(self, predictor_id, target):
+    @staticmethod
+    def _asof_predictions(items,study):
+        if not study:return items
+        cutoff=_time(study['cutoff_at']);result=[]
+        for item in items:
+            if _time(item['created_at'])>cutoff:continue
+            item=dict(item)
+            if item.get('settled_at') and _time(item['settled_at'])>cutoff:item.update(status='pending',settled_at=None)
+            result.append(item)
+        return result
+
+    def _history(self, predictor_id, target, study=None):
         rows = self.store.get_history(predictor_id, before_issue=target)
+        if study:
+            cutoff=_time(study['cutoff_at'])
+            rows=[r for r in rows if _time(r['draw_available_at'])<=cutoff and int(r['issue_no'])<=int(study['cutoff_issue'])]
+            for row in rows:
+                if row.get('prediction_created_at') and _time(row['prediction_created_at'])>cutoff:
+                    row.update(prediction_created_at=None,prediction_settled_at=None,prediction_values={})
+                elif row.get('prediction_settled_at') and _time(row['prediction_settled_at'])>cutoff:row['prediction_settled_at']=None
         if rows and int(rows[-1]['issue_no']) < int(target) - 1:
             # A missing immediate predecessor must break streaks rather than make an older run look current.
             rows.append(dict(issue_no=str(int(target) - 1), open_at=None, draw_available_at=None,
@@ -86,6 +105,8 @@ class RuleLabWorker:
 
     def _settle_pending(self, batch_id, *, available_at=None):
         reference=_time(available_at) if available_at is not None else self._reference
+        study=self.store.get_work_item(batch_id)['batch'].get('study')
+        if study:reference=min(reference,_time(study['cutoff_at']))
         pending = self.store.get_pending_decisions(batch_id)
         if not pending:
             return
@@ -96,6 +117,9 @@ class RuleLabWorker:
             if not self._remaining():
                 return
             draw = self._source('get_draw_by_issue', issue, observed_at=self._now)
+            if study and (draw is None or _time(draw['source_created_at'])>_time(study['cutoff_at']) or _time(draw['open_at'])>_time(study['cutoff_at'])):
+                self._mark_error(batch_id,'比较组待结算输入已缺失或变更到共同截止之后，请核对历史数据后重新比较')
+                break
             if draw is None or _time(draw['open_at']) > reference or _time(draw['source_created_at']) > reference:
                 break  # Never settle later issues ahead of an unresolved earlier result.
             work = self.store.get_work_item(batch_id)
@@ -199,21 +223,35 @@ class RuleLabWorker:
 
     def _start_backtest(self, work):
         batch = work['batch']
-        latest = self._source('latest_draw', observed_at=self._now)
+        study=batch.get('study')
+        latest = {'issue_no':study['cutoff_issue']} if study else self._source('latest_draw', observed_at=self._now)
         first = self._source('find_start_issue', batch['start_date'], observed_at=self._now) if latest else None
-        if first is None:
+        if first is None or int(first)>int(latest['issue_no']):
             self._commit(work, progress={'status': 'completed', 'phase': 'idle', 'total_issues': 0,
                                         'skip_counts_delta': {'no_source_history': 1}})
             return False
         warm = self._source('history_draws', before_issue=first, limit=100, observed_at=self._now)
+        if study:warm={**warm,'items':[d for d in warm['items'] if _time(d['source_created_at'])<=_time(study['cutoff_at'])]}
         predictions = self._source('get_predictions', batch['predictor_id'], [d['issue_no'] for d in warm['items']], observed_at=self._now)
+        predictions={**predictions,'items':self._asof_predictions(predictions['items'],study)}
         before = str(int(first) - 1)
         cursor = dict(work['batch']['cursor'])
         cursor.update(version=1, replay_max_issue=latest['issue_no'], scan_after_issue=before if len(before) == len(first) else '',
-                      history_floor_issue=warm['items'][0]['issue_no'] if warm['items'] else first)
+                      history_floor_issue=warm['items'][0]['issue_no'] if warm['items'] else first,warm_before_issue=first)
         skips = Counter(warm['skip_counts']) + Counter(predictions['skip_counts'])
-        return self._commit(work, cursor=cursor, draws=warm['items'], predictions=predictions['items'],
-                            progress={'phase': 'replaying', 'skip_counts_delta': dict(skips)})
+        if not self._commit(work, cursor=cursor, draws=warm['items'], predictions=predictions['items'],
+                            progress={'phase': 'replaying', 'skip_counts_delta': dict(skips)}):return False
+        if study:
+            return self._warm_evidence(self.store.get_work_item(batch['id']))
+        return True
+
+    def _warm_evidence(self,work):
+        batch=work['batch'];cursor=dict(batch['cursor'])
+        if cursor.get('evidence') is not None:return True
+        history=self._history(batch['predictor_id'],cursor['warm_before_issue'],batch['study'])
+        cursor['evidence']=dict(digest=evidence_step(None,{'kind':'warm','history':history}),count=0,
+            warm_count=len(history),first_issue=None,last_issue=None,conflict=any(r.get('conflict') for r in history))
+        return self._commit(work,cursor=cursor)
 
     def _replay_backtest(self, batch_id):
         work = self.store.get_work_item(batch_id)
@@ -231,6 +269,9 @@ class RuleLabWorker:
                 return
             work = self.store.get_work_item(batch_id)
             batch = work['batch']
+        if batch.get('study') and batch['cursor'].get('evidence') is None:
+            if not self._warm_evidence(work):return
+            work=self.store.get_work_item(batch_id);batch=work['batch']
         cursor = dict(batch['cursor'])
         page = self._source('draws_page', after_issue=cursor.get('scan_after_issue', ''),
                             before_issue=str(int(cursor['replay_max_issue']) + 1), limit=self.page_size, observed_at=self._now)
@@ -248,7 +289,10 @@ class RuleLabWorker:
             self._finish_backtest(batch_id)
             return
         predictions = self._source('get_predictions', batch['predictor_id'], [d['issue_no'] for d in page['items']], observed_at=self._now)
-        if not self._commit(work, draws=page['items'], predictions=predictions['items'], progress={'phase': 'replaying'}):
+        study=batch.get('study')
+        predictions={**predictions,'items':self._asof_predictions(predictions['items'],study)}
+        cache_draws=[d for d in page['items'] if not study or _time(d['source_created_at'])<=_time(study['cutoff_at'])]
+        if not self._commit(work, draws=cache_draws, predictions=predictions['items'], progress={'phase': 'replaying'}):
             return
         prediction_map = {p['issue_no']: p for p in predictions['items']}
         all_processed = True
@@ -269,6 +313,9 @@ class RuleLabWorker:
                 return
             issue = draw['issue_no']
             cursor.update(scan_after_issue=issue, last_issue_no=issue)
+            if study and _time(draw['source_created_at'])>_time(study['cutoff_at']):
+                self._commit(work,cursor=cursor,progress={'skip_counts_delta':{'after_study_cutoff':1}})
+                continue
             decision_at = _stamp(_time(draw['open_at']) - timedelta(seconds=40))
             round_mode=batch.get('risk_policy',{}).get('mode')=='round'
             if round_mode:
@@ -278,7 +325,7 @@ class RuleLabWorker:
                 cursor=dict(work['batch']['cursor'])
                 cursor.update(scan_after_issue=issue,last_issue_no=issue,simulation_time=decision_at)
             prediction = prediction_map.get(issue)
-            decisions, outcomes, skips = [], [], {}
+            decisions, outcomes, skips = [], [], {};features=None
             previous_issue = work['batch']['cursor'].get('last_issue_no')
             if previous_issue and int(issue) > int(previous_issue) + 1:
                 skips['draw_gap'] = int(issue) - int(previous_issue) - 1
@@ -290,13 +337,25 @@ class RuleLabWorker:
             elif _time(prediction['created_at']) > _time(decision_at):
                 skips['late_prediction'] = 1
             else:
-                history = self._history(batch['predictor_id'], issue)
+                history = self._history(batch['predictor_id'], issue,study)
                 if history:
                     cursor['history_floor_issue'] = history[0]['issue_no']
                 features = build_features(batch['metric'], history, decision_at=decision_at)
                 decisions = self._decisions(work, features, prediction, decided_at=decision_at, issue=issue,target_open_at=draw['open_at'])
                 by_id = {e['id']: e for e in work['experiments']}
                 outcomes = [] if round_mode else [self._outcome(by_id[d['experiment_id']], d, draw) for d in decisions]
+            if study:
+                cached=self.store.input_evidence(batch['predictor_id'],issue)
+                if cached.get('prediction'):
+                    cached['prediction']=self._asof_predictions([cached['prediction']],study)
+                evidence=dict(cursor.get('evidence') or {})
+                conflict=bool(evidence.get('conflict')) or bool(cached.get('draw') and cached['draw'].get('conflict'))
+                prediction_cached=cached.get('prediction') or []
+                conflict|=any(p.get('conflict') for p in prediction_cached)
+                evidence.update(digest=evidence_step(evidence.get('digest'),{'kind':'period','draw':draw,'prediction':prediction,
+                    'cached':cached,'features':features}),count=evidence.get('count',0)+1,
+                    first_issue=evidence.get('first_issue') or issue,last_issue=issue,conflict=conflict)
+                cursor['evidence']=evidence
             if not self._commit(work, cursor=cursor, decisions=decisions, outcomes=outcomes,
                                 progress={'processed_issues_delta': 1, 'skip_counts_delta': skips, 'phase': 'replaying'}):
                 return
@@ -308,7 +367,10 @@ class RuleLabWorker:
                 return
             cursor = dict(work['batch']['cursor'])
             cursor['scan_after_issue'] = page['next_issue']
-            skips = Counter(page['skip_counts']) + Counter(predictions['skip_counts'])
+            skips = Counter(page['skip_counts'])
+            # Missing/unusable prediction is counted per processed issue above. Page-level
+            # prediction parse totals would depend on worker budget/restarts and page size.
+            if not study:skips+=Counter(predictions['skip_counts'])
             progress = {'skip_counts_delta': dict(skips)}
             if not page['has_more'] or (page['next_issue'].isdigit() and int(page['next_issue']) >= int(cursor['replay_max_issue'])):
                 cursor['replay_complete']=True
@@ -324,6 +386,15 @@ class RuleLabWorker:
         self._cache, self._features = {}, {}
         self._result = dict(processed_issues=0, inserted_decisions=0, settled=0, skipped=0,
                             state='idle', message='', elapsed_ms=0.0)
+        cutoff=None
+        if self.store.studies_need_cutoff():
+            try:
+                latest=self._source('latest_draw',observed_at=self._now)
+                if latest and _time(latest['open_at'])<=self._reference and _time(latest['source_created_at'])<=self._reference:
+                    cutoff={'issue_no':latest['issue_no'],'at':self._now}
+                elif not latest:self._result.update(state='idle',message='比较队列等待有效历史开奖，尚未冻结共同截止')
+            except RuleLabError as exc:self._result.update(state='error',message=exc.message)
+        self.store.advance_studies(now=self._now,cutoff=cutoff)
         batches = self.store.list_work_batches()
         poll_live = self._last_live_poll is None or (self._reference - self._last_live_poll).total_seconds() >= 15
         if poll_live:
@@ -369,6 +440,7 @@ class RuleLabWorker:
                 except (ValueError, TypeError, KeyError):
                     self._mark_error(batch['id'], '模拟输入或状态异常，请核对数据后恢复')
                     self._result.update(state='error', message='模拟输入或状态异常，已暂停相关批次')
+        self.store.advance_studies(now=self._now,cutoff=cutoff)
         if self._remaining() and (self._last_prune is None or (self._reference - self._last_prune).total_seconds() >= 300):
             self.store.prune(now=self._now, limit=500)
             self._last_prune = self._reference

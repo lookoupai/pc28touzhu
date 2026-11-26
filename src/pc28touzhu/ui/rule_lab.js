@@ -12,7 +12,9 @@
     const riskEditors={};
     const pageSize = 20;
     const state = {options:null, overview:null, batch:null, experiments:[], selectedId:null, detailId:null, detailTrigger:null, resultPage:0,
-        loading:false, mutating:false, exporting:false, readRevision:0, detailRevision:0, readAt:null, accessDenied:false,riskEditingId:null};
+        loading:false, mutating:false, exporting:false, readRevision:0, detailRevision:0, readAt:null, accessDenied:false,riskEditingId:null,
+        studies:[],study:null,studyRows:[],studyId:null,studyPage:0,preview:null,studyRequest:null};
+    const studyNames={paused:'已暂停',queued:'等待运行额度',running:'比较中',completed:'全部完成',error:'比较异常',resource_paused:'资源限制暂停'};
 
     function element(tag, text, className) {
         const node = document.createElement(tag);
@@ -185,6 +187,10 @@
         $("labResultNext").disabled = locked() || (state.resultPage + 1) * pageSize >= state.experiments.length;
         $("labBatchList").querySelectorAll("button").forEach(button => {button.disabled = locked();});
         $("labEditRiskButton").disabled=locked();$("labSaveRiskButton").disabled=locked();$("labCancelRiskButton").disabled=state.mutating;
+        ['labCompareButton','labCreateStudyButton','labStudyExportButton','labStudyPrevious','labStudyNext'].forEach(id=>$(id).disabled=locked());
+        $("labStudyStateButton").disabled=locked()||!state.study||state.study.status==='completed';
+        $("labStudyList").querySelectorAll('button').forEach(button=>button.disabled=locked());
+        if(state.preview)$("labCreateStudyButton").disabled=locked()||state.preview.new_experiments>state.preview.capacity.remaining_saved||state.preview.candidate_count<2;
         Object.keys(riskEditors).forEach(updateRiskEditor);
     }
     function renderOptions() {
@@ -229,7 +235,7 @@
             select.append(element("strong", batch.name), element("span", modeName(batch.mode) + " · " + (metricNames[batch.metric] || batch.metric) + " · " + (statusNames[batch.status] || batch.status) + " · " + batch.experiment_count + " 个版本"), element("span", batch.mode === "backtest" ? batch.start_date + " 至 " + batch.end_date : "启动于 " + time(batch.started_at)));
             select.addEventListener("click", () => selectBatch(batch.id));
             row.append(select);
-            if (batch.status !== "completed") {
+            if (batch.status !== "completed" && !batch.study_id) {
                 const actions = element("div", null, "lab-batch-actions");
                 actions.append(actionButton(batch.status === "running" ? "暂停" : batch.status === "paused" ? "启动" : "恢复", () => changeState(batch.id, batch.status)));
                 row.append(actions);
@@ -294,10 +300,12 @@
         $("labBatchError").textContent = batch.error || ""; $("labBatchError").hidden = !batch.error;
         $("labBatchRiskSummary").textContent=riskSummary(batch.risk_policy)+(batch.risk_policy?.source?.rule_id?" · 复制自 "+batch.risk_policy.source.rule_name+" / "+batch.risk_policy.source.route_name+" / "+batch.risk_policy.source.subscription_name:"");
         $("labEditRiskButton").hidden=!batch.risk_editable;
+        $("labCompareButton").hidden=Boolean(batch.study_id)||batch.mode!=='backtest'||batch.risk_policy?.mode!=='round';
         if(!batch.risk_editable)$("labEditRiskForm").hidden=true;
         const skipCounts = Object.entries(batch.skip_counts || {}).filter(([, count]) => count > 0).map(([reason, count]) => (reasonNames[reason] || reason) + " " + count);
         $("labSkipCounts").textContent = "未执行记录：" + skipCounts.join("；"); $("labSkipCounts").hidden = !skipCounts.length;
-        $("labBatchStateButton").hidden = batch.status === "completed";
+        $("labBatchStateButton").hidden = batch.status === "completed"||Boolean(batch.study_id);
+        if(batch.study_id)$("labBatchRiskSummary").append(document.createTextNode(' · 此子批次由比较组 #'+batch.study_id+' 统一管理'));
         $("labBatchStateButton").textContent = batch.status === "running" ? "暂停模拟" : batch.status === "paused" ? "启动模拟" : "恢复模拟";
         const settled = state.experiments.reduce((sum, item) => sum + item.settled_count, 0);
         $("labResultEmpty").hidden = settled > 0;
@@ -330,9 +338,11 @@
         $("labBatchList").replaceChildren(element("p", "请使用有权限的管理员账号登录后刷新。", "lab-empty"));
         $("labWorkerSummary").replaceChildren(); $("labWorkerMessage").textContent = ""; $("labBatchCount").textContent = "—";
         closeDetail(false); renderResults();
+        state.studies=[];state.study=null;state.studyRows=[];state.studyId=null;renderStudies();renderStudyResults();
     }
     async function selectBatch(id) {
         state.riskEditingId=null;$("labEditRiskForm").hidden=true;
+        $("labComparisonPreview").hidden=true;state.preview=null;state.studyRequest=null;
         if (state.mutating || state.loading || state.accessDenied) return;
         state.selectedId = id; state.resultPage = 0; closeDetail(false); $("labSort").value = "paired";
         await refresh(false);
@@ -341,13 +351,14 @@
         const revision = ++state.readRevision;
         state.loading = true; updateControls();
         try {
-            const calls = [request(base)];
+            const calls = [request(base),request(base+'/studies')];
             if (includeOptions !== false || !state.options) calls.push(request(base + "/options"));
-            const [overview, options] = await Promise.all(calls);
+            const [overview, studies, options] = await Promise.all(calls);
             if (revision !== state.readRevision) return;
             if (!Array.isArray(overview.batches)) throw responseError("批次数据不完整，请刷新后重试", 0, "invalid_response");
             if (options) {state.options = validateOptions(options); renderOptions();}
             state.accessDenied = false; state.overview = overview; state.readAt = new Date().toISOString();
+            state.studies=studies.studies||[];renderStudies();
             if (!overview.batches.some(batch => batch.id === state.selectedId)) state.selectedId = overview.batches.length ? overview.batches[0].id : null;
             renderOverview();
             if (state.selectedId !== null) {
@@ -357,6 +368,7 @@
                 closeDetail(false); state.batch = detail.batch; state.experiments = detail.experiments;
             } else {state.batch = null; state.experiments = [];}
             renderResults(); feedback("statusMessage", "", false);
+            if(state.studyId!==null){const study=await request(base+'/studies/'+state.studyId);if(revision!==state.readRevision)return;state.study=study.study;state.studyRows=study.rows;renderStudyResults();}
         } catch (error) {
             if (revision !== state.readRevision) return;
             if (error.status === 401 || error.status === 403) denyAccess();
@@ -451,6 +463,64 @@
         } catch (error) {if (error.status === 401 || error.status === 403) denyAccess(); feedback("statusMessage", "导出失败：" + error.message, true);}
         finally {state.exporting = false; updateControls();}
     }
+    function renderStudies(){
+        $("labStudyList").replaceChildren();
+        if(!state.studies.length)$("labStudyList").append(element('p','暂无比较组。选择一个历史按轮批次，点击“比较风控方案”。','lab-empty'));
+        state.studies.forEach(study=>{const row=element('div',null,'lab-batch');const button=actionButton(study.name+' · '+(studyNames[study.status]||study.status)+' · 已完成 '+study.completed_children+'/'+study.total_children,()=>openStudy(study.id));button.dataset.studyId=study.id;row.append(button);$("labStudyList").append(row);});
+    }
+    async function openStudy(id){
+        if(locked())return;state.studyId=id;state.studyPage=0;
+        try{const data=await request(base+'/studies/'+id);state.study=data.study;state.studyRows=data.rows;renderStudyResults();}
+        catch(error){feedback('statusMessage',error.message,true);}updateControls();
+    }
+    function renderStudyResults(){
+        const study=state.study;$("labStudyResults").hidden=!study;if(!study)return;
+        $("labStudyTitle").textContent=study.name;
+        $("labStudyMeta").textContent=(studyNames[study.status]||study.status)+' · 已完成 '+study.completed_children+'/'+study.total_children+' 方案 · 共同截止期 '+(study.cutoff_issue||'首次调度时冻结')+' · 截止时间 '+time(study.cutoff_at);
+        $("labStudyNotice").textContent=study.error||study.waiting_reason||(study.comparable?'输入指纹与实际覆盖一致，可查看相对基准差；历史表现仍需新数据验证。':study.comparison_reason);
+        $("labStudyStateButton").textContent=['running','queued'].includes(study.status)?'暂停比较队列':'启动比较队列';$("labStudyStateButton").hidden=study.status==='completed';
+        $("labStudyProgress").replaceChildren();study.children.forEach(child=>{const row=element('p');row.append(document.createTextNode(child.label+'：'+(statusNames[child.status]||child.status)+'，已处理 '+child.processed_issues+' 期。'+child.changes.join('；')+' '));const button=actionButton('查看子批次',()=>selectBatch(child.batch_id));button.dataset.childBatch=child.batch_id;row.append(button);$("labStudyProgress").append(row);});
+        function fillSelect(id,options){const select=$(id),value=select.value;select.replaceChildren();options.forEach(([key,label])=>{const option=element('option',label);option.value=key;select.append(option);});if(options.some(([key])=>key===value))select.value=value;}
+        fillSelect('labStudyVariant',[['','全部风控方案'],...study.children.map(c=>[c.variant_key,c.label])]);
+        const conditionMap=new Map();state.studyRows.forEach(r=>conditionMap.set(r.condition_key,conditionName(r.condition)));
+        fillSelect('labStudyCondition',[['','全部条件'],...conditionMap.entries()]);
+        const variantOrder=new Map(study.children.map((c,i)=>[c.variant_key,i]));
+        const rows=state.studyRows.filter(r=>(!$("labStudyVariant").value||r.variant_key===$("labStudyVariant").value)&&(!$("labStudySettlement").value||r.settlement_rule_id===$("labStudySettlement").value)&&(!$("labStudyCondition").value||r.condition_key===$("labStudyCondition").value));
+        const conditionOrder=new Map([...conditionMap.keys()].map((k,i)=>[k,i]));
+        rows.sort((a,b)=>conditionOrder.get(a.condition_key)-conditionOrder.get(b.condition_key)||a.settlement_rule_id.localeCompare(b.settlement_rule_id)||variantOrder.get(a.variant_key)-variantOrder.get(b.variant_key));
+        state.studyPage=Math.min(state.studyPage,Math.max(0,Math.ceil(rows.length/pageSize)-1));const start=state.studyPage*pageSize;
+        $("labStudyRows").replaceChildren();rows.slice(start,start+pageSize).forEach(r=>{const tr=element('tr');
+            [conditionName(r.condition),r.settlement_rule_name,r.variant_label,r.settled_count,money(r.stake_total),money(r.net_profit,true),percent(r.roi_percent),money(r.max_drawdown),money(r.worst_day_profit,true),r.profitable_days+' / '+r.betting_days,r.completed_rounds,money(r.delta_net_profit,true),r.delta_roi_pp===null?'—':money(r.delta_roi_pp,true),money(r.delta_drawdown,true),r.sample_label].forEach(v=>tr.append(element('td',v,'lab-number')));
+            const td=element('td');td.append(actionButton('子批次',()=>selectBatch(r.batch_id)));tr.append(td);$("labStudyRows").append(tr);});
+        $("labStudyPageInfo").textContent=rows.length?'显示 '+(start+1)+'–'+Math.min(start+pageSize,rows.length)+'，共 '+rows.length+' 行':'当前筛选无结果';
+    }
+    async function comparisonPreview(){
+        if(locked()||!state.batch)return;state.loading=true;updateControls();
+        try{state.preview=await request(base+'/batches/'+state.batch.id+'/comparison-preview');state.studyRequest=null;
+            $("labStudyName").value=(state.batch.name+' · 风控比较').slice(0,80);$("labComparisonPreview").hidden=false;
+            const p=state.preview,c=p.capacity;$("labComparisonCapacity").textContent='将新建 '+p.new_experiments+' 个版本；当前已保存 '+c.saved+'，创建后 '+(c.saved+p.new_experiments)+' / '+c.max_saved+'；剩余容量 '+c.remaining_saved+'。最多同时运行 '+c.max_running+' 个，其他方案排队。';
+            $("labComparisonVariants").replaceChildren();p.variants.forEach(v=>$("labComparisonVariants").append(element('p',v.label+'：'+(v.available?v.changes.join('；'):'不可用 — '+v.reason))));feedback('labComparisonFeedback','',false);
+        }catch(error){feedback('statusMessage',error.message,true);}finally{state.loading=false;updateControls();}
+    }
+    async function createStudy(){
+        if(locked()||!state.preview)return;const name=$("labStudyName").value.trim();if(!name){feedback('labComparisonFeedback','请填写比较组名称',true);return;}
+        const signature=JSON.stringify([state.preview.source_batch_id,name]);
+        if(!state.studyRequest||state.studyRequest.signature!==signature)state.studyRequest={signature,id:crypto.randomUUID()};
+        state.mutating=true;updateControls();
+        try{const result=await request(base+'/studies','POST',{source_batch_id:state.preview.source_batch_id,name,request_id:state.studyRequest.id});state.studyId=result.study.id;state.studyPage=0;await refresh(false);$("labComparisonPreview").hidden=true;feedback('statusMessage','比较组已保存，默认暂停。点击“启动比较队列”才会开始分批计算。',false);}
+        catch(error){feedback('labComparisonFeedback',error.message+(error.unknown?'。保留本次请求标识，可点击同名提交安全重试。':''),true);}
+        finally{state.mutating=false;updateControls();}
+    }
+    async function changeStudyState(){
+        if(locked()||!state.study)return;state.mutating=true;updateControls();
+        try{await request(base+'/studies/'+state.study.id+'/state','POST',{state:['queued','running'].includes(state.study.status)?'paused':'running'});await refresh(false);}
+        catch(error){feedback('statusMessage',error.message,true);}finally{state.mutating=false;updateControls();}
+    }
+    async function exportStudy(){
+        if(locked()||!state.study)return;state.mutating=true;updateControls();
+        try{const blob=await request(base+'/studies/'+state.study.id+'/export.csv','GET',undefined,true);const url=URL.createObjectURL(blob),a=element('a');a.href=url;a.download='rule-study-'+state.study.id+'.csv';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+        catch(error){feedback('statusMessage','比较导出失败：'+error.message,true);}finally{state.mutating=false;updateControls();}
+    }
     $("labBatchForm").addEventListener("submit", createBatch);
     createRiskEditor('labRisk',$("labRiskEditor"));createRiskEditor('labEditRisk',$("labEditRiskEditor"));
     $("labEditRiskButton").addEventListener('click',()=>{
@@ -469,6 +539,10 @@
     $("labResultNext").addEventListener("click", () => {if ((state.resultPage + 1) * pageSize < state.experiments.length) {state.resultPage++; closeDetail(false); renderResults(); updateControls();}});
     $("labCloseDetailButton").addEventListener("click", () => closeDetail(true));
     $("labExportButton").addEventListener("click", exportCsv);
+    $("labCompareButton").addEventListener('click',comparisonPreview);$("labCreateStudyButton").addEventListener('click',createStudy);
+    $("labStudyStateButton").addEventListener('click',changeStudyState);$("labStudyExportButton").addEventListener('click',exportStudy);
+    ['labStudyVariant','labStudySettlement','labStudyCondition'].forEach(id=>$(id).addEventListener('change',()=>{state.studyPage=0;renderStudyResults();}));
+    $("labStudyPrevious").addEventListener('click',()=>{state.studyPage=Math.max(0,state.studyPage-1);renderStudyResults();});$("labStudyNext").addEventListener('click',()=>{state.studyPage++;renderStudyResults();});
     document.addEventListener("platform-auth:changed", () => {state.readRevision++; state.detailRevision++; denyAccess(); state.options = null; refresh(true);});
     updatePreview(); updateControls(); refresh(true);
 }());

@@ -158,6 +158,39 @@ class RuleLabService:
         return dict(batches=self.store.list_batches(user_id), worker=self.store.worker_status(now=_now(now)),
                     storage=self.store.storage_status())
 
+    def comparison_preview(self,user_id,batch_id):
+        return self.store.comparison_preview(user_id,batch_id)
+
+    def create_study(self,user_id,payload,*,now=None):
+        if not isinstance(payload,dict) or set(payload)!={'source_batch_id','name','request_id'}:
+            raise RuleLabError('invalid_input','比较组需提供source_batch_id、name和request_id')
+        return self.store.create_study(user_id,payload['source_batch_id'],payload['name'],payload['request_id'],now=_now(now))
+
+    def list_studies(self,user_id):return dict(studies=self.store.list_studies(user_id))
+
+    def study_detail(self,user_id,study_id):return self.store.study_comparison(user_id,study_id)
+
+    def set_study_state(self,user_id,study_id,payload,*,now=None):
+        if not isinstance(payload,dict) or set(payload)!={'state'} or payload['state'] not in ('running','paused'):
+            raise RuleLabError('invalid_input','比较组状态只支持running或paused')
+        return dict(study=self.store.set_study_state(user_id,study_id,payload['state'],now=_now(now)))
+
+    def export_study_csv(self,user_id,study_id):
+        data=self.store.study_comparison(user_id,study_id);study=data['study']
+        fields=['experiment_id','batch_id','condition','settlement_rule_name','variant_key','variant_label','risk_policy',
+            'settled_count','stake_total','net_profit','roi_percent','max_drawdown','worst_day_profit','profitable_days','betting_days',
+            'completed_rounds','sample_label','cutoff_issue','cutoff_at','comparable','comparison_reason','input_digest',
+            'delta_net_profit','delta_roi_pp','delta_drawdown']
+        output=io.StringIO(newline='');writer=csv.writer(output);writer.writerow(fields)
+        digest={coverage['variant_key']:coverage.get('digest') for coverage in study['actual_coverage']}
+        for source in data['rows']:
+            row={**source,'condition':json.dumps(source['condition'],ensure_ascii=False,separators=(',',':')),
+                 'risk_policy':json.dumps(source['risk_policy'],ensure_ascii=False,separators=(',',':')),
+                 'cutoff_issue':study['cutoff_issue'],'cutoff_at':study['cutoff_at'],'comparison_reason':study['comparison_reason'],
+                 'input_digest':digest[source['variant_key']]}
+            writer.writerow([_csv_cell(row.get(k)) for k in fields])
+        return output.getvalue().encode('utf-8-sig')
+
     def create_batch(self, user_id, payload, *, now=None):
         timestamp = _now(now)
         try:

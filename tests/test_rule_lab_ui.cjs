@@ -174,6 +174,8 @@ const root = path.resolve(__dirname, '..');
         const date=await page.evaluate(()=>new Date(Date.now()+8*3600000).toISOString().slice(0,10));
         await page.getByLabel('开始日期',{exact:true}).fill(date);
         await page.getByLabel('结束日期',{exact:true}).fill(date);
+        await page.locator('#labRiskMode').selectOption('round');
+        await page.locator('#labRiskPreset').selectOption('6:9:7:combo');
         const historical=await saved('/api/platform/rule-lab/batches',()=>page.getByRole('button',{name:'生成并保存',exact:true}).click());
         assert.equal(historical.generated_count,78);
         assert.equal(historical.batch.mode,'backtest');
@@ -183,6 +185,49 @@ const root = path.resolve(__dirname, '..');
         assert.match(await page.locator('#labBatchMeta').innerText(),/历史回测/);
         assert.equal(await page.locator('#labBatchNotice').isVisible(),true);
         assert.match(await page.locator('#labResultsBody tr').first().innerText(),/—/);
+
+        // A 390-version combo study exceeds capacity with two earlier 50-version batches:
+        // preview reports the complete total and disables atomic creation.
+        await page.locator('#labCompareButton').click();
+        await page.locator('#labComparisonCapacity').filter({hasText:'390'}).waitFor();
+        assert.match(await page.locator('#labComparisonCapacity').innerText(),/568 \/ 500/);
+        assert.equal(await page.locator('#labCreateStudyButton').isDisabled(),true);
+        // Create a two-way metric source (50 × 5 = 250, total 478), then test the real queue API/UI.
+        const preset=await page.evaluate(async()=>{const data=await(await fetch('/api/platform/rule-lab/options')).json();return data.risk_presets.find(p=>p.metric==='big_small').policy;});
+        const studySource=await page.evaluate(async({preset,date})=>(await(await fetch('/api/platform/rule-lab/batches',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'风控比较源',mode:'backtest',predictor_id:1,metric:'big_small',start_date:date,end_date:date,risk_policy:preset})})).json()).batch,{preset,date});
+        await page.locator('#labRefreshButton').click();await page.waitForFunction(()=>!document.getElementById('labRefreshButton').disabled);
+        await page.locator('#labBatchList button[data-batch-id="'+studySource.id+'"]').click();
+        await page.locator('#labResultTitle').filter({hasText:'风控比较源'}).waitFor();
+        await page.locator('#labCompareButton').click();await page.locator('#labComparisonCapacity').filter({hasText:'250'}).waitFor();
+        await page.locator('#labStudyName').fill('五风控统一比较');
+        const group=await saved('/api/platform/rule-lab/studies',()=>page.locator('#labCreateStudyButton').click());
+        assert.equal(group.study.status,'paused');assert.equal(group.study.children.length,5);
+        await page.locator('#labStudyTitle').filter({hasText:'五风控统一比较'}).waitFor();
+        assert.equal(await page.locator('#labStudyRows tr').count(),20);
+        await saved('/api/platform/rule-lab/studies/'+group.study.id+'/state',()=>page.locator('#labStudyStateButton').click());
+        await page.locator('#labStudyMeta').filter({hasText:'等待运行额度'}).waitFor();
+        await page.evaluate(()=>fetch('/__fixture/study-tick',{method:'POST'}));
+        await page.locator('#labRefreshButton').click();await page.waitForFunction(()=>!document.getElementById('labRefreshButton').disabled);
+        assert.match(await page.locator('#labStudyMeta').innerText(),/已完成|比较中/);
+        if(await page.locator('#labStudyStateButton').isVisible())await saved('/api/platform/rule-lab/studies/'+group.study.id+'/state',()=>page.locator('#labStudyStateButton').click());
+        await page.locator('#labStudyMeta').filter({hasText:'已暂停'}).waitFor();
+        await saved('/api/platform/rule-lab/studies/'+group.study.id+'/state',()=>page.locator('#labStudyStateButton').click());
+        for(let tick=0;tick<15;tick++){
+            await page.evaluate(()=>fetch('/__fixture/study-tick',{method:'POST'}));
+            const current=await page.evaluate(async id=>(await(await fetch('/api/platform/rule-lab/studies/'+id)).json()).study,group.study.id);
+            if(current.status==='completed')break;
+        }
+        await page.locator('#labRefreshButton').click();await page.waitForFunction(()=>!document.getElementById('labRefreshButton').disabled);
+        await page.locator('#labStudyMeta').filter({hasText:'全部完成'}).waitFor();
+        assert.match(await page.locator('#labStudyNotice').innerText(),/输入指纹与实际覆盖一致/);
+        await page.locator('#labStudyVariant').selectOption('baseline');
+        assert.match(await page.locator('#labStudyRows tr').first().innerText(),/0\.00/);
+        await page.locator('#labStudyVariant').selectOption('');
+        await page.locator('#labStudySettlement').selectOption('pc28_netdisk_regular');
+        assert.doesNotMatch(await page.locator('#labStudyRows').innerText(),/高赔/);
+        const comparisonDownload=page.waitForEvent('download');await page.locator('#labStudyExportButton').click();
+        const comparisonCsv=fs.readFileSync(await(await comparisonDownload).path(),'utf8');assert.match(comparisonCsv,/comparison_reason/);assert.match(comparisonCsv,/cutoff_issue/);
+        assert.match(comparisonCsv,/True/);assert.match(comparisonCsv,/5\.88/);
 
         await page.evaluate(()=>{document.activeElement.blur();window.scrollTo({top:0,behavior:'instant'});});
         await page.screenshot({path:'/tmp/pc28-rule-lab-ui-desktop.png',fullPage:true});
@@ -210,16 +255,13 @@ const root = path.resolve(__dirname, '..');
         await anonymous.addCookies([{name:info.cookie_name,value:info.other_cookie,url:info.url}]);
         assert.equal((await anonymous.request.get(info.url+'/api/platform/rule-lab/batches/'+id)).status(),404);
 
-        // Readable visual evidence is a separate administrator's real local batch.
-        const demoResponse=await anonymous.request.post(info.url+'/api/platform/rule-lab/batches',{data:{name:'单双触发条件观察',mode:'live',predictor_id:1,metric:'odd_even',stake_amount:1,template_pack:'basic_v1'}});
-        assert.equal(demoResponse.status(),201);
-        const demo=(await demoResponse.json()).batch;
-        assert.equal((await anonymous.request.post(info.url+'/api/platform/rule-lab/batches/'+demo.id+'/state',{data:{state:'running'}})).status(),200);
-        assert.equal((await anonymous.request.post(info.url+'/__fixture/settle',{data:{batch_id:demo.id}})).status(),200);
-        const display=await anonymous.newPage();
+        // Reuse the owned populated fixture for visual evidence; capacity remains enforced.
+        const display=await context.newPage();
         await display.setViewportSize({width:1440,height:1000});
         await display.goto(info.url+'/rule-lab');
-        await display.locator('#labResultTitle').filter({hasText:'单双触发条件观察'}).waitFor();
+        await display.locator('#labBatchList button[data-batch-id="'+id+'"]').waitFor();
+        await display.locator('#labBatchList button[data-batch-id="'+id+'"]').click();
+        await display.locator('#labResultTitle').filter({hasText:malicious}).waitFor();
         await display.locator('#labGenerator').evaluate(el=>el.open=false);
         await display.evaluate(()=>{document.activeElement.blur();window.scrollTo({top:0,behavior:'instant'});});
         await display.screenshot({path:'/tmp/pc28-rule-lab-ui-desktop.png',fullPage:true});

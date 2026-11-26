@@ -1,0 +1,19 @@
+{
+  "comparison_experiments": 390,
+  "saved_experiments": 468,
+  "peak_running": 78,
+  "periods_per_variant": 120,
+  "wall_seconds": 37.851,
+  "cpu_seconds": 33.714,
+  "peak_rss_kib": 40124,
+  "initial_bytes": 2076672,
+  "final_bytes": 3158016,
+  "ticks": 21,
+  "max_tick_ms": 2060.209,
+  "comparison_query_ms": 77.912,
+  "completed_variants": 5,
+  "comparable": true,
+  "original_preserved_paused": true,
+  "source_unchanged": true,
+  "measurement": "390 comparison versions and 78 original paused, synthetic 120-period replay, no cgroup throttling"
+}

@@ -37,6 +37,14 @@ def make_source(path):
         conn.execute("INSERT INTO predictors VALUES(1,?,'pc28',1,1,'records')", ('单双共识 · 本地测试来源',))
         conn.execute("INSERT INTO predictors VALUES(2,?,'pc28',1,1,'records')",
                      ('公开来源 <img src=x onerror="window.labXss=1">',))
+        now=datetime.now(timezone.utc).replace(microsecond=0)
+        for index in range(6):
+            opened=now-timedelta(seconds=1800-index*210)
+            conn.execute("INSERT INTO lottery_draws(lottery_type,issue_no,open_time,result_number,source_payload,created_at) VALUES('pc28',?,?,?,?,?)",
+                (str(2000+index),opened.astimezone(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S'),17,
+                 json.dumps({'number':'3+6+8'}),(opened+timedelta(seconds=10)).strftime('%Y-%m-%d %H:%M:%S')))
+            conn.execute("INSERT INTO predictions(predictor_id,lottery_type,issue_no,prediction_big_small,prediction_odd_even,prediction_combo,status,created_at,settled_at) VALUES(1,'pc28',?,'大','单','大单','settled',?,?)",
+                (str(2000+index),(opened-timedelta(seconds=120)).strftime('%Y-%m-%d %H:%M:%S'),(opened+timedelta(seconds=15)).strftime('%Y-%m-%d %H:%M:%S')))
 
 
 def main():
@@ -65,6 +73,10 @@ def main():
         app = PlatformApiApplication(repo, "offline-only", secret,rule_lab_service=RuleLabService(platform_repository=Presets()))
 
         def local_app(environ, start_response):
+            if environ.get('PATH_INFO')=='/__fixture/study-tick' and environ.get('REQUEST_METHOD')=='POST':
+                from pc28touzhu.rule_lab_worker import RuleLabWorker
+                result=RuleLabWorker(app.rule_lab_service.store,app.rule_lab_service.source).tick()
+                start_response('200 OK',[('Content-Type','application/json')]);return [json.dumps(result).encode()]
             # Test-only helper uses the real independent ledger and production settlement.
             if environ.get("PATH_INFO") == "/__fixture/settle" and environ.get("REQUEST_METHOD") == "POST":
                 from pc28touzhu.domain.rule_lab import settle_bet

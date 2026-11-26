@@ -1391,11 +1391,14 @@ class PlatformApiApplication:
             path = str(environ.get("PATH_INFO") or "")
             method = str(environ.get("REQUEST_METHOD") or "GET").upper()
             suffix = path[len("/api/platform/rule-lab"):]
-            batch_match = re.fullmatch(r"/batches/([1-9][0-9]{0,17})(?:/(state|risk-policy|export\.csv|experiments/([1-9][0-9]{0,17})))?", suffix)
+            batch_match = re.fullmatch(r"/batches/([1-9][0-9]{0,17})(?:/(state|risk-policy|comparison-preview|export\.csv|experiments/([1-9][0-9]{0,17})))?", suffix)
+            study_match=re.fullmatch(r"/studies/([1-9][0-9]{0,17})(?:/(state|export\.csv))?",suffix)
             if suffix in ("", "/options"):
                 expected = "GET"
             elif suffix == "/batches":
                 expected = "POST"
+            elif suffix=="/studies":expected=method if method in ('GET','POST') else 'GET'
+            elif study_match:expected='POST' if study_match.group(2)=='state' else 'GET'
             elif batch_match:
                 expected = "POST" if batch_match.group(2) in ("state","risk-policy") else "GET"
             else:
@@ -1420,6 +1423,20 @@ class PlatformApiApplication:
             elif suffix == "/batches":
                 payload = service.create_batch(user_id, _read_json_body(environ))
                 return _json_response(start_response, 201, payload, headers)
+            elif suffix=="/studies":
+                if method=='POST':
+                    payload=service.create_study(user_id,_read_json_body(environ))
+                    return _json_response(start_response,201 if payload['created'] else 200,payload,headers)
+                payload=service.list_studies(user_id)
+            elif study_match:
+                study_id=int(study_match.group(1));action=study_match.group(2)
+                if action=='state':payload=service.set_study_state(user_id,study_id,_read_json_body(environ))
+                elif action=='export.csv':
+                    body=service.export_study_csv(user_id,study_id)
+                    start_response('200 OK',[('Content-Type','text/csv; charset=utf-8'),('Content-Length',str(len(body))),
+                        ('Content-Disposition','attachment; filename="rule-study-%s.csv"'%study_id),('X-Content-Type-Options','nosniff')]+headers)
+                    return [body]
+                else:payload=service.study_detail(user_id,study_id)
             else:
                 batch_id = int(batch_match.group(1))
                 action = batch_match.group(2)
@@ -1427,6 +1444,7 @@ class PlatformApiApplication:
                     payload = service.set_batch_state(user_id, batch_id, _read_json_body(environ))
                 elif action == "risk-policy":
                     payload = service.set_risk_policy(user_id,batch_id,_read_json_body(environ))
+                elif action=='comparison-preview':payload=service.comparison_preview(user_id,batch_id)
                 elif action == "export.csv":
                     body = service.export_csv(user_id, batch_id)
                     start_response("200 OK", [("Content-Type", "text/csv; charset=utf-8"),

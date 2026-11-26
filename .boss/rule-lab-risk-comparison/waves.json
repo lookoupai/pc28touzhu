@@ -1,0 +1,100 @@
+{
+  "feature": "rule-lab-risk-comparison",
+  "waves": [
+    {
+      "id": "comparison-core",
+      "owner": "core",
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_comparison",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_comparison",
+          "tests.test_rule_lab_store",
+          "tests.test_rule_lab_risk",
+          "-q"
+        ]
+      ],
+      "stopCondition": "组创建非原子、快照漂移、额度或迁移失败不得续跑",
+      "status": "verified",
+      "evidence": [
+        "qa-report.md",
+        "/tmp/pc28-comparison-targeted-final.log",
+        "/tmp/pc28-comparison-ui-final.log"
+      ]
+    },
+    {
+      "id": "comparison-runtime-api-ui",
+      "owner": "core",
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_worker",
+          "tests.test_rule_lab_api",
+          "-q"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_ui.cjs"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_comparison",
+          "tests.test_rule_lab_worker",
+          "tests.test_rule_lab_api",
+          "-q"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_ui.cjs"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "stopCondition": "队列越额、暂停失效、输入不一致仍排行、权限或UI主路径失败不得发布",
+      "status": "verified",
+      "evidence": [
+        "qa-report.md",
+        "/tmp/pc28-comparison-targeted-final.log",
+        "/tmp/pc28-comparison-ui-final.log"
+      ]
+    }
+  ],
+  "release_status": "verified_ready_for_deployment",
+  "final_verification": {
+    "tests": 969,
+    "failures": 0,
+    "seconds": 237.434,
+    "log": "/tmp/pc28-comparison-full.log",
+    "browser": "/tmp/pc28-comparison-root-ui.log",
+    "coverage": "evidence/coverage-summary.json",
+    "benchmark": "evidence/benchmark.json",
+    "migration": "evidence/migration.json"
+  }
+}

@@ -156,6 +156,29 @@ class RuleLabApiTests(unittest.TestCase):
         self.assertEqual(presets[0]['policy']['round']['profit_target'],8)
         self.assertEqual(presets[0]['policy']['round']['loss_limit'],6)
 
+    def test_comparison_create_queue_permissions_idempotence_and_csv(self):
+        p=policy();p['day']['hit_rate_gate'].update(enabled=True,threshold=25)
+        result=self.request(PREFIX+'/batches',dict(name='历史风险',mode='backtest',predictor_id=7,metric='big_small',
+            start_date='2026-11-01',end_date='2026-11-26',risk_policy=p))
+        self.assertEqual(result['status_code'],201,result);bid=result['json']['batch']['id']
+        preview=self.request(PREFIX+'/batches/'+str(bid)+'/comparison-preview')
+        self.assertEqual(preview['json']['new_experiments'],250)
+        payload={'source_batch_id':bid,'name':'=危险名字只作文本','request_id':'api-study-request-001'}
+        created=self.request(PREFIX+'/studies',payload);self.assertEqual(created['status_code'],201,created)
+        sid=created['json']['study']['id'];self.assertEqual(self.request(PREFIX+'/studies',payload)['status_code'],200)
+        path=PREFIX+'/studies/'+str(sid)
+        for endpoint,body in [(path,None),(path+'/state',{'state':'running'}),(path+'/export.csv',None)]:
+            self.assertEqual(self.request(endpoint,body,uid=None)['status_code'],401)
+            self.assertEqual(self.request(endpoint,body,uid=self.regular['id'])['status_code'],403)
+            self.assertEqual(self.request(endpoint,body,uid=self.other['id'])['status_code'],404)
+        self.assertEqual(self.request(path+'/state',{'state':'running'})['json']['study']['status'],'queued')
+        self.assertEqual(self.request(path+'/state',{'state':'paused'})['json']['study']['status'],'paused')
+        detail=self.request(path)['json'];self.assertEqual(len(detail['rows']),250);self.assertFalse(detail['study']['comparable'])
+        child=detail['study']['children'][0]['batch_id']
+        self.assertEqual(self.request(PREFIX+'/batches/'+str(child)+'/state',{'state':'running'})['json']['code'],'study_managed')
+        exported=self.request(path+'/export.csv');self.assertEqual(exported['status_code'],200)
+        self.assertIn('comparison_reason',exported['body'].decode('utf-8-sig'))
+
     def test_empty_overview_has_bounded_storage_and_worker_status(self):
         data = self.request()['json']
         self.assertEqual(data['batches'], [])
