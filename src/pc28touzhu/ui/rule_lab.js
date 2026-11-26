@@ -515,20 +515,21 @@
     }
     function renderMonthlyChart(rows) {
         const target=$("labMonthlyChart");target.replaceChildren();
-        const shown=rows.slice(-24),width=620,height=shown.length*34+26;
+        const shown=rows.slice(-24),width=Math.min(760,Math.max(280,target.clientWidth||620)),height=shown.length*34+26;
+        const center=90+(width-165)/2,half=(width-165)/2-8;
         const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
         svg.setAttribute('viewBox','0 0 '+width+' '+height);svg.setAttribute('role','img');
-        svg.setAttribute('aria-label','月度净收益柱状图；正值在右、负值在左，最近最多24个月。详细数据见下方表格。');
+        svg.setAttribute('aria-label','月度净收益柱状图；正值在右、负值在左，星号表示部分月份或无结算，最近最多24个月。详细数据见下方表格。');
         function shape(tag,attrs,text){const node=document.createElementNS(svg.namespaceURI,tag);Object.entries(attrs).forEach(([k,v])=>node.setAttribute(k,v));if(text!==undefined)node.textContent=text;svg.append(node);return node;}
-        shape('line',{x1:350,x2:350,y1:6,y2:height-10,stroke:'currentColor','stroke-opacity':'.25'});
+        shape('line',{x1:center,x2:center,y1:6,y2:height-10,stroke:'currentColor','stroke-opacity':'.25'});
         const maximum=Math.max(1,...shown.map(row=>Math.abs(row.net_profit)));
         shown.forEach((row,index)=>{
-            const y=index*34+20,length=Math.abs(row.net_profit)/maximum*120;
-            shape('text',{x:4,y:y+4},row.month+(row.eligible?'':' · 部分/无样本'));
-            if(row.settled_count)shape('rect',{x:row.net_profit<0?350-length:350,y:y-9,width:Math.max(length,1),height:18,rx:2,class:row.net_profit<0?'lab-chart-loss':'lab-chart-profit'});
-            shape('text',{x:490,y:y+4},row.settled_count?money(row.net_profit,true):'无已结算样本');
+            const y=index*34+20,length=Math.abs(row.net_profit)/maximum*half;
+            shape('text',{x:4,y:y+4},row.month+(row.eligible?'':' *'));
+            if(row.settled_count)shape('rect',{x:row.net_profit<0?center-length:center,y:y-9,width:Math.max(length,1),height:18,rx:2,class:row.net_profit<0?'lab-chart-loss':'lab-chart-profit'});
+            shape('text',{x:width-5,y:y+4,'text-anchor':'end'},row.settled_count?money(row.net_profit,true):'无结算');
         });
-        target.append(svg);
+        target.append(svg,element('p','* 为部分月份或无结算；图中展示最近最多24个月。','lab-muted'));
     }
     function renderCapital() {
         $("labCapitalSummary").replaceChildren();feedback('labCapitalFeedback','',false);
@@ -652,6 +653,7 @@
     $("labStudyPrevious").addEventListener('click',()=>{state.studyPage=Math.max(0,state.studyPage-1);renderStudyResults();});$("labStudyNext").addEventListener('click',()=>{state.studyPage++;renderStudyResults();});
     document.addEventListener("platform-auth:changed", () => {state.readRevision++; state.detailRevision++; denyAccess(); state.options = null; refresh(true);});
     document.addEventListener('visibilitychange',autoRefresh);
+    window.addEventListener('resize',()=>{if(state.monthly)renderMonthlyChart(state.monthly.rows);});
     setInterval(autoRefresh,15000);
     updatePreview(); updateControls(); refresh(true);
 }());

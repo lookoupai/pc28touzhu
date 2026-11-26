@@ -99,7 +99,7 @@
 .lab-loss { color: var(--danger); }
 .lab-sample { color: var(--muted); }
 .lab-monthly-chart { margin: var(--lab-lg) 0; overflow-x: auto; }
-.lab-monthly-chart svg { display: block; width: 100%; min-width: 280px; }
+.lab-monthly-chart svg { display: block; width: 100%; min-width: 280px; max-width: 760px; }
 .lab-monthly-chart text { fill: var(--text); font: 12px var(--lab-font); }
 .lab-monthly-chart .lab-chart-profit { fill: var(--lab-success); }
 .lab-monthly-chart .lab-chart-loss { fill: var(--danger); }
