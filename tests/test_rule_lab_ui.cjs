@@ -206,7 +206,62 @@ const root = path.resolve(__dirname, '..');
         assert.equal(await page.locator('#labStudyRows tr').count(),20);
         await saved('/api/platform/rule-lab/studies/'+group.study.id+'/state',()=>page.locator('#labStudyStateButton').click());
         await page.locator('#labStudyMeta').filter({hasText:'等待运行额度'}).waitFor();
+
+        // A reopened page selects the queue and follows real worker progress without manual refresh.
+        const monitor=await context.newPage();
+        await monitor.clock.install();await monitor.clock.pauseAt(new Date());
+        const monitorErrors=[];let progressReads=0,progressWrites=0;
+        monitor.on('pageerror',error=>monitorErrors.push(String(error)));
+        monitor.on('request',request=>{
+            const pathname=new URL(request.url()).pathname;
+            if(pathname==='/api/platform/rule-lab'&&request.method()==='GET')progressReads++;
+            if(pathname.startsWith('/api/platform/rule-lab')&&request.method()!=='GET')progressWrites++;
+        });
+        await monitor.goto(info.url+'/rule-lab');
+        await monitor.locator('#labStudyMeta').filter({hasText:'等待运行额度'}).waitFor();
+        await monitor.waitForFunction(()=>!document.getElementById('labRefreshButton').disabled);
+        assert.match(await monitor.locator('#labStudyRows').innerText(),/等待队列运行/);
+        assert.doesNotMatch(await monitor.locator('#labStudyRows').innerText(),/样本较少/);
+        assert.match(await monitor.locator('#labStudyProgress').innerText(),/等待前序方案完成/);
+        await monitor.locator('#labStudyVariant').selectOption('baseline');
+        await monitor.locator('#labStudySettlement').selectOption('pc28_netdisk_regular');
+        await monitor.locator('#labStudyNext').click();
+        assert.match(await monitor.locator('#labStudyPageInfo').innerText(),/21–25/);
+
+        // Editing and hidden tabs do not issue polling requests or overwrite the user's draft.
+        await monitor.locator('#labName').fill('尚未保存的草稿');
+        let beforePoll=progressReads;
+        await monitor.clock.runFor(16000);
+        assert.equal(progressReads,beforePoll);
+        assert.equal(await monitor.locator('#labName').inputValue(),'尚未保存的草稿');
+        await monitor.evaluate(()=>{document.activeElement.blur();Object.defineProperty(document,'hidden',{value:true,configurable:true});});
+        await monitor.clock.runFor(16000);assert.equal(progressReads,beforePoll);
+        await monitor.evaluate(()=>delete document.hidden);
+
         await page.evaluate(()=>fetch('/__fixture/study-tick',{method:'POST'}));
+        await monitor.clock.runFor(16000);
+        await monitor.waitForFunction(()=>!document.getElementById('labRefreshButton').disabled);
+        await monitor.locator('#labStudyMeta').filter({hasText:'已完成 1/5'}).waitFor();
+        assert.ok(progressReads>beforePoll);
+        assert.equal(await monitor.locator('#labStudyVariant').inputValue(),'baseline');
+        assert.equal(await monitor.locator('#labStudySettlement').inputValue(),'pc28_netdisk_regular');
+        assert.match(await monitor.locator('#labStudyPageInfo').innerText(),/21–25/);
+        assert.equal(await monitor.locator('#labName').inputValue(),'尚未保存的草稿');
+        await monitor.locator('#labStudyPrevious').click();
+        assert.match(await monitor.locator('#labStudyRows tr').first().innerText(),/5\.88/);
+
+        // A transient polling failure keeps previous results and recovers on the next interval.
+        await monitor.route('**/api/platform/rule-lab',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'暂时不可用',code:'store_busy'})}));
+        await monitor.clock.runFor(16000);
+        await monitor.locator('#statusMessage').filter({hasText:'上次读取结果'}).waitFor();
+        assert.match(await monitor.locator('#labStudyRows tr').first().innerText(),/5\.88/);
+        await monitor.unroute('**/api/platform/rule-lab');
+        await monitor.clock.runFor(16000);
+        await monitor.waitForFunction(()=>!document.getElementById('labRefreshButton').disabled&&!document.getElementById('statusMessage').textContent);
+        assert.equal(progressWrites,0,'automatic updates only read the ledger');
+        assert.deepEqual(monitorErrors,[]);
+        await monitor.close();
+
         await page.locator('#labRefreshButton').click();await page.waitForFunction(()=>!document.getElementById('labRefreshButton').disabled);
         assert.match(await page.locator('#labStudyMeta').innerText(),/已完成|比较中/);
         if(await page.locator('#labStudyStateButton').isVisible())await saved('/api/platform/rule-lab/studies/'+group.study.id+'/state',()=>page.locator('#labStudyStateButton').click());
@@ -235,6 +290,7 @@ const root = path.resolve(__dirname, '..');
         await page.setViewportSize({width:390,height:844});
         await page.reload();
         await page.locator('#labBatchList button[data-batch-id]').first().waitFor();
+        await page.waitForFunction(()=>!document.getElementById('labRefreshButton').disabled);
         assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no page-level mobile horizontal overflow');
         await page.locator('#labGenerator').evaluate(el=>el.open=true);
         await page.getByLabel('批次名称',{exact:true}).focus();

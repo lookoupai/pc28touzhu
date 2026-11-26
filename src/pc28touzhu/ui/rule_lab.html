@@ -14,6 +14,7 @@ __APP_SHELL__
         <button id="labRefreshButton" class="lab-button" type="button">刷新</button>
     </header>
     <div id="statusMessage" class="lab-feedback" role="status" tabindex="-1"></div>
+    <p id="labAutoRefreshStatus" class="lab-muted"></p>
     <section class="lab-panel" aria-label="后台与资源状态">
         <dl id="labWorkerSummary" class="lab-summary"><div><dt>后台状态</dt><dd>读取中…</dd></div></dl>
         <p id="labWorkerMessage" class="lab-muted"></p>
@@ -74,7 +75,7 @@ __APP_SHELL__
         <div class="lab-pagination" aria-label="结果分页"><span id="labResultPageInfo" class="lab-muted"></span><div class="lab-actions"><button id="labResultPrevious" class="lab-button" type="button">上一页</button><button id="labResultNext" class="lab-button" type="button">下一页</button></div></div>
     </section>
 
-    <section class="lab-panel" aria-labelledby="labStudiesHeading"><div class="lab-section-heading"><h2 id="labStudiesHeading">风控比较队列</h2></div><div id="labStudyList"><p class="lab-empty">读取中…</p></div></section>
+    <section class="lab-panel" aria-labelledby="labStudiesHeading"><div class="lab-section-heading"><h2 id="labStudiesHeading">风控比较队列</h2></div><p class="lab-muted">每次运行一个风控方案，其余方案依次等待。运行中的成绩会自动更新；全部方案完成后才显示相对基准差异。</p><div id="labStudyList"><p class="lab-empty">读取中…</p></div></section>
     <section id="labStudyResults" class="lab-panel" hidden aria-labelledby="labStudyTitle">
         <div class="lab-section-heading"><h2 id="labStudyTitle"></h2><div class="lab-actions"><button id="labStudyStateButton" class="lab-button" type="button">启动比较队列</button><button id="labStudyExportButton" class="lab-button" type="button">导出比较 CSV</button></div></div>
         <p id="labStudyMeta" class="lab-muted"></p><p id="labStudyNotice" class="lab-note"></p><div id="labStudyProgress"></div>
