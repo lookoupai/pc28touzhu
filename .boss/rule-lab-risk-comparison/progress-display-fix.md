@@ -23,4 +23,8 @@ worker采样约17.7～21.0MiB，平台API约27.9MiB；没有前一时点整机�
 - `node --check src/pc28touzhu/ui/rule_lab.js`与`git diff --check`通过。移动端布局无整页横向溢出，键盘焦点路径通过。
 - 本次没有重跑969项后端回归，后端代码未改。
 
-发布与线上读取结果待完成后追加。
+## 发布与线上核验
+
+进度修复`cd4f623`已推送feature/main并同步生产，公网JS与文件一致。平台PID719336、worker PID719342均保持，NRestarts=0，无服务重启。真实管理员浏览器仅允许本机GET，验证自动展开比较组、默认显示运行中的原风控基准、15秒后重新读取实际进度与成绩。
+
+线上窄屏检查发现实际长组名的列表按钮因`white-space:nowrap`溢出2px。已加长离线fixture名称复现（`/tmp/pc28-progress-long-name-red.log`），修正比较组按钮可换行后再次完整浏览器验证通过（`/tmp/pc28-progress-ui.log`）。后续线上截图与读取摘要保存于`/tmp/pc28-progress-online.json`及同名前缀desktop/mobile PNG；这些诊断产物不包含会话凭证。

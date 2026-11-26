@@ -77,6 +77,7 @@
 .lab-batch-select span { display: block; margin-top: var(--lab-xs); color: var(--muted); font-size: var(--lab-caption); }
 .lab-batch-select:hover strong { color: var(--primary); }
 .lab-batch-actions { flex-shrink: 0; }
+#labStudyList .lab-button { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
 .lab-result-toolbar { display: flex; gap: var(--lab-lg); justify-content: space-between; align-items: center; margin: var(--lab-lg) 0; }
 .lab-result-toolbar > p { margin-bottom: 0; color: var(--muted); font-size: var(--lab-caption); }
 .lab-result-toolbar > label { display: flex; align-items: center; gap: var(--lab-sm); flex-shrink: 0; font-size: var(--lab-caption); }

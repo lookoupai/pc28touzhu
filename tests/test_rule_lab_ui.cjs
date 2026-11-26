@@ -199,7 +199,7 @@ const root = path.resolve(__dirname, '..');
         await page.locator('#labBatchList button[data-batch-id="'+studySource.id+'"]').click();
         await page.locator('#labResultTitle').filter({hasText:'风控比较源'}).waitFor();
         await page.locator('#labCompareButton').click();await page.locator('#labComparisonCapacity').filter({hasText:'250'}).waitFor();
-        await page.locator('#labStudyName').fill('五风控统一比较');
+        await page.locator('#labStudyName').fill('五风控统一比较 · 组合连挂观察的五组风控对比');
         const group=await saved('/api/platform/rule-lab/studies',()=>page.locator('#labCreateStudyButton').click());
         assert.equal(group.study.status,'paused');assert.equal(group.study.children.length,5);
         await page.locator('#labStudyTitle').filter({hasText:'五风控统一比较'}).waitFor();
