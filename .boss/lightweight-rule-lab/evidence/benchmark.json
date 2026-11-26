@@ -1,0 +1,115 @@
+{
+  "cases": [
+    {
+      "saved_experiments": 50,
+      "peak_running_experiments": 50,
+      "issues_per_batch": 400,
+      "creation_seconds": 0.026,
+      "replay_wall_seconds": 7.114,
+      "replay_cpu_seconds": 5.919,
+      "replay_peak_rss_kib": 34796,
+      "total_peak_rss_kib": 35436,
+      "initial_lab_bytes": 290816,
+      "final_lab_bytes": 1273856,
+      "growth_bytes": 983040,
+      "ticks": 4,
+      "tick_max_ms": 2015.228,
+      "counts": {
+        "lab_decisions": 3450,
+        "lab_daily": 46,
+        "lab_draws": 500,
+        "lab_predictions": 500
+      },
+      "api": {
+        "overview": {
+          "samples": 100,
+          "p50_ms": 2.578,
+          "p95_ms": 3.33,
+          "p99_ms": 4.267
+        },
+        "batch_results": {
+          "samples": 100,
+          "p50_ms": 7.016,
+          "p95_ms": 9.243,
+          "p99_ms": 9.8
+        }
+      },
+      "source_unchanged": true,
+      "measurement": "offline temporary SQLite; no cgroup throttling; 500 run in <=100 groups"
+    },
+    {
+      "saved_experiments": 100,
+      "peak_running_experiments": 100,
+      "issues_per_batch": 400,
+      "creation_seconds": 0.046,
+      "replay_wall_seconds": 15.64,
+      "replay_cpu_seconds": 12.739,
+      "replay_peak_rss_kib": 35048,
+      "total_peak_rss_kib": 35560,
+      "initial_lab_bytes": 503808,
+      "final_lab_bytes": 2265088,
+      "growth_bytes": 1761280,
+      "ticks": 8,
+      "tick_max_ms": 2031.169,
+      "counts": {
+        "lab_decisions": 6900,
+        "lab_daily": 92,
+        "lab_draws": 500,
+        "lab_predictions": 500
+      },
+      "api": {
+        "overview": {
+          "samples": 100,
+          "p50_ms": 2.464,
+          "p95_ms": 3.064,
+          "p99_ms": 3.983
+        },
+        "batch_results": {
+          "samples": 100,
+          "p50_ms": 6.556,
+          "p95_ms": 7.893,
+          "p99_ms": 8.314
+        }
+      },
+      "source_unchanged": true,
+      "measurement": "offline temporary SQLite; no cgroup throttling; 500 run in <=100 groups"
+    },
+    {
+      "saved_experiments": 500,
+      "peak_running_experiments": 100,
+      "issues_per_batch": 400,
+      "creation_seconds": 0.191,
+      "replay_wall_seconds": 73.859,
+      "replay_cpu_seconds": 60.83,
+      "replay_peak_rss_kib": 35560,
+      "total_peak_rss_kib": 36200,
+      "initial_lab_bytes": 2162688,
+      "final_lab_bytes": 10326016,
+      "growth_bytes": 8163328,
+      "ticks": 40,
+      "tick_max_ms": 2026.294,
+      "counts": {
+        "lab_decisions": 34500,
+        "lab_daily": 460,
+        "lab_draws": 500,
+        "lab_predictions": 500
+      },
+      "api": {
+        "overview": {
+          "samples": 100,
+          "p50_ms": 2.552,
+          "p95_ms": 3.65,
+          "p99_ms": 3.924
+        },
+        "batch_results": {
+          "samples": 100,
+          "p50_ms": 6.713,
+          "p95_ms": 8.19,
+          "p99_ms": 9.215
+        }
+      },
+      "source_unchanged": true,
+      "measurement": "offline temporary SQLite; no cgroup throttling; 500 run in <=100 groups"
+    }
+  ]
+}

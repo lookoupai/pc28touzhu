@@ -1,0 +1,91 @@
+{
+  "cases": [
+    {
+      "saved_experiments": 50,
+      "running_experiments": 50,
+      "observed_periods": 20,
+      "capture_tick": {
+        "samples": 20,
+        "p50_ms": 37.038,
+        "p95_ms": 51.141,
+        "p99_ms": 60.376
+      },
+      "settlement_tick": {
+        "samples": 20,
+        "p50_ms": 24.801,
+        "p95_ms": 28.764,
+        "p99_ms": 33.019
+      },
+      "idle_tick": {
+        "samples": 20,
+        "p50_ms": 11.488,
+        "p95_ms": 14.183,
+        "p99_ms": 15.5
+      },
+      "cpu_seconds": 1.2705,
+      "peak_rss_kib": 34296,
+      "initial_lab_bytes": 290816,
+      "final_lab_bytes": 348160,
+      "source_unchanged_by_worker": true,
+      "measurement": "virtual-clock live capture/settlement on temporary SQLite, no cgroup throttling"
+    },
+    {
+      "saved_experiments": 100,
+      "running_experiments": 100,
+      "observed_periods": 20,
+      "capture_tick": {
+        "samples": 20,
+        "p50_ms": 68.34,
+        "p95_ms": 75.126,
+        "p99_ms": 85.095
+      },
+      "settlement_tick": {
+        "samples": 20,
+        "p50_ms": 44.221,
+        "p95_ms": 63.916,
+        "p99_ms": 76.156
+      },
+      "idle_tick": {
+        "samples": 20,
+        "p50_ms": 19.208,
+        "p95_ms": 25.497,
+        "p99_ms": 27.632
+      },
+      "cpu_seconds": 2.2483,
+      "peak_rss_kib": 34420,
+      "initial_lab_bytes": 503808,
+      "final_lab_bytes": 581632,
+      "source_unchanged_by_worker": true,
+      "measurement": "virtual-clock live capture/settlement on temporary SQLite, no cgroup throttling"
+    },
+    {
+      "saved_experiments": 500,
+      "running_experiments": 100,
+      "observed_periods": 20,
+      "capture_tick": {
+        "samples": 20,
+        "p50_ms": 61.869,
+        "p95_ms": 81.746,
+        "p99_ms": 84.942
+      },
+      "settlement_tick": {
+        "samples": 20,
+        "p50_ms": 41.535,
+        "p95_ms": 52.229,
+        "p99_ms": 56.579
+      },
+      "idle_tick": {
+        "samples": 20,
+        "p50_ms": 17.549,
+        "p95_ms": 24.314,
+        "p99_ms": 29.526
+      },
+      "cpu_seconds": 2.1362,
+      "peak_rss_kib": 34272,
+      "initial_lab_bytes": 2162688,
+      "final_lab_bytes": 2240512,
+      "source_unchanged_by_worker": true,
+      "measurement": "virtual-clock live capture/settlement on temporary SQLite, no cgroup throttling"
+    }
+  ]
+}

@@ -21,6 +21,7 @@ PAGE_GROUPS = (
         ("/alerts", "异常提醒", "alerts.html"),
     )),
     ("平台管理", (
+        ("/rule-lab", "规则实验室", "rule_lab.html"),
         ("/admin", "值班总览", "dashboard.html"),
         ("/admin/sources", "来源接入中心", "dashboard.html"),
         ("/admin/signals", "信号中心", "dashboard.html"),

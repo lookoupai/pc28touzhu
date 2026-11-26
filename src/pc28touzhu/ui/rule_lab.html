@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>规则实验室 · pc28touzhu</title>
+    <link rel="stylesheet" href="/assets/autobet.css">
+    <link rel="stylesheet" href="/assets/rule_lab.css">
+</head>
+<body>
+__APP_SHELL__
+<main class="app-page lab-page" id="mainContent" tabindex="-1">
+    <header class="app-page-heading">
+        <div><p>策略研究</p><h1>规则实验室</h1><p>批量比较触发条件，使用固定金额模拟记账。</p></div>
+        <button id="labRefreshButton" class="lab-button" type="button">刷新</button>
+    </header>
+    <div id="statusMessage" class="lab-feedback" role="status" tabindex="-1"></div>
+    <section class="lab-panel" aria-label="后台与资源状态">
+        <dl id="labWorkerSummary" class="lab-summary"><div><dt>后台状态</dt><dd>读取中…</dd></div></dl>
+        <p id="labWorkerMessage" class="lab-muted"></p>
+        <details class="lab-budget"><summary>资源预算与数据保留</summary><p id="labBudgetDescription">读取中…</p><p>模拟在后台继续运行，无需保持页面打开。旧明细清理后，累计成绩仍会保留。</p></details>
+    </section>
+
+    <details id="labGenerator" class="lab-panel lab-generator" open>
+        <summary>生成实验批次</summary>
+        <form id="labBatchForm" novalidate>
+            <div class="lab-form-grid">
+                <div class="lab-field lab-name-field">
+                    <label for="labName">批次名称</label><input id="labName" name="name" maxlength="80" required placeholder="例如：单双连挂条件观察" aria-describedby="labNameError">
+                    <span id="labNameError" class="lab-field-error"></span>
+                </div>
+                <div class="lab-field">
+                    <label for="labPredictor">预测来源</label><select id="labPredictor" name="predictor_id" required disabled aria-describedby="labPredictorError"><option value="">加载来源…</option></select>
+                    <span id="labPredictorError" class="lab-field-error"></span>
+                </div>
+                <div class="lab-field">
+                    <label for="labMetric">投注玩法</label><select id="labMetric" name="metric"><option value="big_small">大小</option><option value="odd_even" selected>单双</option><option value="combo">组合</option></select>
+                </div>
+                <div class="lab-field">
+                    <label for="labStake">每期模拟金额</label><input id="labStake" name="stake_amount" type="number" min="0.01" max="10000" step="0.01" value="1" required aria-describedby="labStakeHelp labStakeError">
+                    <span id="labStakeHelp" class="lab-muted">模拟资金单位；每个实验独立记账。</span><span id="labStakeError" class="lab-field-error"></span>
+                </div>
+                <div class="lab-field"><span class="lab-field-label">条件模板</span><p class="lab-readonly">基础条件 v1</p><span class="lab-muted">含无条件跟随基准、连续条件与窗口命中率。</span></div>
+                <fieldset class="lab-mode-field"><legend>观察方式</legend><div class="lab-radio-options"><label><input type="radio" name="mode" value="live" checked> 前向模拟</label><label><input type="radio" name="mode" value="backtest"> 历史回测</label></div><p id="labModeHelp" class="lab-muted"></p></fieldset>
+                <div id="labDates" class="lab-dates" hidden>
+                    <div class="lab-field"><label for="labStartDate">开始日期</label><input id="labStartDate" name="start_date" type="date" aria-describedby="labDateHelp labStartDateError"><span id="labStartDateError" class="lab-field-error"></span></div>
+                    <div class="lab-field"><label for="labEndDate">结束日期</label><input id="labEndDate" name="end_date" type="date" aria-describedby="labDateHelp labEndDateError"><span id="labEndDateError" class="lab-field-error"></span></div>
+                    <p id="labDateHelp" class="lab-muted">日期按北京时间计算，最多回测 90 天。</p>
+                </div>
+            </div>
+            <details id="labSettlementDetails" class="lab-settlements"><summary>固定比较：OK 游戏网盘与 OK 游戏高赔常规</summary><div id="labSettlementSummary">读取结算规则…</div><p class="lab-muted">每个实验使用创建时的结算配置。实赔、退本与全亏分别统计。</p></details>
+            <div class="lab-generator-footer"><div><strong id="labCandidatePreview">25 个条件 × 2 套结算 = 50 个实验版本</strong><p class="lab-muted">统一固定金额，逐期跟随所选来源；生成后暂停，启动后开始模拟。</p></div><button id="labCreateButton" class="lab-button lab-button-primary" type="submit" disabled>生成并保存</button></div>
+            <div id="labFormFeedback" class="lab-feedback" role="status" tabindex="-1"></div>
+        </form>
+    </details>
+
+    <section class="lab-panel" aria-labelledby="labBatchesHeading">
+        <div class="lab-section-heading"><h2 id="labBatchesHeading">我的实验批次</h2><span id="labBatchCount" class="lab-muted">—</span></div>
+        <div id="labBatchList"><p class="lab-empty">读取中…</p></div>
+    </section>
+
+    <section id="labResults" class="lab-panel" aria-labelledby="labResultTitle" hidden>
+        <div class="lab-section-heading"><div><p class="lab-kicker">批次结果</p><h2 id="labResultTitle" tabindex="-1"></h2></div><div class="lab-actions"><button id="labBatchStateButton" class="lab-button" type="button">启动模拟</button><button id="labExportButton" class="lab-button" type="button" title="导出当前批次结果">导出 CSV</button></div></div>
+        <p id="labBatchMeta" class="lab-muted"></p><p id="labBatchNotice" class="lab-note" hidden></p><p id="labBatchError" class="lab-feedback is-error" hidden></p><p id="labSkipCounts" class="lab-muted" hidden></p>
+        <div class="lab-result-toolbar"><p>金额单位：模拟资金单位。收益率 = 净收益 ÷ 累计投注额。日期及时间均为北京时间。</p><label for="labSort">结果排序<select id="labSort"><option value="paired">按条件配对</option><option value="profit">净收益从高到低</option><option value="sample">已结算期数从多到少</option><option value="drawdown">最大回撤从低到高</option></select></label></div>
+        <p id="labResultEmpty" class="lab-note" hidden></p>
+        <div class="lab-table-scroll" role="region" aria-label="实验结果表，可横向滚动" tabindex="0">
+            <table class="lab-table lab-results-table"><caption>同一条件的两套结算版本；样本表现仍需验证。</caption><thead><tr><th scope="col">触发条件</th><th scope="col">结算规则</th><th scope="col">已结算期数</th><th scope="col">净收益</th><th scope="col">投注收益率</th><th scope="col">最大回撤</th><th scope="col">最长连亏</th><th scope="col">实赔 / 退本 / 全亏</th><th scope="col">样本状态</th><th scope="col">操作</th></tr></thead><tbody id="labResultsBody"></tbody></table>
+        </div>
+        <div class="lab-pagination" aria-label="结果分页"><span id="labResultPageInfo" class="lab-muted"></span><div class="lab-actions"><button id="labResultPrevious" class="lab-button" type="button">上一页</button><button id="labResultNext" class="lab-button" type="button">下一页</button></div></div>
+    </section>
+
+    <section id="labExperimentDetail" class="lab-panel" aria-labelledby="labDetailTitle" hidden>
+        <div class="lab-section-heading"><div><p class="lab-kicker">实验详情</p><h2 id="labDetailTitle" tabindex="-1"></h2></div><button id="labCloseDetailButton" class="lab-button" type="button">关闭详情</button></div>
+        <p id="labDetailMeta" class="lab-muted"></p><div id="labDetailFeedback" class="lab-feedback" role="status"></div>
+        <dl id="labDetailStats" class="lab-summary"></dl>
+        <h3>最近每日成绩</h3><div class="lab-table-scroll" role="region" aria-label="每日成绩表，可横向滚动" tabindex="0"><table class="lab-table"><caption>最多显示最近 90 天；未显示的日期不等于没有记录。</caption><thead><tr><th scope="col">日期</th><th scope="col">结算数</th><th scope="col">实赔 / 退本 / 全亏</th><th scope="col">投注额</th><th scope="col">净收益</th></tr></thead><tbody id="labDailyBody"></tbody></table></div>
+        <h3>最近逐期明细</h3><div class="lab-table-scroll" role="region" aria-label="逐期明细表，可横向滚动" tabindex="0"><table class="lab-table"><caption>最多显示最近 50 条，包含待结算及跳过记录。</caption><thead><tr><th scope="col">期号</th><th scope="col">决策时间</th><th scope="col">方向</th><th scope="col">金额</th><th scope="col">状态</th><th scope="col">结果</th><th scope="col">净收益</th><th scope="col">说明</th></tr></thead><tbody id="labRecentBody"></tbody></table></div>
+    </section>
+</main>
+__ACCOUNT_DIALOG__
+<script src="/assets/ui-text.js"></script><script src="/assets/auth-panel.js"></script><script src="/assets/account-menu.js"></script><script src="/assets/auth-guard.js"></script><script src="/assets/rule_lab.js"></script>
+</body>
+</html>

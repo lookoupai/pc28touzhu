@@ -1,0 +1,611 @@
+{
+  "artifact": "ui-design",
+  "mode": "wireframe",
+  "feature": "lightweight-rule-lab",
+  "version": 1,
+  "requirementsSource": "User authorization and architecture.md",
+  "requirements": {
+    "R1": "批量生成可理解的条件",
+    "R2": "真实结算口径，仅两种OK规则",
+    "R3": "历史与前向分开",
+    "R4": "低资源与可恢复",
+    "R5": "结果可长期比较",
+    "R6": "可操作且适配手机的页面",
+    "R7": "业务隔离",
+    "R8": "共用精简输入与保留边界"
+  },
+  "tokens": {
+    "colors": {
+      "background": "var(--bg)",
+      "surface": "var(--surface)",
+      "line": "var(--line)",
+      "text": "var(--text)",
+      "muted": "var(--muted)",
+      "primary": "var(--primary)",
+      "primaryStrong": "var(--primary-strong)",
+      "danger": "var(--danger)",
+      "hoverSurface": "#f2f5f7",
+      "successText": "#086359",
+      "successSurface": "#e9f5f1",
+      "warningText": "#9c5b16",
+      "warningSurface": "#fff3df"
+    },
+    "typography": {
+      "fontFamily": "system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif",
+      "fontSize": {
+        "caption": "12px",
+        "body": "14px",
+        "title": "26px"
+      },
+      "fontWeight": {
+        "regular": 400,
+        "semibold": 600,
+        "bold": 700
+      },
+      "lineHeight": {
+        "body": 1.65,
+        "title": 1.3
+      },
+      "numeric": "tabular-nums"
+    },
+    "spacing": {
+      "xs": "4px",
+      "sm": "8px",
+      "md": "12px",
+      "lg": "16px",
+      "xl": "24px",
+      "xxl": "32px"
+    },
+    "radius": {
+      "control": "var(--radius-md)",
+      "panel": "var(--radius-lg)"
+    },
+    "shadow": {
+      "panel": "none"
+    },
+    "sizes": {
+      "touchTarget": "44px",
+      "focusWidth": "2px",
+      "focusOffset": "3px",
+      "tableMinWidth": "960px"
+    },
+    "breakpoints": {
+      "mobile": "600px",
+      "tablet": "960px"
+    },
+    "motion": {
+      "duration": "120ms",
+      "reduce": "none"
+    }
+  },
+  "pages": [
+    {
+      "id": "ruleLab",
+      "path": "/rule-lab",
+      "title": "规则实验室",
+      "access": "administrator; current-user batches only",
+      "shell": "existing app_shell",
+      "requirements": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7",
+        "R8"
+      ],
+      "frames": [
+        {
+          "id": "heading",
+          "component": "PageHeading",
+          "copy": {
+            "title": "规则实验室",
+            "description": "批量比较触发条件，使用固定金额模拟记账。"
+          },
+          "actions": [
+            "refresh"
+          ],
+          "requirements": [
+            "R6",
+            "R7"
+          ]
+        },
+        {
+          "id": "workerStatus",
+          "component": "ResourceStatus",
+          "fields": [
+            "worker state",
+            "last processed time",
+            "experiment count",
+            "storage usage and budget"
+          ],
+          "unknown": "—",
+          "details": [
+            "CPU budget",
+            "memory budget",
+            "detail retention"
+          ],
+          "requirements": [
+            "R4",
+            "R8"
+          ]
+        },
+        {
+          "id": "generator",
+          "component": "BatchGenerator",
+          "initialExpanded": "no batches",
+          "requirements": [
+            "R1",
+            "R2",
+            "R3",
+            "R6"
+          ]
+        },
+        {
+          "id": "batches",
+          "component": "BatchList",
+          "requirements": [
+            "R4",
+            "R5",
+            "R6",
+            "R7"
+          ]
+        },
+        {
+          "id": "results",
+          "component": "ResultTable",
+          "requirements": [
+            "R2",
+            "R3",
+            "R5",
+            "R6"
+          ]
+        },
+        {
+          "id": "experimentDetail",
+          "component": "ExperimentDetail",
+          "initialVisible": false,
+          "requirements": [
+            "R2",
+            "R5",
+            "R6",
+            "R8"
+          ]
+        }
+      ],
+      "responsive": {
+        "mobile": "single-column form; wrapped actions; table scrolling within container only",
+        "tablet": "two-column form; stacked batches and results",
+        "desktop": "three-column form; stacked batches and wide results"
+      }
+    }
+  ],
+  "components": [
+    {
+      "id": "PageHeading",
+      "anatomy": [
+        "title",
+        "description",
+        "refresh button"
+      ],
+      "states": {
+        "default": "label plus text or number",
+        "hover": "not applicable",
+        "focus": "not applicable",
+        "active": "not applicable",
+        "disabled": "not applicable",
+        "loading": "读取中…",
+        "error": "plain explanation",
+        "empty": "—"
+      },
+      "actions": {
+        "refresh": {
+          "default": "primary or outline",
+          "hover": "tokens.colors.primaryStrong or hoverSurface",
+          "focus": "tokens.colors.primary visible outline",
+          "active": "pressed background, stable label",
+          "disabled": "native disabled; reason nearby",
+          "loading": "aria-busy, action text, no double submit",
+          "error": "inline message and retry",
+          "empty": "not applicable; accessible name required"
+        }
+      }
+    },
+    {
+      "id": "ResourceStatus",
+      "anatomy": [
+        "state label",
+        "last update",
+        "count",
+        "storage and budget",
+        "expandable details"
+      ],
+      "states": {
+        "default": "label plus text or number",
+        "hover": "not applicable",
+        "focus": "not applicable",
+        "active": "not applicable",
+        "disabled": "not applicable",
+        "loading": "读取中…",
+        "error": "plain explanation",
+        "empty": "—"
+      },
+      "rules": [
+        "Use actual API values only",
+        "Never show database path or credentials",
+        "Stale heartbeat is distinct from paused experiment"
+      ]
+    },
+    {
+      "id": "BatchGenerator",
+      "anatomy": [
+        "collapsible heading",
+        "fields",
+        "settlement summary",
+        "count preview",
+        "submit",
+        "feedback"
+      ],
+      "states": {
+        "default": "visible label, helper and input",
+        "hover": "muted border",
+        "focus": "primary outline",
+        "active": "native value/checked",
+        "disabled": "native disabled; preserve value",
+        "loading": "disable dependent controls",
+        "error": "aria-invalid and aria-describedby",
+        "empty": "example only placeholder; validate required"
+      },
+      "fields": [
+        {
+          "name": "name",
+          "label": "批次名称",
+          "type": "text",
+          "required": true,
+          "maxLength": 80
+        },
+        {
+          "name": "predictor_id",
+          "label": "预测来源",
+          "type": "select",
+          "optionsFrom": "GET /api/platform/rule-lab/options",
+          "required": true
+        },
+        {
+          "name": "metric",
+          "label": "投注玩法",
+          "type": "select",
+          "default": "odd_even",
+          "options": [
+            {
+              "value": "big_small",
+              "label": "大小"
+            },
+            {
+              "value": "odd_even",
+              "label": "单双"
+            },
+            {
+              "value": "combo",
+              "label": "组合"
+            }
+          ]
+        },
+        {
+          "name": "mode",
+          "label": "观察方式",
+          "type": "radio",
+          "default": "live",
+          "options": [
+            {
+              "value": "live",
+              "label": "前向模拟"
+            },
+            {
+              "value": "backtest",
+              "label": "历史回测"
+            }
+          ]
+        },
+        {
+          "name": "stake_amount",
+          "label": "每期模拟金额",
+          "type": "number",
+          "default": 1,
+          "min": 0.01,
+          "max": 10000,
+          "unit": "模拟资金单位",
+          "decimalPlaces": 2
+        },
+        {
+          "name": "start_date",
+          "label": "开始日期",
+          "type": "date",
+          "visibleWhen": {
+            "mode": "backtest"
+          },
+          "requiredWhen": {
+            "mode": "backtest"
+          }
+        },
+        {
+          "name": "end_date",
+          "label": "结束日期",
+          "type": "date",
+          "visibleWhen": {
+            "mode": "backtest"
+          },
+          "requiredWhen": {
+            "mode": "backtest"
+          },
+          "range": "start<=end<=today; server max_backtest_days=90; Asia/Shanghai"
+        },
+        {
+          "name": "template_pack",
+          "label": "条件模板",
+          "type": "readonly",
+          "value": "basic_v1",
+          "display": "基础条件 v1"
+        }
+      ],
+      "settlements": [
+        {
+          "id": "pc28_netdisk_regular",
+          "label": "OK 游戏网盘"
+        },
+        {
+          "id": "pc28_high_regular",
+          "label": "OK 游戏高赔常规"
+        }
+      ],
+      "candidatePreview": {
+        "authority": "basic_v1 fixed contract; actual created generated_count and options.limits are authoritative",
+        "basic_v1": {
+          "big_small": 50,
+          "odd_even": 50,
+          "combo": 78
+        },
+        "formula": "candidate count × two settlements"
+      },
+      "submit": {
+        "label": "生成并保存",
+        "helper": "保存后暂停，启动后开始模拟。",
+        "method": "POST",
+        "path": "/api/platform/rule-lab/batches",
+        "states": {
+          "default": "primary or outline",
+          "hover": "tokens.colors.primaryStrong or hoverSurface",
+          "focus": "tokens.colors.primary visible outline",
+          "active": "pressed background, stable label",
+          "disabled": "native disabled; reason nearby",
+          "loading": "aria-busy, action text, no double submit",
+          "error": "inline message and retry",
+          "empty": "not applicable; accessible name required"
+        }
+      },
+      "onSuccess": "select saved paused batch; focus result heading; do not start automatically",
+      "onError": "Preserve form, show field/summary error. Unknown creation result: refresh batches and request verification, never auto-resubmit; no API idempotency key."
+    },
+    {
+      "id": "BatchList",
+      "anatomy": [
+        "batch name",
+        "mode",
+        "status",
+        "count",
+        "time range",
+        "view/start/pause",
+        "pagination"
+      ],
+      "states": {
+        "default": "bounded results",
+        "hover": "hoverSurface on interactive action",
+        "focus": "visible focus on row action",
+        "active": "aria-current or aria-expanded",
+        "disabled": "boundary pagination disabled",
+        "loading": "retain current content, aria-busy",
+        "error": "local retry, stale time shown",
+        "empty": "explicit context-sensitive empty state"
+      },
+      "pageSize": "bounded maximum 50 batches from API; optional client pagination",
+      "actions": {
+        "start": "POST /api/platform/rule-lab/batches/:id/state {state:running}",
+        "pause": "POST /api/platform/rule-lab/batches/:id/state {state:paused}"
+      },
+      "noBatches": "还没有实验批次。先选择来源与玩法生成候选。"
+    },
+    {
+      "id": "ResultTable",
+      "anatomy": [
+        "batch heading",
+        "mode/stage/updated_at",
+        "actions",
+        "table",
+        "client pagination"
+      ],
+      "states": {
+        "default": "bounded results",
+        "hover": "hoverSurface on interactive action",
+        "focus": "visible focus on row action",
+        "active": "aria-current or aria-expanded",
+        "disabled": "boundary pagination disabled",
+        "loading": "retain current content, aria-busy",
+        "error": "local retry, stale time shown",
+        "empty": "explicit context-sensitive empty state"
+      },
+      "columns": [
+        "条件说明",
+        "结算规则",
+        "已结算期数",
+        "净收益",
+        "投注收益率",
+        "最大回撤",
+        "最长连亏",
+        "实赔／退本／全亏",
+        "样本状态",
+        "详情"
+      ],
+      "defaultSort": "canonical candidate order; two settlements adjacent",
+      "allowedSorts": [
+        "net_profit",
+        "settled_count",
+        "max_drawdown"
+      ],
+      "rowAction": "详情",
+      "export": {
+        "label": "导出当前批次结果",
+        "path": "/api/platform/rule-lab/batches/:id/export.csv",
+        "error": "Show business error; do not download JSON as CSV"
+      },
+      "zeroResults": "尚无已结算模拟结果",
+      "unknownValue": "—",
+      "roi": "net profit / stake total × 100%; no stake means —",
+      "moneyUnit": "模拟资金单位",
+      "dateTimezone": "Asia/Shanghai",
+      "sortExecution": "client-side within complete bounded batch response (max 100 experiments)"
+    },
+    {
+      "id": "ExperimentDetail",
+      "anatomy": [
+        "named region",
+        "condition and template_pack",
+        "settlement rule name",
+        "summary",
+        "daily table",
+        "recent event table",
+        "close"
+      ],
+      "states": {
+        "default": "bounded results",
+        "hover": "hoverSurface on interactive action",
+        "focus": "visible focus on row action",
+        "active": "aria-current or aria-expanded",
+        "disabled": "boundary pagination disabled",
+        "loading": "retain current content, aria-busy",
+        "error": "local retry, stale time shown",
+        "empty": "explicit context-sensitive empty state"
+      },
+      "dailyColumns": [
+        "日期",
+        "结算数",
+        "实赔／退本／全亏",
+        "投注额",
+        "净收益"
+      ],
+      "eventColumns": [
+        "期号",
+        "决策时间",
+        "投注方向",
+        "金额",
+        "状态",
+        "结果类型",
+        "净收益",
+        "退本／跳过原因"
+      ],
+      "rules": [
+        "One detail open at a time",
+        "Read only after click",
+        "Daily latest 90 days; recent latest 50 decisions; no server pagination",
+        "No draw-result column because API does not return it",
+        "Return focus to original detail button on close"
+      ]
+    }
+  ],
+  "stateCopy": {
+    "batch": {
+      "paused": "已暂停",
+      "running": "运行中",
+      "completed": "回测完成",
+      "error": "处理异常",
+      "resource_paused": "资源限制暂停"
+    },
+    "phase": {
+      "warming": "准备历史窗口",
+      "observing": "等待条件或开奖",
+      "importing": "分批读取历史",
+      "replaying": "正在回放历史",
+      "idle": "等待任务"
+    }
+  },
+  "prototype": {
+    "type": "interaction-contract-only",
+    "links": [
+      {
+        "from": "generator",
+        "event": "submit success",
+        "to": "results",
+        "effect": "paused batch selected"
+      },
+      {
+        "from": "batches",
+        "event": "view",
+        "to": "results"
+      },
+      {
+        "from": "results",
+        "event": "details",
+        "to": "experimentDetail"
+      },
+      {
+        "from": "experimentDetail",
+        "event": "close",
+        "to": "results",
+        "effect": "return focus"
+      }
+    ]
+  },
+  "implementationHints": {
+    "architecture": "Follow architecture.md §5 exact schema; synchronize both design files if it changes",
+    "assets": "reuse existing shell and tokens; no external fonts or chart libraries",
+    "refresh": "manual refresh; refresh after mutation; no high-frequency polling",
+    "outputSafety": "render dynamic values as text; no raw untrusted HTML",
+    "permissions": "server enforced admin access and owner filtering",
+    "a11y": [
+      "visible labels",
+      "native controls",
+      "primary focus outline",
+      "table headers and caption",
+      "named keyboard-scroll region",
+      "status announcement for save, not whole table",
+      "aria-expanded detail control",
+      "reduced-motion support"
+    ],
+    "contrastEvidence": {
+      "textOnWhite": 14.57,
+      "mutedOnWhite": 4.9,
+      "primaryOnWhite": 5.47,
+      "dangerOnWhite": 4.84,
+      "warning": 4.88,
+      "success": 6.39
+    },
+    "acceptance": [
+      "generate paused batch",
+      "start and pause persisted",
+      "results/details/CSV match API",
+      "401/403/404",
+      "zero/loading/error/stale states",
+      "long and malicious text",
+      "mobile and desktop no page overflow",
+      "keyboard form/pagination",
+      "only two OK rules"
+    ],
+    "api": {
+      "success": "direct object, no data envelope",
+      "createStatus": 201,
+      "error": "{error,code}",
+      "pagination": "bounded full responses; client-side paging only",
+      "unknownCreateResult": "reload overview; never automatically resubmit",
+      "timestamps": "display updated_at as batch update, not draw cutoff"
+    },
+    "moneyFormatting": {
+      "amountDecimalPlaces": 2,
+      "oddsMaxDecimalPlaces": 4,
+      "preserveExample": 2.846
+    }
+  },
+  "revisionNotes": [
+    "Requirement IDs aligned with prd.md R1-R8",
+    "Creation has no idempotency key; unknown result requires overview refresh, never automatic resubmit"
+  ]
+}

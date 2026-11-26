@@ -1,0 +1,341 @@
+{
+  "feature": "lightweight-rule-lab",
+  "cwd": "/www/wwwroot/pc28touzhu-rule-lab",
+  "waves": [
+    {
+      "id": "wave-1-core",
+      "title": "W1 领域与独立账本",
+      "scope": "确定性模板、冻结结算、特征可见性、独立存储与幂等",
+      "owner": "core",
+      "writeSet": [
+        "src/pc28touzhu/domain/rule_lab.py",
+        "src/pc28touzhu/services/rule_lab_store.py",
+        "tests/test_rule_lab_domain.py",
+        "tests/test_rule_lab_store.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_domain",
+          "tests.test_rule_lab_store",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_domain",
+          "tests.test_rule_lab_store",
+          "tests.test_settlement_rules",
+          "tests.test_pc28_profit_rules",
+          "-q"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "CM-1",
+        "CM-2",
+        "CM-3",
+        "CM-4",
+        "CM-7"
+      ],
+      "stopCondition": "任一核心红绿证据、冻结结算、事务幂等、owner或额度测试失败则停止W2；禁止依赖/主库/上游修改",
+      "status": "verified",
+      "validation": {
+        "rootTestsPassedAtWave": 56,
+        "laterFixesIncludedInFullRegression": true,
+        "evidence": [
+          "qa-report.md"
+        ],
+        "note": "W1独立绿门禁通过；后续补测纳入最终934项，不重复相加。"
+      }
+    },
+    {
+      "id": "wave-2-runtime-api-ui",
+      "title": "W2 来源、运行与页面闭环",
+      "scope": "只读输入、前向冻结与历史回放、管理员API、可操作页面",
+      "owners": [
+        "runtime",
+        "api",
+        "frontend"
+      ],
+      "dependsOn": [
+        "wave-1-core"
+      ],
+      "writeSet": [
+        "src/pc28touzhu/services/rule_lab_source.py",
+        "src/pc28touzhu/rule_lab_worker.py",
+        "tests/test_rule_lab_source.py",
+        "tests/test_rule_lab_worker.py",
+        "src/pc28touzhu/services/rule_lab_service.py",
+        "src/pc28touzhu/api/app.py",
+        "src/pc28touzhu/api/ui_navigation.py",
+        "tests/test_rule_lab_api.py",
+        "tests/test_ui_navigation.py",
+        "src/pc28touzhu/ui/rule_lab.html",
+        "src/pc28touzhu/ui/rule_lab.css",
+        "src/pc28touzhu/ui/rule_lab.js",
+        "tests/test_rule_lab_ui.cjs",
+        "tests/rule_lab_ui_server.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_source",
+          "tests.test_rule_lab_worker",
+          "-q"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_api",
+          "-q"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "node",
+          "tests/test_rule_lab_ui.cjs"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_domain",
+          "tests.test_rule_lab_store",
+          "tests.test_rule_lab_source",
+          "tests.test_rule_lab_worker",
+          "tests.test_rule_lab_api",
+          "tests.test_ui_navigation",
+          "tests.test_api",
+          "-q"
+        ],
+        [
+          "node",
+          "--check",
+          "src/pc28touzhu/ui/rule_lab.js"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "node",
+          "tests/test_rule_lab_ui.cjs"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "CM-1",
+        "CM-2",
+        "CM-3",
+        "CM-4",
+        "CM-5",
+        "CM-6",
+        "CM-7",
+        "CM-8"
+      ],
+      "stopCondition": "权限、未来信息、结算、幂等、页面主路径或原有接口回归任一失败均先修复；不允许源库写入或真实发送",
+      "status": "verified",
+      "validation": {
+        "rootTestsPassedAtWave": 83,
+        "browser": "passed",
+        "evidence": [
+          "qa-report.md"
+        ],
+        "note": "W2主代理独立测试与真实浏览器通过。"
+      }
+    },
+    {
+      "id": "wave-3-qa-ops",
+      "title": "W3 资源预算与最终验收",
+      "scope": "受限服务、文档、独立QA、性能和全量回归",
+      "owners": [
+        "ops",
+        "qa"
+      ],
+      "dependsOn": [
+        "wave-2-runtime-api-ui"
+      ],
+      "writeSet": [
+        "deploy/systemd/pc28touzhu-rule-lab.service",
+        "docs/RULE_LAB.md",
+        "tests/test_rule_lab_ops.py",
+        ".boss/lightweight-rule-lab/deploy-report.md",
+        "tests/test_rule_lab_qa.py",
+        "tests/rule_lab_benchmark.py",
+        ".boss/lightweight-rule-lab/qa-report.md"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_ops",
+          "-q"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_qa",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "nice",
+          "-n",
+          "10",
+          "env",
+          "PYTHONPATH=src:/tmp/pc28-cycle-test-tools",
+          "COVERAGE_FILE=/tmp/pc28-rule-lab-qa.coverage",
+          "python3",
+          "-m",
+          "coverage",
+          "run",
+          "--branch",
+          "--source=pc28touzhu.domain.rule_lab,pc28touzhu.services.rule_lab_store,pc28touzhu.services.rule_lab_source,pc28touzhu.services.rule_lab_service,pc28touzhu.rule_lab_worker",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tests",
+          "-p",
+          "test_*.py",
+          "-q"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src:/tmp/pc28-cycle-test-tools",
+          "COVERAGE_FILE=/tmp/pc28-rule-lab-qa.coverage",
+          "python3",
+          "-m",
+          "coverage",
+          "report",
+          "-m"
+        ],
+        [
+          "nice",
+          "-n",
+          "10",
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "tests.rule_lab_benchmark",
+          "--issues",
+          "400"
+        ],
+        [
+          "nice",
+          "-n",
+          "10",
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "tests.rule_lab_benchmark",
+          "--live-only"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "node",
+          "tests/test_rule_lab_ui.cjs"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_ops",
+          "-q"
+        ],
+        [
+          "systemd-analyze",
+          "verify",
+          "deploy/systemd/pc28touzhu-rule-lab.service"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "CM-2",
+        "CM-3",
+        "CM-4",
+        "CM-5",
+        "CM-6",
+        "CM-7",
+        "CM-8"
+      ],
+      "stopCondition": "资源上限、源只读解析、回归、coverage或浏览器流程失败不得发布；只允许临时库性能测量与生产小样本只读核验",
+      "status": "verified",
+      "validation": {
+        "fullRegression": {
+          "passed": 934,
+          "failed": 0,
+          "skipped": 0,
+          "elapsedSeconds": 187.181
+        },
+        "browser": "passed",
+        "opsTestsPassed": 4,
+        "systemdVerifyExitCode": 0,
+        "statementCoveragePercent": 90.23,
+        "branchCoveragePercent": 77.73,
+        "combinedCoveragePercent": 86.68,
+        "benchmark": "passed",
+        "productionSourceReadOnlySmoke": "passed",
+        "evidence": [
+          "qa-report.md",
+          "deploy-report.md",
+          "evidence/benchmark.json",
+          "evidence/live-benchmark.json",
+          "evidence/coverage-summary.txt"
+        ],
+        "notRun": [
+          "production soak",
+          "production concurrency load",
+          "Lighthouse"
+        ],
+        "deployment": "not_deployed"
+      }
+    }
+  ],
+  "deploymentStatus": "not_deployed",
+  "validationDate": "2026-11-26",
+  "validationNote": "三波验证通过，发布尚未进行；各阶段测试计数有重叠，不相加。最终证据见qa-report.md及deploy-report.md。"
+}

@@ -3,7 +3,7 @@ import re
 import unittest
 from html.parser import HTMLParser
 from pc28touzhu.api.app import PlatformApiApplication, build_testing_environ
-from pc28touzhu.api.ui_navigation import PAGE_ROUTES
+from pc28touzhu.api.ui_navigation import PAGE_ROUTES, render_navigation
 from pc28touzhu.auth import SESSION_COOKIE_NAME, build_session_cookie_value
 from tests.test_api import FakeRepository
 
@@ -95,6 +95,14 @@ class UiNavigationTests(unittest.TestCase):
             self.assertEqual(response["status"], "405 Method Not Allowed")
         response, _ = self.get("/autobet/unknown")
         self.assertEqual(response["status"], "404 Not Found")
+
+    def test_rule_lab_is_in_hidden_admin_navigation(self):
+        self.assertTrue(PAGE_ROUTES["/rule-lab"]["admin"])
+        self.assertEqual(PAGE_ROUTES["/rule-lab"]["template"], "rule_lab.html")
+        navigation = render_navigation("/rule-lab")
+        self.assertRegex(navigation, r'<div class="app-nav-group" data-admin-only hidden><p class="app-nav-label">平台管理</p><a class="app-nav-link" href="/rule-lab" aria-current="page">规则实验室</a>')
+        response, _ = self.get("/rule-lab", uid=self.regular["id"])
+        self.assertEqual(response["status"], "403 Forbidden")
 
 
 if __name__ == "__main__":

@@ -129,12 +129,15 @@ def _json_response(
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     status_text = {
         200: "200 OK",
+        201: "201 Created",
         400: "400 Bad Request",
         401: "401 Unauthorized",
         403: "403 Forbidden",
         404: "404 Not Found",
         405: "405 Method Not Allowed",
+        409: "409 Conflict",
         500: "500 Internal Server Error",
+        503: "503 Service Unavailable",
     }.get(status_code, f"{status_code} Unknown")
     headers = [
         ("Content-Type", "application/json; charset=utf-8"),
@@ -260,6 +263,7 @@ class PlatformApiApplication:
         platform_config: Any = None,
         telegram_bot_config: Any = None,
         runtime_config: Any = None,
+        rule_lab_service: Any = None,
     ):
         self.repository = repository
         self.executor_api_token = executor_api_token
@@ -267,6 +271,7 @@ class PlatformApiApplication:
         self.platform_config = platform_config
         self.telegram_bot_config = telegram_bot_config
         self.runtime_config = runtime_config
+        self.rule_lab_service = rule_lab_service
         self.executor_stale_after_seconds = int(getattr(platform_config, "executor_stale_after_seconds", 60) or 60)
         self.executor_offline_after_seconds = int(getattr(platform_config, "executor_offline_after_seconds", 300) or 300)
         self.auto_retry_max_attempts = int(getattr(platform_config, "auto_retry_max_attempts", 3) or 3)
@@ -319,6 +324,8 @@ class PlatformApiApplication:
             "/assets/app-shell.js": ("app_shell.js", "application/javascript"),
             "/assets/bot-binding.js": ("bot_binding.js", "application/javascript"),
             "/assets/workbench.css": ("workbench.css", "text/css"),
+            "/assets/rule_lab.css": ("rule_lab.css", "text/css"),
+            "/assets/rule_lab.js": ("rule_lab.js", "application/javascript"),
         }
         if path in shared_assets:
             if method != "GET":
@@ -563,6 +570,9 @@ class PlatformApiApplication:
                 {"user": user, "message": "密码已更新，其他旧会话已失效"},
                 extra_headers=[cookie],
             )
+
+        if path == "/api/platform/rule-lab" or path.startswith("/api/platform/rule-lab/"):
+            return self._dispatch_rule_lab(environ, start_response)
 
         if path.startswith("/api/executor/"):
             if not self._is_executor_authorized(environ):
@@ -1368,6 +1378,73 @@ class PlatformApiApplication:
         if not user:
             return False
         return str(user.get("role") or "").strip().lower() == "admin"
+
+    def _dispatch_rule_lab(self, environ: Dict[str, Any], start_response: StartResponse) -> Iterable[bytes]:
+        """Keep experiment errors and lazy initialization isolated from existing routes."""
+        from pc28touzhu.services.rule_lab_store import RuleLabError
+        headers = [("Cache-Control", "no-store")]
+        try:
+            user = self._require_platform_user(environ)
+            self._require_admin_api_user(user, "仅管理员可使用规则实验室")
+            if environ.get("QUERY_STRING"):
+                raise RuleLabError("invalid_input", "此接口不接受查询参数")
+            path = str(environ.get("PATH_INFO") or "")
+            method = str(environ.get("REQUEST_METHOD") or "GET").upper()
+            suffix = path[len("/api/platform/rule-lab"):]
+            batch_match = re.fullmatch(r"/batches/([1-9][0-9]{0,17})(?:/(state|export\.csv|experiments/([1-9][0-9]{0,17})))?", suffix)
+            if suffix in ("", "/options"):
+                expected = "GET"
+            elif suffix == "/batches":
+                expected = "POST"
+            elif batch_match:
+                expected = "POST" if batch_match.group(2) == "state" else "GET"
+            else:
+                return _json_response(start_response, 404, {"error": "实验接口不存在", "code": "not_found"}, headers)
+            if method != expected:
+                return _json_response(start_response, 405, {"error": "请求方法不支持", "code": "method_not_allowed"}, headers)
+            if method == "POST":
+                try:
+                    length = int(environ.get("CONTENT_LENGTH") or 0)
+                except (TypeError, ValueError):
+                    raise RuleLabError("invalid_input", "请求长度无效")
+                if not 0 <= length <= 16384:
+                    raise RuleLabError("invalid_input", "实验配置请求不能超过16KB")
+            if self.rule_lab_service is None:
+                from pc28touzhu.services.rule_lab_service import RuleLabService
+                self.rule_lab_service = RuleLabService()
+            service, user_id = self.rule_lab_service, user["id"]
+            if suffix == "":
+                payload = service.overview(user_id)
+            elif suffix == "/options":
+                payload = service.options()
+            elif suffix == "/batches":
+                payload = service.create_batch(user_id, _read_json_body(environ))
+                return _json_response(start_response, 201, payload, headers)
+            else:
+                batch_id = int(batch_match.group(1))
+                action = batch_match.group(2)
+                if action == "state":
+                    payload = service.set_batch_state(user_id, batch_id, _read_json_body(environ))
+                elif action == "export.csv":
+                    body = service.export_csv(user_id, batch_id)
+                    start_response("200 OK", [("Content-Type", "text/csv; charset=utf-8"),
+                        ("Content-Length", str(len(body))), ("Content-Disposition", 'attachment; filename="rule-lab-%s.csv"' % batch_id),
+                        ("X-Content-Type-Options", "nosniff")] + headers)
+                    return [body]
+                elif action and action.startswith("experiments/"):
+                    payload = service.experiment_detail(user_id, batch_id, int(batch_match.group(3)))
+                else:
+                    payload = service.batch_detail(user_id, batch_id)
+            return _json_response(start_response, 200, payload, headers)
+        except PermissionError as exc:
+            status = int(getattr(exc, "status_code", 401) or 401)
+            return _json_response(start_response, status, {"error": str(exc), "code": "unauthorized" if status == 401 else "forbidden"}, headers)
+        except RuleLabError as exc:
+            return _json_response(start_response, exc.status, {"error": exc.message, "code": exc.code}, headers)
+        except (ValueError, UnicodeError):
+            return _json_response(start_response, 400, {"error": "请求参数或 JSON 格式无效", "code": "invalid_input"}, headers)
+        except Exception:
+            return _json_response(start_response, 503, {"error": "规则实验室暂不可用，请稍后重试", "code": "service_unavailable"}, headers)
 
     def _session_cookie_secure(self, environ: Dict[str, Any]) -> bool:
         return str(environ.get("wsgi.url_scheme") or "").strip().lower() == "https"

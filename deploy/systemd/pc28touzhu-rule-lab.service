@@ -1,0 +1,52 @@
+[Unit]
+Description=pc28touzhu Bounded Rule Simulation Lab
+After=local-fs.target
+StartLimitIntervalSec=10min
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=www
+Group=www
+UMask=0077
+WorkingDirectory=/www/wwwroot/pc28touzhu
+Environment="RULE_LAB_DATA_DIR=/www/wwwroot/pc28touzhu/data/rule_lab" "RULE_LAB_SOURCE_DB=/www/wwwroot/AITradingSimulator/pc28_predictor.db" "PYTHONDONTWRITEBYTECODE=1"
+ExecStart=/usr/bin/env /www/wwwroot/pc28touzhu/deploy/systemd/pc28-python.sh -B -u -m pc28touzhu.rule_lab_worker
+Restart=on-failure
+RestartSec=30s
+TimeoutStopSec=15s
+KillSignal=SIGTERM
+
+# CPUQuota is relative to one CPU: 20% = 0.2 core, not 20% of the host.
+CPUQuota=20%
+CPUWeight=10
+MemoryHigh=192M
+MemoryMax=256M
+MemorySwapMax=0
+TasksMax=16
+Nice=10
+IOSchedulingClass=idle
+IOWeight=10
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+PrivateNetwork=true
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadOnlyPaths=/www/wwwroot/AITradingSimulator /www/wwwroot/pc28touzhu
+ReadWritePaths=/www/wwwroot/pc28touzhu/data/rule_lab
+InaccessiblePaths=-/www/wwwroot/pc28touzhu/.env -/www/wwwroot/pc28touzhu/pc28touzhu.db -/www/wwwroot/pc28touzhu/pc28touzhu.db-wal -/www/wwwroot/pc28touzhu/pc28touzhu.db-shm
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pc28-rule-lab
+LogRateLimitIntervalSec=1min
+LogRateLimitBurst=20
+
+[Install]
+WantedBy=multi-user.target
