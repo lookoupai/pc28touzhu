@@ -151,7 +151,7 @@ class RuleLabService:
                     template_packs=[dict(id='basic_v1',name='基础条件 v1',metrics=['big_small','odd_even','combo'],
                         condition_counts={metric:len(build_conditions(metric)) for metric in ('big_small','odd_even','combo')},
                         description='无条件跟随、预测连错3～7期、连中、连续开出/不出及窗口命中率。'),
-                        dict(id='combo_long_miss_v1',name='组合长连错 · 3～30期',metrics=['combo'],
+                        dict(id='combo_long_miss_v1',name='组合长连错 · 7～30期',metrics=['combo'],
                         condition_counts={'combo':len(COMBO_LONG_MISS_THRESHOLDS)+1},
                         description='无条件跟随基准＋预测连错 ≥ '+ '、'.join(map(str,COMBO_LONG_MISS_THRESHOLDS))+'期。预测连错不等于实盘连续亏损；按轮模式只在开轮时判断门槛。')],
                     default_stake_amount=1,risk_presets=self._risk_presets(user_id),

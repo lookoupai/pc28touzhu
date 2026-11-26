@@ -249,6 +249,7 @@ class RuleLabApiTests(unittest.TestCase):
             detail=self.service.batch_detail(1,child['batch_id'])
             self.assertEqual(detail['batch']['template_pack'],pack['id'])
             self.assertEqual(len(detail['experiments']),26)
+            self.assertEqual(sorted({e['condition']['threshold'] for e in detail['experiments'] if e['condition']['type']=='miss_streak'}),[7,8,9,10,11,12,13,14,15,20,25,30])
             self.assertEqual(max(e['condition']['threshold'] or 0 for e in detail['experiments']),30)
             self.assertEqual(detail['batch']['status'],'paused')
         self.assertEqual(self.service.batch_detail(1,batch['id']),before)

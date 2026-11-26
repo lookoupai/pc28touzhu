@@ -31,8 +31,8 @@ class RuleLabDomainTests(unittest.TestCase):
         original=build_conditions('combo')
         conditions=build_conditions('combo',template_pack='combo_long_miss_v1')
         self.assertEqual(len(conditions),13)
-        self.assertEqual([c['threshold'] for c in conditions if c['type']=='miss_streak'],[3,4,5,6,7,8,10,12,15,20,25,30])
-        old={c['condition_key']:c for c in original if c['type'] in ('always','miss_streak')}
+        self.assertEqual([c['threshold'] for c in conditions if c['type']=='miss_streak'],[7,8,9,10,11,12,13,14,15,20,25,30])
+        old={c['condition_key']:c for c in original if c['type']=='always' or c['type']=='miss_streak' and c['threshold']==7}
         self.assertTrue(all(c in conditions for c in old.values()))
         definitions=build_experiments('combo',template_pack='combo_long_miss_v1')
         self.assertEqual(len(definitions),26)
@@ -46,7 +46,7 @@ class RuleLabDomainTests(unittest.TestCase):
 
     def test_combo_long_streak_entry_thresholds_use_only_visible_consecutive_predictions(self):
         conditions=[c for c in build_conditions('combo',template_pack='combo_long_miss_v1') if c['type']=='miss_streak']
-        for count in (7,8,10,12,15,20,25,29,30,40):
+        for count in (6,7,8,9,10,11,12,13,14,15,20,25,29,30,40):
             rows=history(count)
             for row in rows:row['prediction_value']='小双'  # Actual 3+6+8 is 大单.
             features=build_features('combo',rows,decision_at=NOW)

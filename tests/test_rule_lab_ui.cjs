@@ -35,7 +35,7 @@ const root = path.resolve(__dirname, '..');
         assert.match(await page.locator('#labCandidatePreview').innerText(),/78/);
         await page.getByLabel('条件模板',{exact:true}).selectOption('combo_long_miss_v1');
         assert.match(await page.locator('#labCandidatePreview').innerText(),/13 个条件.*26 个实验版本/);
-        assert.match(await page.locator('#labTemplateHelp').innerText(),/8、10、12、15、20、25、30/);
+        assert.match(await page.locator('#labTemplateHelp').innerText(),/7、8、9、10、11、12、13、14、15、20、25、30/);
         await page.getByLabel('投注玩法',{exact:true}).selectOption('odd_even');
         assert.equal(await page.locator('#labTemplatePack').inputValue(),'basic_v1');
         assert.equal(await page.locator('#labTemplatePack option[value="combo_long_miss_v1"]').count(),0);

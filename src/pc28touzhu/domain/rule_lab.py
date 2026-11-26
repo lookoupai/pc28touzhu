@@ -18,7 +18,7 @@ METRICS = ('big_small', 'odd_even', 'combo')
 VALUES = {'big_small': ('大', '小'), 'odd_even': ('单', '双'),
           'combo': ('大单', '大双', '小单', '小双')}
 SHANGHAI = timezone(timedelta(hours=8))
-COMBO_LONG_MISS_THRESHOLDS = (3, 4, 5, 6, 7, 8, 10, 12, 15, 20, 25, 30)
+COMBO_LONG_MISS_THRESHOLDS = (7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 30)
 
 
 def _validate_template(metric,template_pack):

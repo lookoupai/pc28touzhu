@@ -31,7 +31,7 @@ class LongComboWorkerTests(unittest.TestCase):
                 if store.get_batch(1,batch['id'])['status']=='completed':break
             self.assertEqual(store.get_batch(1,batch['id'])['status'],'completed')
             results=store.list_experiments(1,batch['id'])
-            for threshold in (7,8,10,12,15,20,25,30):
+            for threshold in (7,8,9,10,11,12,13,14,15,20,25,30):
                 pair=[e for e in results if e['condition']['threshold']==threshold]
                 self.assertEqual(len(pair),2)
                 for exp in pair:
