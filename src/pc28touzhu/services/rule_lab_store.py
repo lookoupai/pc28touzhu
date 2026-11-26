@@ -532,7 +532,9 @@ class RuleLabStore:
 
     def get_experiment_detail(self,user_id,batch_id,experiment_id):
         with self._connect() as c:
-            self._owned(c,user_id,batch_id)
+            # The worker may commit between queries; all detail metrics share one read snapshot.
+            c.execute('BEGIN')
+            batch=self._owned(c,user_id,batch_id)
             row=c.execute('SELECT * FROM lab_experiments WHERE batch_id=? AND id=?',(batch_id,experiment_id)).fetchone()
             if row is None:
                 raise RuleLabError('not_found','实验版本不存在',404)
@@ -546,7 +548,36 @@ class RuleLabStore:
             rounds=[]
             for item in c.execute('SELECT summary_json FROM lab_rounds WHERE experiment_id=? ORDER BY round_no DESC LIMIT 30',(experiment_id,)):
                 summary=_load(item[0]);summary['net_profit']=summary.pop('net_cents')/100;rounds.append(summary)
-            return dict(experiment=self._experiment(c,row),daily=list(reversed(daily)),recent=recent,recent_rounds=rounds)
+            return dict(experiment=self._experiment(c,row),daily=list(reversed(daily)),recent=recent,recent_rounds=rounds,
+                        monthly=self._monthly_report(c,batch,row))
+
+    @staticmethod
+    def _monthly_report(c,batch,experiment):
+        from pc28touzhu.domain.rule_lab_monthly import monthly_report, report_window
+        now=datetime.now(timezone.utc).isoformat()
+        internal=RuleLabStore._internal_batch(batch)
+        _,end,first=report_window(internal,now=now)
+        daily=[dict(r) for r in c.execute('''SELECT * FROM lab_daily WHERE experiment_id=?
+            AND stat_date>=? AND stat_date<=? ORDER BY stat_date LIMIT 3720''',
+            (experiment['id'],first.isoformat(),end.isoformat()))]
+        cursor=internal['cursor']
+        def opened(issue):
+            if not issue:return None
+            row=c.execute('SELECT open_at FROM lab_draws WHERE issue_key=?',(_issue(issue),)).fetchone()
+            return row[0] if row else None
+        observed=opened(cursor.get('last_issue_no'))
+        if not observed and cursor.get('simulation_time'):
+            observed=(_time(cursor['simulation_time'])+timedelta(seconds=40)).isoformat()
+        if not observed and daily:
+            # A settlement date alone proves activity that day, not completion of that month.
+            observed=daily[-1]['stat_date']+'T00:00:00+08:00'
+        study=c.execute('''SELECT s.cutoff_at FROM lab_studies s JOIN lab_study_batches b
+            ON b.study_id=s.id WHERE b.batch_id=?''',(batch['id'],)).fetchone()
+        cutoff=study[0] if study else opened(cursor.get('replay_max_issue'))
+        first_observed=opened(cursor.get('warm_before_issue') or (cursor.get('evidence') or {}).get('first_issue'))
+        pending=c.execute("SELECT MIN(decided_at) FROM lab_decisions WHERE experiment_id=? AND status='pending'",(experiment['id'],)).fetchone()[0]
+        return monthly_report(internal,_load(experiment['stats_json']),daily,now=now,observed_at=observed,
+                              cutoff_at=cutoff,first_observed_at=first_observed,pending_since=pending)
 
     def worker_status(self,*,now):
         with self._connect() as c:

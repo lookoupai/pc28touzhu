@@ -13,8 +13,9 @@
     const pageSize = 20;
     const state = {options:null, overview:null, batch:null, experiments:[], selectedId:null, detailId:null, detailTrigger:null, resultPage:0,
         loading:false, mutating:false, exporting:false, readRevision:0, detailRevision:0, readAt:null, accessDenied:false,riskEditingId:null,
-        studies:[],study:null,studyRows:[],studyId:null,studyPage:0,preview:null,studyRequest:null};
+        studies:[],study:null,studyRows:[],studyId:null,studyPage:0,preview:null,studyRequest:null,monthly:null};
     const studyNames={paused:'已暂停',queued:'等待运行额度',running:'比较中',completed:'全部完成',error:'比较异常',resource_paused:'资源限制暂停'};
+    const monthStatus={complete:'已回放完整月',no_samples:'整月已回放 · 无结算',partial:'部分月份 / 回放中',not_replayed:'尚未回放',not_observed:'尚未观察',pending:'尚有待结算'};
 
     function element(tag, text, className) {
         const node = document.createElement(tag);
@@ -269,6 +270,7 @@
                 await openStudy(batch.study_id);
                 if (state.study?.id === batch.study_id) $("labStudyResults").scrollIntoView({block:'start'});
             }));
+            row.querySelectorAll('button').forEach(button=>button.disabled=locked());
             $("labBatchList").append(row);
         });
     }
@@ -314,6 +316,7 @@
     }
     function closeDetail(restoreFocus) {
         state.detailRevision++; state.detailId = null; $("labExperimentDetail").hidden = true;
+        state.monthly=null;$("labMonthly").hidden=true;$("labMonthlyExport").disabled=true;
         $("labResultsBody").querySelectorAll("button[aria-expanded]").forEach(button => button.setAttribute("aria-expanded", "false"));
         if (restoreFocus && state.detailTrigger && state.detailTrigger.isConnected) state.detailTrigger.focus();
         state.detailTrigger = null;
@@ -360,6 +363,7 @@
                 element('td',money(risk.round_net_profit,true),'lab-number'),element('td',reasonNames[risk.stop_reason]||risk.stop_reason||'—'),element("td", sampleLabel(item, batch), "lab-sample"));
             const cell = element("td"); const button = actionButton("详情", () => openDetail(item, button));
             button.setAttribute("aria-expanded", "false"); button.setAttribute("aria-controls", "labExperimentDetail"); button.dataset.experimentId = String(item.id); cell.append(button); row.append(cell); $("labResultsBody").append(row);
+            const monthly=actionButton('月度成绩',()=>openDetail(item,monthly,true));cell.append(monthly);
         });
     }
     function denyAccess() {
@@ -460,8 +464,11 @@
         if (!rows.length) {const row = element("tr"), cell = element("td", emptyMessage, "lab-muted"); cell.colSpan = fields.length; row.append(cell); target.append(row); return;}
         rows.forEach(item => {const row = element("tr"); fields.forEach(field => row.append(element("td", field(item), "lab-number"))); target.append(row);});
     }
-    async function openDetail(item, button) {
-        if (state.detailId === item.id && !$("labExperimentDetail").hidden) {closeDetail(true); return;}
+    async function openDetail(item, button, monthlyFocus=false) {
+        if (state.detailId === item.id && !$("labExperimentDetail").hidden) {
+            if(monthlyFocus && state.monthly){$("labMonthlyTitle").focus();return;}
+            closeDetail(true); return;
+        }
         closeDetail(false); state.detailId = item.id; state.detailTrigger = button;
         const revision = ++state.detailRevision, batchId = state.selectedId;
         button.setAttribute("aria-expanded", "true"); $("labExperimentDetail").hidden = false;
@@ -474,6 +481,8 @@
             if (revision !== state.detailRevision || batchId !== state.selectedId) return;
             if (!result.experiment || !Array.isArray(result.daily) || !Array.isArray(result.recent)) throw responseError("明细数据不完整，请关闭后重试", 0, "invalid_response");
             const exp = result.experiment;
+            state.monthly=result.monthly||null;
+            renderMonthly();
             putSummary($("labDetailStats"), [["累计投注", money(exp.stake_total)], ["累计净收益", money(exp.net_profit, true)], ["已结算期数", exp.settled_count], ["触发 / 跳过", exp.trigger_count + " / " + exp.skipped_count]]);
             const rs=exp.risk_state;
             if(rs?.mode==='round')putSummary($("labDetailStats"),[["累计净收益",money(exp.net_profit,true)],["有效完成轮 / 无效轮",rs.completed_rounds+' / '+rs.invalid_rounds],['盈利 / 亏损 / 平轮',rs.profit_rounds+' / '+rs.loss_rounds+' / '+rs.flat_rounds],['统计日',rs.day_date||'—'],['该日净利 / 开轮',money(rs.day_net_profit,true)+' / '+rs.day_round_count],['当前轮',riskStates[rs.state]||rs.state]]);
@@ -484,7 +493,64 @@
                 d=>({hit:"实赔",refund:"退本",miss:"全亏"}[d.result_type] || "—"), d=>money(d.net_profit,true),
                 d=>d.refund_reason || reasonNames[d.skip_reason] || d.skip_reason || "—"], "暂无逐期明细。");
             feedback("labDetailFeedback", "", false);
+            if(monthlyFocus && state.monthly)$("labMonthlyTitle").focus();
         } catch (error) {if (revision === state.detailRevision) {if (error.status === 401 || error.status === 403) denyAccess(); feedback("labDetailFeedback", error.message + "。关闭后可重新查看。", true);}}
+    }
+    function renderMonthly() {
+        const report=state.monthly;$("labMonthly").hidden=!report;$("labMonthlyExport").disabled=!report;
+        if(!report)return;
+        const summary=report.summary;
+        const notes=['按每个条件、结算规则和风控版本独立统计。历史盈利月份不保证未来每月盈利。'];
+        notes.push('完整月仅表示回放跨过自然月边界，不保证源记录无缺漏；部分月份、待结算和零结算月份不计入盈利月份占比。');
+        if(summary.eligible_months<6)notes.push('目前仅 '+summary.eligible_months+' 个完整且有结算的月份，尚不足以判断长期稳定性。');
+        if(report.window.truncated)notes.push('只展示最近120个自然月，月度摘要也仅计算此范围；累计逐笔回撤仍覆盖全部已处理区间。');
+        if(Object.keys(report.input_warnings||{}).length)notes.push('回放存在跳过或输入告警：'+Object.entries(report.input_warnings).map(([key,value])=>(reasonNames[key]||key)+' '+value).join('；')+'。');
+        $("labMonthlyNotice").textContent=notes.join(' ');
+        putSummary($("labMonthlySummary"),[['盈利 / 完整有结算月份',summary.profitable_months+' / '+summary.eligible_months],['盈利月份占比',percent(summary.profitable_month_ratio)],['亏损 / 持平月份',summary.losing_months+' / '+summary.flat_months],['最长连续亏损月',summary.longest_losing_months],['最好完整月',money(summary.best_month_profit,true)],['最差完整月',money(summary.worst_month_profit,true)]]);
+        tableRows($("labMonthlyBody"),report.rows,[r=>r.month,r=>monthStatus[r.status]||r.status,r=>r.settled_count,r=>money(r.stake_total),r=>r.settled_count?money(r.net_profit,true):'—',r=>percent(r.roi_percent),r=>r.profitable_days+' / '+r.losing_days+' / '+r.betting_days,r=>money(r.worst_day_profit,true),r=>money(r.daily_close_drawdown)],'暂无月度记录。');
+        renderMonthlyChart(report.rows);
+        const basis=report.capital;
+        $("labCapitalBasis").textContent='原固定每注 '+money(basis.stake_amount)+'；整个已处理区间逐笔最大回撤 '+money(basis.max_drawdown)+'。'+(basis.batch_status==='completed'?'该批次已完成。':'该批次尚未完成，历史回撤仍可能增大。')+' 以下假设只在此页面计算，不改变模拟配置。';
+        renderCapital();
+    }
+    function renderMonthlyChart(rows) {
+        const target=$("labMonthlyChart");target.replaceChildren();
+        const shown=rows.slice(-24),width=620,height=shown.length*34+26;
+        const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+        svg.setAttribute('viewBox','0 0 '+width+' '+height);svg.setAttribute('role','img');
+        svg.setAttribute('aria-label','月度净收益柱状图；正值在右、负值在左，最近最多24个月。详细数据见下方表格。');
+        function shape(tag,attrs,text){const node=document.createElementNS(svg.namespaceURI,tag);Object.entries(attrs).forEach(([k,v])=>node.setAttribute(k,v));if(text!==undefined)node.textContent=text;svg.append(node);return node;}
+        shape('line',{x1:350,x2:350,y1:6,y2:height-10,stroke:'currentColor','stroke-opacity':'.25'});
+        const maximum=Math.max(1,...shown.map(row=>Math.abs(row.net_profit)));
+        shown.forEach((row,index)=>{
+            const y=index*34+20,length=Math.abs(row.net_profit)/maximum*120;
+            shape('text',{x:4,y:y+4},row.month+(row.eligible?'':' · 部分/无样本'));
+            if(row.settled_count)shape('rect',{x:row.net_profit<0?350-length:350,y:y-9,width:Math.max(length,1),height:18,rx:2,class:row.net_profit<0?'lab-chart-loss':'lab-chart-profit'});
+            shape('text',{x:490,y:y+4},row.settled_count?money(row.net_profit,true):'无已结算样本');
+        });
+        target.append(svg);
+    }
+    function renderCapital() {
+        $("labCapitalSummary").replaceChildren();feedback('labCapitalFeedback','',false);
+        const basis=state.monthly?.capital;if(!basis)return;
+        const multiple=Number($("labCapitalMultiplier").value),tolerance=Number($("labCapitalTolerance").value),raw=$("labCapitalBudget").value,budget=raw===''?null:Number(raw);
+        if(!Number.isFinite(multiple)||multiple<1||multiple>10||!Number.isFinite(tolerance)||tolerance<1||tolerance>100||budget!==null&&(!Number.isFinite(budget)||budget<.01||budget>1e9)){
+            feedback('labCapitalFeedback','压力倍数须为1～10，回撤比例须为1～100%；本金如填写须在0.01～10亿之间。',true);return;
+        }
+        if(!basis.available){feedback('labCapitalFeedback','尚无已结算亏损或逐笔回撤记录，无法据此估算本金；零回撤不代表无需本金。',false);return;}
+        const stress=basis.max_drawdown*multiple,required=Math.ceil((stress/(tolerance/100))*100-1e-8)/100;
+        const entries=[['压力情景回撤',money(stress)],['按该回撤比例折算本金',money(required)]];
+        if(budget!==null)entries.push(['拟投入本金',money(budget)],['压力回撤占本金',percent(stress/budget*100)]);
+        putSummary($("labCapitalSummary"),entries);
+        if(budget!==null&&stress/budget*100>tolerance)feedback('labCapitalFeedback','此压力情景超过你填写的本金回撤容忍度；该比较不是对未来收益或资金安全的保证。',true);
+    }
+    function exportMonthly() {
+        const report=state.monthly;if(!report||state.accessDenied)return;
+        const columns=['month','status','range_start','range_end','complete_month','eligible','settled_count','stake_total','net_profit','roi_percent','betting_days','profitable_days','losing_days','worst_day_profit','daily_close_drawdown'];
+        const cell=value=>'"'+String(value??'').replaceAll('"','""')+'"';
+        const text=columns.join(',')+'\r\n'+report.rows.map(row=>columns.map(key=>cell(row[key])).join(',')).join('\r\n');
+        const url=URL.createObjectURL(new Blob(['\uFEFF',text],{type:'text/csv;charset=utf-8'})),link=element('a');
+        link.href=url;link.download='rule-lab-'+state.selectedId+'-experiment-'+state.detailId+'-monthly.csv';document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
     }
     async function exportCsv() {
         if (!state.batch || state.exporting || locked()) return;
@@ -529,7 +595,8 @@
         $("labStudyRows").replaceChildren();rows.slice(start,start+pageSize).forEach(r=>{const tr=element('tr');
             const child=study.children.find(child=>child.batch_id===r.batch_id);
             [conditionName(r.condition),r.settlement_rule_name,r.variant_label,r.settled_count,money(r.stake_total),money(r.net_profit,true),percent(r.roi_percent),money(r.max_drawdown),money(r.worst_day_profit,true),r.profitable_days+' / '+r.betting_days,r.completed_rounds,money(r.delta_net_profit,true),r.delta_roi_pp===null?'—':money(r.delta_roi_pp,true),money(r.delta_drawdown,true),sampleLabel(r,{...child,study_id:study.id})].forEach(v=>tr.append(element('td',v,'lab-number')));
-            const td=element('td');td.append(actionButton('子批次',()=>selectBatch(r.batch_id)));tr.append(td);$("labStudyRows").append(tr);});
+            const td=element('td');td.append(actionButton('子批次',()=>selectBatch(r.batch_id)));
+            const monthly=actionButton('月度成绩',async()=>{if(locked())return;await selectBatch(r.batch_id);const item=state.experiments.find(item=>item.id===r.experiment_id);if(state.selectedId===r.batch_id&&item)await openDetail(item,monthly,true);});td.append(monthly);tr.append(td);$("labStudyRows").append(tr);});
         $("labStudyPageInfo").textContent=rows.length?'显示 '+(start+1)+'–'+Math.min(start+pageSize,rows.length)+'，共 '+rows.length+' 行':'当前筛选无结果';
     }
     async function comparisonPreview(){
@@ -576,6 +643,8 @@
     $("labResultPrevious").addEventListener("click", () => {if (state.resultPage > 0) {state.resultPage--; closeDetail(false); renderResults(); updateControls();}});
     $("labResultNext").addEventListener("click", () => {if ((state.resultPage + 1) * pageSize < state.experiments.length) {state.resultPage++; closeDetail(false); renderResults(); updateControls();}});
     $("labCloseDetailButton").addEventListener("click", () => closeDetail(true));
+    $("labMonthlyExport").addEventListener('click',exportMonthly);
+    ['labCapitalMultiplier','labCapitalTolerance','labCapitalBudget'].forEach(id=>$(id).addEventListener('input',renderCapital));
     $("labExportButton").addEventListener("click", exportCsv);
     $("labCompareButton").addEventListener('click',comparisonPreview);$("labCreateStudyButton").addEventListener('click',createStudy);
     $("labStudyStateButton").addEventListener('click',changeStudyState);$("labStudyExportButton").addEventListener('click',exportStudy);

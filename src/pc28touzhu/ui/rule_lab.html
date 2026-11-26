@@ -89,6 +89,23 @@ __APP_SHELL__
         <div class="lab-section-heading"><div><p class="lab-kicker">实验详情</p><h2 id="labDetailTitle" tabindex="-1"></h2></div><button id="labCloseDetailButton" class="lab-button" type="button">关闭详情</button></div>
         <p id="labDetailMeta" class="lab-muted"></p><div id="labDetailFeedback" class="lab-feedback" role="status"></div>
         <dl id="labDetailStats" class="lab-summary"></dl>
+        <section id="labMonthly" hidden aria-labelledby="labMonthlyTitle">
+            <div class="lab-section-heading"><h3 id="labMonthlyTitle" tabindex="-1">月度成绩与本金压力</h3><button id="labMonthlyExport" class="lab-button" type="button" disabled>导出月度 CSV</button></div>
+            <p id="labMonthlyNotice" class="lab-note"></p>
+            <dl id="labMonthlySummary" class="lab-summary"></dl>
+            <div id="labMonthlyChart" class="lab-monthly-chart"></div>
+            <div class="lab-table-scroll" role="region" aria-label="月度成绩表，可横向滚动" tabindex="0"><table class="lab-table"><caption>北京时间自然月；未结束月与零结算月不计入盈利月份占比。月内回撤按每日收盘净利计算，可能低于真实逐笔回撤。</caption><thead><tr><th scope="col">月份</th><th scope="col">覆盖状态</th><th scope="col">结算数</th><th scope="col">投注额</th><th scope="col">净收益</th><th scope="col">投注 ROI</th><th scope="col">盈利 / 亏损 / 投注日</th><th scope="col">最差日</th><th scope="col">月内日终回撤</th></tr></thead><tbody id="labMonthlyBody"></tbody></table></div>
+            <h3>单个实验版本的本金压力测算</h3>
+            <p id="labCapitalBasis" class="lab-muted"></p>
+            <div class="lab-form-grid">
+                <div class="lab-field"><label for="labCapitalMultiplier">历史回撤压力倍数</label><input id="labCapitalMultiplier" type="number" min="1" max="10" step="0.1" value="2"><span class="lab-muted">情景假设，默认2倍，可调整。</span></div>
+                <div class="lab-field"><label for="labCapitalTolerance">可承受本金回撤（%）</label><input id="labCapitalTolerance" type="number" min="1" max="100" step="0.1" value="20"></div>
+                <div class="lab-field"><label for="labCapitalBudget">拟投入本金（可选）</label><input id="labCapitalBudget" type="number" min="0.01" max="1000000000" step="0.01" placeholder="使用同一资金单位"></div>
+            </div>
+            <div id="labCapitalFeedback" class="lab-feedback" role="status"></div>
+            <dl id="labCapitalSummary" class="lab-summary"></dl>
+            <p class="lab-note">比例对应本金 = 历史逐笔最大回撤 × 压力倍数 ÷ 可承受回撤比例。该金额仅用于资金压力比较，不是最低可运行本金或未来亏损上限；未计同时占款、费用、滑点及多个策略的相关性。保持本实验的固定注额和风控参数，改变下注金额需要重新回测。</p>
+        </section>
         <h3>最近轮次</h3><div class="lab-table-scroll" role="region" aria-label="轮次结果表，可横向滚动" tabindex="0"><table class="lab-table"><caption>最多显示最近30轮；区间结束时未完结轮仍保留实际净利，不强制收工。无有效投注轮单列，不算盈利成功。</caption><thead><tr><th scope="col">轮次</th><th scope="col">开始时间</th><th scope="col">结束时间</th><th scope="col">冻结 / 已结算期数</th><th scope="col">净收益</th><th scope="col">状态</th><th scope="col">停止原因</th></tr></thead><tbody id="labRoundsBody"></tbody></table></div>
         <h3>最近每日成绩</h3><div class="lab-table-scroll" role="region" aria-label="每日成绩表，可横向滚动" tabindex="0"><table class="lab-table"><caption>最多显示最近 90 天；未显示的日期不等于没有记录。</caption><thead><tr><th scope="col">日期</th><th scope="col">结算数</th><th scope="col">实赔 / 退本 / 全亏</th><th scope="col">投注额</th><th scope="col">净收益</th></tr></thead><tbody id="labDailyBody"></tbody></table></div>
         <h3>最近逐期明细</h3><div class="lab-table-scroll" role="region" aria-label="逐期明细表，可横向滚动" tabindex="0"><table class="lab-table"><caption>最多显示最近 50 条，包含待结算及跳过记录。</caption><thead><tr><th scope="col">期号</th><th scope="col">决策时间</th><th scope="col">方向</th><th scope="col">金额</th><th scope="col">状态</th><th scope="col">结果</th><th scope="col">净收益</th><th scope="col">说明</th></tr></thead><tbody id="labRecentBody"></tbody></table></div>

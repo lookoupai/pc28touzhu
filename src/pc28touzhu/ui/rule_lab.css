@@ -98,6 +98,13 @@
 .lab-profit { color: var(--lab-success); }
 .lab-loss { color: var(--danger); }
 .lab-sample { color: var(--muted); }
+.lab-monthly-chart { margin: var(--lab-lg) 0; overflow-x: auto; }
+.lab-monthly-chart svg { display: block; width: 100%; min-width: 280px; }
+.lab-monthly-chart text { fill: var(--text); font: 12px var(--lab-font); }
+.lab-monthly-chart .lab-chart-profit { fill: var(--lab-success); }
+.lab-monthly-chart .lab-chart-loss { fill: var(--danger); }
+#labMonthly { border-top: thin solid var(--line); margin-top: var(--lab-xl); padding-top: var(--lab-lg); }
+#labMonthly h3 { margin-top: 0; }
 /* Breakpoint values map to ui-design.json tokens.breakpoints. */
 @media (max-width: 960px) {
     .lab-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

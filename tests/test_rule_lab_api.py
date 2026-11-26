@@ -186,6 +186,23 @@ class RuleLabApiTests(unittest.TestCase):
         self.assertGreater(data['storage']['used_bytes'], 0)
         self.assertEqual(data['storage']['detail_retention_days'], 30)
 
+    def test_monthly_detail_is_owned_read_only_and_compatible(self):
+        batch=self.create();bid=batch['id'];eid=self.store.list_experiments(1,bid)[0]['id']
+        path=PREFIX+'/batches/'+str(bid)+'/experiments/'+str(eid)
+        result=self.request(path)
+        self.assertEqual(result['status_code'],200,result)
+        self.assertEqual(set(result['json']),{'experiment','daily','recent','recent_rounds','monthly'})
+        report=result['json']['monthly']
+        self.assertEqual(report['timezone'],'Asia/Shanghai')
+        self.assertFalse(report['capital']['available'])
+        self.assertIsNone(report['summary']['profitable_month_ratio'])
+        for uid,expected in [(None,401),(self.regular['id'],403),(self.other['id'],404)]:
+            self.assertEqual(self.request(path,uid=uid)['status_code'],expected)
+        self.assertEqual(self.request(path,method='POST',payload={})['status_code'],405)
+        self.assertEqual(self.request(path,query='month=2026-10')['status_code'],400)
+        self.assertEqual(self.store.get_batch(1,bid)['status'],'paused')
+        self.assertEqual(result['headers']['Cache-Control'],'no-store')
+
     def test_create_start_pause_detail_and_export_workflow(self):
         batch = self.create()
         self.assertEqual(batch['status'], 'paused')
