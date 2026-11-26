@@ -86,7 +86,7 @@
       ]
     }
   ],
-  "release_status": "verified_ready_for_deployment",
+  "release_status": "deployed_verified_study_paused",
   "final_verification": {
     "tests": 969,
     "failures": 0,
@@ -96,5 +96,22 @@
     "coverage": "evidence/coverage-summary.json",
     "benchmark": "evidence/benchmark.json",
     "migration": "evidence/migration.json"
+  },
+  "deployment": {
+    "code_commit": "469b628",
+    "date_utc": "2026-11-26",
+    "schema_version": 3,
+    "study_id": 1,
+    "study_status": "paused",
+    "child_batch_ids": [
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "saved_experiments": 468,
+    "processed_issues": 0,
+    "report": "deploy-report.md"
   }
 }
