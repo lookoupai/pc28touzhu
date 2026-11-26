@@ -18,6 +18,14 @@ METRICS = ('big_small', 'odd_even', 'combo')
 VALUES = {'big_small': ('大', '小'), 'odd_even': ('单', '双'),
           'combo': ('大单', '大双', '小单', '小双')}
 SHANGHAI = timezone(timedelta(hours=8))
+COMBO_LONG_MISS_THRESHOLDS = (3, 4, 5, 6, 7, 8, 10, 12, 15, 20, 25, 30)
+
+
+def _validate_template(metric,template_pack):
+    if not isinstance(template_pack,str) or template_pack not in ('basic_v1','combo_long_miss_v1'):
+        raise ValueError('不支持的规则模板包')
+    if template_pack=='combo_long_miss_v1' and metric!='combo':
+        raise ValueError('组合长连错模板仅支持组合玩法')
 
 
 def _time(value):
@@ -42,8 +50,8 @@ def normalize_batch_payload(payload: dict, *, now: str) -> dict:
     pid = payload.get('predictor_id')
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
         raise ValueError('预测器编号必须为正整数')
-    if payload.get('template_pack', 'basic_v1') != 'basic_v1':
-        raise ValueError('不支持的规则模板包')
+    template_pack=payload.get('template_pack','basic_v1')
+    _validate_template(metric,template_pack)
     amount = payload.get('stake_amount', 1)
     if isinstance(amount, bool) or not isinstance(amount, (int, float)):
         raise ValueError('每注金额必须是数字')
@@ -68,13 +76,14 @@ def normalize_batch_payload(payload: dict, *, now: str) -> dict:
                 raise ValueError()
         except (ValueError, TypeError) as exc:
             raise ValueError('回放日期须完整、按先后排列、不晚于今天，且最多90天') from exc
-    return dict(name=name.strip(), mode=mode, predictor_id=pid, metric=metric, template_pack='basic_v1',
+    return dict(name=name.strip(), mode=mode, predictor_id=pid, metric=metric, template_pack=template_pack,
                 stake_cents=int(money*100), start_date=start, end_date=end,risk_policy=normalize_risk_policy(payload.get('risk_policy')))
 
 
-def build_conditions(metric: str) -> list[dict]:
+def build_conditions(metric: str, *, template_pack='basic_v1') -> list[dict]:
     if metric not in METRICS:
         raise ValueError('不支持的实验玩法')
+    _validate_template(metric,template_pack)
     conditions = {}
 
     def add(kind, threshold=None, value=None, window=None, operator='gte'):
@@ -93,6 +102,9 @@ def build_conditions(metric: str) -> list[dict]:
         conditions[key] = {**condition, 'condition_key':hashlib.sha256(key.encode()).hexdigest()[:24], 'name':name}
 
     add('always')
+    if template_pack=='combo_long_miss_v1':
+        for n in COMBO_LONG_MISS_THRESHOLDS:add('miss_streak',n)
+        return list(conditions.values())
     for n in (3, 4, 5, 6, 7): add('miss_streak', n)
     for n in (2, 3, 4): add('hit_streak', n)
     for value in VALUES[metric]:
@@ -106,11 +118,11 @@ def build_conditions(metric: str) -> list[dict]:
     return list(conditions.values())
 
 
-def build_experiments(metric: str) -> list[dict]:
+def build_experiments(metric: str, *, template_pack='basic_v1') -> list[dict]:
     result = []
     snapshots = {rid:build_settlement_snapshot(rule_source='subscription_fixed', settlement_rule_id=rid,
                 fallback_profit_ratio=1, resolved_from='rule_lab') for rid in ALLOWED_SETTLEMENT_RULE_IDS}
-    for condition in build_conditions(metric):
+    for condition in build_conditions(metric,template_pack=template_pack):
         for rule_id in ALLOWED_SETTLEMENT_RULE_IDS:
             snapshot = copy.deepcopy(snapshots[rule_id])
             snapshot['catalog_hash'] = hashlib.sha256(json.dumps(snapshot, ensure_ascii=False, sort_keys=True).encode()).hexdigest()

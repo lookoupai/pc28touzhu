@@ -232,6 +232,27 @@ class RuleLabApiTests(unittest.TestCase):
     def test_combo_creates_78_versions(self):
         self.assertEqual(self.create(metric='combo')['experiment_count'], 78)
 
+    def test_long_combo_pack_freezes_26_versions_and_five_risk_variants(self):
+        options=self.request(PREFIX+'/options')['json']
+        pack=next(p for p in options['template_packs'] if p['id']=='combo_long_miss_v1')
+        self.assertEqual(pack['condition_counts']['combo'],13)
+        p=policy();p['day']['hit_rate_gate'].update(enabled=True,threshold=25)
+        result=self.request(PREFIX+'/batches',dict(name='组合长连错',mode='backtest',predictor_id=7,metric='combo',
+            start_date='2026-11-01',end_date='2026-11-26',risk_policy=p,template_pack=pack['id']))
+        self.assertEqual(result['status_code'],201,result)
+        batch=result['json']['batch'];self.assertEqual(batch['experiment_count'],26)
+        before=self.service.batch_detail(1,batch['id'])
+        study=self.request(PREFIX+'/studies',dict(source_batch_id=batch['id'],name='long variants',request_id='long-variants-01'))
+        self.assertEqual(study['status_code'],201,study)
+        self.assertEqual(self.store.capacity()['saved'],156)
+        for child in study['json']['study']['children']:
+            detail=self.service.batch_detail(1,child['batch_id'])
+            self.assertEqual(detail['batch']['template_pack'],pack['id'])
+            self.assertEqual(len(detail['experiments']),26)
+            self.assertEqual(max(e['condition']['threshold'] or 0 for e in detail['experiments']),30)
+            self.assertEqual(detail['batch']['status'],'paused')
+        self.assertEqual(self.service.batch_detail(1,batch['id']),before)
+
     def test_anonymous_and_regular_users_cannot_access_any_lab_api(self):
         endpoints = [(PREFIX, None), (PREFIX + '/options', None), (PREFIX + '/batches', self.payload()),
                      (PREFIX + '/batches/1', None), (PREFIX + '/batches/1/state', {'state': 'running'}),

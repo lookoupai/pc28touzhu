@@ -8,7 +8,7 @@ import sqlite3
 import copy
 from datetime import datetime, timezone
 
-from pc28touzhu.domain.rule_lab import ALLOWED_SETTLEMENT_RULE_IDS, build_experiments, normalize_batch_payload
+from pc28touzhu.domain.rule_lab import ALLOWED_SETTLEMENT_RULE_IDS, COMBO_LONG_MISS_THRESHOLDS, build_conditions, build_experiments, normalize_batch_payload
 from pc28touzhu.domain.settlement_rules import build_settlement_snapshot
 from pc28touzhu.domain.rule_lab_risk import normalize_risk_policy
 from pc28touzhu.domain.subscription_strategy import upgrade_subscription_strategy
@@ -147,7 +147,14 @@ class RuleLabService:
                               else '命中遇13/14、对子、顺子或豹子退本；未中全亏'))
         return dict(predictors=predictors, metrics=[dict(id=k, name=v) for k, v in
                     [('big_small', '大小'), ('odd_even', '单双'), ('combo', '组合')]],
-                    settlement_rules=rules, template_pack='basic_v1', default_stake_amount=1,risk_presets=self._risk_presets(user_id),
+                    settlement_rules=rules, template_pack='basic_v1',
+                    template_packs=[dict(id='basic_v1',name='基础条件 v1',metrics=['big_small','odd_even','combo'],
+                        condition_counts={metric:len(build_conditions(metric)) for metric in ('big_small','odd_even','combo')},
+                        description='无条件跟随、预测连错3～7期、连中、连续开出/不出及窗口命中率。'),
+                        dict(id='combo_long_miss_v1',name='组合长连错 · 3～30期',metrics=['combo'],
+                        condition_counts={'combo':len(COMBO_LONG_MISS_THRESHOLDS)+1},
+                        description='无条件跟随基准＋预测连错 ≥ '+ '、'.join(map(str,COMBO_LONG_MISS_THRESHOLDS))+'期。预测连错不等于实盘连续亏损；按轮模式只在开轮时判断门槛。')],
+                    default_stake_amount=1,risk_presets=self._risk_presets(user_id),
                     limits=dict(max_experiments_per_batch=100, max_running_experiments=MAX_RUNNING_EXPERIMENTS,
                                 max_total_experiments=MAX_TOTAL_EXPERIMENTS, max_backtest_days=90,
                                 detail_retention_days=self.store.detail_retention_days,
@@ -199,7 +206,7 @@ class RuleLabService:
             raise RuleLabError('invalid_input', str(exc)) from exc
         predictor = self._source_predictor(config['predictor_id'])
         config['risk_policy']=self._risk_snapshot(user_id,config['risk_policy'],config['metric'])
-        definitions = build_experiments(config['metric'])
+        definitions = build_experiments(config['metric'],template_pack=config['template_pack'])
         batch = self.store.create_batch(user_id, config, predictor['name'], definitions, now=timestamp)
         return dict(batch=batch, generated_count=len(definitions))
 

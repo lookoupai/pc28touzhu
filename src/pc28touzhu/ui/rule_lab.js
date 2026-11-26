@@ -275,8 +275,13 @@
         });
     }
     function updatePreview() {
-        const combo = $("labMetric").value === "combo";
-        $("labCandidatePreview").textContent = (combo ? 39 : 25) + " 个条件 × 2 套结算 = " + (combo ? 78 : 50) + " 个实验版本";
+        const metric=$("labMetric").value,selected=$("labTemplatePack").value;
+        const packs=(state.options?.template_packs||[{id:'basic_v1',name:'基础条件 v1',metrics:['combo','big_small','odd_even'],condition_counts:{combo:39,big_small:25,odd_even:25},description:'含无条件跟随基准、连续条件与窗口命中率。'}]).filter(pack=>pack.metrics.includes(metric));
+        $("labTemplatePack").replaceChildren();packs.forEach(pack=>{const option=element('option',pack.name);option.value=pack.id;$("labTemplatePack").append(option);});
+        if(packs.some(pack=>pack.id===selected))$("labTemplatePack").value=selected;
+        const pack=packs.find(pack=>pack.id===$("labTemplatePack").value),count=pack?.condition_counts[metric]||0;
+        $("labTemplateHelp").textContent=pack?.description||'暂无可用模板';
+        $("labCandidatePreview").textContent = count + " 个条件 × 2 套结算 = " + (count*2) + " 个实验版本";
         const historical = $("labBatchForm").elements.mode.value === "backtest";
         $("labDates").hidden = !historical;
         $("labStartDate").required = historical; $("labEndDate").required = historical;
@@ -291,7 +296,7 @@
         clearFieldErrors();
         const fields = $("labBatchForm").elements;
         const payload = {name:fields.name.value.trim(), predictor_id:Number(fields.predictor_id.value), metric:fields.metric.value,
-            mode:fields.mode.value, stake_amount:Number(fields.stake_amount.value), template_pack:"basic_v1"};
+            mode:fields.mode.value, stake_amount:Number(fields.stake_amount.value), template_pack:fields.template_pack.value};
         const failures = [];
         function invalid(id, message) {$(id).setAttribute("aria-invalid", "true"); $(id + "Error").textContent = message; failures.push(id);}
         if (!payload.name || payload.name.length > 80) invalid("labName", "请填写 1～80 字符的批次名称");
@@ -473,7 +478,8 @@
         const revision = ++state.detailRevision, batchId = state.selectedId;
         button.setAttribute("aria-expanded", "true"); $("labExperimentDetail").hidden = false;
         $("labDetailTitle").textContent = conditionName(item.condition) + " · " + item.settlement_rule_name;
-        $("labDetailMeta").textContent = "基础条件 v1 · 固定金额 · 北京时间 · "+riskSummary(state.batch?.risk_policy);
+        const packName=(state.options?.template_packs||[]).find(pack=>pack.id===state.batch?.template_pack)?.name||state.batch?.template_pack||'基础条件 v1';
+        $("labDetailMeta").textContent = packName+" · 固定金额 · 北京时间 · "+riskSummary(state.batch?.risk_policy);
         $("labDetailStats").replaceChildren(); $("labDailyBody").replaceChildren(); $("labRecentBody").replaceChildren();$("labRoundsBody").replaceChildren();
         feedback("labDetailFeedback", "读取明细…", false); $("labDetailTitle").focus();
         try {

@@ -40,7 +40,7 @@ __APP_SHELL__
                     <label for="labStake">每期模拟金额</label><input id="labStake" name="stake_amount" type="number" min="0.01" max="10000" step="0.01" value="1" required aria-describedby="labStakeHelp labStakeError">
                     <span id="labStakeHelp" class="lab-muted">模拟资金单位；每个实验独立记账。</span><span id="labStakeError" class="lab-field-error"></span>
                 </div>
-                <div class="lab-field"><span class="lab-field-label">条件模板</span><p class="lab-readonly">基础条件 v1</p><span class="lab-muted">含无条件跟随基准、连续条件与窗口命中率。</span></div>
+                <div class="lab-field"><label for="labTemplatePack">条件模板</label><select id="labTemplatePack" name="template_pack" aria-describedby="labTemplateHelp"><option value="basic_v1">基础条件 v1</option></select><span id="labTemplateHelp" class="lab-muted">含无条件跟随基准、连续条件与窗口命中率。</span></div>
                 <fieldset class="lab-mode-field"><legend>观察方式</legend><div class="lab-radio-options"><label><input type="radio" name="mode" value="live" checked> 前向模拟</label><label><input type="radio" name="mode" value="backtest"> 历史回测</label></div><p id="labModeHelp" class="lab-muted"></p></fieldset>
                 <div id="labDates" class="lab-dates" hidden>
                     <div class="lab-field"><label for="labStartDate">开始日期</label><input id="labStartDate" name="start_date" type="date" aria-describedby="labDateHelp labStartDateError"><span id="labStartDateError" class="lab-field-error"></span></div>

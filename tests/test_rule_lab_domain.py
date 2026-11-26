@@ -27,6 +27,40 @@ def history(count=100, *, hit=True):
 
 
 class RuleLabDomainTests(unittest.TestCase):
+    def test_combo_long_miss_pack_preserves_existing_keys_and_has_two_rules_per_threshold(self):
+        original=build_conditions('combo')
+        conditions=build_conditions('combo',template_pack='combo_long_miss_v1')
+        self.assertEqual(len(conditions),13)
+        self.assertEqual([c['threshold'] for c in conditions if c['type']=='miss_streak'],[3,4,5,6,7,8,10,12,15,20,25,30])
+        old={c['condition_key']:c for c in original if c['type'] in ('always','miss_streak')}
+        self.assertTrue(all(c in conditions for c in old.values()))
+        definitions=build_experiments('combo',template_pack='combo_long_miss_v1')
+        self.assertEqual(len(definitions),26)
+        self.assertTrue(all(sum(e['condition_key']==c['condition_key'] for e in definitions)==2 for c in conditions))
+        self.assertEqual(build_conditions('combo'),original)
+        for metric in ('big_small','odd_even'):
+            with self.assertRaises(ValueError):build_conditions(metric,template_pack='combo_long_miss_v1')
+        payload=dict(name='long',mode='live',predictor_id=1,metric='combo',template_pack='combo_long_miss_v1')
+        self.assertEqual(normalize_batch_payload(payload,now=NOW)['template_pack'],'combo_long_miss_v1')
+        with self.assertRaises(ValueError):normalize_batch_payload({**payload,'metric':'odd_even'},now=NOW)
+
+    def test_combo_long_streak_entry_thresholds_use_only_visible_consecutive_predictions(self):
+        conditions=[c for c in build_conditions('combo',template_pack='combo_long_miss_v1') if c['type']=='miss_streak']
+        for count in (7,8,10,12,15,20,25,29,30,40):
+            rows=history(count)
+            for row in rows:row['prediction_value']='小双'  # Actual 3+6+8 is 大单.
+            features=build_features('combo',rows,decision_at=NOW)
+            self.assertEqual(features['miss_streak'],count)
+            self.assertEqual([c['threshold'] for c in conditions if match_condition(c,features)['matched']],
+                             [c['threshold'] for c in conditions if c['threshold']<=count])
+        for field,value in [('prediction_value',None),('prediction_created_at','2026-11-26T04:01:00Z'),('conflict',True)]:
+            rows=history(30)
+            for row in rows:row['prediction_value']='小双'
+            rows[-1][field]=value
+            features=build_features('combo',rows,decision_at=NOW)
+            self.assertEqual(features['miss_streak'],0)
+            self.assertFalse(any(match_condition(c,features)['matched'] for c in conditions))
+
     def test_templates_are_unique_and_exactly_two_presets(self):
         for metric, count in [('big_small', 25), ('odd_even', 25), ('combo', 39)]:
             conditions = build_conditions(metric)
