@@ -11,6 +11,7 @@ from pc28touzhu.rule_lab_worker import RuleLabWorker
 from pc28touzhu.services.rule_lab_source import RuleLabSource
 from pc28touzhu.services.rule_lab_store import RuleLabStore
 from tests.test_rule_lab_source import SourceFixture, UTC, stamp
+from tests.test_rule_lab_risk import policy
 
 
 class RuleLabWorkerTests(unittest.TestCase):
@@ -65,6 +66,66 @@ class RuleLabWorkerTests(unittest.TestCase):
         self.assertEqual([r['net_profit'] for r in first], [.98, 1.85])
         self.worker.tick(now=stamp(self.now + timedelta(seconds=15)))
         self.assertEqual(self.store.list_experiments(1, batch['id'])[:2], first)
+
+    def test_round_replay_continues_after_entry_condition_breaks_and_keeps_ok_states_independent(self):
+        # Three preceding correct big calls open the >=3 hit streak candidate.
+        for i in range(-3,5):
+            opened=self.opened+timedelta(seconds=210*i)
+            self.fixture.draw(1100+i,opened,balls=(3,6,8) if i<0 or i>0 else (1,3,5))
+            self.fixture.prediction(1100+i,opened)
+        self.now=self.opened+timedelta(hours=1)
+        p=policy();p['round'].update(profit_target=1,loss_limit=10);p['day']['enabled']=False
+        payload=dict(name='按轮测试',mode='backtest',predictor_id=1,metric='big_small',start_date='2026-11-26',end_date='2026-11-26',risk_policy=p)
+        config=normalize_batch_payload(payload,now=stamp(self.now))
+        b=self.store.create_batch(1,config,'source',build_experiments('big_small'),now=stamp(self.now))
+        self.store.set_batch_state(1,b['id'],'running',now=stamp(self.now))
+        for _ in range(20):
+            self.worker.tick(now=stamp(self.now))
+            if self.store.get_batch(1,b['id'])['status']=='completed':break
+        results=self.store.list_experiments(1,b['id'])
+        entered=[e for e in results if e['condition']['type']=='hit_streak' and e['condition']['threshold']==3]
+        self.assertEqual(len(entered),2)
+        for e in entered:
+            detail=self.store.get_experiment_detail(1,b['id'],e['id'])
+            issues={d['issue_no'] for d in detail['recent']}
+            self.assertIn('1100',issues);self.assertIn('1101',issues)  # Loss broke condition, active round continues.
+        self.assertNotEqual(entered[0]['risk_state']['completed_rounds'],entered[1]['risk_state']['completed_rounds'])
+
+    def test_round_replay_waits_for_result_publication_before_future_bets(self):
+        for i in range(4):
+            opened=self.opened+timedelta(seconds=210*i)
+            self.fixture.draw(1100+i,opened,available=self.opened+timedelta(seconds=500) if i==0 else None)
+            self.fixture.prediction(1100+i,opened)
+        self.now=self.opened+timedelta(hours=1)
+        p=policy();p['round'].update(profit_target=1,loss_limit=10);p['day']['enabled']=False
+        cfg=normalize_batch_payload(dict(name='延迟回测',mode='backtest',predictor_id=1,metric='big_small',
+            start_date='2026-11-26',end_date='2026-11-26',risk_policy=p),now=stamp(self.now))
+        b=self.store.create_batch(1,cfg,'source',build_experiments('big_small'),now=stamp(self.now))
+        self.store.set_batch_state(1,b['id'],'running',now=stamp(self.now))
+        RuleLabWorker(self.store,self.source,page_size=1).tick(now=stamp(self.now))
+        self.store.set_batch_state(1,b['id'],'paused',now=stamp(self.now))
+        RuleLabWorker(self.store,self.source,page_size=1).tick(now=stamp(self.now+timedelta(hours=1)))
+        before=self.store.list_experiments(1,b['id'])[:2]
+        self.assertEqual([e['settled_count'] for e in before],[0,0])
+        self.assertEqual([e['risk_state']['stop_reason'] for e in before],['',''])
+        self.store.set_batch_state(1,b['id'],'running',now=stamp(self.now))
+        for _ in range(20):
+            RuleLabWorker(self.store,self.source,page_size=1).tick(now=stamp(self.now))
+            if self.store.get_batch(1,b['id'])['status']=='completed':break
+        exp=self.store.list_experiments(1,b['id'])[0]
+        detail=self.store.get_experiment_detail(1,b['id'],exp['id'])
+        self.assertEqual({d['issue_no'] for d in detail['recent']},{'1100','1103'})
+        self.assertEqual(exp['settled_count'],2)
+        other=self.store.create_batch(1,cfg,'source',build_experiments('big_small'),now=stamp(self.now))
+        self.store.set_batch_state(1,other['id'],'running',now=stamp(self.now))
+        for _ in range(5):
+            RuleLabWorker(self.store,self.source,page_size=200).tick(now=stamp(self.now))
+            if self.store.get_batch(1,other['id'])['status']=='completed':break
+        other_exp=self.store.list_experiments(1,other['id'])[0]
+        other_detail=self.store.get_experiment_detail(1,other['id'],other_exp['id'])
+        self.assertEqual(other_exp['net_profit'],exp['net_profit'])
+        self.assertEqual(other_exp['risk_state'],exp['risk_state'])
+        self.assertEqual({d['issue_no'] for d in other_detail['recent']},{'1100','1103'})
 
     def test_late_actual_open_is_skipped_instead_of_charged(self):
         self.prepare_live()

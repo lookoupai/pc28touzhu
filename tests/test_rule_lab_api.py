@@ -13,6 +13,7 @@ from pc28touzhu.api.app import PlatformApiApplication, build_testing_environ
 from pc28touzhu.auth import SESSION_COOKIE_NAME, build_session_cookie_value
 from pc28touzhu.services.rule_lab_store import RuleLabError, RuleLabStore
 from tests.test_api import FakeRepository
+from tests.test_rule_lab_risk import policy
 
 PREFIX = '/api/platform/rule-lab'
 NOW = '2026-11-26T04:00:00Z'
@@ -85,6 +86,75 @@ class RuleLabApiTests(unittest.TestCase):
         self.assertEqual(data['settlement_rules'][1]['big_small_odds'], 2.846)
         self.assertEqual(data['limits']['max_running_experiments'], 100)
         self.assertTrue(data['source_available'])
+
+    def test_risk_policy_edit_is_owned_unstarted_and_updates_no_source_fields(self):
+        batch=self.create();path=PREFIX+'/batches/'+str(batch['id'])
+        result=self.request(path+'/risk-policy',{'risk_policy':policy()})
+        self.assertEqual(result['status_code'],200,result)
+        self.assertEqual(result['json']['batch']['predictor_id'],7)
+        self.assertEqual(result['json']['batch']['stake_amount'],1)
+        self.assertEqual(result['json']['batch']['risk_policy']['mode'],'round')
+        self.assertEqual(self.request(path+'/risk-policy',{'risk_policy':policy()},uid=self.other['id'])['status_code'],404)
+        self.request(path+'/state',{'state':'running'});self.request(path+'/state',{'state':'paused'})
+        self.assertEqual(self.request(path+'/risk-policy',{'risk_policy':policy()})['status_code'],409)
+
+    def test_presets_keep_route_and_rule_layers_and_only_owners_safe_fields(self):
+        class Repo:
+            def list_auto_trigger_rules(self,*,user_id):
+                self.uid=user_id
+                return [dict(id=6,name='参考规则',user_id=user_id,scope_mode='selected_subscriptions',subscription_ids=[7],cooldown_issues=10,
+                    daily_risk_control=dict(enabled=True,profit_target=20,loss_limit=20,hit_rate_gate=dict(enabled=True,threshold=25,min_settled_count=20)),
+                    cycle_policy={'mode':'legacy'},routes=[dict(id=9,name='路由A',route_risk_mode='override',
+                        route_risk_control=dict(enabled=True,profit_target=30,loss_limit=10),subscription_risk_mode='override',
+                        subscription_risk_control=dict(enabled=True,profit_target=10,loss_limit=10)),
+                        dict(id=10,name='路由B',route_risk_mode='disabled',subscription_risk_mode='disabled')])]
+            def list_subscriptions(self,user_id):
+                return [dict(id=7,user_id=user_id,name='方案',source_id=99,config_json='SECRET',strategy_v2=dict(
+                    play_filter=dict(mode='selected',selected_keys=['combo:大单']),staking_policy=dict(mode='fixed',fixed_amount=9),
+                    risk_control=dict(enabled=True,profit_target=5,loss_limit=7)))]
+        repo=Repo();self.service.platform_repository=repo
+        data=self.request(PREFIX+'/options')['json'];presets=data['risk_presets']
+        self.assertEqual(repo.uid,1);self.assertEqual(len(presets),2)
+        self.assertNotIn('SECRET',json.dumps(data))
+        first=next(p for p in presets if p['policy']['source']['route_id']==9)['policy']
+        self.assertEqual(first['round']['profit_target'],10)
+        self.assertEqual(first['day']['profit_target'],20)
+        self.assertEqual(first['additional_day_guards'][0]['loss_limit'],10)
+        self.assertEqual(first['day']['max_rounds'],0)
+        second=next(p for p in presets if p['policy']['source']['route_id']==10)['policy']
+        self.assertFalse(second['round']['enabled'])
+        self.assertTrue(second['day']['enabled'])
+
+    def test_disabled_daily_targets_are_not_revived_by_cycle_quota(self):
+        class Repo:
+            def list_auto_trigger_rules(self,*,user_id):
+                return [dict(id=6,user_id=user_id,name='轮数规则',subscription_ids=[7],cooldown_issues=0,cycle_policy=dict(mode='rule',max_starts_per_day=3),
+                    daily_risk_control=dict(enabled=False,profit_target=10,loss_limit=8,hit_rate_gate=dict(enabled=True,threshold=40,min_settled_count=2)),
+                    routes=[dict(id=9,name='路由',route_risk_mode='inherit_rule',subscription_risk_mode='override',subscription_risk_control=dict(enabled=True,profit_target=1,loss_limit=1))])]
+            def list_subscriptions(self,user_id):
+                return [dict(id=7,user_id=user_id,name='方案',strategy_v2=dict(play_filter=dict(mode='selected',selected_keys=['odd_even:单']),
+                    staking_policy=dict(mode='fixed',fixed_amount=1),risk_control=dict(enabled=False,profit_target=0,loss_limit=0)))]
+        self.service.platform_repository=Repo()
+        p=self.request(PREFIX+'/options')['json']['risk_presets'][0]['policy']
+        self.assertTrue(p['day']['enabled']);self.assertEqual(p['day']['max_rounds'],3)
+        self.assertEqual(p['day']['profit_target'],0);self.assertEqual(p['day']['loss_limit'],0)
+        self.assertFalse(p['day']['hit_rate_gate']['enabled'])
+
+    def test_inherited_play_limits_and_unsupported_roll_are_explicitly_not_mixed(self):
+        class Repo:
+            def list_auto_trigger_rules(self,*,user_id):
+                return [dict(id=6,user_id=user_id,name='继承',subscription_ids=[7,8],daily_risk_control=dict(enabled=False),
+                    routes=[dict(id=9,name='路由',route_risk_mode='disabled',subscription_risk_mode='inherit_subscription')])]
+            def list_subscriptions(self,user_id):
+                return [dict(id=7,user_id=user_id,name='固定',strategy_v2=dict(play_filter=dict(mode='selected',selected_keys=['combo:大单']),staking_policy=dict(mode='fixed',fixed_amount=9),
+                    risk_control=dict(enabled=True,profit_target=4,loss_limit=6,play_limits=dict(combo=dict(profit_target=8,loss_limit=0))))),
+                    dict(id=8,user_id=user_id,name='过关不可复制',strategy_v2=dict(play_filter=dict(mode='all'),staking_policy=dict(mode='win_streak_roll',initial_amount=10)))]
+        self.service.platform_repository=Repo()
+        result=self.request(PREFIX+'/options')
+        self.assertEqual(result['status_code'],200,result)
+        presets=result['json']['risk_presets'];self.assertEqual(len(presets),1)
+        self.assertEqual(presets[0]['policy']['round']['profit_target'],8)
+        self.assertEqual(presets[0]['policy']['round']['loss_limit'],6)
 
     def test_empty_overview_has_bounded_storage_and_worker_status(self):
         data = self.request()['json']

@@ -11,6 +11,7 @@ from pc28touzhu.domain.settlement_rules import (
     build_settlement_snapshot, resolve_pc28_result_for_signal,
     resolve_pc28_settled_hit_detail,
 )
+from pc28touzhu.domain.rule_lab_risk import normalize_risk_policy
 
 ALLOWED_SETTLEMENT_RULE_IDS = ('pc28_netdisk_regular', 'pc28_high_regular')
 METRICS = ('big_small', 'odd_even', 'combo')
@@ -29,7 +30,7 @@ def _time(value):
 
 
 def normalize_batch_payload(payload: dict, *, now: str) -> dict:
-    allowed = {'name', 'mode', 'predictor_id', 'metric', 'template_pack', 'stake_amount', 'start_date', 'end_date'}
+    allowed = {'name', 'mode', 'predictor_id', 'metric', 'template_pack', 'stake_amount', 'start_date', 'end_date','risk_policy'}
     if not isinstance(payload, dict) or set(payload)-allowed:
         raise ValueError('实验参数包含不支持的字段')
     name = payload.get('name')
@@ -68,7 +69,7 @@ def normalize_batch_payload(payload: dict, *, now: str) -> dict:
         except (ValueError, TypeError) as exc:
             raise ValueError('回放日期须完整、按先后排列、不晚于今天，且最多90天') from exc
     return dict(name=name.strip(), mode=mode, predictor_id=pid, metric=metric, template_pack='basic_v1',
-                stake_cents=int(money*100), start_date=start, end_date=end)
+                stake_cents=int(money*100), start_date=start, end_date=end,risk_policy=normalize_risk_policy(payload.get('risk_policy')))
 
 
 def build_conditions(metric: str) -> list[dict]:

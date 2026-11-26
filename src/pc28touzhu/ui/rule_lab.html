@@ -47,8 +47,9 @@ __APP_SHELL__
                     <p id="labDateHelp" class="lab-muted">日期按北京时间计算，最多回测 90 天。</p>
                 </div>
             </div>
+            <fieldset class="lab-risk-box"><legend>模拟轮次与风控</legend><div id="labRiskEditor"></div></fieldset>
             <details id="labSettlementDetails" class="lab-settlements"><summary>固定比较：OK 游戏网盘与 OK 游戏高赔常规</summary><div id="labSettlementSummary">读取结算规则…</div><p class="lab-muted">每个实验使用创建时的结算配置。实赔、退本与全亏分别统计。</p></details>
-            <div class="lab-generator-footer"><div><strong id="labCandidatePreview">25 个条件 × 2 套结算 = 50 个实验版本</strong><p class="lab-muted">统一固定金额，逐期跟随所选来源；生成后暂停，启动后开始模拟。</p></div><button id="labCreateButton" class="lab-button lab-button-primary" type="submit" disabled>生成并保存</button></div>
+            <div class="lab-generator-footer"><div><strong id="labCandidatePreview">25 个条件 × 2 套结算 = 50 个实验版本</strong><p class="lab-muted">统一固定金额，生成后暂停。按轮模式条件只负责开轮，轮内继续跟随至退出。</p></div><button id="labCreateButton" class="lab-button lab-button-primary" type="submit" disabled>生成并保存</button></div>
             <div id="labFormFeedback" class="lab-feedback" role="status" tabindex="-1"></div>
         </form>
     </details>
@@ -61,10 +62,12 @@ __APP_SHELL__
     <section id="labResults" class="lab-panel" aria-labelledby="labResultTitle" hidden>
         <div class="lab-section-heading"><div><p class="lab-kicker">批次结果</p><h2 id="labResultTitle" tabindex="-1"></h2></div><div class="lab-actions"><button id="labBatchStateButton" class="lab-button" type="button">启动模拟</button><button id="labExportButton" class="lab-button" type="button" title="导出当前批次结果">导出 CSV</button></div></div>
         <p id="labBatchMeta" class="lab-muted"></p><p id="labBatchNotice" class="lab-note" hidden></p><p id="labBatchError" class="lab-feedback is-error" hidden></p><p id="labSkipCounts" class="lab-muted" hidden></p>
+        <p id="labBatchRiskSummary" class="lab-note"></p><button id="labEditRiskButton" class="lab-button" type="button" hidden>配置风控</button>
+        <form id="labEditRiskForm" class="lab-risk-box" hidden novalidate><h3>修改未启动批次的风控</h3><p class="lab-muted">只修改风控，预测来源、触发条件、每注金额和两套OK结算保持不变。启动后不可修改此口径。</p><div id="labEditRiskEditor"></div><div class="lab-actions"><button id="labSaveRiskButton" class="lab-button lab-button-primary" type="submit">保存风控</button><button id="labCancelRiskButton" class="lab-button" type="button">取消</button></div><p id="labEditRiskFeedback" class="lab-feedback" role="status"></p></form>
         <div class="lab-result-toolbar"><p>金额单位：模拟资金单位。收益率 = 净收益 ÷ 累计投注额。日期及时间均为北京时间。</p><label for="labSort">结果排序<select id="labSort"><option value="paired">按条件配对</option><option value="profit">净收益从高到低</option><option value="sample">已结算期数从多到少</option><option value="drawdown">最大回撤从低到高</option></select></label></div>
         <p id="labResultEmpty" class="lab-note" hidden></p>
         <div class="lab-table-scroll" role="region" aria-label="实验结果表，可横向滚动" tabindex="0">
-            <table class="lab-table lab-results-table"><caption>同一条件的两套结算版本；样本表现仍需验证。</caption><thead><tr><th scope="col">触发条件</th><th scope="col">结算规则</th><th scope="col">已结算期数</th><th scope="col">净收益</th><th scope="col">投注收益率</th><th scope="col">最大回撤</th><th scope="col">最长连亏</th><th scope="col">实赔 / 退本 / 全亏</th><th scope="col">样本状态</th><th scope="col">操作</th></tr></thead><tbody id="labResultsBody"></tbody></table>
+            <table class="lab-table lab-results-table"><caption>同一条件的两套结算版本；样本表现仍需验证。统计日为最近处理日，回测中不代表真实今天。</caption><thead><tr><th scope="col">触发条件</th><th scope="col">结算规则</th><th scope="col">已结算期数</th><th scope="col">净收益</th><th scope="col">投注收益率</th><th scope="col">最大回撤</th><th scope="col">最长连亏</th><th scope="col">实赔 / 退本 / 全亏</th><th scope="col">轮状态</th><th scope="col">统计日</th><th scope="col">该日净利 / 开轮</th><th scope="col">本轮净利</th><th scope="col">停止原因</th><th scope="col">样本状态</th><th scope="col">操作</th></tr></thead><tbody id="labResultsBody"></tbody></table>
         </div>
         <div class="lab-pagination" aria-label="结果分页"><span id="labResultPageInfo" class="lab-muted"></span><div class="lab-actions"><button id="labResultPrevious" class="lab-button" type="button">上一页</button><button id="labResultNext" class="lab-button" type="button">下一页</button></div></div>
     </section>
@@ -73,6 +76,7 @@ __APP_SHELL__
         <div class="lab-section-heading"><div><p class="lab-kicker">实验详情</p><h2 id="labDetailTitle" tabindex="-1"></h2></div><button id="labCloseDetailButton" class="lab-button" type="button">关闭详情</button></div>
         <p id="labDetailMeta" class="lab-muted"></p><div id="labDetailFeedback" class="lab-feedback" role="status"></div>
         <dl id="labDetailStats" class="lab-summary"></dl>
+        <h3>最近轮次</h3><div class="lab-table-scroll" role="region" aria-label="轮次结果表，可横向滚动" tabindex="0"><table class="lab-table"><caption>最多显示最近30轮；区间结束时未完结轮仍保留实际净利，不强制收工。无有效投注轮单列，不算盈利成功。</caption><thead><tr><th scope="col">轮次</th><th scope="col">开始时间</th><th scope="col">结束时间</th><th scope="col">冻结 / 已结算期数</th><th scope="col">净收益</th><th scope="col">状态</th><th scope="col">停止原因</th></tr></thead><tbody id="labRoundsBody"></tbody></table></div>
         <h3>最近每日成绩</h3><div class="lab-table-scroll" role="region" aria-label="每日成绩表，可横向滚动" tabindex="0"><table class="lab-table"><caption>最多显示最近 90 天；未显示的日期不等于没有记录。</caption><thead><tr><th scope="col">日期</th><th scope="col">结算数</th><th scope="col">实赔 / 退本 / 全亏</th><th scope="col">投注额</th><th scope="col">净收益</th></tr></thead><tbody id="labDailyBody"></tbody></table></div>
         <h3>最近逐期明细</h3><div class="lab-table-scroll" role="region" aria-label="逐期明细表，可横向滚动" tabindex="0"><table class="lab-table"><caption>最多显示最近 50 条，包含待结算及跳过记录。</caption><thead><tr><th scope="col">期号</th><th scope="col">决策时间</th><th scope="col">方向</th><th scope="col">金额</th><th scope="col">状态</th><th scope="col">结果</th><th scope="col">净收益</th><th scope="col">说明</th></tr></thead><tbody id="labRecentBody"></tbody></table></div>
     </section>

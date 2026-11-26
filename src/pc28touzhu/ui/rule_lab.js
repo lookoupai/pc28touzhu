@@ -7,15 +7,93 @@
     const workerNames = {starting:"等待后台启动", idle:"等待任务", running:"正在处理", stale:"后台暂未更新", resource_paused:"资源限制暂停", error:"处理异常"};
     const metricNames = {big_small:"大小", odd_even:"单双", combo:"组合"};
     const reasonNames = {insufficient_history:"历史样本不足", late_decision:"错过决策窗口", late_prediction:"预测到达过晚", missing_prediction:"缺少预测", invalid_draw:"开奖数据不完整", input_conflict:"输入内容冲突", missing_draw:"缺少开奖", source_unavailable:"来源暂不可用", input_expired:"所需输入已过保留期"};
+    Object.assign(reasonNames,{round_profit_target:"单轮止盈",round_loss_limit:"单轮止损",round_max_bets:"单轮下注上限",day_profit_target:"日止盈",day_loss_limit:"日止损",day_max_bets:"日下注上限",day_max_rounds:"当日开轮次数已达上限",daily_hit_rate_low:"日命中率熔断",cooldown:"等待开轮间隔",no_valid_bets:"无有效投注"});
+    const riskStates={legacy:"逐期对照",active:"轮内跟随",unfinished:"区间结束·轮未完结",waiting:"等待条件 / 冷却",day_stopped:"统计日已停止"};
+    const riskEditors={};
     const pageSize = 20;
     const state = {options:null, overview:null, batch:null, experiments:[], selectedId:null, detailId:null, detailTrigger:null, resultPage:0,
-        loading:false, mutating:false, exporting:false, readRevision:0, detailRevision:0, readAt:null, accessDenied:false};
+        loading:false, mutating:false, exporting:false, readRevision:0, detailRevision:0, readAt:null, accessDenied:false,riskEditingId:null};
 
     function element(tag, text, className) {
         const node = document.createElement(tag);
         if (text !== undefined && text !== null) node.textContent = String(text);
         if (className) node.className = className;
         return node;
+    }
+    function blankRisk() {return {version:1,mode:"round",round:{enabled:true,profit_target:0,loss_limit:0,max_bets:0},day:{enabled:false,profit_target:0,loss_limit:0,max_bets:0,max_rounds:0,hit_rate_gate:{enabled:false,threshold:0,min_settled_count:20}},additional_day_guards:[],cooldown_issues:0,source:{}};}
+    function createRiskEditor(prefix, target) {
+        const editor={prefix,source:{},guards:[],selectedPreset:"",fields:{}};riskEditors[prefix]=editor;
+        const grid=element("div",null,"lab-form-grid");
+        function field(key,label,type,choices) {
+            const wrap=element("div",null,"lab-field"),id=prefix+key,input=element(type==="select"?"select":"input");input.id=id;
+            const caption=element("label",label);caption.htmlFor=id;
+            if(type==="select") choices.forEach(([value,text])=>{const option=element("option",text);option.value=value;input.append(option);});
+            else {input.type=type;if(type==="number"){input.min="0";input.step=key.includes("Profit")||key.includes("Loss")||key==="Threshold"?"0.01":"1";}}
+            wrap.append(caption,input);grid.append(wrap);editor.fields[key]=input;return input;
+        }
+        field("Mode","运行口径","select",[["round","按轮模拟"],["legacy","逐期条件对照（无轮风控）"]]);
+        field("Preset","复制现有规则风控","select",[["","手动设置（不自动选择预设）"]]);
+        field("RoundEnabled","启用单轮退出","checkbox");field("RoundProfit","单轮止盈（0不限）","number");field("RoundLoss","单轮止损（0不限）","number");field("RoundMax","单轮最多下注（0不限）","number");
+        field("DayEnabled","启用日风控","checkbox");field("DayProfit","日止盈（0不限）","number");field("DayLoss","日止损（0不限）","number");field("DayMax","每日最多下注（0不限）","number");field("DayRounds","每日最多开轮（0不限）","number");
+        field("GateEnabled","启用日命中率熔断","checkbox");field("Threshold","熔断命中率阈值（%）","number");field("Minimum","最少实赔＋全亏单数","number");field("Cooldown","距上次开轮至少间隔（期）","number");
+        editor.notice=element("p",null,"lab-note");editor.provenance=element("p",null,"lab-muted");editor.extra=element("p",null,"lab-note");
+        target.append(grid,element("p","命中率 = 实赔 ÷（实赔＋全亏），退本不计分母；达到最少单数且低于阈值才停止。冷却从上次开轮期号算起，不是收工后等待。日次数按目标开奖日预占、最终盈亏按实际开奖日结算。","lab-muted"),editor.provenance,editor.extra,editor.notice);
+        grid.addEventListener("change",event=>{
+            if(event.target===editor.fields.Preset){
+                const found=(state.options?.risk_presets||[]).find(p=>p.id===event.target.value);
+                if(found){editor.selectedPreset=found.id;fillRisk(prefix,found.policy);editor.fields.Preset.value=found.id;}
+                else {editor.source={};editor.guards=[];editor.selectedPreset="";}
+            } else if(event.target!==editor.fields.Mode && Object.keys(editor.source).length)editor.source.modified=true;
+            updateRiskEditor(prefix);
+        });
+        fillRisk(prefix,blankRisk());
+    }
+    function fillRisk(prefix,policy) {
+        const editor=riskEditors[prefix],f=editor.fields,p=policy?.mode==="round"?policy:blankRisk();
+        f.Mode.value=policy?.mode||"round";
+        f.RoundEnabled.checked=p.round.enabled;f.RoundProfit.value=p.round.profit_target;f.RoundLoss.value=p.round.loss_limit;f.RoundMax.value=p.round.max_bets;
+        f.DayEnabled.checked=p.day.enabled;f.DayProfit.value=p.day.profit_target;f.DayLoss.value=p.day.loss_limit;f.DayMax.value=p.day.max_bets;f.DayRounds.value=p.day.max_rounds;
+        f.GateEnabled.checked=p.day.hit_rate_gate.enabled;f.Threshold.value=p.day.hit_rate_gate.threshold;f.Minimum.value=p.day.hit_rate_gate.min_settled_count;f.Cooldown.value=p.cooldown_issues;
+        editor.source=structuredClone(p.source||{});editor.guards=structuredClone(p.additional_day_guards||[]);updateRiskEditor(prefix);
+    }
+    function riskValue(prefix) {
+        const editor=riskEditors[prefix],f=editor.fields;
+        if(f.Mode.value==="legacy")return {version:1,mode:"legacy"};
+        return {version:1,mode:"round",round:{enabled:f.RoundEnabled.checked,profit_target:Number(f.RoundProfit.value),loss_limit:Number(f.RoundLoss.value),max_bets:Number(f.RoundMax.value)},
+            day:{enabled:f.DayEnabled.checked,profit_target:Number(f.DayProfit.value),loss_limit:Number(f.DayLoss.value),max_bets:Number(f.DayMax.value),max_rounds:Number(f.DayRounds.value),
+                hit_rate_gate:{enabled:f.GateEnabled.checked,threshold:Number(f.Threshold.value),min_settled_count:Number(f.Minimum.value)}},
+            cooldown_issues:Number(f.Cooldown.value),additional_day_guards:structuredClone(editor.guards),source:structuredClone(editor.source)};
+    }
+    function riskError(p) {
+        if(p.mode==="legacy")return "";
+        const controls=[p.round,p.day,...p.additional_day_guards];
+        if(!controls.some(c=>c.enabled && (c.profit_target>0||c.loss_limit>0||c.max_bets>0)))return "尚未设置退出条件：请启用至少一项单轮或日止盈、止损、最多下注，或明确选择逐期对照。";
+        if(controls.some(c=>[c.profit_target,c.loss_limit,c.max_bets,c.max_rounds??0].some(v=>!Number.isFinite(v)||v<0)))return "风控金额和次数必须是有效非负数字。";
+        if(controls.some(c=>!Number.isInteger(c.max_bets)||!Number.isInteger(c.max_rounds??0))||!Number.isInteger(p.cooldown_issues)||p.cooldown_issues<0)return "次数与开轮间隔必须是非负整数。";
+        if(p.day.hit_rate_gate.enabled && (!(p.day.hit_rate_gate.threshold>0&&p.day.hit_rate_gate.threshold<100)||!Number.isInteger(p.day.hit_rate_gate.min_settled_count)||p.day.hit_rate_gate.min_settled_count<1))return "启用命中率熔断时，请填写0～100之间的阈值及正整数最少单数。";
+        return "";
+    }
+    function riskSummary(p) {
+        if(!p||p.mode!=="round")return "逐期条件对照：每期重新判断触发条件，无按轮止盈止损。";
+        const n=v=>v?String(v):"不限",r=p.round,d=p.day,g=d.hit_rate_gate;
+        return "按轮模拟 · 单轮"+(r.enabled?"止盈 "+n(r.profit_target)+" / 止损 "+n(r.loss_limit)+" / 最多下注 "+n(r.max_bets):"退出关闭")+" · 日"+(d.enabled?"止盈 "+n(d.profit_target)+" / 止损 "+n(d.loss_limit)+" / 最多下注 "+n(d.max_bets)+" / 最多开轮 "+n(d.max_rounds):"风控关闭")+(d.enabled&&g.enabled?" · 实赔命中率 < "+g.threshold+"%，至少 "+g.min_settled_count+" 单":"")+" · 距上次开轮 ≥ "+p.cooldown_issues+" 期"+(p.additional_day_guards?.length?" · 另有一套独立规则日保护":"");
+    }
+    function updateRiskEditor(prefix) {
+        const editor=riskEditors[prefix];if(!editor)return;
+        const p=riskValue(prefix),f=editor.fields,legacy=p.mode==="legacy",busy=state.mutating||state.accessDenied;
+        Object.entries(f).forEach(([key,input])=>{input.disabled=busy||(legacy&&!['Mode'].includes(key));});
+        if(!legacy){['RoundProfit','RoundLoss','RoundMax'].forEach(k=>f[k].disabled=busy||!f.RoundEnabled.checked);['DayProfit','DayLoss','DayMax','DayRounds','GateEnabled'].forEach(k=>f[k].disabled=busy||!f.DayEnabled.checked);['Threshold','Minimum'].forEach(k=>f[k].disabled=busy||!f.DayEnabled.checked||!f.GateEnabled.checked);}
+        const source=editor.source;editor.provenance.textContent=source.rule_id?"复制自："+[source.rule_name,source.route_name,source.subscription_name].join(" · ")+(source.modified?"（已修改预设）":"")+"。仅复制风控，来源与每注金额不变。":"未选择现有规则预设，当前为手动配置。";
+        editor.extra.hidden=!editor.guards.length;editor.extra.textContent=editor.guards.length?"附加独立日保护："+riskSummary({mode:'round',round:{enabled:false},day:editor.guards[0],cooldown_issues:0,additional_day_guards:[]})+"。选择手动配置可移除此附加层。":"";
+        editor.notice.textContent=riskError(p)||riskSummary(p);editor.notice.classList.toggle('is-error',Boolean(riskError(p)));
+    }
+    function renderRiskPresets(prefix,metric) {
+        const editor=riskEditors[prefix],select=editor.fields.Preset,selected=select.value;
+        select.replaceChildren();const manual=element('option','手动设置（不自动选择预设）');manual.value='';select.append(manual);
+        (state.options?.risk_presets||[]).filter(p=>p.metric===metric).forEach(p=>{const option=element('option',p.label);option.value=p.id;select.append(option);});
+        if([...select.options].some(o=>o.value===selected))select.value=selected;
+        else if(editor.source.rule_id){editor.source={};editor.guards=[];}
+        updateRiskEditor(prefix);
     }
     function feedback(id, message, error) {
         const node = $(id);
@@ -106,6 +184,8 @@
         $("labResultPrevious").disabled = locked() || state.resultPage <= 0;
         $("labResultNext").disabled = locked() || (state.resultPage + 1) * pageSize >= state.experiments.length;
         $("labBatchList").querySelectorAll("button").forEach(button => {button.disabled = locked();});
+        $("labEditRiskButton").disabled=locked();$("labSaveRiskButton").disabled=locked();$("labCancelRiskButton").disabled=state.mutating;
+        Object.keys(riskEditors).forEach(updateRiskEditor);
     }
     function renderOptions() {
         const options = state.options;
@@ -128,6 +208,7 @@
         $("labDateHelp").textContent = "日期按北京时间计算，最多回测 " + limits.max_backtest_days + " 天；仅使用实际留存的数据。";
         $("labStartDate").max = today(); $("labEndDate").max = today();
         updatePreview();
+        renderRiskPresets("labRisk",$("labMetric").value);
     }
     function renderOverview() {
         if (!state.overview) return;
@@ -163,6 +244,7 @@
         $("labDates").hidden = !historical;
         $("labStartDate").required = historical; $("labEndDate").required = historical;
         $("labModeHelp").textContent = historical ? "按现存历史记录重放，与前向模拟分别统计。" : "从启动后的可用信号开始观察，等待条件及开奖。";
+        if(riskEditors.labRisk)renderRiskPresets('labRisk',$("labMetric").value);
     }
     function clearFieldErrors() {
         $("labBatchForm").querySelectorAll("[aria-invalid]").forEach(input => input.removeAttribute("aria-invalid"));
@@ -190,6 +272,9 @@
             }
         }
         if (failures.length) {$(failures[0]).focus(); return null;}
+        payload.risk_policy=riskValue('labRisk');
+        const riskProblem=riskError(payload.risk_policy);
+        if(riskProblem){feedback('labFormFeedback',riskProblem,true);riskEditors.labRisk.notice.focus?.();return null;}
         return payload;
     }
     function closeDetail(restoreFocus) {
@@ -207,6 +292,9 @@
             batch.predictor_name, metricNames[batch.metric], "每期 " + money(batch.stake_amount), "已处理 " + batch.processed_issues + (batch.total_issues === null ? " 期" : " / " + batch.total_issues + " 期"), "批次更新于 " + time(batch.updated_at)].filter(Boolean).join(" · ");
         $("labBatchNotice").textContent = batch.history_notice || ""; $("labBatchNotice").hidden = !batch.history_notice;
         $("labBatchError").textContent = batch.error || ""; $("labBatchError").hidden = !batch.error;
+        $("labBatchRiskSummary").textContent=riskSummary(batch.risk_policy)+(batch.risk_policy?.source?.rule_id?" · 复制自 "+batch.risk_policy.source.rule_name+" / "+batch.risk_policy.source.route_name+" / "+batch.risk_policy.source.subscription_name:"");
+        $("labEditRiskButton").hidden=!batch.risk_editable;
+        if(!batch.risk_editable)$("labEditRiskForm").hidden=true;
         const skipCounts = Object.entries(batch.skip_counts || {}).filter(([, count]) => count > 0).map(([reason, count]) => (reasonNames[reason] || reason) + " " + count);
         $("labSkipCounts").textContent = "未执行记录：" + skipCounts.join("；"); $("labSkipCounts").hidden = !skipCounts.length;
         $("labBatchStateButton").hidden = batch.status === "completed";
@@ -228,7 +316,11 @@
             row.append(element("td", conditionName(item.condition), "lab-condition"), element("td", item.settlement_rule_name),
                 element("td", item.settled_count, "lab-number"), element("td", money(item.net_profit, true), "lab-number " + profitClass(item.net_profit)),
                 element("td", percent(item.roi_percent), "lab-number"), element("td", money(item.max_drawdown), "lab-number"),
-                element("td", item.max_loss_streak, "lab-number"), element("td", resultCounts(item), "lab-number"), element("td", item.sample_label, "lab-sample"));
+                element("td", item.max_loss_streak, "lab-number"), element("td", resultCounts(item), "lab-number"));
+            const risk=item.risk_state||{mode:'legacy',state:'legacy'};
+            row.append(element('td',riskStates[risk.state]||risk.state),element('td',risk.day_date||'—'),
+                element('td',risk.mode==='round'?money(risk.day_net_profit,true)+' / '+risk.day_round_count:'—','lab-number'),
+                element('td',money(risk.round_net_profit,true),'lab-number'),element('td',reasonNames[risk.stop_reason]||risk.stop_reason||'—'),element("td", item.sample_label, "lab-sample"));
             const cell = element("td"); const button = actionButton("详情", () => openDetail(item, button));
             button.setAttribute("aria-expanded", "false"); button.setAttribute("aria-controls", "labExperimentDetail"); button.dataset.experimentId = String(item.id); cell.append(button); row.append(cell); $("labResultsBody").append(row);
         });
@@ -240,6 +332,7 @@
         closeDetail(false); renderResults();
     }
     async function selectBatch(id) {
+        state.riskEditingId=null;$("labEditRiskForm").hidden=true;
         if (state.mutating || state.loading || state.accessDenied) return;
         state.selectedId = id; state.resultPage = 0; closeDetail(false); $("labSort").value = "paired";
         await refresh(false);
@@ -293,6 +386,17 @@
             $("labGenerator").open = true;
         } finally {state.mutating = false; updateControls();}
     }
+    async function saveRisk(event) {
+        event.preventDefault();if(locked()||!state.batch?.risk_editable||state.riskEditingId!==state.batch.id)return;
+        const policy=riskValue('labEditRisk'),problem=riskError(policy);
+        if(problem){feedback('labEditRiskFeedback',problem,true);return;}
+        state.mutating=true;updateControls();
+        try{
+            await request(base+'/batches/'+state.batch.id+'/risk-policy','POST',{risk_policy:policy});
+            $("labEditRiskForm").hidden=true;await refresh(false);feedback('statusMessage','风控已保存，批次仍暂停，来源与每注金额不变。',false);
+        }catch(error){feedback('labEditRiskFeedback',error.message,true);}
+        finally{state.mutating=false;updateControls();}
+    }
     async function changeState(id, status) {
         if (locked()) return;
         state.mutating = true; updateControls();
@@ -316,8 +420,8 @@
         const revision = ++state.detailRevision, batchId = state.selectedId;
         button.setAttribute("aria-expanded", "true"); $("labExperimentDetail").hidden = false;
         $("labDetailTitle").textContent = conditionName(item.condition) + " · " + item.settlement_rule_name;
-        $("labDetailMeta").textContent = "基础条件 v1 · 固定金额单期模拟 · 北京时间";
-        $("labDetailStats").replaceChildren(); $("labDailyBody").replaceChildren(); $("labRecentBody").replaceChildren();
+        $("labDetailMeta").textContent = "基础条件 v1 · 固定金额 · 北京时间 · "+riskSummary(state.batch?.risk_policy);
+        $("labDetailStats").replaceChildren(); $("labDailyBody").replaceChildren(); $("labRecentBody").replaceChildren();$("labRoundsBody").replaceChildren();
         feedback("labDetailFeedback", "读取明细…", false); $("labDetailTitle").focus();
         try {
             const result = await request(base + "/batches/" + batchId + "/experiments/" + item.id);
@@ -325,6 +429,9 @@
             if (!result.experiment || !Array.isArray(result.daily) || !Array.isArray(result.recent)) throw responseError("明细数据不完整，请关闭后重试", 0, "invalid_response");
             const exp = result.experiment;
             putSummary($("labDetailStats"), [["累计投注", money(exp.stake_total)], ["累计净收益", money(exp.net_profit, true)], ["已结算期数", exp.settled_count], ["触发 / 跳过", exp.trigger_count + " / " + exp.skipped_count]]);
+            const rs=exp.risk_state;
+            if(rs?.mode==='round')putSummary($("labDetailStats"),[["累计净收益",money(exp.net_profit,true)],["有效完成轮 / 无效轮",rs.completed_rounds+' / '+rs.invalid_rounds],['盈利 / 亏损 / 平轮',rs.profit_rounds+' / '+rs.loss_rounds+' / '+rs.flat_rounds],['统计日',rs.day_date||'—'],['该日净利 / 开轮',money(rs.day_net_profit,true)+' / '+rs.day_round_count],['当前轮',riskStates[rs.state]||rs.state]]);
+            tableRows($("labRoundsBody"),result.recent_rounds||[],[r=>r.round_no,r=>time(r.started_at),r=>time(r.ended_at),r=>r.bet_count+' / '+r.settled_count,r=>money(r.net_profit,true),r=>r.status==='active'?(state.batch?.status==='completed'?'区间结束·未完结':'进行中'):r.stop_reason==='no_valid_bets'?'无有效投注':'已完成',r=>reasonNames[r.stop_reason]||r.stop_reason||'—'],'暂无轮次记录；逐期对照不会生成轮次。');
             tableRows($("labDailyBody"), result.daily, [d=>d.date, d=>d.settled_count, resultCounts, d=>money(d.stake_total), d=>money(d.net_profit,true)], "暂无每日结算记录。");
             tableRows($("labRecentBody"), result.recent, [d=>d.issue_no, d=>time(d.decided_at), d=>d.bet_value, d=>money(d.stake_amount),
                 d=>({pending:"待结算",settled:"已结算",skipped:"已跳过"}[d.status] || d.status),
@@ -345,6 +452,15 @@
         finally {state.exporting = false; updateControls();}
     }
     $("labBatchForm").addEventListener("submit", createBatch);
+    createRiskEditor('labRisk',$("labRiskEditor"));createRiskEditor('labEditRisk',$("labEditRiskEditor"));
+    $("labEditRiskButton").addEventListener('click',()=>{
+        if(!state.batch?.risk_editable)return;renderRiskPresets('labEditRisk',state.batch.metric);
+        state.riskEditingId=state.batch.id;
+        fillRisk('labEditRisk',state.batch.risk_policy?.mode==='round'?state.batch.risk_policy:blankRisk());
+        riskEditors.labEditRisk.fields.Preset.value='';$("labEditRiskForm").hidden=false;feedback('labEditRiskFeedback','',false);
+    });
+    $("labEditRiskForm").addEventListener('submit',saveRisk);
+    $("labCancelRiskButton").addEventListener('click',()=>{$("labEditRiskForm").hidden=true;});
     $("labBatchForm").addEventListener("change", updatePreview);
     $("labRefreshButton").addEventListener("click", () => refresh(true));
     $("labBatchStateButton").addEventListener("click", () => state.batch && changeState(state.batch.id, state.batch.status));

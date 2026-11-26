@@ -1391,13 +1391,13 @@ class PlatformApiApplication:
             path = str(environ.get("PATH_INFO") or "")
             method = str(environ.get("REQUEST_METHOD") or "GET").upper()
             suffix = path[len("/api/platform/rule-lab"):]
-            batch_match = re.fullmatch(r"/batches/([1-9][0-9]{0,17})(?:/(state|export\.csv|experiments/([1-9][0-9]{0,17})))?", suffix)
+            batch_match = re.fullmatch(r"/batches/([1-9][0-9]{0,17})(?:/(state|risk-policy|export\.csv|experiments/([1-9][0-9]{0,17})))?", suffix)
             if suffix in ("", "/options"):
                 expected = "GET"
             elif suffix == "/batches":
                 expected = "POST"
             elif batch_match:
-                expected = "POST" if batch_match.group(2) == "state" else "GET"
+                expected = "POST" if batch_match.group(2) in ("state","risk-policy") else "GET"
             else:
                 return _json_response(start_response, 404, {"error": "实验接口不存在", "code": "not_found"}, headers)
             if method != expected:
@@ -1411,12 +1411,12 @@ class PlatformApiApplication:
                     raise RuleLabError("invalid_input", "实验配置请求不能超过16KB")
             if self.rule_lab_service is None:
                 from pc28touzhu.services.rule_lab_service import RuleLabService
-                self.rule_lab_service = RuleLabService()
+                self.rule_lab_service = RuleLabService(platform_repository=self.repository)
             service, user_id = self.rule_lab_service, user["id"]
             if suffix == "":
                 payload = service.overview(user_id)
             elif suffix == "/options":
-                payload = service.options()
+                payload = service.options(user_id)
             elif suffix == "/batches":
                 payload = service.create_batch(user_id, _read_json_body(environ))
                 return _json_response(start_response, 201, payload, headers)
@@ -1425,6 +1425,8 @@ class PlatformApiApplication:
                 action = batch_match.group(2)
                 if action == "state":
                     payload = service.set_batch_state(user_id, batch_id, _read_json_body(environ))
+                elif action == "risk-policy":
+                    payload = service.set_risk_policy(user_id,batch_id,_read_json_body(environ))
                 elif action == "export.csv":
                     body = service.export_csv(user_id, batch_id)
                     start_response("200 OK", [("Content-Type", "text/csv; charset=utf-8"),

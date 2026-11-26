@@ -9,6 +9,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from pc28touzhu.domain.rule_lab import ALLOWED_SETTLEMENT_RULE_IDS, apply_outcome, empty_stats
+from pc28touzhu.domain.rule_lab_risk import (
+    normalize_risk_policy, empty_risk_runtime, empty_risk_day, admit_risk, settle_risk,
+)
 
 SHANGHAI = timezone(timedelta(hours=8))
 MAX_TOTAL_EXPERIMENTS = 500
@@ -100,7 +103,7 @@ class RuleLabStore:
             connection.execute('PRAGMA journal_mode=WAL')
         with self._connect(write=True) as c:
             version = c.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, 2):
                 raise RuleLabError('store_unavailable', '模拟账本版本不兼容', 503)
             statements = [
                 '''CREATE TABLE IF NOT EXISTS lab_batches (
@@ -151,7 +154,24 @@ class RuleLabStore:
             ]
             for statement in statements:
                 c.execute(statement)
-            c.execute('PRAGMA user_version=1')
+            additions={
+                'lab_batches': [('risk_policy_json',"TEXT NOT NULL DEFAULT '{\"version\":1,\"mode\":\"legacy\"}'")],
+                'lab_experiments':[('risk_runtime_json',"TEXT NOT NULL DEFAULT '{}'" )],
+                'lab_decisions':[('round_no','INTEGER'),('risk_date','TEXT')],
+            }
+            for table,columns in additions.items():
+                existing={r[1] for r in c.execute('PRAGMA table_info('+table+')')}
+                for name,definition in columns:
+                    if name not in existing:c.execute('ALTER TABLE '+table+' ADD COLUMN '+name+' '+definition)
+            c.execute('''CREATE TABLE IF NOT EXISTS lab_risk_days (
+                experiment_id INTEGER NOT NULL REFERENCES lab_experiments(id),stat_date TEXT NOT NULL,
+                state_json TEXT NOT NULL,PRIMARY KEY(experiment_id,stat_date))''')
+            c.execute('''CREATE TABLE IF NOT EXISTS lab_rounds (
+                experiment_id INTEGER NOT NULL REFERENCES lab_experiments(id),round_no INTEGER NOT NULL,
+                status TEXT NOT NULL,summary_json TEXT NOT NULL,finalized_at TEXT,
+                PRIMARY KEY(experiment_id,round_no))''')
+            c.execute('CREATE INDEX IF NOT EXISTS lab_rounds_finished ON lab_rounds(status,finalized_at)')
+            c.execute('PRAGMA user_version=2')
 
     def storage_status(self):
         total = 0
@@ -183,10 +203,62 @@ class RuleLabStore:
                     start_date=row['start_date'],end_date=row['end_date'],status=row['status'],phase=row['phase'],
                     experiment_count=count,processed_issues=row['processed_issues'],total_issues=row['total_issues'],
                     created_at=row['created_at'],started_at=row['started_at'],updated_at=row['updated_at'],error=row['error'],
-                    skip_counts=_load(row['skip_counts_json']),history_notice='历史回放使用现存预测记录，不能证明历史预测版本从未修改。' if row['mode']=='backtest' else '')
+                    skip_counts=_load(row['skip_counts_json']),history_notice='历史回放使用现存预测记录，不能证明历史预测版本从未修改。' if row['mode']=='backtest' else '',
+                    risk_policy=_load(row['risk_policy_json']),risk_editable=RuleLabStore._risk_editable(c,row))
 
     @staticmethod
-    def _experiment(row):
+    def _risk_editable(c,row):
+        return (row['status']=='paused' and row['started_at'] is None and row['processed_issues']==0
+                and not c.execute('''SELECT 1 FROM lab_decisions d JOIN lab_experiments e ON e.id=d.experiment_id
+                    WHERE e.batch_id=? LIMIT 1''',(row['id'],)).fetchone())
+
+    def set_risk_policy(self,user_id,batch_id,policy,*,now):
+        policy=normalize_risk_policy(policy)
+        with self._connect(write=True) as c:
+            row=self._owned(c,user_id,batch_id)
+            if not self._risk_editable(c,row):
+                raise RuleLabError('risk_policy_locked','只有尚未启动且无模拟记录的暂停批次可以修改风控，请新建批次比较其他口径',409)
+            c.execute('UPDATE lab_batches SET risk_policy_json=?,revision=revision+1,updated_at=? WHERE id=?',(_dump(policy),now,batch_id))
+            return self._batch(c,self._owned(c,user_id,batch_id))
+
+    @staticmethod
+    def _risk_day(c,eid,day):
+        row=c.execute('SELECT state_json FROM lab_risk_days WHERE experiment_id=? AND stat_date=?',(eid,day)).fetchone()
+        return _load(row[0]) if row else empty_risk_day(day)
+
+    @staticmethod
+    def _save_risk_day(c,eid,day):
+        c.execute('''INSERT INTO lab_risk_days(experiment_id,stat_date,state_json) VALUES(?,?,?)
+            ON CONFLICT(experiment_id,stat_date) DO UPDATE SET state_json=excluded.state_json''',(eid,day['stat_date'],_dump(day)))
+
+    @staticmethod
+    def _save_round(c,eid,summary,now):
+        if summary is None:return
+        c.execute('''INSERT INTO lab_rounds(experiment_id,round_no,status,summary_json,finalized_at) VALUES(?,?,?,?,?)
+            ON CONFLICT(experiment_id,round_no) DO UPDATE SET status=excluded.status,summary_json=excluded.summary_json,
+            finalized_at=COALESCE(lab_rounds.finalized_at,excluded.finalized_at)''',
+            (eid,summary['round_no'],summary['status'],_dump(summary),now if summary['status']=='closed' else None))
+
+    @staticmethod
+    def _risk_view(c,row):
+        batch=c.execute('SELECT risk_policy_json,status,mode FROM lab_batches WHERE id=?',(row['batch_id'],)).fetchone()
+        policy=_load(batch['risk_policy_json']);runtime={**empty_risk_runtime(),**_load(row['risk_runtime_json'])}
+        active=runtime['active_round'];day=RuleLabStore._risk_day(c,row['id'],runtime['latest_day'])
+        reason=day['stop_reason'] or runtime['last_stop_reason']
+        state='legacy' if policy['mode']=='legacy' else 'active' if active else 'day_stopped' if day['stop_reason'] else 'waiting'
+        if policy['mode']=='round' and not active and not day['stop_reason']:
+            if any(control['enabled'] and control['max_rounds'] and day['round_count']>=control['max_rounds']
+                   for control in [policy['day']]+policy.get('additional_day_guards',[])):
+                state='day_stopped';reason='day_max_rounds'
+        if active and batch['status']=='completed':state='unfinished'
+        return dict(mode=policy['mode'],state=state,day_date=runtime['latest_day'] or None,day_net_profit=day['net_cents']/100,
+                    day_round_count=day['round_count'],day_bet_count=day['bet_count'],round_no=active['round_no'] if active else None,
+                    round_net_profit=active['net_cents']/100 if active else None,round_bet_count=active['bet_count'] if active else 0,
+                    stop_reason=reason,started_rounds=runtime['round_seq'],
+                    **{k:runtime[k] for k in ('completed_rounds','profit_rounds','loss_rounds','flat_rounds','invalid_rounds','round_profit_stops','round_loss_stops')})
+
+    @staticmethod
+    def _experiment(c,row):
         stats = _load(row['stats_json'])
         snapshot = _load(row['settlement_snapshot_json'])
         return dict(id=row['id'],batch_id=row['batch_id'],name=row['name'],condition=_load(row['condition_json']),
@@ -195,7 +267,8 @@ class RuleLabStore:
                                                   'max_loss_streak','trigger_count','skipped_count')},
                     stake_total=stats['stake_cents']/100,net_profit=stats['net_cents']/100,
                     roi_percent=round(100*stats['net_cents']/stats['stake_cents'],2) if stats['stake_cents'] else None,
-                    max_drawdown=stats['max_drawdown_cents']/100,sample_label='样本较少' if stats['settled_count']<100 else '仍需验证')
+                    max_drawdown=stats['max_drawdown_cents']/100,sample_label='样本较少' if stats['settled_count']<100 else '仍需验证',
+                    risk_state=RuleLabStore._risk_view(c,row))
 
     def create_batch(self, user_id, config, predictor_name, experiments, *, now):
         if not 1 <= len(experiments) <= 100 or any(e['settlement_rule_id'] not in ALLOWED_SETTLEMENT_RULE_IDS for e in experiments):
@@ -211,6 +284,7 @@ class RuleLabStore:
             cur = c.execute('''INSERT INTO lab_batches (user_id,name,mode,predictor_id,predictor_name,metric,template_pack,
                 stake_cents,start_date,end_date,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',params)
             bid = cur.lastrowid
+            c.execute('UPDATE lab_batches SET risk_policy_json=? WHERE id=?',(_dump(normalize_risk_policy(config.get('risk_policy'))),bid))
             for e in experiments:
                 if e['settlement_snapshot'].get('settlement_rule_id') != e['settlement_rule_id']:
                     raise ValueError('冻结规则与实验不一致')
@@ -229,6 +303,7 @@ class RuleLabStore:
             if row['status']=='completed':
                 raise RuleLabError('invalid_transition','已完成的历史回放不能重新启动，请新建批次',409)
             if state=='running':
+                normalize_risk_policy(_load(row['risk_policy_json']))
                 self._require_space()
                 if _load(row['cursor_json']).get('input_expired'):
                     raise RuleLabError('input_expired','所需输入已过期，请新建实验批次',409)
@@ -252,7 +327,7 @@ class RuleLabStore:
     def list_experiments(self,user_id,batch_id):
         with self._connect() as c:
             self._owned(c,user_id,batch_id)
-            return [self._experiment(r) for r in c.execute('SELECT * FROM lab_experiments WHERE batch_id=? ORDER BY id LIMIT 100',(batch_id,))]
+            return [self._experiment(c,r) for r in c.execute('SELECT * FROM lab_experiments WHERE batch_id=? ORDER BY id LIMIT 100',(batch_id,))]
 
     def get_experiment_detail(self,user_id,batch_id,experiment_id):
         with self._connect() as c:
@@ -267,7 +342,10 @@ class RuleLabStore:
                          stake_amount=r['stake_cents']/100,status=r['status'],result_type=r['result_type'],
                          net_profit=r['net_cents']/100 if r['net_cents'] is not None else None,skip_reason=r['skip_reason'],refund_reason=r['refund_reason'])
                     for r in c.execute('SELECT * FROM lab_decisions WHERE experiment_id=? ORDER BY issue_key DESC LIMIT 50',(experiment_id,))]
-            return dict(experiment=self._experiment(row),daily=list(reversed(daily)),recent=recent)
+            rounds=[]
+            for item in c.execute('SELECT summary_json FROM lab_rounds WHERE experiment_id=? ORDER BY round_no DESC LIMIT 30',(experiment_id,)):
+                summary=_load(item[0]);summary['net_profit']=summary.pop('net_cents')/100;rounds.append(summary)
+            return dict(experiment=self._experiment(c,row),daily=list(reversed(daily)),recent=recent,recent_rounds=rounds)
 
     def worker_status(self,*,now):
         with self._connect() as c:
@@ -290,6 +368,7 @@ class RuleLabStore:
         result=dict(row)
         result['cursor']=_load(result.pop('cursor_json'))
         result['skip_counts']=_load(result.pop('skip_counts_json'))
+        result['risk_policy']=_load(result.pop('risk_policy_json'))
         return result
 
     def list_work_batches(self):
@@ -307,7 +386,8 @@ class RuleLabStore:
             experiments=[]
             for row in c.execute('SELECT * FROM lab_experiments WHERE batch_id=? ORDER BY id LIMIT 100',(batch_id,)):
                 experiments.append(dict(id=row['id'],batch_id=row['batch_id'],name=row['name'],condition=_load(row['condition_json']),
-                    settlement_snapshot=_load(row['settlement_snapshot_json']),settlement_rule_id=row['settlement_rule_id'],stats=_load(row['stats_json'])))
+                    settlement_snapshot=_load(row['settlement_snapshot_json']),settlement_rule_id=row['settlement_rule_id'],stats=_load(row['stats_json']),
+                    risk_runtime={**empty_risk_runtime(),**_load(row['risk_runtime_json'])}))
             return dict(batch=self._internal_batch(batch),experiments=experiments)
 
     def get_history(self,predictor_id,*,before_issue,limit=100):
@@ -387,6 +467,11 @@ class RuleLabStore:
             self._cache(c,draws,predictions)
             experiments={r['id']:dict(r) for r in c.execute('SELECT * FROM lab_experiments WHERE batch_id=?',(batch_id,))}
             stats={eid:_load(e['stats_json']) for eid,e in experiments.items()}
+            policy=_load(batch['risk_policy_json'])
+            round_mode=policy.get('mode')=='round'
+            runtimes={eid:{**empty_risk_runtime(),**_load(e['risk_runtime_json'])} for eid,e in experiments.items()}
+            if round_mode and len({str(d['issue_no']) for d in decisions})>1:
+                raise ValueError('按轮模式必须逐期准入并结算，不能批量提前冻结多期')
             dirty=set()
             input_conflict_outcomes=[]
             for decision in sorted(decisions,key=lambda d:(_issue(d['issue_no']),d['experiment_id'])):
@@ -395,18 +480,32 @@ class RuleLabStore:
                     raise ValueError('决策与实验不一致')
                 if issue<=max(old_watermark,experiments[eid]['last_decided_issue']):
                     continue
+                conflict=c.execute('''SELECT COALESCE((SELECT conflict FROM lab_predictions WHERE predictor_id=? AND issue_no=?),0)
+                    OR COALESCE((SELECT conflict FROM lab_draws WHERE issue_no=?),0)''',
+                    (batch['predictor_id'],str(decision['issue_no']),str(decision['issue_no']))).fetchone()[0]
+                round_no=None;risk_date=None
+                if round_mode and not conflict:
+                    risk_date=decision.get('risk_date') or _day(decision.get('target_open_at') or decision['decided_at'])
+                    if not isinstance(risk_date,str) or datetime.strptime(risk_date,'%Y-%m-%d').date().isoformat()!=risk_date:
+                        raise ValueError('风险日期无效')
+                    pending_count=c.execute("SELECT COUNT(*) FROM lab_decisions WHERE experiment_id=? AND status='pending'",(eid,)).fetchone()[0]
+                    admitted=admit_risk(policy,runtimes[eid],self._risk_day(c,eid,risk_date),issue_no=str(issue),
+                        at=decision['decided_at'],matched=decision.get('condition_matched') is True,pending_count=pending_count)
+                    if not admitted['allowed']:
+                        result['risk_blocked']=result.get('risk_blocked',0)+1
+                        continue
+                    runtimes[eid]=admitted['runtime'];round_no=runtimes[eid]['active_round']['round_no']
+                    self._save_risk_day(c,eid,admitted['day'])
+                    self._save_round(c,eid,runtimes[eid]['active_round'],now)
                 cur=c.execute('''INSERT OR IGNORE INTO lab_decisions(experiment_id,issue_no,issue_key,bet_value,stake_cents,
-                    decided_at,decision_mode,feature_issue_no,condition_value_json) VALUES(?,?,?,?,?,?,?,?,?)''',
+                    decided_at,decision_mode,feature_issue_no,condition_value_json,round_no,risk_date) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
                     (eid,str(decision['issue_no']),issue,decision['bet_value'],decision['stake_cents'],decision['decided_at'],decision['decision_mode'],
-                     decision.get('feature_issue_no'),_dump(decision.get('condition_value'))))
+                     decision.get('feature_issue_no'),_dump(decision.get('condition_value')),round_no,risk_date))
                 if cur.rowcount:
                     stats[eid]['trigger_count']+=1; dirty.add(eid);result['inserted_decisions']+=1
                     experiments[eid]['last_decided_issue']=issue
                     c.execute('UPDATE lab_experiments SET last_decided_issue=? WHERE id=?',(issue,eid))
                     self._daily(c,eid,_day(decision['decided_at']),trigger_count=1)
-                    conflict=c.execute('''SELECT COALESCE((SELECT conflict FROM lab_predictions WHERE predictor_id=? AND issue_no=?),0)
-                        OR COALESCE((SELECT conflict FROM lab_draws WHERE issue_no=?),0)''',
-                        (batch['predictor_id'],str(decision['issue_no']),str(decision['issue_no']))).fetchone()[0]
                     if conflict:
                         input_conflict_outcomes.append(dict(experiment_id=eid,issue_no=decision['issue_no'],status='skipped',
                             settled_at=now,result_type=None,net_cents=None,direction_hit=False,refund_reason='',skip_reason='input_conflict'))
@@ -440,11 +539,20 @@ class RuleLabStore:
                         raise ValueError('跳过的决策不能记收益')
                     stats[eid]['skipped_count']+=1;result['skipped']+=1
                     self._daily(c,eid,_day(outcome['settled_at']),skipped_count=1)
+                if round_mode and pending['round_no'] is not None:
+                    active=runtimes[eid]['active_round']
+                    if not active or active['round_no']!=pending['round_no']:
+                        raise ValueError('模拟轮次与待结算决策不一致')
+                    risk_day=self._risk_day(c,eid,_day(outcome['settled_at']))
+                    settled_risk=settle_risk(policy,runtimes[eid],risk_day,outcome)
+                    runtimes[eid]=settled_risk['runtime']
+                    self._save_risk_day(c,eid,settled_risk['day'])
+                    self._save_round(c,eid,settled_risk['closed_round'] or runtimes[eid]['active_round'],now)
                 dirty.add(eid)
                 c.execute('''UPDATE lab_decisions SET status=?,settled_at=?,finalized_at=?,result_type=?,net_cents=?,refund_reason=?,skip_reason=? WHERE id=?''',
                           (outcome['status'],outcome['settled_at'],now,outcome.get('result_type'),outcome.get('net_cents'),outcome.get('refund_reason',''),outcome.get('skip_reason',''),pending['id']))
             for eid in dirty:
-                c.execute('UPDATE lab_experiments SET stats_json=? WHERE id=?',(_dump(stats[eid]),eid))
+                c.execute('UPDATE lab_experiments SET stats_json=?,risk_runtime_json=? WHERE id=?',(_dump(stats[eid]),_dump(runtimes[eid]),eid))
             skips=_load(batch['skip_counts_json'])
             for key,value in progress.get('skip_counts_delta',{}).items():
                 if type(value) is not int or value<0:
@@ -463,11 +571,16 @@ class RuleLabStore:
         limit=max(1,min(500,int(limit)))
         cutoff=(_time(now)-timedelta(days=self.detail_retention_days)).isoformat().replace('+00:00','Z')
         input_cutoff=(_time(now)-timedelta(days=90)).isoformat().replace('+00:00','Z')
-        removed=dict(decisions=0,predictions=0,draws=0)
+        removed=dict(decisions=0,predictions=0,draws=0,rounds=0)
         with self._connect(write=True) as c:
             cur=c.execute("DELETE FROM lab_decisions WHERE id IN (SELECT id FROM lab_decisions WHERE status IN ('settled','skipped') AND finalized_at<? ORDER BY finalized_at LIMIT ?)",(cutoff,limit))
             removed['decisions']=cur.rowcount
             remaining=limit-cur.rowcount
+            if remaining:
+                cur=c.execute('''DELETE FROM lab_rounds WHERE rowid IN (SELECT r.rowid FROM lab_rounds r WHERE status='closed'
+                    AND finalized_at<? AND NOT EXISTS(SELECT 1 FROM lab_decisions d WHERE d.experiment_id=r.experiment_id
+                    AND d.round_no=r.round_no AND d.status='pending') ORDER BY finalized_at LIMIT ?)''',(cutoff,remaining))
+                removed['rounds']=cur.rowcount;remaining-=cur.rowcount
             # Keep the latest feature window, each pending issue, and active replay warm-up floors.
             latest_floor=c.execute('SELECT issue_key FROM lab_draws ORDER BY issue_key DESC LIMIT 1 OFFSET 99').fetchone()
             floor=latest_floor[0] if latest_floor else 0

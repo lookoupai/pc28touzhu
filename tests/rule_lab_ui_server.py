@@ -51,7 +51,18 @@ def main():
         regular = repo.create_user_record(username="rule-lab-user", role="user")
         other = repo.create_user_record(username="rule-lab-other-admin", role="admin")
         secret = "rule-lab-offline-fixture"
-        app = PlatformApiApplication(repo, "offline-only", secret)
+        class Presets:
+            def list_auto_trigger_rules(self,*,user_id):
+                if user_id!=admin['id']:return []
+                return [dict(id=6,user_id=user_id,name='组合连错参考',scope_mode='selected_subscriptions',subscription_ids=[7],cooldown_issues=10,
+                    daily_risk_control=dict(enabled=True,profit_target=20,loss_limit=20,hit_rate_gate=dict(enabled=True,threshold=25,min_settled_count=20)),
+                    cycle_policy={'mode':'legacy'},routes=[dict(id=9,name='参考路由',route_risk_mode='inherit_rule',subscription_risk_mode='override',
+                        subscription_risk_control=dict(enabled=True,profit_target=10,loss_limit=10))])]
+            def list_subscriptions(self,user_id):
+                return [dict(id=7,user_id=user_id,name='参考方案（不同来源）',strategy_v2=dict(play_filter=dict(mode='all'),
+                    staking_policy=dict(mode='fixed',fixed_amount=9),risk_control=dict(enabled=True,profit_target=5,loss_limit=5)))] if user_id==admin['id'] else []
+        from pc28touzhu.services.rule_lab_service import RuleLabService
+        app = PlatformApiApplication(repo, "offline-only", secret,rule_lab_service=RuleLabService(platform_repository=Presets()))
 
         def local_app(environ, start_response):
             # Test-only helper uses the real independent ledger and production settlement.
@@ -73,7 +84,8 @@ def main():
                         issue = str(1001 + i)
                         decisions.append(dict(experiment_id=exp["id"], issue_no=issue, bet_value="单",
                             stake_cents=100, decided_at=decided, decision_mode="live",
-                            feature_issue_no=str(1000 + i), condition_value=1))
+                            feature_issue_no=str(1000 + i), condition_value=1,condition_matched=True,
+                            risk_date=datetime.fromisoformat(timestamp.replace('Z','+00:00')).astimezone(timezone(timedelta(hours=8))).date().isoformat()))
                         result = settle_bet(exp["settlement_snapshot"], "odd_even", "单", 100, balls)
                         outcomes.append(dict(experiment_id=exp["id"], issue_no=issue, status="settled",
                                              settled_at=timestamp, skip_reason="", **result))

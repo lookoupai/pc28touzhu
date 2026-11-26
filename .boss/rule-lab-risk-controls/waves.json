@@ -1,0 +1,116 @@
+{
+  "feature": "rule-lab-risk-controls",
+  "waves": [
+    {
+      "id": "risk-core",
+      "owner": "core",
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_risk",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_risk",
+          "tests.test_rule_lab_store",
+          "tests.test_rule_lab_domain",
+          "-q"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "stopCondition": "风控、跨日、迁移、幂等任一失败不得续跑",
+      "status": "verified",
+      "evidence": [
+        "qa-report.md",
+        "/tmp/pc28-risk-targeted-final.log"
+      ]
+    },
+    {
+      "id": "risk-runtime-api",
+      "owner": "core",
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_worker",
+          "tests.test_rule_lab_api",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_risk",
+          "tests.test_rule_lab_worker",
+          "tests.test_rule_lab_api",
+          "-q"
+        ]
+      ],
+      "stopCondition": "实际跨期/预设继承/编辑竞态/权限失败不得交付",
+      "status": "verified",
+      "evidence": [
+        "qa-report.md",
+        "/tmp/pc28-risk-targeted-final.log"
+      ]
+    },
+    {
+      "id": "risk-ui",
+      "owner": "core",
+      "redTests": [
+        [
+          "node",
+          "tests/test_rule_lab_ui.cjs"
+        ]
+      ],
+      "greenGates": [
+        [
+          "node",
+          "tests/test_rule_lab_ui.cjs"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "stopCondition": "主流程或数据展示不完整不得发布",
+      "status": "verified",
+      "evidence": [
+        "qa-report.md",
+        "/tmp/pc28-risk-targeted-final.log",
+        "/tmp/pc28-risk-root-ui.log"
+      ]
+    }
+  ],
+  "release_status": "verified_ready_for_deployment",
+  "final_verification": {
+    "tests": 952,
+    "failures": 0,
+    "seconds": 220.245,
+    "log": "/tmp/pc28-risk-full.log",
+    "browser": "/tmp/pc28-risk-root-ui.log",
+    "coverage": "evidence/coverage-summary.json"
+  }
+}

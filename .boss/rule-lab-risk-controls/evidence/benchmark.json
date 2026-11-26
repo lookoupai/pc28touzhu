@@ -1,0 +1,15 @@
+{
+  "experiments": 100,
+  "periods_per_batch": 400,
+  "wall_seconds": 47.374,
+  "cpu_seconds": 39.172,
+  "peak_rss_kib": 37448,
+  "initial_bytes": 524288,
+  "final_bytes": 4165632,
+  "ticks": 24,
+  "max_tick_ms": 2052.856,
+  "settled_total": 14212,
+  "completed_rounds": 152,
+  "source_unchanged": true,
+  "measurement": "100 round-risk versions, synthetic 400-period replay, no cgroup throttling"
+}

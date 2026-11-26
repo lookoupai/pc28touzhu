@@ -11,6 +11,12 @@
     font-family: var(--lab-font); font-size: var(--lab-body); line-height: var(--lab-line-height);
 }
 .lab-page h2, .lab-page h3, .lab-page p { margin-top: 0; }
+.lab-risk-box { min-width: 0; margin: var(--lab-lg) 0; padding: var(--lab-lg); border: thin solid var(--line); border-radius: var(--radius-md); }
+.lab-risk-box legend { font-weight: var(--lab-semibold); padding: 0 var(--lab-sm); }
+.lab-risk-box .lab-form-grid { margin-bottom: var(--lab-lg); }
+.lab-risk-box input[type="checkbox"] { width: var(--lab-lg); height: var(--lab-lg); min-height: 0; justify-self: start; accent-color: var(--primary); }
+.lab-risk-box .is-error { color: var(--danger); }
+.lab-risk-box :disabled { opacity: .6; }
 .lab-page h2 { margin-bottom: var(--lab-sm); font-size: calc(var(--lab-body) + var(--lab-xs)); line-height: var(--lab-title-height); overflow-wrap: anywhere; }
 .lab-page h3 { margin: var(--lab-xl) 0 var(--lab-md); font-size: var(--lab-body); }
 .lab-panel { margin-bottom: var(--lab-xl); padding: var(--lab-xl); border: thin solid var(--line); border-radius: var(--radius-lg); background: var(--surface); min-width: 0; }
