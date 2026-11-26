@@ -104,7 +104,7 @@
       ]
     }
   ],
-  "release_status": "verified_ready_for_deployment",
+  "release_status": "deployed_verified_batch_paused",
   "final_verification": {
     "tests": 952,
     "failures": 0,
@@ -112,5 +112,14 @@
     "log": "/tmp/pc28-risk-full.log",
     "browser": "/tmp/pc28-risk-root-ui.log",
     "coverage": "evidence/coverage-summary.json"
+  },
+  "deployment": {
+    "code_commit": "e583f67",
+    "date_utc": "2026-11-26",
+    "schema_version": 2,
+    "batch_id": 1,
+    "batch_status": "paused",
+    "processed_issues": 0,
+    "report": "deploy-report.md"
   }
 }
