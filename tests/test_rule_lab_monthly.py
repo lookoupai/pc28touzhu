@@ -98,6 +98,26 @@ class MonthlyStatisticsTests(unittest.TestCase):
         self.assertEqual(result['summary']['profitable_month_ratio'],50)
         self.assertEqual(rows,original)
 
+    def test_equity_uses_all_daily_totals_in_date_order_and_reconciles(self):
+        batch=dict(mode='backtest',start_date='2026-10-01',end_date='2026-11-26',status='completed',
+                   processed_issues=100,stake_cents=100,created_at=NOW,started_at=NOW,skip_counts={})
+        stats=empty_stats();stats.update(settled_count=3,net_cents=50)
+        report=monthly_report(batch,stats,[day('2026-11-02',-250),day('2026-10-01',200),day('2026-10-05',100)],now=NOW)
+        self.assertEqual([p['cumulative_net_cents'] for p in report['equity']['points']],[200,300,50])
+        self.assertEqual(report['equity']['opening_net_cents'],0)
+        self.assertTrue(report['equity']['complete_history'])
+        partial=monthly_report(batch,stats,[day('2026-11-02',-250)],now=NOW)
+        self.assertEqual(partial['equity']['opening_net_cents'],300)
+        self.assertEqual(partial['equity']['points'][-1]['cumulative_net_cents'],50)
+        self.assertFalse(partial['equity']['complete_history'])
+
+    def test_truncated_curve_does_not_claim_whole_history_even_when_missing_net_is_zero(self):
+        batch=dict(mode='live',status='running',processed_issues=100,stake_cents=100,
+                   created_at='2000-01-01T00:00:00Z',started_at='2000-01-01T00:00:00Z',skip_counts={})
+        stats=empty_stats();stats.update(settled_count=1,net_cents=100)
+        report=monthly_report(batch,stats,[day('2026-11-01',100)],now=NOW)
+        self.assertFalse(report['equity']['complete_history'])
+
 
 class MonthlyLedgerTests(unittest.TestCase):
     def setUp(self):

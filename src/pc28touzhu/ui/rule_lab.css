@@ -105,6 +105,8 @@
 .lab-monthly-chart .lab-chart-loss { fill: var(--danger); }
 #labMonthly { border-top: thin solid var(--line); margin-top: var(--lab-xl); padding-top: var(--lab-lg); }
 #labMonthly h3 { margin-top: 0; }
+#labMonthly h3.lab-report-subtitle { margin-top: var(--lab-xl); }
+.lab-initial-capital { max-width: 420px; margin-bottom: var(--lab-lg); }
 /* Breakpoint values map to ui-design.json tokens.breakpoints. */
 @media (max-width: 960px) {
     .lab-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

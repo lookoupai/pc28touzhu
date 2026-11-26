@@ -102,10 +102,22 @@ def monthly_report(batch, stats, daily, *, now, observed_at=None, cutoff_at=None
     skips = dict(batch.get('skip_counts', {}))
     if (batch.get('cursor',{}).get('evidence') or {}).get('conflict'):
         skips['input_conflict']=max(1,skips.get('input_conflict',0))
+    # Daily totals remain available after individual decisions are pruned. Preserve
+    # the actual accumulated PnL at the start of a truncated reporting window.
+    curve_days=sorted((d for d in daily if d['settled_count']>0),key=lambda d:d['stat_date'])
+    opening_net=stats['net_cents']-sum(d['net_cents'] for d in curve_days)
+    cumulative=opening_net;points=[]
+    for day in curve_days:
+        cumulative+=day['net_cents']
+        points.append(dict(date=day['stat_date'],cumulative_net_cents=cumulative))
+    full_curve=(month_index(first)==month_index(start) and opening_net==0
+                and sum(d['settled_count'] for d in curve_days)==stats['settled_count'])
     return dict(timezone='Asia/Shanghai',rows=rows,
         window=dict(start=first.isoformat(),end=end.isoformat(),truncated=month_index(first)>month_index(start),max_months=MAX_MONTHS),
         observed_through=observed.isoformat() if observed else None,
         input_warnings={k:v for k,v in skips.items() if v},
+        equity=dict(points=points,opening_net_cents=opening_net,complete_history=full_curve,
+                    basis='daily_close',window_start=first.isoformat(),window_end=end.isoformat()),
         summary=dict(eligible_months=len(eligible),profitable_months=profitable,losing_months=losing,
             flat_months=len(eligible)-profitable-losing,
             profitable_month_ratio=round(profitable/len(eligible)*100,2) if eligible else None,

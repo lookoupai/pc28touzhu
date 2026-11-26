@@ -13,9 +13,9 @@
     const pageSize = 20;
     const state = {options:null, overview:null, batch:null, experiments:[], selectedId:null, detailId:null, detailTrigger:null, resultPage:0,
         loading:false, mutating:false, exporting:false, readRevision:0, detailRevision:0, readAt:null, accessDenied:false,riskEditingId:null,
-        studies:[],study:null,studyRows:[],studyId:null,studyPage:0,preview:null,studyRequest:null,monthly:null};
+        studies:[],study:null,studyRows:[],studyId:null,studyPage:0,preview:null,studyRequest:null,monthly:null,reportExperiment:null};
     const studyNames={paused:'已暂停',queued:'等待运行额度',running:'比较中',completed:'全部完成',error:'比较异常',resource_paused:'资源限制暂停'};
-    const monthStatus={complete:'已回放完整月',no_samples:'整月已回放 · 无结算',partial:'部分月份 / 回放中',not_replayed:'尚未回放',not_observed:'尚未观察',pending:'尚有待结算'};
+    const monthStatus={complete:'完整月份',no_samples:'完整月份 · 无交易',partial:'部分月份',not_replayed:'尚未回放',not_observed:'尚未观察',pending:'等待结算'};
 
     function element(tag, text, className) {
         const node = document.createElement(tag);
@@ -316,7 +316,7 @@
     }
     function closeDetail(restoreFocus) {
         state.detailRevision++; state.detailId = null; $("labExperimentDetail").hidden = true;
-        state.monthly=null;$("labMonthly").hidden=true;$("labMonthlyExport").disabled=true;
+        state.monthly=null;state.reportExperiment=null;$("labMonthly").hidden=true;$("labMonthlyExport").disabled=true;
         $("labResultsBody").querySelectorAll("button[aria-expanded]").forEach(button => button.setAttribute("aria-expanded", "false"));
         if (restoreFocus && state.detailTrigger && state.detailTrigger.isConnected) state.detailTrigger.focus();
         state.detailTrigger = null;
@@ -481,6 +481,7 @@
             if (revision !== state.detailRevision || batchId !== state.selectedId) return;
             if (!result.experiment || !Array.isArray(result.daily) || !Array.isArray(result.recent)) throw responseError("明细数据不完整，请关闭后重试", 0, "invalid_response");
             const exp = result.experiment;
+            state.reportExperiment=exp;
             state.monthly=result.monthly||null;
             renderMonthly();
             putSummary($("labDetailStats"), [["累计投注", money(exp.stake_total)], ["累计净收益", money(exp.net_profit, true)], ["已结算期数", exp.settled_count], ["触发 / 跳过", exp.trigger_count + " / " + exp.skipped_count]]);
@@ -500,17 +501,17 @@
         const report=state.monthly;$("labMonthly").hidden=!report;$("labMonthlyExport").disabled=!report;
         if(!report)return;
         const summary=report.summary;
-        const notes=['按每个条件、结算规则和风控版本独立统计。历史盈利月份不保证未来每月盈利。'];
-        notes.push('完整月仅表示回放跨过自然月边界，不保证源记录无缺漏；部分月份、待结算和零结算月份不计入盈利月份占比。');
-        if(summary.eligible_months<6)notes.push('目前仅 '+summary.eligible_months+' 个完整且有结算的月份，尚不足以判断长期稳定性。');
+        const exp=state.reportExperiment,valid=exp.hit_count+exp.miss_count;
+        $("labReportScope").textContent='每注 '+money(report.capital.stake_amount)+' · '+(report.capital.batch_status==='completed'?'回测已完成':'回测尚未完成，以下为阶段结果')+' · 每个条件、赔率和风控版本独立统计。';
+        putSummary($("labPerformanceSummary"),[['累计净利润',money(exp.net_profit,true)],['累计投注额',money(exp.stake_total)],['投注收益率',percent(exp.roi_percent)],['最大回撤金额（逐笔）',money(exp.max_drawdown)],['已结算笔数',exp.settled_count],['胜率（不含退款）',percent(valid?exp.hit_count/valid*100:null)],['最长连续亏损笔数',exp.max_loss_streak],['收益回撤比',exp.max_drawdown>0?money(exp.net_profit/exp.max_drawdown):'—']]);
+        const notes=['月度胜率 = 盈利月份 ÷ 完整且有交易的月份。部分月份及无交易月份不参与计算。'];
+        if(summary.eligible_months<6)notes.push('目前仅 '+summary.eligible_months+' 个完整且有交易的月份，样本不足以判断长期稳定性。');
         if(report.window.truncated)notes.push('只展示最近120个自然月，月度摘要也仅计算此范围；累计逐笔回撤仍覆盖全部已处理区间。');
         if(Object.keys(report.input_warnings||{}).length)notes.push('回放存在跳过或输入告警：'+Object.entries(report.input_warnings).map(([key,value])=>(reasonNames[key]||key)+' '+value).join('；')+'。');
         $("labMonthlyNotice").textContent=notes.join(' ');
-        putSummary($("labMonthlySummary"),[['盈利 / 完整有结算月份',summary.profitable_months+' / '+summary.eligible_months],['盈利月份占比',percent(summary.profitable_month_ratio)],['亏损 / 持平月份',summary.losing_months+' / '+summary.flat_months],['最长连续亏损月',summary.longest_losing_months],['最好完整月',money(summary.best_month_profit,true)],['最差完整月',money(summary.worst_month_profit,true)]]);
+        putSummary($("labMonthlySummary"),[['盈利月份 / 有效月份',summary.profitable_months+' / '+summary.eligible_months],['月度胜率',percent(summary.profitable_month_ratio)],['亏损月份 / 持平月份',summary.losing_months+' / '+summary.flat_months],['最长连续亏损月数',summary.longest_losing_months],['最佳月份净利润',money(summary.best_month_profit,true)],['最差月份净利润',money(summary.worst_month_profit,true)]]);
         tableRows($("labMonthlyBody"),report.rows,[r=>r.month,r=>monthStatus[r.status]||r.status,r=>r.settled_count,r=>money(r.stake_total),r=>r.settled_count?money(r.net_profit,true):'—',r=>percent(r.roi_percent),r=>r.profitable_days+' / '+r.losing_days+' / '+r.betting_days,r=>money(r.worst_day_profit,true),r=>money(r.daily_close_drawdown)],'暂无月度记录。');
         renderMonthlyChart(report.rows);
-        const basis=report.capital;
-        $("labCapitalBasis").textContent='原固定每注 '+money(basis.stake_amount)+'；整个已处理区间逐笔最大回撤 '+money(basis.max_drawdown)+'。'+(basis.batch_status==='completed'?'该批次已完成。':'该批次尚未完成，历史回撤仍可能增大。')+' 以下假设只在此页面计算，不改变模拟配置。';
         renderCapital();
     }
     function renderMonthlyChart(rows) {
@@ -532,18 +533,36 @@
         target.append(svg,element('p','* 为部分月份或无结算；图中展示最近最多24个月。','lab-muted'));
     }
     function renderCapital() {
-        $("labCapitalSummary").replaceChildren();feedback('labCapitalFeedback','',false);
+        $("labCapitalSummary").replaceChildren();$("labEquityChart").replaceChildren();feedback('labCapitalFeedback','',false);
         const basis=state.monthly?.capital;if(!basis)return;
-        const multiple=Number($("labCapitalMultiplier").value),tolerance=Number($("labCapitalTolerance").value),raw=$("labCapitalBudget").value,budget=raw===''?null:Number(raw);
-        if(!Number.isFinite(multiple)||multiple<1||multiple>10||!Number.isFinite(tolerance)||tolerance<1||tolerance>100||budget!==null&&(!Number.isFinite(budget)||budget<.01||budget>1e9)){
-            feedback('labCapitalFeedback','压力倍数须为1～10，回撤比例须为1～100%；本金如填写须在0.01～10亿之间。',true);return;
+        const raw=$("labInitialCapital").value,initial=Number(raw),cents=Math.round(initial*100);
+        if(raw===''){feedback('labCapitalFeedback','填写初始资金后显示期末资金、累计收益率和资金曲线。',false);return;}
+        if(!Number.isFinite(initial)||initial<.01||initial>1e9||Math.abs(initial*100-cents)>.00001){
+            feedback('labCapitalFeedback','初始资金须为0.01～10亿之间的金额，最多两位小数。',true);return;
         }
-        if(!basis.available){feedback('labCapitalFeedback','尚无已结算亏损或逐笔回撤记录，无法据此估算本金；零回撤不代表无需本金。',false);return;}
-        const stress=basis.max_drawdown*multiple,required=Math.ceil((stress/(tolerance/100))*100-1e-8)/100;
-        const entries=[['压力情景回撤',money(stress)],['按该回撤比例折算本金',money(required)]];
-        if(budget!==null)entries.push(['拟投入本金',money(budget)],['压力回撤占本金',percent(stress/budget*100)]);
+        if(!basis.settled_count){feedback('labCapitalFeedback','尚无已结算交易，暂不能展示资金表现。',false);return;}
+        const curve=state.monthly.equity;
+        if(!curve?.complete_history){feedback('labCapitalFeedback','历史日记录未完整覆盖整个回测区间，暂不计算完整资金表现。累计盈亏和月度记录仍可查看。',false);return;}
+        const points=[{date:curve.window_start,value:cents},...curve.points.map(p=>({date:p.date,value:cents+p.cumulative_net_cents}))];
+        let peak=cents,maximum=0,minimum=cents;
+        points.forEach(p=>{peak=Math.max(peak,p.value);maximum=Math.max(maximum,(peak-p.value)/peak*100);minimum=Math.min(minimum,p.value);});
+        const bankrupt=minimum<=0;
+        const entries=[['初始资金',money(initial)],['期末资金',money((cents+Math.round(basis.net_profit*100))/100)],['累计收益率',bankrupt?'—':percent(basis.net_profit/initial*100)],['最大回撤率（日结）',bankrupt?'—':percent(maximum)],['最低日终资金',money(minimum/100)]];
         putSummary($("labCapitalSummary"),entries);
-        if(budget!==null&&stress/budget*100>tolerance)feedback('labCapitalFeedback','此压力情景超过你填写的本金回撤容忍度；该比较不是对未来收益或资金安全的保证。',true);
+        if(bankrupt)feedback('labCapitalFeedback','按此初始资金，日终余额曾小于等于0。本次回测未模拟资金不足停投，后续盈亏不能当作可实现收益，收益率与回撤率暂停展示。',true);
+        renderEquityChart(points);
+    }
+    function renderEquityChart(points) {
+        const target=$("labEquityChart"),width=Math.min(760,Math.max(280,target.clientWidth||620)),height=210;
+        const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 '+width+' '+height);svg.setAttribute('role','img');svg.setAttribute('aria-label','日结资金曲线；初始资金加每日累计净利润。');
+        function shape(tag,attrs,text){const node=document.createElementNS(svg.namespaceURI,tag);Object.entries(attrs).forEach(([k,v])=>node.setAttribute(k,v));if(text!==undefined)node.textContent=text;svg.append(node);return node;}
+        const low=Math.min(...points.map(p=>p.value)),high=Math.max(...points.map(p=>p.value)),range=Math.max(1,high-low);
+        const first=Date.parse(points[0].date+'T00:00:00Z'),last=Date.parse(points.at(-1).date+'T00:00:00Z');
+        const x=p=>12+(Date.parse(p.date+'T00:00:00Z')-first)/Math.max(86400000,last-first)*(width-24),y=value=>40+(high-value)/range*125;
+        shape('line',{x1:12,x2:width-12,y1:y(points[0].value),y2:y(points[0].value),stroke:'currentColor','stroke-opacity':'.2','stroke-dasharray':'4 4'});
+        shape('polyline',{points:points.map(p=>x(p)+','+y(p.value)).join(' '),fill:'none',stroke:'var(--primary)','stroke-width':2,'vector-effect':'non-scaling-stroke'});
+        shape('text',{x:12,y:18},'最高 '+money(high/100));shape('text',{x:width-12,y:18,'text-anchor':'end'},'最低 '+money(low/100));
+        shape('text',{x:12,y:198},points[0].date);shape('text',{x:width-12,y:198,'text-anchor':'end'},points.at(-1).date);target.append(svg);
     }
     function exportMonthly() {
         const report=state.monthly;if(!report||state.accessDenied)return;
@@ -645,7 +664,7 @@
     $("labResultNext").addEventListener("click", () => {if ((state.resultPage + 1) * pageSize < state.experiments.length) {state.resultPage++; closeDetail(false); renderResults(); updateControls();}});
     $("labCloseDetailButton").addEventListener("click", () => closeDetail(true));
     $("labMonthlyExport").addEventListener('click',exportMonthly);
-    ['labCapitalMultiplier','labCapitalTolerance','labCapitalBudget'].forEach(id=>$(id).addEventListener('input',renderCapital));
+    $("labInitialCapital").addEventListener('input',renderCapital);
     $("labExportButton").addEventListener("click", exportCsv);
     $("labCompareButton").addEventListener('click',comparisonPreview);$("labCreateStudyButton").addEventListener('click',createStudy);
     $("labStudyStateButton").addEventListener('click',changeStudyState);$("labStudyExportButton").addEventListener('click',exportStudy);
@@ -653,7 +672,7 @@
     $("labStudyPrevious").addEventListener('click',()=>{state.studyPage=Math.max(0,state.studyPage-1);renderStudyResults();});$("labStudyNext").addEventListener('click',()=>{state.studyPage++;renderStudyResults();});
     document.addEventListener("platform-auth:changed", () => {state.readRevision++; state.detailRevision++; denyAccess(); state.options = null; refresh(true);});
     document.addEventListener('visibilitychange',autoRefresh);
-    window.addEventListener('resize',()=>{if(state.monthly)renderMonthlyChart(state.monthly.rows);});
+    window.addEventListener('resize',()=>{if(state.monthly){renderMonthlyChart(state.monthly.rows);renderCapital();}});
     setInterval(autoRefresh,15000);
     updatePreview(); updateControls(); refresh(true);
 }());
