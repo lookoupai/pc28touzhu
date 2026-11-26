@@ -446,6 +446,35 @@ class RuleLabStore:
     def get_study(self,user_id,study_id):
         with self._connect() as c:return self._study(c,self._owned_study(c,user_id,study_id))
 
+    def inspect_continuation_checkpoint(self,user_id,study_id):
+        """Internal read-only preflight; no API or runtime state transitions yet."""
+        from pc28touzhu.domain.rule_lab_continuation import checkpoint_readiness
+        with self._connect() as c:
+            c.execute('BEGIN')
+            study=self._study(c,self._owned_study(c,user_id,study_id))
+            batches=[];experiments=[];pending_count=0
+            for child in study['children']:
+                row=c.execute('SELECT * FROM lab_batches WHERE id=?',(child['batch_id'],)).fetchone()
+                batch=self._internal_batch(row);batch['experiment_count']=child['experiment_count'];batches.append(batch)
+                for item in c.execute('SELECT * FROM lab_experiments WHERE batch_id=? ORDER BY id',(row['id'],)):
+                    exp=dict(item)
+                    for key in ('condition','settlement_snapshot','stats','risk_runtime'):
+                        exp[key]=_load(exp.pop(key+'_json'))
+                    experiments.append(exp)
+                pending_count+=c.execute('''SELECT COUNT(*) FROM lab_decisions d JOIN lab_experiments e ON e.id=d.experiment_id
+                    WHERE e.batch_id=? AND d.status='pending' ''',(row['id'],)).fetchone()[0]
+            history=[]
+            if batches and batches[0]['cursor'].get('last_issue_no'):
+                first=batches[0]
+                rows=c.execute('''SELECT d.*,p.created_at AS prediction_created_at,p.settled_at AS prediction_settled_at,
+                    p.status AS prediction_status,p.big_small,p.odd_even,p.combo,p.conflict AS prediction_conflict
+                    FROM lab_draws d LEFT JOIN lab_predictions p ON p.predictor_id=? AND p.issue_no=d.issue_no
+                    WHERE d.issue_key<=? ORDER BY d.issue_key DESC LIMIT 100''',
+                    (first['predictor_id'],_issue(first['cursor']['last_issue_no']))).fetchall()
+                history=[dict(r) for r in reversed(rows)]
+                for item in history:item['conflict']=bool(item['conflict'] or item['prediction_conflict'])
+            return checkpoint_readiness(study,batches,experiments,history,pending_count=pending_count)
+
     @staticmethod
     def _enqueue(c,study_id,now):
         seq=c.execute('SELECT COALESCE(MAX(queue_order),0)+1 FROM lab_studies').fetchone()[0]
