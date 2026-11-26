@@ -36,7 +36,7 @@
 | 内存 | `MemoryHigh=192M`、`MemoryMax=256M`、`MemorySwapMax=0`；超限可能终止 worker，重启后从事务检查点继续 |
 | 进程／优先级 | 单实例文件锁，`TasksMax=16`、`Nice=10`、空闲 I/O 优先级 |
 | 网络 | worker 私有网络命名空间，仅允许 Unix socket；不加载生产 `.env` 或读取投注账本 |
-| 文件写入 | systemd 只放开 `data/rule_lab`；代码和源项目只读 |
+| 文件写入 | 放开 `data/rule_lab` 以及源目录供 SQLite 管理 WAL／SHM；源数据库主文件单独只读挂载，连接同时为 `mode=ro`／`query_only`；投注端代码只读、两项目 `.env` 对 worker 不可见 |
 | 存储预算 | 模拟目录 1GiB 应用预算，含 DB／WAL／SHM 和目录内临时文件；约 960MiB 时暂停新增模拟，SQLite 主文件另设较低页数上限以预留空间 |
 | 日志 | 状态变化才输出，并由 journal 每分钟最多 20 条限速；系统 journal 不包含在模拟目录的 1GiB 中 |
 
@@ -71,9 +71,11 @@ sudo systemctl enable --now pc28touzhu-rule-lab.service
 sudo systemctl restart pc28touzhu-platform.service
 ```
 
-只重启平台 API 加载新页面/接口；现有执行器、自动触发、结算和来源同步服务不需要重启。启动新 worker 只创建空模拟库，不生成实验、不启用实盘规则。无须新增 timer、开放端口、改变 Nginx 或 DNS。
+只主动重启平台 API 加载新页面/接口；现有执行器、自动触发、结算和来源同步服务不需要手动重启。现有执行器可能在平台短暂不可用时退出并由 systemd 自动恢复，发布后必须检查其心跳和恢复状态，不能保证所有旧服务 PID 不变。启动新 worker 只创建空模拟库，不生成实验、不启用实盘规则。无须新增 timer、开放端口、改变 Nginx 或 DNS。
 
-源库当前采用 WAL。`www` 必须能读取数据库及已存在的 `-wal`／`-shm` 文件；沙箱不给源库写权限。若源维护期间文件不可读，worker 会报告来源暂不可读并重试，不能通过 `immutable=1` 跳过 WAL 一致性，也不能扩大源目录写权限来规避问题。
+源库当前采用 WAL，上游最后一个连接关闭时可能删除 `-wal`／`-shm`。即使连接指定 `mode=ro`，SQLite 在这两个文件不存在时仍需要创建同步辅助文件；把整个源目录只读挂载会导致间歇性“无法打开数据库”。因此部署允许源目录写入，同时对 `pc28_predictor.db` 主文件设置单独只读挂载，并继续使用 `mode=ro`／`query_only`。应用只通过 SQLite 管理辅助文件，不执行源库业务写入。
+
+这是明确的权限取舍：systemd 没有把源目录写入权限精确限制为两个文件名，服务用户仍可能写入源目录中其他未单独保护的文件；两项目 `.env` 已屏蔽。不能宣称“只有模拟目录可写”。不要将某一时刻的 WAL／SHM 单文件绑定挂载，因为上游删除重建后会换 inode；也不能使用 `immutable=1` 或 `nolock=1` 跳过活库一致性。若上游维护会替换数据库主文件 inode，维护后应重启模拟 worker，使只读绑定指向新文件。
 
 ## 验证、监控与恢复
 

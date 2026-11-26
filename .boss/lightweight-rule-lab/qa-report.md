@@ -112,6 +112,24 @@ EXPLAIN QUERY PLAN确认开奖分页使用 `idx_draws_issue (lottery_type,issue_
 - 历史源不是不可变预测版本档案，回测始终标记为历史回放；成绩不是稳定盈利证明。前向决策有实际观察与冻结时刻，但模拟不含群组拒单、网络派单和实盘限额。
 - 当前QA未部署生产服务。生产启用、Git提交与GitHub备份由主代理/DevOps完成并写部署报告；本报告不会把测试通过写成已经上线。
 
+## 发布期间发现的 WAL 权限问题与定向复验
+
+2026-11-26，发布后在真实 systemd 挂载命名空间发现：上游最后一个 SQLite 连接关闭后可能删除 `-wal`／`-shm`；源目录整体只读时，即使使用 `mode=ro`，连接也无法创建缺失的同步辅助文件。因此此前普通进程里的源只读测试通过，不等于完整生产沙箱权限已经验证。
+
+经主代理授权，运维修正只涉及unit访问策略、相应测试和文档：源目录允许SQLite管理WAL／SHM，源主数据库 `pc28_predictor.db` 仍单独只读挂载；所有源连接继续 `mode=ro` 与 `PRAGMA query_only=ON`。两项目 `.env` 和生产投注账本对worker不可读，网络隔离保持。QA只读复核diff确认无应用结算/预测/账本逻辑改动。
+
+该修复有明确的权限边界：源目录中未单独保护的其他文件仍可由服务用户写入，不能宣称“只有实验目录可写”，也不能宣称写权限精确限定为两个辅助文件名。源库主文件若被维护流程替换inode，需重启worker重新绑定。实际业务SQL写入仍被拒绝；没有使用`immutable=1`或`nolock=1`绕过活库一致性。
+
+| 定向检查 | 命令 | 退出码 | 通过/失败/跳过 | 结果 |
+|---|---|---:|---|---|
+| 运维与源回归 | `env PYTHONPATH=src python3 -m unittest tests.test_rule_lab_ops tests.test_rule_lab_source -q` | 0 | 16/0/0 | 0.377秒，`/tmp/pc28-rule-lab-qa-wal-regression.log` |
+| unit校验 | `systemd-analyze verify deploy/systemd/pc28touzhu-rule-lab.service` | 0 | 1/0/0 | 无错误输出 |
+| diff格式 | `git diff --check` | 0 | 1/0/0 | 无错误输出 |
+
+另只读复核DevOps实际命名空间证据 `/tmp/pc28-rule-lab-sandbox-probe.json`：进入运行worker的mount/net命名空间并降权为www，起始WAL／SHM均不存在时，15个公开来源与5条开奖读取成功，耗时5.654ms；主数据库挂载只读，`O_WRONLY`打开被errno30拒绝，零行SQL UPDATE也被只读保护拒绝；源`.env`、平台`.env`、投注账本均不可读，实验目录可写。该probe由DevOps执行、QA读取证据确认，没有把它记成QA再次执行。
+
+原934项完整回归记录仍是权限修复前的真实记录；本修复后只执行上述16项相关回归，没有宣称重新跑过934项。上线服务和Git版本的最终状态以部署报告为准。该问题已修复，无新增阻塞项。
+
 ## 状态
 
 **STATUS: DONE_WITH_CONCERNS**

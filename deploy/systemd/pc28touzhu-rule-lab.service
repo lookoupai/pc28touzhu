@@ -38,9 +38,13 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
-ReadOnlyPaths=/www/wwwroot/AITradingSimulator /www/wwwroot/pc28touzhu
-ReadWritePaths=/www/wwwroot/pc28touzhu/data/rule_lab
-InaccessiblePaths=-/www/wwwroot/pc28touzhu/.env -/www/wwwroot/pc28touzhu/pc28touzhu.db -/www/wwwroot/pc28touzhu/pc28touzhu.db-wal -/www/wwwroot/pc28touzhu/pc28touzhu.db-shm
+# Read-only SQLite WAL connections still create/remove WAL/SHM bookkeeping
+# when the last upstream connection has closed. Protect the main DB inode;
+# permit the source directory so SQLite can manage changing sidecar inodes.
+# The application also enforces mode=ro and query_only for every connection.
+ReadOnlyPaths=/www/wwwroot/AITradingSimulator/pc28_predictor.db /www/wwwroot/pc28touzhu
+ReadWritePaths=/www/wwwroot/pc28touzhu/data/rule_lab /www/wwwroot/AITradingSimulator
+InaccessiblePaths=-/www/wwwroot/AITradingSimulator/.env -/www/wwwroot/pc28touzhu/.env -/www/wwwroot/pc28touzhu/pc28touzhu.db -/www/wwwroot/pc28touzhu/pc28touzhu.db-wal -/www/wwwroot/pc28touzhu/pc28touzhu.db-shm
 
 StandardOutput=journal
 StandardError=journal

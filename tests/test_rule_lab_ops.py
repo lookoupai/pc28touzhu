@@ -61,7 +61,11 @@ class RuleLabOpsTests(unittest.TestCase):
         self.assertEqual(service['User'], 'www')
         self.assertEqual(service['Group'], 'www')
         self.assertEqual(service['ProtectSystem'], 'strict')
-        self.assertEqual(shlex.split(service['ReadWritePaths']), [PRODUCTION + '/data/rule_lab'])
+        self.assertEqual(shlex.split(service['ReadWritePaths']),
+                         [PRODUCTION + '/data/rule_lab', '/www/wwwroot/AITradingSimulator'])
+        self.assertEqual(shlex.split(service['ReadOnlyPaths']),
+                         ['/www/wwwroot/AITradingSimulator/pc28_predictor.db', PRODUCTION])
+        self.assertIn('-/www/wwwroot/AITradingSimulator/.env', shlex.split(service['InaccessiblePaths']))
         self.assertEqual(service['PrivateNetwork'], 'true')
         self.assertEqual(service['RestrictAddressFamilies'], 'AF_UNIX')
         self.assertEqual(service['NoNewPrivileges'], 'true')
