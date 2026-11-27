@@ -330,8 +330,27 @@ class RuleLabApiTests(unittest.TestCase):
         self.assertEqual(self.repo.jobs, [])
         self.assertEqual(self.repo.subscriptions, [])
 
-    def test_combo_creates_78_versions(self):
-        self.assertEqual(self.create(metric='combo')['experiment_count'], 78)
+    def test_combo_default_is_one_comprehensive_batch_with_all_long_thresholds(self):
+        batch=self.create(metric='combo')
+        self.assertEqual(batch['template_pack'],'basic_v2')
+        self.assertEqual(batch['experiment_count'],92)
+        rows=self.store.list_experiments(1,batch['id'])
+        self.assertEqual({row['condition']['type'] for row in rows},{'always','miss_streak','hit_streak','draw_streak','draw_absence','hit_rate'})
+        self.assertEqual(sorted({row['condition']['threshold'] for row in rows if row['condition']['type']=='miss_streak'}),[7,8,9,10,11,12,13,14,15,20,25,30])
+        self.assertEqual(self.request(PREFIX+'/batches/%s/state'%batch['id'],{'state':'running'})['status_code'],200)
+        options=self.request(PREFIX+'/options')['json']
+        self.assertEqual(options['template_pack'],'basic_v2')
+        current=next(p for p in options['template_packs'] if p['id']=='basic_v2')
+        self.assertEqual(current['condition_counts']['combo'],46)
+        self.assertIn('无需另跑',current['descriptions_by_metric']['combo'])
+        self.assertFalse(next(p for p in options['template_packs'] if p['id']=='basic_v1')['selectable'])
+
+    def test_legacy_combo_template_is_preserved_for_existing_batches(self):
+        old=self.service.create_batch(1,dict(name='旧综合包',mode='live',predictor_id=7,metric='combo',template_pack='basic_v1'),now=NOW)['batch']
+        before=self.service.batch_detail(1,old['id'])
+        self.assertEqual(old['experiment_count'],78)
+        self.create(metric='combo')
+        self.assertEqual(self.service.batch_detail(1,old['id']),before)
 
     def test_long_combo_pack_freezes_26_versions_and_five_risk_variants(self):
         options=self.request(PREFIX+'/options')['json']

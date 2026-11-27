@@ -27,6 +27,20 @@ def history(count=100, *, hit=True):
 
 
 class RuleLabDomainTests(unittest.TestCase):
+    def test_comprehensive_combo_includes_whole_long_pack_and_other_trigger_families(self):
+        combined=build_conditions('combo')
+        long=build_conditions('combo',template_pack='combo_long_miss_v1')
+        old=build_conditions('combo',template_pack='basic_v1')
+        self.assertEqual(len(combined),46)
+        self.assertEqual([c['threshold'] for c in combined if c['type']=='miss_streak'],[7,8,9,10,11,12,13,14,15,20,25,30])
+        self.assertTrue(all(c in combined for c in long))
+        self.assertEqual([c for c in combined if c['type']!='miss_streak'],[c for c in old if c['type']!='miss_streak'])
+        self.assertEqual(len(old),39)
+        self.assertEqual([c['threshold'] for c in old if c['type']=='miss_streak'],[3,4,5,6,7])
+        for metric in ('big_small','odd_even'):
+            self.assertEqual(build_conditions(metric),build_conditions(metric,template_pack='basic_v1'))
+        self.assertEqual(normalize_batch_payload(dict(name='default',mode='live',predictor_id=1,metric='combo'),now=NOW)['template_pack'],'basic_v2')
+
     def test_combo_long_miss_pack_preserves_existing_keys_and_has_two_rules_per_threshold(self):
         original=build_conditions('combo')
         conditions=build_conditions('combo',template_pack='combo_long_miss_v1')
@@ -62,7 +76,7 @@ class RuleLabDomainTests(unittest.TestCase):
             self.assertFalse(any(match_condition(c,features)['matched'] for c in conditions))
 
     def test_templates_are_unique_and_exactly_two_presets(self):
-        for metric, count in [('big_small', 25), ('odd_even', 25), ('combo', 39)]:
+        for metric, count in [('big_small', 25), ('odd_even', 25), ('combo', 46)]:
             conditions = build_conditions(metric)
             self.assertEqual(len(conditions), count)
             self.assertEqual(len({c['condition_key'] for c in conditions}), count)

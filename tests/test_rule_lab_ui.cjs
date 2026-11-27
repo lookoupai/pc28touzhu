@@ -54,12 +54,15 @@ const root = path.resolve(__dirname, '..');
         assert.equal(await page.locator('#labGenerator').getAttribute('open'),'');
         assert.match(await page.locator('#labCandidatePreview').innerText(),/50/);
         await page.getByLabel('投注玩法',{exact:true}).selectOption('combo');
-        assert.match(await page.locator('#labCandidatePreview').innerText(),/78/);
+        assert.match(await page.locator('#labCandidatePreview').innerText(),/92/);
+        assert.match(await page.locator('#labTemplateHelp').innerText(),/7、8、9、10、11、12、13、14、15、20、25、30/);
+        assert.match(await page.locator('#labTemplateHelp').innerText(),/无需另跑/);
+        assert.equal(await page.locator('#labTemplatePack option[value="basic_v1"]').count(),0);
         await page.getByLabel('条件模板',{exact:true}).selectOption('combo_long_miss_v1');
         assert.match(await page.locator('#labCandidatePreview').innerText(),/13 个条件.*26 个实验版本/);
         assert.match(await page.locator('#labTemplateHelp').innerText(),/7、8、9、10、11、12、13、14、15、20、25、30/);
         await page.getByLabel('投注玩法',{exact:true}).selectOption('odd_even');
-        assert.equal(await page.locator('#labTemplatePack').inputValue(),'basic_v1');
+        assert.equal(await page.locator('#labTemplatePack').inputValue(),'basic_v2');
         assert.equal(await page.locator('#labTemplatePack option[value="combo_long_miss_v1"]').count(),0);
         await page.locator('#labSettlementDetails').evaluate(el=>el.open=true);
         assert.match(await page.locator('#labSettlementSummary').innerText(),/2\.846/);
@@ -251,10 +254,11 @@ const root = path.resolve(__dirname, '..');
         assert.equal(await page.getByLabel('批次名称',{exact:true}).inputValue(),'响应丢失仍只创建一次');
         await page.unroute('**/api/platform/rule-lab/batches');
 
-        // Backtest form validates locally and saves the full 78-version combo batch paused.
+        // Backtest form validates locally and saves the full 92-version combo batch paused.
         await page.getByLabel('批次名称',{exact:true}).fill('组合历史条件观察');
         await page.getByLabel('投注玩法',{exact:true}).selectOption('combo');
         await page.getByRole('radio',{name:'历史回测',exact:true}).check();
+        assert.match(await page.locator('#labModeHelp').innerText(),/不会自动延长.*尚不支持追加日期/);
         const beforeInvalid=creates;
         await page.getByRole('button',{name:'生成并保存',exact:true}).click();
         assert.equal(await page.getByLabel('开始日期',{exact:true}).getAttribute('aria-invalid'),'true');
@@ -265,22 +269,22 @@ const root = path.resolve(__dirname, '..');
         await page.locator('#labRiskMode').selectOption('round');
         await page.locator('#labRiskPreset').selectOption('6:9:7:combo');
         const historical=await saved('/api/platform/rule-lab/batches',()=>page.getByRole('button',{name:'生成并保存',exact:true}).click());
-        assert.equal(historical.generated_count,78);
+        assert.equal(historical.generated_count,92);
         assert.equal(historical.batch.mode,'backtest');
         assert.equal(historical.batch.status,'paused');
         await page.locator('#labResultTitle').filter({hasText:'组合历史条件观察'}).waitFor();
-        assert.match(await page.locator('#labResultPageInfo').innerText(),/共 78/);
+        assert.match(await page.locator('#labResultPageInfo').innerText(),/共 92/);
         assert.match(await page.locator('#labBatchMeta').innerText(),/历史回测/);
         assert.equal(await page.locator('#labBatchNotice').isVisible(),true);
         assert.match(await page.locator('#labResultsBody tr').first().innerText(),/—/);
 
-        // A 390-version combo study exceeds capacity with two earlier 50-version batches:
+        // A 460-version combo study exceeds capacity with two earlier 50-version batches:
         // preview reports the complete total and disables atomic creation.
         await page.locator('#labCompareButton').click();
-        await page.locator('#labComparisonCapacity').filter({hasText:'390'}).waitFor();
-        assert.match(await page.locator('#labComparisonCapacity').innerText(),/568 \/ 500/);
+        await page.locator('#labComparisonCapacity').filter({hasText:'460'}).waitFor();
+        assert.match(await page.locator('#labComparisonCapacity').innerText(),/652 \/ 500/);
         assert.equal(await page.locator('#labCreateStudyButton').isDisabled(),true);
-        // Create a two-way metric source (50 × 5 = 250, total 478), then test the real queue API/UI.
+        // Create a two-way metric source (50 × 5 = 250, total 492), then test the real queue API/UI.
         const preset=await page.evaluate(async()=>{const data=await(await fetch('/api/platform/rule-lab/options')).json();return data.risk_presets.find(p=>p.metric==='big_small').policy;});
         const studySource=await page.evaluate(async({preset,date})=>(await(await fetch('/api/platform/rule-lab/batches',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'风控比较源',mode:'backtest',predictor_id:1,metric:'big_small',start_date:date,end_date:date,risk_policy:preset})})).json()).batch,{preset,date});
         await page.locator('#labRefreshButton').click();await page.waitForFunction(()=>!document.getElementById('labRefreshButton').disabled);

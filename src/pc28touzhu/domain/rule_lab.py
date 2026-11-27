@@ -22,7 +22,7 @@ COMBO_LONG_MISS_THRESHOLDS = (7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 30)
 
 
 def _validate_template(metric,template_pack):
-    if not isinstance(template_pack,str) or template_pack not in ('basic_v1','combo_long_miss_v1'):
+    if not isinstance(template_pack,str) or template_pack not in ('basic_v1','basic_v2','combo_long_miss_v1'):
         raise ValueError('不支持的规则模板包')
     if template_pack=='combo_long_miss_v1' and metric!='combo':
         raise ValueError('组合长连错模板仅支持组合玩法')
@@ -50,7 +50,7 @@ def normalize_batch_payload(payload: dict, *, now: str) -> dict:
     pid = payload.get('predictor_id')
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
         raise ValueError('预测器编号必须为正整数')
-    template_pack=payload.get('template_pack','basic_v1')
+    template_pack=payload.get('template_pack','basic_v2')
     _validate_template(metric,template_pack)
     amount = payload.get('stake_amount', 1)
     if isinstance(amount, bool) or not isinstance(amount, (int, float)):
@@ -80,7 +80,7 @@ def normalize_batch_payload(payload: dict, *, now: str) -> dict:
                 stake_cents=int(money*100), start_date=start, end_date=end,risk_policy=normalize_risk_policy(payload.get('risk_policy')))
 
 
-def build_conditions(metric: str, *, template_pack='basic_v1') -> list[dict]:
+def build_conditions(metric: str, *, template_pack='basic_v2') -> list[dict]:
     if metric not in METRICS:
         raise ValueError('不支持的实验玩法')
     _validate_template(metric,template_pack)
@@ -105,7 +105,8 @@ def build_conditions(metric: str, *, template_pack='basic_v1') -> list[dict]:
     if template_pack=='combo_long_miss_v1':
         for n in COMBO_LONG_MISS_THRESHOLDS:add('miss_streak',n)
         return list(conditions.values())
-    for n in (3, 4, 5, 6, 7): add('miss_streak', n)
+    thresholds=COMBO_LONG_MISS_THRESHOLDS if metric=='combo' and template_pack=='basic_v2' else (3,4,5,6,7)
+    for n in thresholds: add('miss_streak', n)
     for n in (2, 3, 4): add('hit_streak', n)
     for value in VALUES[metric]:
         for n in (3, 4, 5): add('draw_streak', n, value)
@@ -118,7 +119,7 @@ def build_conditions(metric: str, *, template_pack='basic_v1') -> list[dict]:
     return list(conditions.values())
 
 
-def build_experiments(metric: str, *, template_pack='basic_v1') -> list[dict]:
+def build_experiments(metric: str, *, template_pack='basic_v2') -> list[dict]:
     result = []
     snapshots = {rid:build_settlement_snapshot(rule_source='subscription_fixed', settlement_rule_id=rid,
                 fallback_profit_ratio=1, resolved_from='rule_lab') for rid in ALLOWED_SETTLEMENT_RULE_IDS}

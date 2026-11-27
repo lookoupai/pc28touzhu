@@ -50,9 +50,9 @@ class ComparisonStoreTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.store=RuleLabStore(Path(self.tmp.name)/'lab.db');self.store.initialize()
         self.p=policy();self.p['day']['hit_rate_gate'].update(enabled=True,threshold=25)
-        config=normalize_batch_payload(dict(name='原始组合',mode='backtest',predictor_id=7,metric='combo',stake_amount=1,
+        config=normalize_batch_payload(dict(name='原始组合',mode='backtest',predictor_id=7,metric='combo',template_pack='basic_v1',stake_amount=1,
             start_date='2026-10-01',end_date='2026-11-26',risk_policy=self.p),now=NOW)
-        self.original=self.store.create_batch(1,config,'频次趋势',build_experiments('combo'),now=NOW)
+        self.original=self.store.create_batch(1,config,'频次趋势',build_experiments('combo',template_pack='basic_v1'),now=NOW)
 
     def create(self,token='study-request-0001',name='五组比较'):
         return self.store.create_study(1,self.original['id'],name,token,now=NOW)

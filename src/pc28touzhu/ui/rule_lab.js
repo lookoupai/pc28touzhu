@@ -287,16 +287,16 @@
     }
     function updatePreview() {
         const metric=$("labMetric").value,selected=$("labTemplatePack").value;
-        const packs=(state.options?.template_packs||[{id:'basic_v1',name:'基础条件 v1',metrics:['combo','big_small','odd_even'],condition_counts:{combo:39,big_small:25,odd_even:25},description:'含无条件跟随基准、连续条件与窗口命中率。'}]).filter(pack=>pack.metrics.includes(metric));
+        const packs=(state.options?.template_packs||[{id:'basic_v2',name:'综合条件 v2（多种触发）',metrics:['combo','big_small','odd_even'],condition_counts:{combo:46,big_small:25,odd_even:25},description:'含无条件基准、预测连错/连中、连续开出/不出和命中率；组合含7～30期长连错。'}]).filter(pack=>pack.selectable!==false&&pack.metrics.includes(metric));
         $("labTemplatePack").replaceChildren();packs.forEach(pack=>{const option=element('option',pack.name);option.value=pack.id;$("labTemplatePack").append(option);});
         if(packs.some(pack=>pack.id===selected))$("labTemplatePack").value=selected;
         const pack=packs.find(pack=>pack.id===$("labTemplatePack").value),count=pack?.condition_counts[metric]||0;
-        $("labTemplateHelp").textContent=pack?.description||'暂无可用模板';
+        $("labTemplateHelp").textContent=pack?.descriptions_by_metric?.[metric]||pack?.description||'暂无可用模板';
         $("labCandidatePreview").textContent = count + " 个条件 × 2 套结算 = " + (count*2) + " 个实验版本";
         const historical = $("labBatchForm").elements.mode.value === "backtest";
         $("labDates").hidden = !historical;
         $("labStartDate").required = historical; $("labEndDate").required = historical;
-        $("labModeHelp").textContent = historical ? "按现存历史记录重放，与前向模拟分别统计。" : "从启动后的可用信号开始观察，等待条件及开奖。";
+        $("labModeHelp").textContent = historical ? "只回放所选日期区间，完成后不会自动延长；当前版本尚不支持追加日期续跑。" : "从启动后的可用信号开始持续观察；与历史回测分别记账，不接续旧批次成绩。";
         if(riskEditors.labRisk)renderRiskPresets('labRisk',$("labMetric").value);
     }
     function clearFieldErrors() {

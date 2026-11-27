@@ -81,8 +81,8 @@ class CheckpointStoreTests(unittest.TestCase):
     def test_owned_read_only_inspection_leaves_existing_tables_identical(self):
         with tempfile.TemporaryDirectory() as tmp:
             store=RuleLabStore(Path(tmp)/'lab.db');store.initialize()
-            cfg=normalize_batch_payload(dict(name='old',mode='backtest',predictor_id=1,metric='combo',start_date='2026-10-01',end_date='2026-11-26',risk_policy=policy()),now=NOW)
-            batch=store.create_batch(1,cfg,'source',build_experiments('combo'),now=NOW)
+            cfg=normalize_batch_payload(dict(name='old',mode='backtest',predictor_id=1,metric='combo',template_pack='basic_v1',start_date='2026-10-01',end_date='2026-11-26',risk_policy=policy()),now=NOW)
+            batch=store.create_batch(1,cfg,'source',build_experiments('combo',template_pack='basic_v1'),now=NOW)
             study=store.create_study(1,batch['id'],'group','checkpoint-request-1',now=NOW)['study']
             def contents():
                 with sqlite3.connect(store.db_path) as c:
