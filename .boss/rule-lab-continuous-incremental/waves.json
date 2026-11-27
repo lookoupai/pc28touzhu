@@ -448,8 +448,22 @@
       "dependsOn": [
         "wave-4-qa"
       ],
-      "status": "pending",
-      "verificationNote": "发布尚待执行；不得标记完成"
+      "status": "passed",
+      "verificationNote": "发布尚待执行；不得标记完成",
+      "evidence": {
+        "codeCommit": "b563e760d75d8658f3e5452298c6702a70008ddf",
+        "postflight": "/tmp/pc28-continuation-release-verified.json",
+        "onlineGet": "/tmp/pc28-continuation-online.json",
+        "originalTables": 10,
+        "originalRowsUnchanged": 103786,
+        "schema": 4,
+        "defaultSeries": 0,
+        "defaultSegments": 0,
+        "actualPostRequests": 0,
+        "cpuCores": 1,
+        "memoryMaxBytes": 268435456,
+        "recovery": "PATH corrected; executor recovered naturally after API restart; original failed attempts preserved"
+      }
     }
   ],
   "ownerAgents": {
