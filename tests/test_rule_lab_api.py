@@ -14,6 +14,7 @@ from pc28touzhu.auth import SESSION_COOKIE_NAME, build_session_cookie_value
 from pc28touzhu.services.rule_lab_store import RuleLabError, RuleLabStore
 from tests.test_api import FakeRepository
 from tests.test_rule_lab_risk import policy
+from tests.test_rule_lab_resources import FakeResources
 
 PREFIX = '/api/platform/rule-lab'
 NOW = '2026-11-26T04:00:00Z'
@@ -40,7 +41,8 @@ class RuleLabApiTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.store = RuleLabStore(Path(self.tmp.name) / 'lab' / 'rule_lab.db')
         self.source = PublicSource()
-        self.service = RuleLabService(self.store, self.source)
+        self.resources=FakeResources()
+        self.service = RuleLabService(self.store, self.source,resources=self.resources)
         self.repo = FakeRepository()
         self.other = self.repo.create_user_record(username='second-admin', role='admin', status='active')
         self.regular = self.repo.create_user_record(username='regular', role='user', status='active')
@@ -86,6 +88,25 @@ class RuleLabApiTests(unittest.TestCase):
         self.assertEqual(data['settlement_rules'][1]['big_small_odds'], 2.846)
         self.assertEqual(data['limits']['max_running_experiments'], 100)
         self.assertTrue(data['source_available'])
+
+    def test_performance_is_admin_global_validated_and_preserves_ledger(self):
+        batch=self.create();before=self.service.batch_detail(1,batch['id'])
+        path=PREFIX+'/performance'
+        self.assertEqual(self.request(path)['json']['performance']['mode'],'economy')
+        for uid,expected in ((None,401),(self.regular['id'],403)):
+            for payload in (None,{'mode':'fast'}):self.assertEqual(self.request(path,payload,uid=uid)['status_code'],expected)
+        self.assertEqual(self.resources.changes,[])
+        for payload in ({'mode':'other'},{'mode':[]},{'mode':'fast','unit':'other'},{}):
+            self.assertEqual(self.request(path,payload)['status_code'],400)
+        self.assertEqual(self.request(path,method='DELETE')['status_code'],405)
+        changed=self.request(path,{'mode':'fast'})
+        self.assertEqual(changed['status_code'],200,changed)
+        self.assertEqual(changed['json']['performance']['cpu_cores'],1)
+        self.assertEqual(self.request(path,uid=self.other['id'])['json']['performance']['mode'],'fast')
+        self.assertEqual(self.request(path,{'mode':'economy'})['status_code'],200)
+        self.assertEqual(self.service.batch_detail(1,batch['id']),before)
+        self.assertEqual(self.resources.changes,['fast','economy'])
+        self.assertEqual(changed['headers']['Cache-Control'],'no-store')
 
     def test_risk_policy_edit_is_owned_unstarted_and_updates_no_source_fields(self):
         batch=self.create();path=PREFIX+'/batches/'+str(batch['id'])

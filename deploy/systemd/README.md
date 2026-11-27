@@ -120,3 +120,20 @@ journalctl -u pc28touzhu-telegram-report.service -f
 
 - Bot 报 `chat not found`：用 Bot `getUpdates` 确认 `chat.id`，并确保 Bot 已加入目标群且可发言。
 - SQLite 只读：确认 `DATABASE_PATH` 文件可写，以及其所在目录可写（SQLite 需要写入 journal 文件）。
+# 规则实验室速度切换
+
+在基础worker单元安装完成后，单独安装固定资源helper（不能从www可写的项目目录直接以sudo执行）。只允许将`pc28touzhu-rule-lab.service`的CPUQuota设为20%或100%，不授权任意systemctl或其他参数。
+
+```bash
+sudo install -d -o root -g root -m 0755 /usr/local/libexec
+sudo install -o root -g root -m 0755 deploy/systemd/pc28-rule-lab-resource-mode /usr/local/libexec/pc28-rule-lab-resource-mode
+sudo visudo -cf deploy/systemd/pc28-rule-lab-resource.sudoers
+sudo install -o root -g root -m 0440 deploy/systemd/pc28-rule-lab-resource.sudoers /etc/sudoers.d/pc28-rule-lab-resource
+sudo visudo -cf /etc/sudoers.d/pc28-rule-lab-resource
+```
+
+发布后管理员网页GET/POST `/api/platform/rule-lab/performance`读取/修改全服务速度，POST仅接受`{"mode":"economy"}`或`{"mode":"fast"}`。helper固定unit/参数，清空调用环境、串行锁、超时；www无权更改helper及父目录。状态同时检查systemd与cgroup v2的实际CPU限额，内存硬上限必须保持256MiB。非本部署方式或缺helper时显示不可切换，不伪造成功。
+
+`systemctl set-property`实时生效且默认持久化到systemd控制drop-in，不需要重启worker。基准unit继续CPUQuota20%；加速100%是1核上限。切换后核对MainPID不变、CPUQuotaPerSecUSec（200ms或1s）与`cpu.max`（quota/period为0.2或1），MemoryMax、禁swap及安全属性不变。空闲时仍保持低实际CPU使用。默认发布验证后回到省资源。
+
+卸载控制时先用helper切回economy，再删除此sudoers文件和helper。持久化CPU限额在`/etc/systemd/system.control/pc28touzhu-rule-lab.service.d/`，不要用`systemctl revert`清除其他管理员配置。

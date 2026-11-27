@@ -13,7 +13,7 @@
     const pageSize = 20;
     const state = {options:null, overview:null, batch:null, experiments:[], selectedId:null, detailId:null, detailTrigger:null, resultPage:0,
         loading:false, mutating:false, exporting:false, readRevision:0, detailRevision:0, readAt:null, accessDenied:false,riskEditingId:null,
-        studies:[],study:null,studyRows:[],studyId:null,studyPage:0,preview:null,studyRequest:null,monthly:null,reportExperiment:null};
+        studies:[],study:null,studyRows:[],studyId:null,studyPage:0,preview:null,studyRequest:null,monthly:null,reportExperiment:null,performance:null};
     const studyNames={paused:'已暂停',queued:'等待运行额度',running:'比较中',completed:'全部完成',error:'比较异常',resource_paused:'资源限制暂停'};
     const monthStatus={complete:'完整月份',no_samples:'完整月份 · 无交易',partial:'部分月份',not_replayed:'尚未回放',not_observed:'尚未观察',pending:'等待结算'};
 
@@ -215,6 +215,10 @@
         ['labCompareButton','labCreateStudyButton','labStudyExportButton','labStudyPrevious','labStudyNext'].forEach(id=>$(id).disabled=locked());
         $("labStudyStateButton").disabled=locked()||!state.study||state.study.status==='completed';
         $("labStudyList").querySelectorAll('button').forEach(button=>button.disabled=locked());
+        [['labEconomyButton','economy'],['labFastButton','fast']].forEach(([id,mode])=>{
+            $(id).disabled=locked()||!state.performance?.available||state.performance.mode===mode;
+            $(id).setAttribute('aria-pressed',String(state.performance?.mode===mode));
+        });
         if(state.preview)$("labCreateStudyButton").disabled=locked()||state.preview.new_experiments>state.preview.capacity.remaining_saved||state.preview.candidate_count<2;
         Object.keys(riskEditors).forEach(updateRiskEditor);
         updateRefreshStatus();
@@ -236,7 +240,7 @@
             $("labSettlementSummary").append(row);
         });
         const limits = options.limits;
-        $("labBudgetDescription").textContent = "后台 CPU 上限 " + (limits.cpu_quota_percent / 100) + " 个核心，内存上限 " + bytes(limits.memory_max_bytes) + "；全服务最多同时运行 " + limits.max_running_experiments + " 个实验、保存 " + limits.max_total_experiments + " 个实验。近期明细保留 " + limits.detail_retention_days + " 天。这里显示配置预算，不是实时资源用量。";
+        $("labBudgetDescription").textContent = "默认省资源CPU上限0.2核，加速上限1核；内存上限 " + bytes(limits.memory_max_bytes) + "；全服务最多同时运行 " + limits.max_running_experiments + " 个实验、保存 " + limits.max_total_experiments + " 个实验。近期明细保留 " + limits.detail_retention_days + " 天。当前生效档位见上方运行速度。";
         $("labDateHelp").textContent = "日期按北京时间计算，最多回测 " + limits.max_backtest_days + " 天；仅使用实际留存的数据。";
         $("labStartDate").max = today(); $("labEndDate").max = today();
         updatePreview();
@@ -377,6 +381,7 @@
         $("labWorkerSummary").replaceChildren(); $("labWorkerMessage").textContent = ""; $("labBatchCount").textContent = "—";
         closeDetail(false); renderResults();
         state.studies=[];state.study=null;state.studyRows=[];state.studyId=null;renderStudies();renderStudyResults();
+        state.performance=null;renderPerformance();feedback('labPerformanceFeedback','',false);
     }
     async function selectBatch(id) {
         state.riskEditingId=null;$("labEditRiskForm").hidden=true;
@@ -389,13 +394,14 @@
         const revision = ++state.readRevision;
         state.loading = true; updateControls();
         try {
-            const calls = [request(base),request(base+'/studies')];
+            const calls = [request(base),request(base+'/studies'),readPerformance()];
             if (includeOptions !== false || !state.options) calls.push(request(base + "/options"));
-            const [overview, studies, options] = await Promise.all(calls);
+            const [overview, studies, performance, options] = await Promise.all(calls);
             if (revision !== state.readRevision) return;
             if (!Array.isArray(overview.batches)) throw responseError("批次数据不完整，请刷新后重试", 0, "invalid_response");
             if (options) {state.options = validateOptions(options); renderOptions();}
             state.accessDenied = false; state.overview = overview; state.readAt = new Date().toISOString();
+            state.performance=performance;renderPerformance();
             state.studies=studies.studies||[];renderStudies();
             if (!state.studies.some(study => study.id === state.studyId)) {
                 state.studyId = (state.studies.find(study => ['running','queued'].includes(study.status)) ||
@@ -417,6 +423,32 @@
             if (error.status === 401 || error.status === 403) denyAccess();
             feedback("statusMessage", error.message + (state.overview ? "。更新失败，以下为上次读取结果（" + time(state.readAt) + "）。" : "。可点击刷新重试。"), true);
         } finally {if (revision === state.readRevision) {state.loading = false; updateControls();}}
+    }
+    async function readPerformance() {
+        try{return (await request(base+'/performance')).performance;}
+        catch(error){if(error.status===401||error.status===403)throw error;return {available:false,mode:null,message:'暂时无法读取实际运行速度，请刷新重试'};}
+    }
+    function renderPerformance() {
+        const p=state.performance;
+        if(!p){$("labPerformanceStatus").textContent=state.accessDenied?'登录管理员账号后可查看运行速度':'正在读取实际运行档位…';return;}
+        const name={economy:'省资源',fast:'加速'}[p.mode]||'待核对';
+        $("labPerformanceStatus").textContent='当前生效：'+name+(typeof p.cpu_cores==='number'?' · CPU上限 '+p.cpu_cores+' 核':'')+(typeof p.memory_current_bytes==='number'?' · 当前内存 '+bytes(p.memory_current_bytes):'')+(p.message?'。'+p.message:'');
+    }
+    async function changePerformance(mode) {
+        if(locked()||!state.performance?.available)return;
+        state.mutating=true;updateControls();feedback('labPerformanceFeedback','正在切换运行速度…',false);
+        try{
+            state.performance=(await request(base+'/performance','POST',{mode})).performance;
+            renderPerformance();feedback('labPerformanceFeedback','已切换为'+(mode==='fast'?'加速':'省资源')+'，当前实验将按新额度继续处理。',false);
+        }catch(error){
+            if(error.status===401||error.status===403){denyAccess();feedback('labPerformanceFeedback',error.message,true);}
+            else{
+                try{state.performance=await readPerformance();renderPerformance();}
+                catch(readError){if(readError.status===401||readError.status===403)denyAccess();}
+                const confirmed=state.performance?.available&&state.performance.mode===mode;
+                feedback('labPerformanceFeedback',confirmed?'切换响应中断；已重新核对，当前生效为'+(mode==='fast'?'加速':'省资源')+'。':error.message+'。请以当前生效档位为准。',!confirmed);
+            }
+        }finally{state.mutating=false;updateControls();}
     }
     async function createBatch(event) {
         event.preventDefault();
@@ -664,6 +696,8 @@
     $("labCancelRiskButton").addEventListener('click',()=>{$("labEditRiskForm").hidden=true;});
     $("labBatchForm").addEventListener("change", updatePreview);
     $("labRefreshButton").addEventListener("click", () => refresh(true));
+    $("labEconomyButton").addEventListener('click',()=>changePerformance('economy'));
+    $("labFastButton").addEventListener('click',()=>changePerformance('fast'));
     $("labBatchStateButton").addEventListener("click", () => state.batch && changeState(state.batch.id, state.batch.status));
     $("labSort").addEventListener("change", () => {state.resultPage = 0; closeDetail(false); renderResults(); updateControls();});
     $("labResultPrevious").addEventListener("click", () => {if (state.resultPage > 0) {state.resultPage--; closeDetail(false); renderResults(); updateControls();}});

@@ -19,6 +19,7 @@ from pc28touzhu.domain.rule_lab_comparison import risk_variants
 SHANGHAI = timezone(timedelta(hours=8))
 MAX_TOTAL_EXPERIMENTS = 500
 MAX_RUNNING_EXPERIMENTS = 100
+LEGACY_REPLAY_NOTICE = '此成绩由旧版按轮回放生成：时间预算耗尽时可能漏过入场机会，需复核后再用于方案比较。原成绩已保留。'
 
 
 class RuleLabError(Exception):
@@ -210,6 +211,12 @@ class RuleLabStore:
         return row
 
     @staticmethod
+    def _replay_review_required(row):
+        return (row['mode']=='backtest' and row['processed_issues']>0
+                and _load(row['risk_policy_json']).get('mode')=='round'
+                and _load(row['cursor_json']).get('replay_scheduler_version',1)<2)
+
+    @staticmethod
     def _batch(c, row):
         count = c.execute('SELECT COUNT(*) FROM lab_experiments WHERE batch_id=?',(row['id'],)).fetchone()[0]
         relation=c.execute('SELECT study_id,variant_key FROM lab_study_batches WHERE batch_id=?',(row['id'],)).fetchone()
@@ -218,7 +225,9 @@ class RuleLabStore:
                     start_date=row['start_date'],end_date=row['end_date'],status=row['status'],phase=row['phase'],
                     experiment_count=count,processed_issues=row['processed_issues'],total_issues=row['total_issues'],
                     created_at=row['created_at'],started_at=row['started_at'],updated_at=row['updated_at'],error=row['error'],
-                    skip_counts=_load(row['skip_counts_json']),history_notice='历史回放使用现存预测记录，不能证明历史预测版本从未修改。' if row['mode']=='backtest' else '',
+                    skip_counts=_load(row['skip_counts_json']),
+                    history_notice=(LEGACY_REPLAY_NOTICE+' ' if RuleLabStore._replay_review_required(row) else '')+('历史回放使用现存预测记录，不能证明历史预测版本从未修改。' if row['mode']=='backtest' else ''),
+                    review_required=RuleLabStore._replay_review_required(row),
                     risk_policy=_load(row['risk_policy_json']),risk_editable=RuleLabStore._risk_editable(c,row),
                     study_id=relation['study_id'] if relation else None,variant_key=relation['variant_key'] if relation else None)
 
@@ -381,7 +390,7 @@ class RuleLabStore:
 
     @staticmethod
     def _study(c,row):
-        children=[];signatures=[];coverage=[];conflict=False
+        children=[];signatures=[];coverage=[];conflict=False;review_required=False
         for child in c.execute('''SELECT b.*,s.variant_key,s.position,s.label,s.change_json FROM lab_study_batches s
             JOIN lab_batches b ON b.id=s.batch_id WHERE s.study_id=? ORDER BY s.position''',(row['id'],)):
             evidence=_load(child['cursor_json']).get('evidence') or {}
@@ -391,12 +400,14 @@ class RuleLabStore:
             signatures.append((evidence.get('digest'),evidence.get('count',0),evidence.get('warm_count',0),
                                evidence.get('first_issue'),evidence.get('last_issue'),json.dumps(_load(child['skip_counts_json']),sort_keys=True)))
             conflict|=bool(evidence.get('conflict'))
+            review_required|=RuleLabStore._replay_review_required(child)
             coverage.append(dict(variant_key=child['variant_key'],first_issue=evidence.get('first_issue'),last_issue=evidence.get('last_issue'),
                 count=evidence.get('count',0),warm_count=evidence.get('warm_count',0),digest=evidence.get('digest'),
                 skip_counts=_load(child['skip_counts_json'])))
         complete=sum(child['status']=='completed' for child in children)
         comparable=bool(children and complete==len(children) and not conflict and signatures[0][0] and signatures[0][1]>0 and len(set(signatures))==1)
         reason='' if comparable else '全部方案完成后才计算相对基准差异' if complete<len(children) else '输入存在修订或冲突，不可直接比较' if conflict else '实际输入指纹或日期覆盖不一致，或没有有效历史样本'
+        if review_required:comparable=False;reason=LEGACY_REPLAY_NOTICE
         capacity=RuleLabStore._capacity(c)
         needed=next((child['experiment_count'] for child in children if child['status']!='completed'),0)
         waiting=''
@@ -404,7 +415,7 @@ class RuleLabStore:
             waiting='等待其他批次释放运行额度（需要%s，当前剩余%s）'%(needed,capacity['remaining_running']) if needed>capacity['remaining_running'] else '等待队列调度'+('并冻结共同历史截止' if not row['cutoff_issue'] else '')
         return dict(id=row['id'],name=row['name'],source_batch_id=row['source_batch_id'],status=row['status'],created_at=row['created_at'],
                     updated_at=row['updated_at'],cutoff_issue=row['cutoff_issue'],cutoff_at=row['cutoff_at'],error=row['error'],waiting_reason=waiting,
-                    children=children,completed_children=complete,total_children=len(children),comparable=comparable,comparison_reason=reason,actual_coverage=coverage)
+                    children=children,completed_children=complete,total_children=len(children),comparable=comparable,comparison_reason=reason,actual_coverage=coverage,review_required=review_required)
 
     def create_study(self,user_id,source_batch_id,name,request_id,*,now):
         if type(source_batch_id) is not int or source_batch_id<=0 or not isinstance(name,str) or not 1<=len(name.strip())<=80:

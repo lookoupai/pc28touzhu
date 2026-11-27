@@ -15,6 +15,36 @@ from tests.test_rule_lab_risk import policy
 
 
 class RuleLabWorkerTests(unittest.TestCase):
+    def test_budget_expiring_before_due_settlement_does_not_skip_next_entry(self):
+        for i in range(8):
+            opened=self.opened+timedelta(seconds=210*i)
+            self.fixture.draw(1100+i,opened)
+            self.fixture.prediction(1100+i,opened)
+        now=stamp(self.opened+timedelta(hours=1))
+        p=policy();p['round'].update(profit_target=1,loss_limit=10);p['day']['enabled']=False
+        cfg=normalize_batch_payload(dict(name='budget',mode='backtest',predictor_id=1,metric='big_small',
+            start_date='2026-11-26',end_date='2026-11-26',risk_policy=p),now=now)
+        def replay(path,interrupt):
+            store=RuleLabStore(path);store.initialize()
+            batch=store.create_batch(1,cfg,'source',build_experiments('big_small'),now=now)
+            store.set_batch_state(1,batch['id'],'running',now=now)
+            triggered=set()
+            class YieldingWorker(RuleLabWorker):
+                def _settle_pending(worker,batch_id,*,available_at=None):
+                    # Exhaustion can happen between the outer remaining check and settlement.
+                    if interrupt and available_at and available_at not in triggered and store.get_pending_decisions(batch_id):
+                        triggered.add(available_at);worker._deadline=0
+                    return super()._settle_pending(batch_id,available_at=available_at)
+            for _ in range(40):
+                YieldingWorker(store,self.source).tick(now=now)
+                if store.get_batch(1,batch['id'])['status']=='completed':break
+            self.assertEqual(store.get_batch(1,batch['id'])['status'],'completed')
+            return store.list_experiments(1,batch['id']),triggered
+        expected,_=replay(Path(self.tmp.name)/'baseline.db',False)
+        actual,triggered=replay(Path(self.tmp.name)/'yielding.db',True)
+        self.assertTrue(triggered)
+        self.assertEqual(actual,expected)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.fixture = SourceFixture(Path(self.tmp.name) / 'source.db')

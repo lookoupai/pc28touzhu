@@ -1395,6 +1395,7 @@ class PlatformApiApplication:
             study_match=re.fullmatch(r"/studies/([1-9][0-9]{0,17})(?:/(state|export\.csv))?",suffix)
             if suffix in ("", "/options"):
                 expected = "GET"
+            elif suffix=='/performance':expected=method if method in ('GET','POST') else 'GET'
             elif suffix == "/batches":
                 expected = "POST"
             elif suffix=="/studies":expected=method if method in ('GET','POST') else 'GET'
@@ -1420,6 +1421,8 @@ class PlatformApiApplication:
                 payload = service.overview(user_id)
             elif suffix == "/options":
                 payload = service.options(user_id)
+            elif suffix=='/performance':
+                payload=service.set_performance(_read_json_body(environ)) if method=='POST' else service.performance()
             elif suffix == "/batches":
                 payload = service.create_batch(user_id, _read_json_body(environ))
                 return _json_response(start_response, 201, payload, headers)

@@ -29,6 +29,28 @@ const root = path.resolve(__dirname, '..');
         await page.getByRole('heading',{name:'规则实验室',exact:true}).waitFor();
         await page.locator('#labPredictor option[value="1"]').waitFor({state:'attached'});
         await page.getByText('还没有实验批次。先选择来源与玩法生成候选。',{exact:true}).waitFor();
+        await page.waitForFunction(()=>!document.getElementById('labRefreshButton').disabled);
+        assert.match(await page.locator('#labPerformanceStatus').innerText(),/省资源.*0\.2 核/);
+        assert.equal(await page.locator('#labEconomyButton').isDisabled(),true);
+        await page.locator('#labFastButton').click();
+        await page.locator('#labPerformanceStatus').filter({hasText:'当前生效：加速'}).waitFor();
+        assert.match(await page.locator('#labPerformanceStatus').innerText(),/1 核/);
+        assert.equal(await page.locator('#labFastButton').getAttribute('aria-pressed'),'true');
+        await page.locator('#labEconomyButton').click();
+        await page.locator('#labPerformanceStatus').filter({hasText:'当前生效：省资源'}).waitFor();
+        // A lost mutation response is reconciled with GET, never retried as a second POST.
+        let modePosts=0;
+        await page.route('**/api/platform/rule-lab/performance',async route=>{
+            if(route.request().method()==='POST'){modePosts++;await route.fetch();await route.abort();}
+            else await route.continue();
+        });
+        await page.locator('#labFastButton').click();
+        await page.locator('#labPerformanceFeedback').filter({hasText:'已重新核对'}).waitFor();
+        assert.equal(modePosts,1);
+        assert.equal(await page.locator('#labFastButton').getAttribute('aria-pressed'),'true');
+        await page.unroute('**/api/platform/rule-lab/performance');
+        await page.locator('#labEconomyButton').click();
+        await page.locator('#labPerformanceStatus').filter({hasText:'当前生效：省资源'}).waitFor();
         assert.equal(await page.locator('#labGenerator').getAttribute('open'),'');
         assert.match(await page.locator('#labCandidatePreview').innerText(),/50/);
         await page.getByLabel('投注玩法',{exact:true}).selectOption('combo');

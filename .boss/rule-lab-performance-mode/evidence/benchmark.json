@@ -1,0 +1,27 @@
+{
+  "economy": {
+    "mode": "economy",
+    "periods": 180,
+    "experiments": 78,
+    "wall_seconds": 55.519,
+    "cpu_seconds": 10.499,
+    "rss_peak_kib": 60444,
+    "ticks": 24,
+    "digest": "07f0db703051c819bba7a60421924fb0e0b98a60e548432faa91416d5a89782b",
+    "cpu_max": "20000 100000"
+  },
+  "fast": {
+    "mode": "fast",
+    "periods": 180,
+    "experiments": 78,
+    "wall_seconds": 10.877,
+    "cpu_seconds": 9.021,
+    "rss_peak_kib": 64248,
+    "ticks": 5,
+    "digest": "07f0db703051c819bba7a60421924fb0e0b98a60e548432faa91416d5a89782b",
+    "cpu_max": "100000 100000"
+  },
+  "speedup": 5.1,
+  "results_identical": true,
+  "scope": "180 synthetic periods, 78 combo experiments, actual separate cgroup quotas; not a complete two-month production timing"
+}

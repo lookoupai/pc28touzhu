@@ -107,6 +107,10 @@
 #labMonthly h3 { margin-top: 0; }
 #labMonthly h3.lab-report-subtitle { margin-top: var(--lab-xl); }
 .lab-initial-capital { max-width: 420px; margin-bottom: var(--lab-lg); }
+.lab-performance { border-top: thin solid var(--line); padding-top: var(--lab-lg); margin: var(--lab-lg) 0; }
+.lab-performance h3 { margin-top: 0; }
+.lab-performance .lab-button[aria-pressed=true] { border-color: var(--primary); background: var(--lab-success-bg); color: var(--lab-success); opacity: 1; }
+.lab-performance p { margin-top: var(--lab-sm); }
 /* Breakpoint values map to ui-design.json tokens.breakpoints. */
 @media (max-width: 960px) {
     .lab-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

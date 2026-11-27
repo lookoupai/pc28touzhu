@@ -244,6 +244,20 @@ class ComparisonWorkerTests(unittest.TestCase):
         self.assertFalse(state['comparable'])
         self.assertTrue(all(r['delta_net_profit'] is None for r in self.store.study_comparison(1,state['id'])['rows']))
 
+    def test_old_scheduler_results_remain_visible_but_require_review(self):
+        state=self.run_to_end(200);self.assertTrue(state['comparable'])
+        bid=state['children'][0]['batch_id']
+        before=self.store.list_experiments(1,bid)
+        with sqlite3.connect(self.store.db_path) as c:
+            cursor=json.loads(c.execute('SELECT cursor_json FROM lab_batches WHERE id=?',(bid,)).fetchone()[0])
+            cursor.pop('replay_scheduler_version')
+            c.execute('UPDATE lab_batches SET cursor_json=? WHERE id=?',(json.dumps(cursor),bid))
+        current=self.store.study_comparison(1,state['id'])
+        self.assertTrue(current['study']['review_required']);self.assertFalse(current['study']['comparable'])
+        self.assertIn('需复核',self.store.get_batch(1,bid)['history_notice'])
+        self.assertTrue(all(row['delta_net_profit'] is None for row in current['rows']))
+        self.assertEqual(self.store.list_experiments(1,bid),before)
+
     def test_pending_input_moved_after_cutoff_errors_instead_of_waiting_forever(self):
         RuleLabWorker(self.store,self.source,page_size=1).tick(now=self.now)
         child=self.store.get_study(1,self.study['id'])['children'][0]['batch_id']

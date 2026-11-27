@@ -30,14 +30,29 @@ def _csv_cell(value):
 
 
 class RuleLabService:
-    def __init__(self, store=None, source=None, platform_repository=None):
+    def __init__(self, store=None, source=None, platform_repository=None, resources=None):
         self.store = store if store is not None else RuleLabStore()
         if source is None:
             from pc28touzhu.services.rule_lab_source import RuleLabSource
             source = RuleLabSource()
         self.source = source
         self.platform_repository=platform_repository
+        self.resources=resources
         self.store.initialize()
+
+    def performance(self):
+        if self.resources is None:
+            from pc28touzhu.services.rule_lab_resources import RuleLabResources
+            self.resources=RuleLabResources()
+        return dict(performance=self.resources.status())
+
+    def set_performance(self,payload):
+        if not isinstance(payload,dict) or set(payload)!={'mode'}:
+            raise RuleLabError('invalid_input','请提供运行速度mode')
+        if not isinstance(payload['mode'],str) or payload['mode'] not in ('economy','fast'):
+            raise RuleLabError('invalid_input','运行速度只能选择省资源或加速')
+        self.performance()
+        return dict(performance=self.resources.set_mode(payload['mode']))
 
     def _risk_presets(self,user_id):
         if self.platform_repository is None or user_id is None:return []

@@ -1,0 +1,15 @@
+#!/bin/sh
+# Install this standalone file root:root 0755 outside the writable application tree.
+# Only two fixed operations are delegated; no project imports, shell input or paths.
+set -eu
+umask 077
+[ "$#" -eq 1 ] || exit 64
+case "$1" in
+    economy) quota='CPUQuota=20%' ;;
+    fast) quota='CPUQuota=100%' ;;
+    *) exit 64 ;;
+esac
+exec /usr/bin/flock -x -w 3 /run/pc28-rule-lab-resource.lock \
+    /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C \
+    /usr/bin/timeout 6s /usr/bin/systemctl --no-ask-password set-property \
+    pc28touzhu-rule-lab.service "$quota"

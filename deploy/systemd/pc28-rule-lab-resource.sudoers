@@ -1,0 +1,3 @@
+# Install root:root 0440 as /etc/sudoers.d/pc28-rule-lab-resource.
+# The helper and every parent directory must remain owned and writable only by root.
+www ALL=(root) NOPASSWD: /usr/local/libexec/pc28-rule-lab-resource-mode economy, /usr/local/libexec/pc28-rule-lab-resource-mode fast

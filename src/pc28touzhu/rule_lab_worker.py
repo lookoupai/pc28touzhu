@@ -236,7 +236,7 @@ class RuleLabWorker:
         predictions={**predictions,'items':self._asof_predictions(predictions['items'],study)}
         before = str(int(first) - 1)
         cursor = dict(work['batch']['cursor'])
-        cursor.update(version=1, replay_max_issue=latest['issue_no'], scan_after_issue=before if len(before) == len(first) else '',
+        cursor.update(version=1, replay_scheduler_version=2, replay_max_issue=latest['issue_no'], scan_after_issue=before if len(before) == len(first) else '',
                       history_floor_issue=warm['items'][0]['issue_no'] if warm['items'] else first,warm_before_issue=first)
         skips = Counter(warm['skip_counts']) + Counter(predictions['skip_counts'])
         if not self._commit(work, cursor=cursor, draws=warm['items'], predictions=predictions['items'],
@@ -320,6 +320,11 @@ class RuleLabWorker:
             round_mode=batch.get('risk_policy',{}).get('mode')=='round'
             if round_mode:
                 self._settle_pending(batch_id,available_at=decision_at)
+                # If the budget expired before due settlements could finish, retry
+                # this same draw next tick. Advancing it would silently suppress an
+                # otherwise valid entry because the prior decision is still pending.
+                if not self._remaining():
+                    return
                 work=self.store.get_work_item(batch_id)
                 if work['batch']['status']!='running':return
                 cursor=dict(work['batch']['cursor'])

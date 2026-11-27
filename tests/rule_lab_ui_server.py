@@ -70,7 +70,8 @@ def main():
                 return [dict(id=7,user_id=user_id,name='参考方案（不同来源）',strategy_v2=dict(play_filter=dict(mode='all'),
                     staking_policy=dict(mode='fixed',fixed_amount=9),risk_control=dict(enabled=True,profit_target=5,loss_limit=5)))] if user_id==admin['id'] else []
         from pc28touzhu.services.rule_lab_service import RuleLabService
-        app = PlatformApiApplication(repo, "offline-only", secret,rule_lab_service=RuleLabService(platform_repository=Presets()))
+        from tests.test_rule_lab_resources import FakeResources
+        app = PlatformApiApplication(repo, "offline-only", secret,rule_lab_service=RuleLabService(platform_repository=Presets(),resources=FakeResources()))
 
         def local_app(environ, start_response):
             if environ.get('PATH_INFO')=='/__fixture/study-tick' and environ.get('REQUEST_METHOD')=='POST':

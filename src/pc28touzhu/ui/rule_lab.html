@@ -18,6 +18,16 @@ __APP_SHELL__
     <section class="lab-panel" aria-label="后台与资源状态">
         <dl id="labWorkerSummary" class="lab-summary"><div><dt>后台状态</dt><dd>读取中…</dd></div></dl>
         <p id="labWorkerMessage" class="lab-muted"></p>
+        <div class="lab-performance" aria-labelledby="labPerformanceHeading">
+            <h3 id="labPerformanceHeading">运行速度</h3>
+            <div class="lab-actions" role="group" aria-label="模拟运行速度">
+                <button id="labEconomyButton" class="lab-button" type="button" aria-pressed="false" disabled>省资源 · 0.2 核</button>
+                <button id="labFastButton" class="lab-button" type="button" aria-pressed="false" disabled>加速 · 1 核</button>
+            </div>
+            <p id="labPerformanceStatus" class="lab-muted" role="status">正在读取实际运行档位…</p>
+            <p class="lab-muted">全服务共用，切换即生效并保存；后台进度继续，两档内存上限均为256 MiB。核数是CPU额度上限，空闲时不会占满。加速会增加计算占用，实际提速取决于数据和服务器负载。</p>
+            <div id="labPerformanceFeedback" class="lab-feedback" role="status"></div>
+        </div>
         <details class="lab-budget"><summary>资源预算与数据保留</summary><p id="labBudgetDescription">读取中…</p><p>模拟在后台继续运行，无需保持页面打开。旧明细清理后，累计成绩仍会保留。</p></details>
     </section>
 
