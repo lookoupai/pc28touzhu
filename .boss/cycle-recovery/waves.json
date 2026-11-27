@@ -449,8 +449,8 @@
         "CM-11"
       ],
       "stopCondition": "QA没有新失败时记录边界验证结果，不伪造RED；有新增失败回派原owner。发布另需一致备份、DB副本幂等/原数据保持/外键与quick_check证据及父代理明确放行。",
-      "status": "in_progress",
-      "progressNote": "独立QA与代码审查完成；最终副本演练通过。仅副本验证器的精确重建/核心哈希证据收尾，生产部署等待父代理冻结提交SHA后派发；ship尚未完成。",
+      "status": "done",
+      "progressNote": "02614e5 已 released_verified；生产迁移、历史轮1937摘离、自然窗口新轮1968与配对备份核验完成。发布过程见 deploy-report.md。",
       "earlyParallelPreparation": {
         "after": "W2-cycle-lifecycle",
         "allowed": [
@@ -485,8 +485,30 @@
           "status": "passed",
           "duration_seconds": 224.711
         },
-        "remaining": "validator-only exact reconstruction/core hash evidence finishing; production deployment pending frozen root SHA",
-        "production_ship": "pending"
+        "remaining": "none",
+        "production_ship": "released_verified",
+        "release_sha": "02614e5",
+        "production_verification": {
+          "paired_backup": "verified",
+          "original_tables_unchanged": 39,
+          "original_table_hashes": "identical",
+          "archived_run_id": 1937,
+          "archive_count": 1,
+          "reserved_stake": 13,
+          "spendable_balance": 9.39,
+          "old_jobs_events_money_configuration_quotas": "unchanged",
+          "services_active": 9,
+          "rule_lab_pid": "unchanged",
+          "natural_rule_id": 13,
+          "natural_new_run_id": 1968,
+          "natural_started_at_utc": "2026-11-27T06:46:05Z",
+          "natural_started_at_shanghai": "2026-11-27T14:46:05+08:00",
+          "first_combined_send": "delivered",
+          "starts_today": 1,
+          "old_unconfirmed_blocks_new_run": false,
+          "outage_seconds": 291.965,
+          "outage_note": "runuser PATH 中脚本失败发生在迁移前，改绝对路径后恢复；详见发布记录"
+        }
       }
     }
   ]
