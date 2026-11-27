@@ -29,7 +29,11 @@ def month_date(index):
 def report_window(batch, *, now):
     start = (date.fromisoformat(batch['start_date']) if batch['mode'] == 'backtest'
              else local_time(batch.get('started_at') or batch['created_at']).date())
-    end = date.fromisoformat(batch['end_date']) if batch['mode'] == 'backtest' else local_time(now).date()
+    continuation = batch.get('continuation') or {}
+    end_text = batch.get('end_date')
+    if continuation.get('enabled'):
+        end_text = continuation.get('effective_end_date') or continuation.get('calculated_through_date') or end_text
+    end = date.fromisoformat(end_text) if batch['mode'] == 'backtest' else local_time(now).date()
     end = max(start, end)
     first = month_date(max(month_index(start), month_index(end) - MAX_MONTHS + 1))
     return start, end, first
@@ -43,6 +47,23 @@ def monthly_report(batch, stats, daily, *, now, observed_at=None, cutoff_at=None
     first_observed = local_time(first_observed_at)
     pending = local_time(pending_since)
     started = local_time(batch.get('started_at'))
+    continuation = batch.get('continuation') or {}
+    continuous = bool(continuation.get('enabled'))
+    completed_through = (date.fromisoformat(continuation['completed_through_date'])
+                         if continuous and continuation.get('completed_through_date') else None)
+    pending_counts = continuation.get('pending_counts') if continuous else None
+    skips = dict(batch.get('skip_counts', {}))
+    if (batch.get('cursor',{}).get('evidence') or {}).get('conflict'):
+        skips['input_conflict']=max(1,skips.get('input_conflict',0))
+    coverage_quality = continuation.get('coverage_quality') if continuous else None
+    if skips.get('input_conflict'):
+        coverage_quality = 'conflict'
+    elif skips.get('input_expired') or continuation.get('state') == 'archive_gap':
+        coverage_quality = 'archive_gap'
+    elif any(skips.values()) and coverage_quality in (None, 'complete'):
+        coverage_quality = 'known_skips'
+    coverage_quality = coverage_quality or 'complete'
+    comparable = bool(continuation.get('comparable', True))
     rows = []
     by_month = {}
     for day in daily:
@@ -72,19 +93,27 @@ def monthly_report(batch, stats, daily, *, now, observed_at=None, cutoff_at=None
         closed = bool(observed and observed >= boundary)
         if batch['status'] == 'completed' and cutoff and cutoff >= boundary and end >= month_end:
             closed = True
-        full = bool(processed and full_start and end >= month_end and closed)
-        if pending and pending < boundary:
-            full = False
+        if continuous:
+            if 'completed_through_date' in continuation:
+                closed = bool(completed_through and completed_through >= month_end)
+            closed = closed and local_time(now) >= boundary
+        time_complete = bool(processed and full_start and end >= month_end and closed)
+        # 连续实验提供按目标开奖月分组的准确 pending 数，不把旧月迟到结果记到后续每个月。
+        pending_count = (int(pending_counts.get(key, 0)) if isinstance(pending_counts, dict)
+                         else int(bool(pending and pending < boundary)))
+        full = time_complete and pending_count == 0
         if full:
             status = 'complete' if count else 'no_samples'
         elif not count and (not observed or observed.date() < month_start):
             status = 'not_replayed' if batch['mode'] == 'backtest' else 'not_observed'
-        elif pending and pending < boundary:
+        elif pending_count:
             status = 'pending'
         else:
             status = 'partial'
         rows.append(dict(month=key,range_start=max(start,month_start).isoformat(),range_end=min(end,month_end).isoformat(),
-            status=status,complete_month=full,eligible=full and count>0,settled_count=count,
+            status=status,complete_month=full,time_complete=time_complete,pending_count=pending_count,
+            coverage_quality=coverage_quality,comparable=comparable,
+            eligible=full and count>0,settled_count=count,
             hit_count=sum(d['hit_count'] for d in days),refund_count=sum(d['refund_count'] for d in days),
             miss_count=sum(d['miss_count'] for d in days),stake_total=stake/100,net_profit=net/100,
             roi_percent=round(net/stake*100,2) if stake else None,betting_days=len(betting_days),
@@ -99,9 +128,6 @@ def monthly_report(batch, stats, daily, *, now, observed_at=None, cutoff_at=None
     for row in rows:
         streak = streak+1 if row['eligible'] and row['net_profit']<0 else 0
         longest = max(longest, streak)
-    skips = dict(batch.get('skip_counts', {}))
-    if (batch.get('cursor',{}).get('evidence') or {}).get('conflict'):
-        skips['input_conflict']=max(1,skips.get('input_conflict',0))
     # Daily totals remain available after individual decisions are pruned. Preserve
     # the actual accumulated PnL at the start of a truncated reporting window.
     curve_days=sorted((d for d in daily if d['settled_count']>0),key=lambda d:d['stat_date'])
@@ -113,6 +139,12 @@ def monthly_report(batch, stats, daily, *, now, observed_at=None, cutoff_at=None
     full_curve=(month_index(first)==month_index(start) and opening_net==0
                 and sum(d['settled_count'] for d in curve_days)==stats['settled_count'])
     return dict(timezone='Asia/Shanghai',rows=rows,
+        time_complete=bool(batch.get('processed_issues',0)>0 and observed and batch['status']=='completed'
+                           and local_time(now).date()>end
+                           and (not continuous or 'completed_through_date' not in continuation
+                                or completed_through and completed_through>=end)),
+        pending_count=sum(int(value) for value in pending_counts.values()) if isinstance(pending_counts,dict) else int(bool(pending)),
+        coverage_quality=coverage_quality,comparable=comparable,
         window=dict(start=first.isoformat(),end=end.isoformat(),truncated=month_index(first)>month_index(start),max_months=MAX_MONTHS),
         observed_through=observed.isoformat() if observed else None,
         input_warnings={k:v for k,v in skips.items() if v},

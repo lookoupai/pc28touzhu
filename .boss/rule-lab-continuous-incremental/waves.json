@@ -1,0 +1,509 @@
+{
+  "feature": "rule-lab-continuous-incremental",
+  "contractSource": ".boss/rule-lab-continuous-incremental/plan.md#42-稳定内部契约",
+  "defaultCwd": "/www/wwwroot/pc28touzhu-lab-continuation",
+  "owners": {
+    "Data": [
+      "src/pc28touzhu/services/rule_lab_store.py",
+      "src/pc28touzhu/domain/rule_lab_continuation.py",
+      "tests/test_rule_lab_series.py",
+      "tests/test_rule_lab_store.py",
+      "src/pc28touzhu/services/rule_lab_source.py",
+      "src/pc28touzhu/services/rule_lab_archive.py",
+      "tests/test_rule_lab_archive.py",
+      "tests/test_rule_lab_continuation.py",
+      "src/pc28touzhu/services/rule_lab_series.py",
+      "tests/test_rule_lab_risk.py",
+      "tests/test_rule_lab_comparison.py"
+    ],
+    "Engine": [
+      "src/pc28touzhu/rule_lab_worker.py",
+      "tests/test_rule_lab_continuous_worker.py"
+    ],
+    "API": [
+      "src/pc28touzhu/services/rule_lab_service.py",
+      "src/pc28touzhu/api/app.py",
+      "tests/test_rule_lab_continuous_api.py",
+      "src/pc28touzhu/domain/rule_lab_monthly.py",
+      "tests/test_rule_lab_continuous_monthly.py",
+      "docs/RULE_LAB.md"
+    ],
+    "UI": [
+      "tests/rule_lab_continuation_ui_server.py",
+      "tests/test_rule_lab_continuation_ui.cjs",
+      "src/pc28touzhu/ui/rule_lab.js",
+      "src/pc28touzhu/ui/rule_lab.html",
+      "src/pc28touzhu/ui/rule_lab.css",
+      "tests/test_rule_lab_ui.cjs"
+    ],
+    "QA": [
+      "tests/test_rule_lab_continuous_qa.py",
+      ".boss/rule-lab-continuous-incremental/qa-report.md"
+    ],
+    "DevOps": [
+      ".boss/rule-lab-continuous-incremental/deploy-report.md"
+    ]
+  },
+  "waves": [
+    {
+      "id": "wave-1-data",
+      "title": "W1 系列/档案/检查点",
+      "scope": "schema4,baseline,immutable inputs,coverage,idempotency,quota",
+      "tasks": [
+        "T-001",
+        "T-002",
+        "T-003",
+        "T-004",
+        "T-011"
+      ],
+      "writeSet": [
+        "src/pc28touzhu/domain/rule_lab_continuation.py",
+        "src/pc28touzhu/services/rule_lab_archive.py",
+        "src/pc28touzhu/services/rule_lab_series.py",
+        "src/pc28touzhu/services/rule_lab_source.py",
+        "src/pc28touzhu/services/rule_lab_store.py",
+        "tests/test_rule_lab_archive.py",
+        "tests/test_rule_lab_comparison.py",
+        "tests/test_rule_lab_continuation.py",
+        "tests/test_rule_lab_risk.py",
+        "tests/test_rule_lab_series.py",
+        "tests/test_rule_lab_store.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_series",
+          "tests.test_rule_lab_archive",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_series",
+          "tests.test_rule_lab_archive",
+          "tests.test_rule_lab_store",
+          "tests.test_rule_lab_source",
+          "tests.test_rule_lab_continuation",
+          "-q"
+        ]
+      ],
+      "contractRows": [
+        "CM-001",
+        "CM-002",
+        "CM-003",
+        "CM-004",
+        "CM-005",
+        "CM-009"
+      ],
+      "stopCondition": "旧列变化、缺档伪装无预测、非原子水位或必要依赖被清理时停止，修复后再过门禁",
+      "dependsOn": [],
+      "status": "passed",
+      "verificationNote": "最终数据门禁及最后公平性补测通过",
+      "evidence": {
+        "finalTests": {
+          "count": 65,
+          "result": "passed",
+          "elapsedSeconds": 4.414
+        },
+        "lastFairnessTests": {
+          "count": 3,
+          "result": "passed",
+          "elapsedSeconds": 3.084
+        },
+        "source": "根代理最终验收结果"
+      }
+    },
+    {
+      "id": "wave-2-engine",
+      "title": "W2 连续回放与有界调度",
+      "scope": "event-time frontier,archive-only replay,capture,daily,study",
+      "tasks": [
+        "T-005",
+        "T-006"
+      ],
+      "writeSet": [
+        "src/pc28touzhu/rule_lab_worker.py",
+        "tests/test_rule_lab_continuous_worker.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_continuous_worker",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_continuous_worker",
+          "tests.test_rule_lab_worker",
+          "tests.test_rule_lab_risk",
+          "tests.test_rule_lab_comparison",
+          "-q"
+        ]
+      ],
+      "contractRows": [
+        "CM-003",
+        "CM-006",
+        "CM-007",
+        "CM-008",
+        "CM-009",
+        "CM-010"
+      ],
+      "stopCondition": "同前沿A+B与分段不一致、未来结算泄漏、重复记账、组输入不一致时停止；自动关闭阻止手动任务、关闭自动取消手动任务、调度器解暂停任一发生也停止",
+      "dependsOn": [
+        "wave-1-data"
+      ],
+      "status": "passed",
+      "evidence": {
+        "originalFinalTests": {
+          "count": 69,
+          "result": "passed",
+          "elapsedSeconds": 41.687,
+          "log": "/tmp/pc28-continuation-engine-final.log"
+        },
+        "engineSuiteAfterTwoFairnessCases": {
+          "count": 15,
+          "result": "passed",
+          "elapsedSeconds": 17.099
+        },
+        "source": "根代理最终验收结果"
+      },
+      "verificationNote": "原W2门禁及新增公平性后的Engine专测通过"
+    },
+    {
+      "id": "wave-3-product",
+      "title": "W3 API报告与UI闭环",
+      "scope": "strict API,cumulative/segment/monthly reports,long replay,desktop/mobile UI",
+      "tasks": [
+        "T-007",
+        "T-008",
+        "T-009",
+        "T-010",
+        "T-012"
+      ],
+      "writeSet": [
+        "docs/RULE_LAB.md",
+        "src/pc28touzhu/api/app.py",
+        "src/pc28touzhu/domain/rule_lab_monthly.py",
+        "src/pc28touzhu/services/rule_lab_service.py",
+        "src/pc28touzhu/ui/rule_lab.css",
+        "src/pc28touzhu/ui/rule_lab.html",
+        "src/pc28touzhu/ui/rule_lab.js",
+        "tests/rule_lab_continuation_ui_server.py",
+        "tests/test_rule_lab_continuation_ui.cjs",
+        "tests/test_rule_lab_continuous_api.py",
+        "tests/test_rule_lab_continuous_monthly.py",
+        "tests/test_rule_lab_ui.cjs"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_continuous_api",
+          "tests.test_rule_lab_continuous_monthly",
+          "-q"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_continuation_ui.cjs"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_continuous_api",
+          "tests.test_rule_lab_continuous_monthly",
+          "tests.test_rule_lab_api",
+          "tests.test_rule_lab_monthly",
+          "-q"
+        ],
+        [
+          "node",
+          "--check",
+          "src/pc28touzhu/ui/rule_lab.js"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_continuation_ui.cjs"
+        ]
+      ],
+      "contractRows": [
+        "CM-001",
+        "CM-004",
+        "CM-007",
+        "CM-010",
+        "CM-011",
+        "CM-012",
+        "CM-013"
+      ],
+      "stopCondition": "权限、幂等恢复、旧报告保护、跨月资金重测或手机主流程失败时停止；expected_revision被转整数或UI混淆自动开关与本段暂停时停止",
+      "dependsOn": [
+        "wave-1-data",
+        "wave-2-engine"
+      ],
+      "status": "passed",
+      "evidence": {
+        "apiTests": {
+          "count": 59,
+          "result": "passed",
+          "elapsedSeconds": 32.307
+        },
+        "newBrowserFlow": {
+          "result": "passed",
+          "log": "/tmp/pc28-continuation-ui-flow-final.log"
+        },
+        "existingRuleLabBrowser": {
+          "result": "passed",
+          "runner": "root"
+        },
+        "amountReplayBrowser": {
+          "result": "passed",
+          "runner": "root"
+        },
+        "source": "根代理最终验收结果"
+      },
+      "verificationNote": "API、新增实际浏览器流程及既有规则实验室/金额浏览器通过"
+    },
+    {
+      "id": "wave-4-qa",
+      "title": "W4 独立QA/副本/全回归",
+      "scope": "independent edge cases,production snapshot migration and append,resource/full regression",
+      "tasks": [
+        "T-013"
+      ],
+      "writeSet": [
+        ".boss/rule-lab-continuous-incremental/qa-report.md",
+        "tests/test_rule_lab_continuous_qa.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_continuous_qa",
+          "-q"
+        ]
+      ],
+      "redEvidencePolicy": "可在实现前准备独立反例；无新缺陷的验收场景复用W1-W3已记录红测，不人为破坏实现制造失败",
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "RULE_LAB_MIGRATION_SNAPSHOT=/tmp/pc28-continuation-baseline.db",
+          "RULE_LAB_READONLY_SOURCE_DB=/www/wwwroot/AITradingSimulator/pc28_predictor.db",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_continuous_qa",
+          "-q"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tests",
+          "-q"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_ui.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_amount_ui.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_continuation_ui.cjs"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "CM-001",
+        "CM-002",
+        "CM-003",
+        "CM-004",
+        "CM-005",
+        "CM-006",
+        "CM-007",
+        "CM-008",
+        "CM-009",
+        "CM-010",
+        "CM-011",
+        "CM-012",
+        "CM-013",
+        "CM-014"
+      ],
+      "stopCondition": "R1-R8未关闭、旧列hash变化、26IDs变化、下一期错误、资源超限时不得发布",
+      "dependsOn": [
+        "wave-1-data",
+        "wave-2-engine",
+        "wave-3-product"
+      ],
+      "status": "passed",
+      "verificationNote": "实际1158项完整套件通过；最后变更后238项实验室回归和独立QA通过；未宣称未运行的1161项合并全量",
+      "evidence": {
+        "rootFullSuite": {
+          "count": 1158,
+          "result": "passed",
+          "elapsedSeconds": 328.548
+        },
+        "allRuleLabAfterFinalFairnessChanges": {
+          "count": 238,
+          "result": "passed",
+          "elapsedSeconds": 116.141,
+          "skipped": 0,
+          "includes": [
+            "只读生产副本",
+            "快照测试"
+          ]
+        },
+        "independentQa": {
+          "count": 10,
+          "result": "passed",
+          "elapsedSeconds": 39.141,
+          "memoryLimitMiB": 256,
+          "peakMemoryMiB": 104,
+          "reportState": "finalizing"
+        },
+        "source": "根代理最终验收结果"
+      }
+    },
+    {
+      "id": "wave-5-release",
+      "title": "W5 上线与只读核验",
+      "scope": "authorized additive rollout with outside-budget backup and GET checks",
+      "tasks": [
+        "T-014"
+      ],
+      "writeSet": [
+        ".boss/rule-lab-continuous-incremental/deploy-report.md"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_series",
+          "tests.test_rule_lab_continuous_worker",
+          "-q"
+        ]
+      ],
+      "redEvidencePolicy": "复用W1/W2已保存的红测记录，不在生产运行红测",
+      "greenGates": [
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "manualGates": [
+        "仅实验库一致备份放预算外",
+        "schema4加法迁移，原列指纹与quick_check/FK正常",
+        "API及实验worker正常，1core/256MiB不变",
+        "GET新入口/旧成绩正常；默认未启用全部现有实验",
+        "实际执行器心跳健康；未发送消息或投注"
+      ],
+      "contractRows": [
+        "CM-014"
+      ],
+      "stopCondition": "备份/迁移/健康核验失败或意外自动启用时停止扩展；不得旧备份覆盖已产生新成绩",
+      "dependsOn": [
+        "wave-4-qa"
+      ],
+      "status": "pending",
+      "verificationNote": "发布尚待执行；不得标记完成"
+    }
+  ],
+  "ownerAgents": {
+    "Data": "/root/continuation_storage"
+  },
+  "coordinatedSubgroups": [
+    {
+      "owner": "Data",
+      "name": "storage",
+      "agent": "/root/continuation_storage",
+      "writeSet": [
+        "src/pc28touzhu/domain/rule_lab_continuation.py",
+        "src/pc28touzhu/services/rule_lab_series.py",
+        "src/pc28touzhu/services/rule_lab_store.py",
+        "tests/test_rule_lab_comparison.py",
+        "tests/test_rule_lab_continuation.py",
+        "tests/test_rule_lab_risk.py",
+        "tests/test_rule_lab_series.py",
+        "tests/test_rule_lab_store.py"
+      ]
+    },
+    {
+      "owner": "Data",
+      "name": "archive",
+      "assignment": "原archive子代理平台并发限制中断；确认子代理闲置后由storage接回唯一写权，无并行写者",
+      "writeSet": [
+        "src/pc28touzhu/services/rule_lab_archive.py",
+        "src/pc28touzhu/services/rule_lab_source.py",
+        "tests/test_rule_lab_archive.py"
+      ],
+      "agent": "/root/continuation_storage"
+    }
+  ],
+  "dispatchPolicy": "Engine/API/UI 在 W1 绿门禁前只准备独立红测；生产代码实现等待 W1 通过。Data 两子组只写各自互斥文件。",
+  "semanticContracts": {
+    "compute_enabled": "仅控制每日自动续算；不是显式手动append前置",
+    "manual_append": "capture_enabled=true且compute_enabled=false时仍执行本次手动任务，不开启自动；关闭自动不取消已提交手动任务",
+    "active_pause": "既有batch/study state控制当前段暂停/恢复；调度器不得自动解除用户暂停；capture开启时继续采集",
+    "expected_revision": {
+      "type": "opaque string",
+      "formats": [
+        "legacy:<statehash>",
+        "series:<id>:<rev>"
+      ],
+      "clientRule": "原样传回，不解析/递增/整数化；拒绝整数；内部worker CAS revision另行保留整数"
+    }
+  },
+  "authorizedNarrowEdits": {
+    "Data": {
+      "tests/test_rule_lab_risk.py": "仅schema断言3→4",
+      "tests/test_rule_lab_comparison.py": "仅schema断言3→4"
+    },
+    "UI": {
+      "tests/test_rule_lab_ui.cjs": "仅旧不支持追加日期帮助文案断言"
+    }
+  }
+}

@@ -13,9 +13,12 @@
     const pageSize = 20;
     const state = {options:null, overview:null, batch:null, experiments:[], selectedId:null, detailId:null, detailTrigger:null, resultPage:0,
         loading:false, mutating:false, exporting:false, readRevision:0, detailRevision:0, readAt:null, accessDenied:false,riskEditingId:null,
-        studies:[],study:null,studyRows:[],studyId:null,studyPage:0,preview:null,studyRequest:null,monthly:null,reportExperiment:null,performance:null};
+        studies:[],study:null,studyRows:[],studyId:null,studyPage:0,preview:null,studyRequest:null,monthly:null,reportExperiment:null,performance:null,continuation:null,continuationRevision:0};
     const studyNames={paused:'已暂停',queued:'等待运行额度',running:'比较中',completed:'全部完成',error:'比较异常',resource_paused:'资源限制暂停'};
     const monthStatus={complete:'完整月份',no_samples:'完整月份 · 无交易',partial:'部分月份',not_replayed:'尚未回放',not_observed:'尚未观察',pending:'等待结算'};
+    const continuationNames={disabled:'未启用',idle:'等待追加',catching_up:'正在保存后续数据',waiting_inputs:'等待输入齐备',running:'正在追加计算',paused:'本段计算已暂停',archive_gap:'输入档案有缺口',storage_paused:'存储预算暂停',source_unavailable:'来源暂不可用',error:'续算异常'};
+    const coverageNames={present:'已有预测',no_prediction:'已确认无可用预测',invalid_prediction:'预测格式无效',waiting:'等待核对',archive_gap:'输入已缺失',complete:'覆盖完整',known_skips:'包含已知跳过',conflict:'输入存在冲突'};
+    const segmentNames={queued:'等待计算',running:'计算中',paused:'计算已暂停',completed:'本段计算完成',error:'处理异常',resource_paused:'存储预算暂停'};
 
     function element(tag, text, className) {
         const node = document.createElement(tag);
@@ -178,11 +181,12 @@
     function hasSources() { return Boolean(state.options && state.options.source_available && state.options.predictors.length); }
     function locked() { return state.loading || state.mutating || state.accessDenied; }
     function hasRunningWork() {
-        return state.overview?.batches.some(batch => batch.status === 'running') ||
-            state.studies.some(study => ['running', 'queued'].includes(study.status));
+        const updating = item => item.continuation?.capture_enabled || item.continuation?.active_segment_id;
+        return state.overview?.batches.some(batch => batch.status === 'running' || updating(batch)) ||
+            state.studies.some(study => ['running', 'queued'].includes(study.status) || updating(study));
     }
     function isReadingOrEditing() {
-        return state.detailId !== null || !$("labEditRiskForm").hidden || !$("labComparisonPreview").hidden ||
+        return state.detailId !== null || state.continuation?.dirty || !$("labEditRiskForm").hidden || !$("labComparisonPreview").hidden ||
             Boolean(document.activeElement?.matches('input,textarea,[contenteditable="true"]'));
     }
     function updateRefreshStatus() {
@@ -222,6 +226,19 @@
         $("labStudyStateButton").disabled=locked()||!state.study||state.study.status==='completed';
         ['labReplayStake','labReplayRiskMode','labReplayCreateButton'].forEach(id=>$(id).disabled=locked()||state.batch?.mode!=='backtest'||!state.monthly);
         $("labStudyList").querySelectorAll('button').forEach(button=>button.disabled=locked());
+        ['labContinuationButton','labStudyContinuationButton','labContinuationRefresh','labContinuationMore','labContinuationPause'].forEach(id=>$(id).disabled=locked());
+        $("labContinuationClose").disabled=state.mutating;
+        const continuation=state.continuation,preview=continuation?.preview,summary=preview?.continuation;
+        const continuationLocked=locked()||!preview||!preview.eligible||Boolean(continuation?.unconfirmed);
+        $("labContinuationRetry").hidden=!continuation?.unconfirmed?.body;
+        $("labContinuationRetry").disabled=locked();
+        ['labContinuationCapture','labContinuationSave'].forEach(id=>$(id).disabled=continuationLocked);
+        $("labContinuationCompute").disabled=continuationLocked||!$("labContinuationCapture").checked;
+        $("labContinuationDaily").disabled=continuationLocked||!$("labContinuationCompute").checked;
+        const waiting=preview?.latest_request?.kind==='append'&&preview.latest_request.status==='waiting_inputs';
+        $("labContinuationAppend").disabled=continuationLocked||!summary?.capture_enabled||Boolean(summary?.active_segment_id)||waiting;
+        $("labContinuationEndDate").disabled=continuationLocked||Boolean(summary?.active_segment_id)||waiting;
+        $("labContinuationPanel").setAttribute('aria-busy',String(state.loading||state.mutating));
         [['labEconomyButton','economy'],['labFastButton','fast']].forEach(([id,mode])=>{
             $(id).disabled=locked()||!state.performance?.available||state.performance.mode===mode;
             $(id).setAttribute('aria-pressed',String(state.performance?.mode===mode));
@@ -270,6 +287,7 @@
             select.setAttribute("aria-label", "查看批次：" + batch.name);
             if (batch.id === state.selectedId) select.setAttribute("aria-current", "true");
             select.append(element("strong", batch.name), element("span", modeName(batch.mode) + " · " + (metricNames[batch.metric] || batch.metric) + " · " + (statusNames[batch.status] || batch.status) + " · " + batch.experiment_count + " 个版本 · 已处理 " + batch.processed_issues + " 期"), element("span", batch.mode === "backtest" ? batch.start_date + " 至 " + batch.end_date : "启动于 " + time(batch.started_at)));
+            if(batch.continuation?.enabled)select.append(element('span',continuationBrief(batch.continuation)));
             select.addEventListener("click", () => selectBatch(batch.id));
             row.append(select);
             if (batch.status !== "completed" && !batch.study_id) {
@@ -296,7 +314,7 @@
         const historical = $("labBatchForm").elements.mode.value === "backtest";
         $("labDates").hidden = !historical;
         $("labStartDate").required = historical; $("labEndDate").required = historical;
-        $("labModeHelp").textContent = historical ? "只回放所选日期区间，完成后不会自动延长；当前版本尚不支持追加日期续跑。" : "从启动后的可用信号开始持续观察；与历史回测分别记账，不接续旧批次成绩。";
+        $("labModeHelp").textContent = historical ? "先回放所选日期区间。完成后可在“增量续算”中保留后续数据、手动追加或开启每日自动续算。" : "从启动后的可用信号开始持续观察；与历史回测分别记账，不接续旧批次成绩。";
         if(riskEditors.labRisk)renderRiskPresets('labRisk',$("labMetric").value);
     }
     function clearFieldErrors() {
@@ -348,6 +366,8 @@
         $("labBatchError").textContent = batch.error || ""; $("labBatchError").hidden = !batch.error;
         $("labBatchRiskSummary").textContent=riskSummary(batch.risk_policy)+(batch.risk_policy?.source?.rule_id?" · 复制自 "+batch.risk_policy.source.rule_name+" / "+batch.risk_policy.source.route_name+" / "+batch.risk_policy.source.subscription_name:"");
         $("labEditRiskButton").hidden=!batch.risk_editable;
+        $("labContinuationButton").hidden=batch.mode!=='backtest';
+        $("labContinuationButton").textContent=batch.study_id?'比较组增量续算':'增量续算';
         $("labCompareButton").hidden=Boolean(batch.study_id)||batch.mode!=='backtest'||batch.risk_policy?.mode!=='round'||batch.experiment_count<2;
         $("labResultsBody").closest('table').querySelector('caption').textContent=(batch.experiment_count===1?'当前条件与赔率的独立实验版本；':'同一条件的两套结算版本；')+'样本表现仍需验证。统计日为最近处理日，回测中不代表真实今天。';
         if(!batch.risk_editable)$("labEditRiskForm").hidden=true;
@@ -355,7 +375,8 @@
         $("labSkipCounts").textContent = "未执行记录：" + skipCounts.join("；"); $("labSkipCounts").hidden = !skipCounts.length;
         $("labBatchStateButton").hidden = batch.status === "completed"||Boolean(batch.study_id);
         if(batch.study_id)$("labBatchRiskSummary").append(document.createTextNode(' · 此子批次由比较组 #'+batch.study_id+' 统一管理'));
-        $("labBatchStateButton").textContent = batch.status === "running" ? "暂停模拟" : batch.status === "paused" ? "启动模拟" : "恢复模拟";
+        $("labBatchStateButton").textContent = batch.continuation?.active_segment_id ? (batch.status==='running'?'暂停本段计算':'恢复本段计算') : batch.status === "running" ? "暂停模拟" : batch.status === "paused" ? "启动模拟" : "恢复模拟";
+        if(batch.continuation?.enabled)$("labBatchMeta").append(document.createTextNode(' · '+continuationBrief(batch.continuation)));
         const settled = state.experiments.reduce((sum, item) => sum + item.settled_count, 0);
         $("labResultEmpty").hidden = settled > 0;
         $("labResultEmpty").textContent = "尚无已结算模拟结果。" + (batch.study_id && batch.status === "paused" ? "此方案由比较队列统一调度，请在比较组查看当前进度。" : batch.status === "paused" ? "启动批次后开始观察。" : (phaseNames[batch.phase] || "等待可用数据") + "，条件不足时不会按零命中率处理。");
@@ -384,6 +405,7 @@
         });
     }
     function denyAccess() {
+        closeContinuation(false);
         state.accessDenied = true; state.selectedId = null; state.batch = null; state.experiments = []; state.overview = null;
         $("labBatchList").replaceChildren(element("p", "请使用有权限的管理员账号登录后刷新。", "lab-empty"));
         $("labWorkerSummary").replaceChildren(); $("labWorkerMessage").textContent = ""; $("labBatchCount").textContent = "—";
@@ -395,6 +417,7 @@
         state.riskEditingId=null;$("labEditRiskForm").hidden=true;
         $("labComparisonPreview").hidden=true;state.preview=null;state.studyRequest=null;
         if (state.mutating || state.loading || state.accessDenied) return;
+        if(state.continuation)closeContinuation(false);
         state.selectedId = id; state.resultPage = 0; closeDetail(false); $("labSort").value = "paired";
         await refresh(false);
     }
@@ -426,6 +449,7 @@
             } else {state.batch = null; state.experiments = [];}
             renderResults(); feedback("statusMessage", "", false);
             if(state.studyId!==null){const study=await request(base+'/studies/'+state.studyId);if(revision!==state.readRevision)return;state.study=study.study;state.studyRows=study.rows;renderStudyResults();}
+            if(state.continuation)await readContinuation({preserveDraft:true});
         } catch (error) {
             if (revision !== state.readRevision) return;
             if (error.status === 401 || error.status === 403) denyAccess();
@@ -562,8 +586,25 @@
         $("labMonthlyNotice").textContent=notes.join(' ');
         putSummary($("labMonthlySummary"),[['盈利月份 / 有效月份',summary.profitable_months+' / '+summary.eligible_months],['月度胜率',percent(summary.profitable_month_ratio)],['亏损月份 / 持平月份',summary.losing_months+' / '+summary.flat_months],['最长连续亏损月数',summary.longest_losing_months],['最佳月份净利润',money(summary.best_month_profit,true)],['最差月份净利润',money(summary.worst_month_profit,true)]]);
         tableRows($("labMonthlyBody"),report.rows,[r=>r.month,r=>monthStatus[r.status]||r.status,r=>r.settled_count,r=>money(r.stake_total),r=>r.settled_count?money(r.net_profit,true):'—',r=>percent(r.roi_percent),r=>r.profitable_days+' / '+r.losing_days+' / '+r.betting_days,r=>money(r.worst_day_profit,true),r=>money(r.daily_close_drawdown)],'暂无月度记录。');
+        if(state.batch?.continuation?.enabled){
+            $("labReportScope").textContent='每注 '+money(report.capital.stake_amount)+' · 累计统计至 '+(report.window?.end||state.batch.continuation.effective_end_date||state.batch.continuation.calculated_through_date||'—')+' · 待结算 '+number(report.pending_count,state.batch.continuation.pending_count||0)+' 笔 · '+(coverageNames[report.coverage_quality]||'输入质量待核对')+'。';
+            if(report.time_complete===false)$("labReportScope").append(document.createTextNode('当前区间仍为部分时段。'));
+        }
+        renderMonthlySnapshots(report.snapshots||[]);
         renderMonthlyChart(report.rows);
         renderCapital();
+    }
+    function renderMonthlySnapshots(snapshots) {
+        const target=$("labMonthlySnapshotList");target.replaceChildren();$("labMonthlySnapshots").hidden=!snapshots.length;
+        snapshots.forEach(snapshot=>{
+            const detail=element('details'),report=snapshot.report||{};
+            const row=Array.isArray(report.rows)?report.rows.find(item=>item.month===snapshot.month)||report.rows[0]||{}:report;
+            detail.append(element('summary',snapshot.month+' · 第 '+snapshot.revision+' 版 · 保存于 '+time(snapshot.created_at)));
+            const values=element('dl',null,'lab-summary');
+            putSummary(values,[['月度净利润',money(row.net_profit,true)],['结算笔数',number(row.settled_count,0)],['累计投注额',money(row.stake_total)],['当时统计状态',monthStatus[row.status]||'已保存']]);
+            detail.append(values);if(snapshot.reason)detail.append(element('p',({segment_completed:'计算段完成时保存',late_settlement:'补充迟到结算',baseline:'原回测基线'}[snapshot.reason]||'计算完成后保存的月份结果'),'lab-muted'));
+            target.append(detail);
+        });
     }
     function renderMonthlyChart(rows) {
         const target=$("labMonthlyChart");target.replaceChildren();
@@ -684,7 +725,7 @@
         state.studies.forEach(study=>{const row=element('div',null,'lab-batch');const button=actionButton(study.name+' · '+(studyNames[study.status]||study.status)+' · 已完成 '+study.completed_children+'/'+study.total_children,()=>openStudy(study.id));button.dataset.studyId=study.id;row.append(button);$("labStudyList").append(row);});
     }
     async function openStudy(id){
-        if(locked())return;state.studyId=id;state.studyPage=0;state.loading=true;updateControls();
+        if(locked())return;if(state.continuation)closeContinuation(false);state.studyId=id;state.studyPage=0;state.loading=true;updateControls();
         const revision=++state.readRevision;
         try{const data=await request(base+'/studies/'+id);if(revision!==state.readRevision)return;state.study=data.study;state.studyRows=data.rows;renderStudyResults();}
         catch(error){if(revision!==state.readRevision)return;if(error.status===401||error.status===403)denyAccess();feedback('statusMessage',error.message,true);}
@@ -696,7 +737,8 @@
         const active=study.children.find(child=>child.status==='running');
         $("labStudyMeta").textContent=(studyNames[study.status]||study.status)+' · 已完成 '+study.completed_children+'/'+study.total_children+' 方案'+(active?' · 当前：'+active.label+'，已处理 '+active.processed_issues+' 期':'')+' · 共同截止期 '+(study.cutoff_issue||'首次调度时冻结')+' · 截止时间 '+time(study.cutoff_at);
         $("labStudyNotice").textContent=study.error||study.waiting_reason||(study.comparable?'输入指纹与实际覆盖一致，可查看相对基准差；历史表现仍需新数据验证。':study.comparison_reason);
-        $("labStudyStateButton").textContent=['running','queued'].includes(study.status)?'暂停比较队列':'启动比较队列';$("labStudyStateButton").hidden=study.status==='completed';
+        $("labStudyStateButton").textContent=study.continuation?.active_segment_id?(['running','queued'].includes(study.status)?'暂停本段计算':'恢复本段计算'):['running','queued'].includes(study.status)?'暂停比较队列':'启动比较队列';$("labStudyStateButton").hidden=study.status==='completed';
+        if(study.continuation?.enabled)$("labStudyMeta").append(document.createTextNode(' · '+continuationBrief(study.continuation)));
         $("labStudyProgress").replaceChildren();study.children.forEach(child=>{const row=element('p');const waiting=child.status==='paused'&&['running','queued'].includes(study.status);row.append(document.createTextNode(child.label+'：'+(waiting?'等待前序方案完成':statusNames[child.status]||child.status)+'，已处理 '+child.processed_issues+' 期。'+child.changes.join('；')+' '));const button=actionButton('查看子批次',()=>selectBatch(child.batch_id));button.dataset.childBatch=child.batch_id;row.append(button);$("labStudyProgress").append(row);});
         function fillSelect(id,options){const select=$(id),value=select.value;select.replaceChildren();options.forEach(([key,label])=>{const option=element('option',label);option.value=key;select.append(option);});if(options.some(([key])=>key===value))select.value=value;}
         fillSelect('labStudyVariant',[['','全部风控方案'],...study.children.map(c=>[c.variant_key,c.label])]);
@@ -741,6 +783,179 @@
         try{const blob=await request(base+'/studies/'+state.study.id+'/export.csv','GET',undefined,true);const url=URL.createObjectURL(blob),a=element('a');a.href=url;a.download='rule-study-'+state.study.id+'.csv';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
         catch(error){feedback('statusMessage','比较导出失败：'+error.message,true);}finally{state.mutating=false;updateControls();}
     }
+    function continuationBrief(summary) {
+        return (summary.compute_enabled?'自动续算已开启':'自动续算未开启')+' · 已计算至 '+(summary.calculated_through_date||'—')+
+            (summary.calculated_through_issue?'（'+summary.calculated_through_issue+'期）':'')+
+            (summary.capture_enabled?' · 持续保留后续数据':' · 后续数据保留已关闭');
+    }
+    function continuationPath(view) {return base+'/'+(view.kind==='study'?'studies':'batches')+'/'+view.id;}
+    function continuationStorageKey(view) {return 'ruleLabContinuationPending:'+view.kind+':'+view.id;}
+    function rememberContinuationRequest(view, value) {
+        view.unconfirmed=value;
+        try {if(value)sessionStorage.setItem(continuationStorageKey(view),JSON.stringify(value));else sessionStorage.removeItem(continuationStorageKey(view));} catch (_) {}
+    }
+    function closeContinuation(restoreFocus) {
+        const trigger=state.continuation?.trigger;
+        state.continuationRevision++;state.continuation=null;$("labContinuationPanel").hidden=true;
+        ['labContinuationButton','labStudyContinuationButton'].forEach(id=>$(id).setAttribute('aria-expanded','false'));
+        if(restoreFocus&&trigger?.isConnected)trigger.focus();
+    }
+    async function openContinuation(kind,id,trigger) {
+        if(locked())return;
+        closeContinuation(false);
+        const view={kind,id,trigger,preview:null,coverage:null,segments:[],nextCursor:null,dirty:false,unconfirmed:null};
+        try {const saved=JSON.parse(sessionStorage.getItem(continuationStorageKey(view))||'null');if(saved&&typeof saved.request_id==='string')view.unconfirmed=saved;} catch (_) {}
+        state.continuation=view;state.loading=true;
+        $("labContinuationPanel").hidden=false;trigger?.setAttribute('aria-expanded','true');
+        $("labContinuationTitle").textContent=kind==='study'?'比较组增量续算':'增量续算';
+        $("labContinuationSummary").replaceChildren();$("labContinuationSegments").replaceChildren();
+        $("labContinuationBasis").textContent='正在核对实际计算边界与原实验版本…';
+        $("labContinuationBlockers").hidden=true;feedback('labContinuationFeedback','读取续算状态…',false);updateControls();
+        try {await readContinuation();feedback('labContinuationFeedback',view.unconfirmed?'上次提交结果尚未确认，请刷新续算状态核对后再操作。':'',Boolean(view.unconfirmed));}
+        catch(error){feedback('labContinuationFeedback',error.message,true);if(error.status===401)denyAccess();}
+        finally {state.loading=false;updateControls();if(state.continuation===view){$("labContinuationPanel").scrollIntoView({block:'start'});$("labContinuationTitle").focus();}}
+    }
+    async function readContinuation({preserveDraft=false}={}) {
+        const view=state.continuation;if(!view)return;
+        const revision=++state.continuationRevision,path=continuationPath(view);
+        const [preview,coverage,segments]=await Promise.all([request(path+'/continuation-preview'),request(path+'/input-coverage'),request(path+'/segments?limit=20')]);
+        if(state.continuation!==view||revision!==state.continuationRevision)return;
+        if(!preview.continuation||typeof preview.expected_revision!=='string'||typeof preview.eligible!=='boolean'||!Array.isArray(preview.blockers)||!Array.isArray(segments.segments))throw responseError('续算状态不完整，请刷新后重试',0,'invalid_response');
+        view.preview=preview;view.coverage=coverage;view.segments=segments.segments;view.nextCursor=segments.next_cursor;
+        if(view.unconfirmed&&preview.latest_request?.request_id===view.unconfirmed.request_id)rememberContinuationRequest(view,null);
+        renderContinuation(!preserveDraft||!view.dirty);
+    }
+    function renderContinuation(fillFields) {
+        const view=state.continuation,preview=view?.preview;if(!preview)return;
+        const summary=preview.continuation,owner=view.kind==='study'?state.studies.find(s=>s.id===view.id):state.overview?.batches.find(b=>b.id===view.id);
+        $("labContinuationOwner").textContent=(owner?.name||'所选实验')+(view.kind==='study'?' · 全部风控方案统一追加':'');
+        $("labContinuationBasis").textContent='保留原 '+preview.saved_experiments+' 个实验版本、每注金额、条件、赔率和风控。'+(preview.next_issue?'下一期待计算：'+preview.next_issue+'。':'')+'累计收益与未结束轮次接着计算。';
+        const watermark=(day,issue)=>day?(day+(issue?' · '+issue+'期':'')):(issue?issue+'期':'尚无');
+        putSummary($("labContinuationSummary"),[
+            ['续算状态',continuationNames[summary.state]||'等待核对'],
+            ['已计算至',watermark(summary.calculated_through_date,summary.calculated_through_issue)],
+            ['已保存数据至',watermark(summary.captured_through_date,summary.captured_through_issue)],
+            ['结算进度',(summary.settled_through_issue?summary.settled_through_issue+'期':'各实验独立结算')+' · 待结算 '+number(summary.pending_count,0)+' 笔'],
+            ['后续数据保留',summary.capture_enabled?'已开启':'未开启'],['每日自动续算',summary.compute_enabled?'已开启':'未开启'],
+            ['下次自动追加',summary.compute_enabled?time(summary.next_run_at):'未安排'],
+            ['输入质量',coverageNames[summary.coverage_quality]||'等待核对'],
+        ]);
+        const problems=preview.blockers.map(item=>item.message).filter(Boolean);if(summary.error)problems.push(summary.error);
+        $("labContinuationBlockers").textContent=problems.join('；');$("labContinuationBlockers").hidden=!problems.length;
+        const receipt=preview.latest_request;
+        $("labContinuationRequest").textContent=receipt?.kind==='append'?'最近追加'+(receipt.end_date?'至 '+receipt.end_date:'')+'：'+({waiting_inputs:'请求已保存，等待输入齐备后计算',up_to_date:'已经追平，没有生成空段',completed:'已完成',running:'正在计算',queued:'已进入计算队列',error:'等待处理异常'}[receipt.status]||'请求已保存')+'。':'';
+        if(fillFields){
+            $("labContinuationCapture").checked=summary.capture_enabled===true;$("labContinuationCompute").checked=summary.compute_enabled===true;
+            $("labContinuationDaily").value=summary.daily_at||'00:10';view.dirty=false;
+        }
+        const end=$("labContinuationEndDate");end.max=today();end.min=summary.calculated_through_date||'';
+        if(!end.value||end.value<end.min||end.value>end.max)end.value=today();
+        $("labContinuationAppendHelp").textContent=summary.capture_enabled?'每次最多追加90天；选择今天时，只计算已经保存的期数，不代表今天已完整结束。':'先开启“保留后续数据”并保存设置，再选择日期手动追加；每日自动续算可以保持关闭。';
+        const active=Boolean(summary.active_segment_id),paused=summary.state==='paused';
+        $("labContinuationPause").hidden=!active;$("labContinuationPause").textContent=paused?'恢复本段计算':'暂停本段计算';
+        $("labContinuationPauseHelp").textContent=active?(summary.capture_enabled?'暂停本段计算后，仍保留后续数据。':'当前未开启后续数据保留。'):'';
+        const coverage=view.coverage?.coverage||{},storage=view.coverage?.storage||{};
+        const counts=Object.entries(coverage.counts||{}).map(([key,value])=>(coverageNames[key]||key)+' '+value+' 期');
+        $("labContinuationCoverage").textContent=(counts.length?counts.join('；'):'尚无后续输入覆盖记录。')+' 最近成功保存：'+time(coverage.last_success_at)+'。模拟存储 '+bytes(storage.used_bytes)+' / '+bytes(storage.budget_bytes)+'。';
+        const gaps=(coverage.gaps||[]).map(item=>(item.issue_no?item.issue_no+'期：':'')+(coverageNames[item.reason]||item.reason));
+        if(coverage.error)gaps.unshift(coverage.error);
+        $("labContinuationGaps").textContent=gaps.join('；');$("labContinuationGaps").hidden=!gaps.length;
+        renderSegments();updateControls();
+    }
+    function segmentExperiment(experimentId,batchId) {
+        const exp=state.experiments.find(e=>e.id===experimentId)||state.studyRows.find(e=>e.experiment_id===experimentId);
+        if(exp)return conditionName(exp.condition)+' · '+settlementName(exp)+(exp.variant_label?' · '+exp.variant_label:'');
+        const batch=state.overview?.batches.find(b=>b.id===batchId);
+        return (batch?.name||'原实验')+' · 版本 '+experimentId;
+    }
+    function renderSegments() {
+        const view=state.continuation,target=$("labContinuationSegments");if(!view)return;
+        const openIds=new Set([...target.querySelectorAll('details[open]')].map(item=>item.dataset.segmentId));
+        target.replaceChildren();$("labContinuationMore").hidden=!view.nextCursor;
+        if(!view.segments.length){target.append(element('p','尚无计算段。保存续算设置后会保留原成绩作为基线。','lab-empty'));return;}
+        view.segments.forEach(segment=>{
+            const detail=element('details',null,'lab-segment');detail.dataset.segmentId=String(segment.id);detail.open=openIds.has(String(segment.id));
+            detail.append(element('summary',(segment.kind==='baseline'?'原回测基线':'第 '+segment.sequence+' 段追加')+' · 截至 '+segment.requested_end_date+' · '+(segmentNames[segment.status]||'等待核对')));
+            const batches=Array.isArray(segment.summary?.batches)?segment.summary.batches:[],pending=batches.reduce((sum,b)=>sum+number(b.pending_count,0),0);
+            const notes=['截止期 '+(segment.cutoff_issue||'—'),'保存于 '+time(segment.completed_at||segment.created_at)];
+            if(pending)notes.push('待结算 '+pending+' 笔，下一段按可见时间继续结算');
+            if(segment.summary?.baseline_audit)notes.push('迁移时保存的原回测结果');
+            if(segment.time_complete===false||segment.summary?.time_complete===false)notes.push('此日期仍为部分时段');
+            if(segment.summary?.coverage_quality)notes.push(coverageNames[segment.summary.coverage_quality]||'输入质量待核对');
+            detail.append(element('p',notes.join(' · '),'lab-muted lab-segment-meta'));
+            if(!batches.length){detail.append(element('p','本段尚在处理中，完成后显示保存的结果。','lab-empty'));target.append(detail);return;}
+            const scroll=element('div',null,'lab-table-scroll');scroll.setAttribute('role','region');scroll.setAttribute('aria-label','本段各实验成绩，可横向滚动');scroll.tabIndex=0;
+            const table=element('table',null,'lab-table');table.append(element('caption','金额单位：元。每个实验独立展示，不合计互斥版本。'));
+            const head=element('thead'),headRow=element('tr');['实验条件与结算','本段新增结算','本段新增净利','累计结算','累计净利','累计最大回撤','累计最长连亏'].forEach(label=>{const th=element('th',label);th.scope='col';headRow.append(th);});head.append(headRow);table.append(head);
+            const body=element('tbody');
+            batches.forEach(batch=>(batch.experiments||[]).forEach(exp=>{
+                const add=exp.incremental||{},total=exp.cumulative||{},row=element('tr');
+                [segmentExperiment(exp.experiment_id,batch.batch_id),segment.kind==='baseline'?'—':number(add.settled_count,0),segment.kind==='baseline'?'—':money(number(add.net_cents,0)/100,true),number(total.settled_count,0),money(number(total.net_cents,0)/100,true),money(number(total.max_drawdown_cents,0)/100),number(total.max_loss_streak,0)].forEach(value=>row.append(element('td',value)));body.append(row);
+            }));table.append(body);scroll.append(table);detail.append(scroll);target.append(detail);
+        });
+    }
+    async function refreshContinuation() {
+        if(locked()||!state.continuation)return;state.loading=true;updateControls();
+        try{await readContinuation({preserveDraft:true});feedback('labContinuationFeedback',state.continuation?.unconfirmed?'提交结果尚未确认，已保留请求标识。请稍后刷新核对，暂不重复提交。':'续算状态已更新。',Boolean(state.continuation?.unconfirmed));}
+        catch(error){feedback('labContinuationFeedback',error.message,true);}finally{state.loading=false;updateControls();}
+    }
+    async function moreSegments() {
+        const view=state.continuation;if(locked()||!view?.nextCursor)return;state.loading=true;updateControls();
+        try{const result=await request(continuationPath(view)+'/segments?limit=20&before_id='+encodeURIComponent(view.nextCursor));if(state.continuation!==view)return;
+            if(!Array.isArray(result.segments))throw responseError('计算段列表不完整',0,'invalid_response');
+            const ids=new Set(view.segments.map(s=>s.id));view.segments.push(...result.segments.filter(s=>!ids.has(s.id)));view.nextCursor=result.next_cursor;renderSegments();
+        }catch(error){feedback('labContinuationFeedback',error.message,true);}finally{state.loading=false;updateControls();}
+    }
+    async function mutateContinuation(kind, payload, retry=null) {
+        const view=state.continuation;if(locked()||!view?.preview||(view.unconfirmed&&!retry))return;
+        const requestId=retry?.request_id||crypto.randomUUID(),body=retry?.body||{...payload,request_id:requestId,expected_revision:view.preview.expected_revision};
+        rememberContinuationRequest(view,{request_id:requestId,kind,body});state.mutating=true;updateControls();
+        try {
+            const result=await request(continuationPath(view)+(kind==='append'?'/append':'/continuation'),'POST',body);
+            rememberContinuationRequest(view,null);view.dirty=false;await refresh(false);
+            const message=kind==='append'?(result.up_to_date?'已追平，没有生成空计算段。':result.queued?'追加请求已保存，输入齐备后将接着计算；每日自动续算设置不变。':'已保存本次追加任务。'):'续算设置已保存。'+(body.compute_enabled?'将按北京时间每天追加。':'每日自动续算未开启，已有追加任务继续按原状态运行。');
+            feedback('labContinuationFeedback',message,false);
+        } catch(error) {
+            if(!error.unknown)rememberContinuationRequest(view,null);
+            if(error.unknown||error.code==='stale_revision'){
+                try {await readContinuation({preserveDraft:!error.unknown});} catch (_) {}
+                const confirmed=error.unknown&&!view.unconfirmed;
+                if(confirmed)view.dirty=false;
+                feedback('labContinuationFeedback',confirmed?'连接中断后已重新核对，提交已保存；没有重复发送请求。':error.unknown?'连接中断，提交结果尚未确认。请刷新续算状态核对，暂不重复提交。':error.message+'。已尝试更新状态，请核对后再次操作。',!confirmed);
+            } else feedback('labContinuationFeedback',error.message,true);
+        } finally {state.mutating=false;updateControls();}
+    }
+    async function retryContinuation() {
+        const view=state.continuation,pending=view?.unconfirmed;if(locked()||!pending?.body)return;
+        state.loading=true;updateControls();
+        try{await readContinuation();}
+        catch(error){feedback('labContinuationFeedback','暂时无法核对原提交，稍后刷新再试。',true);return;}
+        finally{state.loading=false;updateControls();}
+        if(state.continuation!==view)return;
+        if(!view.unconfirmed){feedback('labContinuationFeedback','已核对到原提交，无需再次发送。',false);return;}
+        await mutateContinuation(pending.kind,pending.body,pending);
+    }
+    function saveContinuation(event) {
+        event.preventDefault();if(locked())return;
+        const capture=$("labContinuationCapture").checked,compute=$("labContinuationCompute").checked,daily=$("labContinuationDaily").value;
+        if(!/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(daily)){feedback('labContinuationFeedback','请选择有效的每日续算时间。',true);return;}
+        if(compute&&!capture){feedback('labContinuationFeedback','自动续算需要同时保留后续数据。',true);return;}
+        mutateContinuation('configure',{capture_enabled:capture,compute_enabled:compute,daily_at:daily,timezone:'Asia/Shanghai'});
+    }
+    function appendContinuation(event) {
+        event.preventDefault();const view=state.continuation;if(locked()||!view?.preview)return;
+        const end=$("labContinuationEndDate").value,start=view.preview.continuation.calculated_through_date;
+        const difference=(Date.parse(end)-Date.parse(start))/86400000;
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(end)||!Number.isFinite(Date.parse(end))||end>today()||difference<0||difference>90){feedback('labContinuationFeedback','追加日期不能早于已计算日期、晚于今天，或一次超过90天。',true);return;}
+        mutateContinuation('append',{end_date:end});
+    }
+    async function pauseContinuation() {
+        const view=state.continuation;if(locked()||!view?.preview?.continuation.active_segment_id)return;
+        const paused=view.preview.continuation.state==='paused';state.mutating=true;updateControls();
+        try{await request(continuationPath(view)+'/state','POST',{state:paused?'running':'paused'});await refresh(false);feedback('labContinuationFeedback',paused?'已恢复本段计算。':'本段计算已暂停；已开启的后续数据保留继续运行。',false);}
+        catch(error){if(error.unknown){try{await refresh(false);}catch(_){}}feedback('labContinuationFeedback',error.message+(error.unknown?'。已尝试重新核对当前状态。':''),true);}
+        finally{state.mutating=false;updateControls();}
+    }
     $("labBatchForm").addEventListener("submit", createBatch);
     createRiskEditor('labRisk',$("labRiskEditor"));createRiskEditor('labEditRisk',$("labEditRiskEditor"));
     $("labEditRiskButton").addEventListener('click',()=>{
@@ -760,6 +975,23 @@
     $("labResultPrevious").addEventListener("click", () => {if (state.resultPage > 0) {state.resultPage--; closeDetail(false); renderResults(); updateControls();}});
     $("labResultNext").addEventListener("click", () => {if ((state.resultPage + 1) * pageSize < state.experiments.length) {state.resultPage++; closeDetail(false); renderResults(); updateControls();}});
     $("labCloseDetailButton").addEventListener("click", () => closeDetail(true));
+    $("labContinuationButton").addEventListener('click',()=>{
+        const batch=state.batch;if(!batch)return;
+        openContinuation(batch.study_id?'study':'batch',batch.study_id||batch.id,$("labContinuationButton"));
+    });
+    $("labStudyContinuationButton").addEventListener('click',()=>state.study&&openContinuation('study',state.study.id,$("labStudyContinuationButton")));
+    $("labContinuationClose").addEventListener('click',()=>{if(!state.mutating)closeContinuation(true);});
+    $("labContinuationRefresh").addEventListener('click',refreshContinuation);
+    $("labContinuationMore").addEventListener('click',moreSegments);
+    $("labContinuationSettings").addEventListener('submit',saveContinuation);
+    $("labContinuationAppendForm").addEventListener('submit',appendContinuation);
+    $("labContinuationPause").addEventListener('click',pauseContinuation);
+    $("labContinuationRetry").addEventListener('click',retryContinuation);
+    $("labContinuationSettings").addEventListener('change',()=>{
+        if(state.continuation)state.continuation.dirty=true;
+        if(!$("labContinuationCapture").checked)$("labContinuationCompute").checked=false;
+        feedback('labContinuationFeedback','设置尚未保存。',false);updateControls();
+    });
     $("labMonthlyExport").addEventListener('click',exportMonthly);
     $("labInitialCapital").addEventListener('input',renderCapital);
     $("labReplayStake").addEventListener('input',renderReplay);

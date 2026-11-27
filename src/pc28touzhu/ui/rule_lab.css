@@ -113,6 +113,24 @@
 .lab-performance h3 { margin-top: 0; }
 .lab-performance .lab-button[aria-pressed=true] { border-color: var(--primary); background: var(--lab-success-bg); color: var(--lab-success); opacity: 1; }
 .lab-performance p { margin-top: var(--lab-sm); }
+.lab-continuation { scroll-margin-top: 80px; }
+.lab-continuation[aria-busy=true] { cursor: progress; }
+.lab-continuation-settings, .lab-continuation-append { border-top: thin solid var(--line); padding-top: var(--lab-lg); margin-top: var(--lab-lg); }
+.lab-continuation-switches { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--lab-lg); margin-bottom: var(--lab-lg); }
+.lab-toggle { display: flex; align-items: flex-start; gap: var(--lab-md); min-height: var(--lab-touch); cursor: pointer; }
+.lab-toggle span { min-width: 0; }
+.lab-toggle small { display: block; color: var(--muted); margin-top: var(--lab-xs); line-height: 1.6; }
+.lab-page .lab-toggle input[type=checkbox] { width: 20px; height: 20px; min-height: 20px; margin: 3px 0 0; flex: 0 0 20px; accent-color: var(--primary); }
+.lab-continuation-time { max-width: 260px; }
+.lab-continuation-append-form { display: flex; align-items: flex-end; flex-wrap: wrap; gap: var(--lab-md); }
+.lab-continuation-append-form .lab-field { flex: 0 1 320px; }
+.lab-continuation-history-heading { margin-top: var(--lab-xl); }
+.lab-segment { border-top: thin solid var(--line); padding: var(--lab-md) 0; }
+.lab-segment > summary { font-weight: var(--lab-semibold); overflow-wrap: anywhere; }
+.lab-segment .lab-table { min-width: 700px; }
+.lab-segment-meta { margin: var(--lab-xs) 0 var(--lab-md); }
+#labMonthlySnapshots { margin-top: var(--lab-lg); }
+#labMonthlySnapshotList details { padding: var(--lab-sm) 0; border-top: thin solid var(--line); }
 /* Breakpoint values map to ui-design.json tokens.breakpoints. */
 @media (max-width: 960px) {
     .lab-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -123,6 +141,9 @@
 @media (max-width: 600px) {
     .lab-panel { padding: var(--lab-lg); }
     .lab-form-grid, .lab-dates, .lab-replay-fields { grid-template-columns: minmax(0, 1fr); }
+    .lab-continuation-switches { grid-template-columns: minmax(0, 1fr); }
+    .lab-continuation-append-form { align-items: stretch; flex-direction: column; }
+    .lab-continuation-append-form .lab-field { flex-basis: auto; }
     .lab-section-heading, .lab-generator-footer { flex-direction: column; }
     .lab-batch { align-items: flex-start; gap: var(--lab-sm); }
     .lab-batch-actions .lab-button { padding-inline: var(--lab-md); }

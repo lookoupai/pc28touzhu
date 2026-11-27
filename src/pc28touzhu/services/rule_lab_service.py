@@ -4,9 +4,10 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 import sqlite3
 import copy
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
 from pc28touzhu.domain.rule_lab import ALLOWED_SETTLEMENT_RULE_IDS, COMBO_LONG_MISS_THRESHOLDS, build_conditions, build_experiments, normalize_batch_payload
@@ -188,6 +189,73 @@ class RuleLabService:
     def comparison_preview(self,user_id,batch_id):
         return self.store.comparison_preview(user_id,batch_id)
 
+    def continuation_preview(self,user_id,owner_kind,owner_id,*,now=None):
+        return self.store.continuation_preview(user_id,owner_kind,owner_id,now=_now(now))
+
+    @staticmethod
+    def _continuation_payload(payload,kind,*,now):
+        expected={'request_id','expected_revision'}|(
+            {'end_date'} if kind=='append' else {'capture_enabled','compute_enabled','daily_at','timezone'})
+        if not isinstance(payload,dict) or set(payload)!=expected:
+            raise RuleLabError('invalid_input','续算请求字段不完整或包含未知字段')
+        if not isinstance(payload['request_id'],str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,80}',payload['request_id']):
+            raise RuleLabError('invalid_input','请求标识必须为8至80位字母、数字、下划线或短横线')
+        if not isinstance(payload['expected_revision'],str) or not 1<=len(payload['expected_revision'])<=150:
+            raise RuleLabError('invalid_input','续算版本标识无效，请重新预览')
+        if kind=='append':
+            value=payload['end_date']
+            try:
+                if not isinstance(value,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',value):raise ValueError()
+                target=date.fromisoformat(value)
+            except ValueError as exc:
+                raise RuleLabError('invalid_input','追加截止日期无效') from exc
+            today=datetime.fromisoformat(now.replace('Z','+00:00')).astimezone(timezone(timedelta(hours=8))).date()
+            if target>today:raise RuleLabError('invalid_input','追加截止日期不能晚于北京时间今天')
+        else:
+            if type(payload['capture_enabled']) is not bool or type(payload['compute_enabled']) is not bool:
+                raise RuleLabError('invalid_input','保留数据和自动续算开关必须为布尔值')
+            if payload['compute_enabled'] and not payload['capture_enabled']:
+                raise RuleLabError('invalid_input','自动续算必须同时保留后续数据')
+            if not isinstance(payload['daily_at'],str) or not re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]',payload['daily_at']):
+                raise RuleLabError('invalid_input','每日续算时间须为00:00至23:59')
+            if payload['timezone']!='Asia/Shanghai':
+                raise RuleLabError('invalid_input','续算时区只支持Asia/Shanghai')
+
+    def _require_continuation_source(self,predictor_id):
+        try:predictor=self.source.get_predictor(predictor_id)
+        except (RuleLabError,OSError,sqlite3.Error) as exc:
+            raise RuleLabError('source_unavailable','预测来源暂不可用，已有成绩仍可查看',503) from exc
+        if predictor is None:
+            raise RuleLabError('source_forbidden','来源已停用或不再共享逐期预测，不能开始采集或续算',403)
+
+    def set_continuation(self,user_id,owner_kind,owner_id,payload,*,now=None):
+        timestamp=_now(now)
+        preview=self.continuation_preview(user_id,owner_kind,owner_id,now=timestamp)
+        self._continuation_payload(payload,'configure',now=timestamp)
+        receipt=self.store.continuation_receipt(user_id,owner_kind,owner_id,payload,'configure')
+        if receipt is not None:return receipt
+        current=preview['continuation']
+        enabling=any(payload[key] and not current.get(key) for key in ('capture_enabled','compute_enabled'))
+        if enabling:self._require_continuation_source(preview['predictor_id'])
+        # 关闭自动续算/采集属于控制操作，来源故障时也允许保存关闭状态。
+        return self.store.set_continuation(user_id,owner_kind,owner_id,payload,now=timestamp)
+
+    def request_append(self,user_id,owner_kind,owner_id,payload,*,now=None):
+        timestamp=_now(now)
+        preview=self.continuation_preview(user_id,owner_kind,owner_id,now=timestamp)
+        self._continuation_payload(payload,'append',now=timestamp)
+        receipt=self.store.continuation_receipt(user_id,owner_kind,owner_id,payload,'append')
+        if receipt is not None:return receipt
+        # 相对上次截止的90天检查由账本在幂等回执查找后执行，旧请求重试不能被后续进度误拒绝。
+        self._require_continuation_source(preview['predictor_id'])
+        return self.store.request_append(user_id,owner_kind,owner_id,payload,now=timestamp)
+
+    def list_segments(self,user_id,owner_kind,owner_id,*,limit=20,before_id=None):
+        return self.store.list_segments(user_id,owner_kind,owner_id,limit=limit,before_id=before_id)
+
+    def input_coverage(self,user_id,owner_kind,owner_id):
+        return self.store.input_coverage(user_id,owner_kind,owner_id)
+
     def create_study(self,user_id,payload,*,now=None):
         if not isinstance(payload,dict) or set(payload)!={'source_batch_id','name','request_id'}:
             raise RuleLabError('invalid_input','比较组需提供source_batch_id、name和request_id')
@@ -273,7 +341,11 @@ class RuleLabService:
         rule_name=definition['settlement_snapshot']['rule']['name']
         stake=format(Decimal(config['stake_cents'])/100,'f')
         config['name']=(definition['name']+' · '+rule_name+' · 每注'+stake+' · '+('同比风控' if payload['risk_amount_mode']=='scale' else '原额风控'))[:80]
-        result=self.store.create_batch(user_id,config,batch['predictor_name'],[definition],now=timestamp)
+        if (batch.get('continuation') or {}).get('enabled'):
+            # 长期重测由账本固定同一档案视图并分片运行，不能退回原短区间或线性放大收益。
+            result=self.store.create_archive_replay(user_id,batch_id,experiment_id,config,now=timestamp)
+        else:
+            result=self.store.create_batch(user_id,config,batch['predictor_name'],[definition],now=timestamp)
         return dict(batch=result,generated_count=1,source_batch_id=batch_id,source_experiment_id=experiment_id)
 
     def set_batch_state(self, user_id, batch_id, payload, *, now=None):

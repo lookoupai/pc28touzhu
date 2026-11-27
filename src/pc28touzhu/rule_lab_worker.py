@@ -41,12 +41,58 @@ class RuleLabWorker:
         self._last_prune = None
         self._processed_total = 0
         self._last_backtest_id = 0
+        self._last_capture_poll = None
 
     def _source(self, method, *args, **kwargs):
         key = (method, repr(args), repr(sorted(kwargs.items())))
         if key not in self._cache:
             self._cache[key] = getattr(self.source, method)(*args, **kwargs)
         return self._cache[key]
+
+    def _inputs(self, batch, method, *args, **kwargs):
+        """Read every continuous input from the same frozen local segment."""
+        context = batch.get('continuation')
+        if not context:
+            return self._source(method, *args, **kwargs)
+        identity = (batch['id'], context['segment_id'], context['archive_revision'])
+        if identity not in self._archives:
+            self._archives[identity] = self.store.archive_source(batch['id'])
+        key = ('archive', identity, method, repr(args), repr(sorted(kwargs.items())))
+        if key not in self._cache:
+            self._cache[key] = getattr(self._archives[identity], method)(*args, **kwargs)
+        return self._cache[key]
+
+    def _capture_inputs(self):
+        """Reserve part of the existing tick for fair, bounded input capture."""
+        if self._last_capture_poll is not None and (self._reference - self._last_capture_poll).total_seconds() < 15:
+            return
+        capture_deadline = min(self._deadline, time.monotonic() + min(.5, self.max_tick_seconds / 3))
+        tasks = self.store.capture_work_items(now=self._now, limit=10)
+        caught_up = True
+        for task in tasks:
+            if time.monotonic() >= capture_deadline or not self._remaining():
+                caught_up = False
+                break
+            try:
+                page = self._source('capture_page', task['predictor_id'],
+                    after_issue=str(task.get('capture_after_issue', task['after_issue'])),
+                    limit=self.page_size, observed_at=self._now)
+                committed = self.store.commit_capture(task['id'], task['revision'],
+                    draws=page['draws'], predictions=page['predictions'], coverage=page['coverage'],
+                    next_issue=page['next_issue'], highest_seen_issue=page['highest_seen_issue'],
+                    source_identity=page.get('source_identity'), now=self._now)
+                if committed['committed']:
+                    self._result['captured_periods'] += len(page['draws'])
+                if page.get('has_more') or int(task.get('seed_after_issue', 0)) < int(task.get('seed_until_issue', 0)):
+                    caught_up = False
+            except RuleLabError as exc:
+                self.store.set_capture_error(task['id'], exc.code, exc.message, now=self._now)
+                self._result.update(state='resource_paused' if exc.code == 'storage_limit' else 'error', message=exc.message)
+            except (ValueError, TypeError, KeyError):
+                self.store.set_capture_error(task['id'], 'source_unavailable', '输入采集返回的数据格式异常，稍后重试', now=self._now)
+                self._result.update(state='error', message='输入采集返回的数据格式异常，稍后重试')
+        self._result['capture_pending'] = bool(tasks) and not caught_up
+        self._last_capture_poll = self._reference if caught_up else None
 
     def _remaining(self):
         return time.monotonic() < self._deadline
@@ -77,8 +123,9 @@ class RuleLabWorker:
             result.append(item)
         return result
 
-    def _history(self, predictor_id, target, study=None):
-        rows = self.store.get_history(predictor_id, before_issue=target)
+    def _history(self, predictor_id, target, study=None, *, batch=None):
+        rows = (self._inputs(batch, 'get_history', predictor_id, before_issue=target)
+                if batch and batch.get('continuation') else self.store.get_history(predictor_id, before_issue=target))
         if study:
             cutoff=_time(study['cutoff_at'])
             rows=[r for r in rows if _time(r['draw_available_at'])<=cutoff and int(r['issue_no'])<=int(study['cutoff_issue'])]
@@ -104,38 +151,64 @@ class RuleLabWorker:
                     settled_at=draw['open_at'], skip_reason='', **value)
 
     def _settle_pending(self, batch_id, *, available_at=None):
-        reference=_time(available_at) if available_at is not None else self._reference
-        study=self.store.get_work_item(batch_id)['batch'].get('study')
-        if study:reference=min(reference,_time(study['cutoff_at']))
-        pending = self.store.get_pending_decisions(batch_id)
-        if not pending:
-            return
-        groups = {}
-        for decision in pending:
-            groups.setdefault(decision['issue_no'], []).append(decision)
-        for issue, decisions in groups.items():
-            if not self._remaining():
+        batch=self.store.get_work_item(batch_id)['batch']
+        continuation=batch.get('continuation')
+        if continuation:
+            if self._source('get_predictor', batch['predictor_id']) is None:
+                raise RuleLabError('source_unavailable', '来源已停用或不再共享逐期预测，已保留续算进度', 403)
+            frontier=available_at or batch['cursor'].get('simulation_time') or continuation.get('frontier_time')
+            if not frontier or continuation.get('segment_kind')=='baseline':
                 return
-            draw = self._source('get_draw_by_issue', issue, observed_at=self._now)
-            if study and (draw is None or _time(draw['source_created_at'])>_time(study['cutoff_at']) or _time(draw['open_at'])>_time(study['cutoff_at'])):
-                self._mark_error(batch_id,'比较组待结算输入已缺失或变更到共同截止之后，请核对历史数据后重新比较')
-                break
-            if draw is None or _time(draw['open_at']) > reference or _time(draw['source_created_at']) > reference:
-                break  # Never settle later issues ahead of an unresolved earlier result.
-            work = self.store.get_work_item(batch_id)
-            experiments = {e['id']: e for e in work['experiments']}
-            outcomes = [self._outcome(experiments[d['experiment_id']], d, draw) for d in decisions]
-            if not self._commit(work, draws=[draw], outcomes=outcomes):
-                break
-            unresolved = self.store.get_pending_decisions(batch_id, limit=1)
-            if unresolved and int(unresolved[0]['issue_no']) <= int(issue):
-                self._result.update(state='error', message='开奖输入存在冲突，已冻结决策等待核对')
-                break  # A draw conflict has left the frozen decisions pending.
+            if batch['status']!='running':
+                frontier=batch['cursor'].get('simulation_time') or continuation.get('frontier_time')
+                if not frontier:
+                    return
+            reference=min(_time(frontier),_time(continuation['cutoff_at']))
+        else:
+            reference=_time(available_at) if available_at is not None else self._reference
+        study=batch.get('study')
+        if study:reference=min(reference,_time(study['cutoff_at']))
+        while self._remaining():
+            pending = self.store.get_pending_decisions(batch_id)
+            if not pending:
+                return
+            groups = {}
+            for decision in pending:
+                groups.setdefault(decision['issue_no'], []).append(decision)
+            for issue, decisions in groups.items():
+                if not self._remaining():
+                    return
+                draw = self._inputs(batch, 'get_draw_by_issue', issue, observed_at=self._now)
+                if study and (draw is None or _time(draw['source_created_at'])>_time(study['cutoff_at']) or _time(draw['open_at'])>_time(study['cutoff_at'])):
+                    self._mark_error(batch_id,'比较组待结算输入已缺失或变更到共同截止之后，请核对历史数据后重新比较')
+                    return
+                if draw is None or _time(draw['open_at']) > reference or _time(draw['source_created_at']) > reference:
+                    return  # An unresolved earlier result blocks later ones.
+                work = self.store.get_work_item(batch_id)
+                if (continuation and work['batch']['status']!='running'
+                        and (not work['batch']['cursor'].get('simulation_time')
+                             or reference>_time(work['batch']['cursor']['simulation_time']))):
+                    return
+                experiments = {e['id']: e for e in work['experiments']}
+                outcomes = [self._outcome(experiments[d['experiment_id']], d, draw) for d in decisions]
+                if not self._commit(work, draws=[draw], outcomes=outcomes):
+                    return
+                unresolved = self.store.get_pending_decisions(batch_id, limit=1)
+                if unresolved and int(unresolved[0]['issue_no']) <= int(issue):
+                    self._result.update(state='error', message='开奖输入存在冲突，已冻结决策等待核对')
+                    return
+            # More than one page may become visible at the same event time.
+            # Drain all due pages before allowing the next decision to advance.
 
     def _finish_backtest(self,batch_id):
         work=self.store.get_work_item(batch_id)
         if work['batch']['status']!='running':return
         cursor=dict(work['batch']['cursor'])
+        if work['batch'].get('continuation'):
+            # The next segment owns the next decision-time event. Keep pending
+            # and active rounds rather than flushing them at the real wallclock.
+            self.store.complete_segment(batch_id,work['batch']['revision'],cursor=cursor,now=self._now)
+            return
         if not cursor.get('replay_complete'):
             cursor['replay_complete']=True
             if not self._commit(work,cursor=cursor):return
@@ -224,15 +297,15 @@ class RuleLabWorker:
     def _start_backtest(self, work):
         batch = work['batch']
         study=batch.get('study')
-        latest = {'issue_no':study['cutoff_issue']} if study else self._source('latest_draw', observed_at=self._now)
-        first = self._source('find_start_issue', batch['start_date'], observed_at=self._now) if latest else None
+        latest = {'issue_no':study['cutoff_issue']} if study else self._inputs(batch,'latest_draw', observed_at=self._now)
+        first = self._inputs(batch,'find_start_issue', batch['start_date'], observed_at=self._now) if latest else None
         if first is None or int(first)>int(latest['issue_no']):
             self._commit(work, progress={'status': 'completed', 'phase': 'idle', 'total_issues': 0,
                                         'skip_counts_delta': {'no_source_history': 1}})
             return False
-        warm = self._source('history_draws', before_issue=first, limit=100, observed_at=self._now)
+        warm = self._inputs(batch,'history_draws', before_issue=first, limit=100, observed_at=self._now)
         if study:warm={**warm,'items':[d for d in warm['items'] if _time(d['source_created_at'])<=_time(study['cutoff_at'])]}
-        predictions = self._source('get_predictions', batch['predictor_id'], [d['issue_no'] for d in warm['items']], observed_at=self._now)
+        predictions = self._inputs(batch,'get_predictions', batch['predictor_id'], [d['issue_no'] for d in warm['items']], observed_at=self._now)
         predictions={**predictions,'items':self._asof_predictions(predictions['items'],study)}
         before = str(int(first) - 1)
         cursor = dict(work['batch']['cursor'])
@@ -248,7 +321,7 @@ class RuleLabWorker:
     def _warm_evidence(self,work):
         batch=work['batch'];cursor=dict(batch['cursor'])
         if cursor.get('evidence') is not None:return True
-        history=self._history(batch['predictor_id'],cursor['warm_before_issue'],batch['study'])
+        history=self._history(batch['predictor_id'],cursor['warm_before_issue'],batch['study'],batch=batch)
         cursor['evidence']=dict(digest=evidence_step(None,{'kind':'warm','history':history}),count=0,
             warm_count=len(history),first_issue=None,last_issue=None,conflict=any(r.get('conflict') for r in history))
         return self._commit(work,cursor=cursor)
@@ -273,13 +346,13 @@ class RuleLabWorker:
             if not self._warm_evidence(work):return
             work=self.store.get_work_item(batch_id);batch=work['batch']
         cursor = dict(batch['cursor'])
-        page = self._source('draws_page', after_issue=cursor.get('scan_after_issue', ''),
+        page = self._inputs(batch, 'draws_page', after_issue=cursor.get('scan_after_issue', ''),
                             before_issue=str(int(cursor['replay_max_issue']) + 1), limit=self.page_size, observed_at=self._now)
         previous = cursor.get('last_issue_no')
         if previous and int(previous) < int(cursor['replay_max_issue']):
             first_issue = page['items'][0]['issue_no'] if page['items'] else None
             gap = first_issue is None or int(first_issue) > int(previous) + 1
-            if gap and self._source('get_draw_by_issue', previous, observed_at=self._now) is None:
+            if gap and self._inputs(batch, 'get_draw_by_issue', previous, observed_at=self._now) is None:
                 cursor['input_expired'] = True
                 self._commit(work, cursor=cursor, progress={'status': 'error', 'error': '回放所需历史已被清理，请新建批次选择仍保留的日期',
                                                            'skip_counts_delta': {'input_expired': 1}})
@@ -288,7 +361,7 @@ class RuleLabWorker:
         if not page['scanned_count']:
             self._finish_backtest(batch_id)
             return
-        predictions = self._source('get_predictions', batch['predictor_id'], [d['issue_no'] for d in page['items']], observed_at=self._now)
+        predictions = self._inputs(batch, 'get_predictions', batch['predictor_id'], [d['issue_no'] for d in page['items']], observed_at=self._now)
         study=batch.get('study')
         predictions={**predictions,'items':self._asof_predictions(predictions['items'],study)}
         cache_draws=[d for d in page['items'] if not study or _time(d['source_created_at'])<=_time(study['cutoff_at'])]
@@ -318,7 +391,10 @@ class RuleLabWorker:
                 continue
             decision_at = _stamp(_time(draw['open_at']) - timedelta(seconds=40))
             round_mode=batch.get('risk_policy',{}).get('mode')=='round'
-            if round_mode:
+            continuous=bool(batch.get('continuation'))
+            if continuous and cursor.get('simulation_time') and _time(decision_at)<_time(cursor['simulation_time']):
+                raise RuleLabError('archive_conflict','开奖时间顺序倒退，已保留原进度并停止本段续算',409)
+            if round_mode or continuous:
                 self._settle_pending(batch_id,available_at=decision_at)
                 # If the budget expired before due settlements could finish, retry
                 # this same draw next tick. Advancing it would silently suppress an
@@ -342,15 +418,16 @@ class RuleLabWorker:
             elif _time(prediction['created_at']) > _time(decision_at):
                 skips['late_prediction'] = 1
             else:
-                history = self._history(batch['predictor_id'], issue,study)
+                history = self._history(batch['predictor_id'], issue,study,batch=batch)
                 if history:
                     cursor['history_floor_issue'] = history[0]['issue_no']
                 features = build_features(batch['metric'], history, decision_at=decision_at)
                 decisions = self._decisions(work, features, prediction, decided_at=decision_at, issue=issue,target_open_at=draw['open_at'])
                 by_id = {e['id']: e for e in work['experiments']}
-                outcomes = [] if round_mode else [self._outcome(by_id[d['experiment_id']], d, draw) for d in decisions]
+                outcomes = [] if round_mode or continuous else [self._outcome(by_id[d['experiment_id']], d, draw) for d in decisions]
             if study:
-                cached=self.store.input_evidence(batch['predictor_id'],issue)
+                cached=(self._inputs(batch,'input_evidence',batch['predictor_id'],issue)
+                        if continuous else self.store.input_evidence(batch['predictor_id'],issue))
                 if cached.get('prediction'):
                     cached['prediction']=self._asof_predictions([cached['prediction']],study)
                 evidence=dict(cursor.get('evidence') or {})
@@ -364,7 +441,7 @@ class RuleLabWorker:
             if not self._commit(work, cursor=cursor, decisions=decisions, outcomes=outcomes,
                                 progress={'processed_issues_delta': 1, 'skip_counts_delta': skips, 'phase': 'replaying'}):
                 return
-            if not round_mode and self.store.get_pending_decisions(batch_id, limit=1):
+            if not round_mode and not continuous and self.store.get_pending_decisions(batch_id, limit=1):
                 return
         if all_processed:
             work = self.store.get_work_item(batch_id)
@@ -375,7 +452,7 @@ class RuleLabWorker:
             skips = Counter(page['skip_counts'])
             # Missing/unusable prediction is counted per processed issue above. Page-level
             # prediction parse totals would depend on worker budget/restarts and page size.
-            if not study:skips+=Counter(predictions['skip_counts'])
+            if not study and not batch.get('continuation'):skips+=Counter(predictions['skip_counts'])
             progress = {'skip_counts_delta': dict(skips)}
             if not page['has_more'] or (page['next_issue'].isdigit() and int(page['next_issue']) >= int(cursor['replay_max_issue'])):
                 cursor['replay_complete']=True
@@ -388,9 +465,12 @@ class RuleLabWorker:
         self._reference = _time(now) if now is not None else datetime.now(UTC)
         self._fixed_clock = now is not None
         self._now = _stamp(self._reference)
-        self._cache, self._features = {}, {}
+        self._cache, self._features, self._archives = {}, {}, {}
         self._result = dict(processed_issues=0, inserted_decisions=0, settled=0, skipped=0,
-                            state='idle', message='', elapsed_ms=0.0)
+                            captured_periods=0, capture_pending=False, state='idle', message='', elapsed_ms=0.0)
+        self._capture_inputs()
+        if self._remaining():
+            self.store.prepare_due_appends(now=self._now,limit=10)
         cutoff=None
         if self.store.studies_need_cutoff():
             try:
@@ -410,7 +490,9 @@ class RuleLabWorker:
                 break
             try:
                 if poll_live:
-                    if batch['mode']=='backtest' and batch.get('risk_policy',{}).get('mode')=='round' and not batch['cursor'].get('replay_complete'):
+                    if batch.get('continuation'):
+                        self._settle_pending(batch['id'],available_at=batch['cursor'].get('simulation_time'))
+                    elif batch['mode']=='backtest' and batch.get('risk_policy',{}).get('mode')=='round' and not batch['cursor'].get('replay_complete'):
                         if batch['cursor'].get('simulation_time'):
                             self._settle_pending(batch['id'],available_at=batch['cursor']['simulation_time'])
                     else:self._settle_pending(batch['id'])
@@ -429,7 +511,8 @@ class RuleLabWorker:
                 if batch['id'] in blocked or batch['mode'] != mode or batch['status'] != 'running' or (mode == 'live' and not poll_live):
                     continue
                 try:
-                    if self.store.storage_status()['used_bytes'] >= self.store.budget_bytes * 15 / 16:
+                    threshold=.8 if batch.get('continuation') else 15/16
+                    if self.store.storage_status()['used_bytes'] >= self.store.budget_bytes * threshold:
                         raise RuleLabError('storage_limit', '模拟存储接近预算上限，已暂停新模拟', 503)
                     if mode == 'live':
                         self._observe_live(batch['id'])
@@ -442,12 +525,18 @@ class RuleLabWorker:
                     self._result.update(state='resource_paused' if exc.code == 'storage_limit' else 'error', message=exc.message)
                     if exc.code == 'storage_limit':
                         self._mark_error(batch['id'], exc.message, resource=True)
+                    elif batch.get('continuation') and exc.code in ('archive_conflict','archive_corrupt','archive_gap'):
+                        self._mark_error(batch['id'], exc.message)
                 except (ValueError, TypeError, KeyError):
                     self._mark_error(batch['id'], '模拟输入或状态异常，请核对数据后恢复')
                     self._result.update(state='error', message='模拟输入或状态异常，已暂停相关批次')
         self.store.advance_studies(now=self._now,cutoff=cutoff)
+        if self._remaining():
+            self.store.prepare_due_appends(now=self._now,limit=10)
         if self._remaining() and (self._last_prune is None or (self._reference - self._last_prune).total_seconds() >= 300):
             self.store.prune(now=self._now, limit=500)
+            if self._remaining():
+                self.store.maintain_archive(now=self._now,limit=200)
             self._last_prune = self._reference
         self._processed_total += self._result['processed_issues']
         self._result['elapsed_ms'] = round((time.monotonic() - started) * 1000, 3)
@@ -485,7 +574,7 @@ def main():
                 failures = min(failures + 1, 5) if result['state'] == 'error' else 0
                 if args.once:
                     break
-                active_history = any(b['mode'] == 'backtest' and b['status'] == 'running' for b in store.list_work_batches())
+                active_history = result.get('capture_pending') or any(b['mode'] == 'backtest' and b['status'] == 'running' for b in store.list_work_batches())
                 delay = min(60.0, 2 ** failures) if failures else .25 if active_history else 15.0
             except (RuleLabError, OSError) as exc:
                 failures = min(failures + 1, 5)

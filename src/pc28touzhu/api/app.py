@@ -1418,11 +1418,23 @@ class PlatformApiApplication:
         try:
             user = self._require_platform_user(environ)
             self._require_admin_api_user(user, "仅管理员可使用规则实验室")
-            if environ.get("QUERY_STRING"):
-                raise RuleLabError("invalid_input", "此接口不接受查询参数")
             path = str(environ.get("PATH_INFO") or "")
             method = str(environ.get("REQUEST_METHOD") or "GET").upper()
             suffix = path[len("/api/platform/rule-lab"):]
+            continuation_match=re.fullmatch(r"/(batches|studies)/([1-9][0-9]{0,17})/(continuation-preview|continuation|append|segments|input-coverage)",suffix)
+            pagination={}
+            if environ.get("QUERY_STRING"):
+                if not continuation_match or continuation_match.group(3)!='segments' or method!='GET':
+                    raise RuleLabError('invalid_input','此接口不接受查询参数')
+                try:query=parse_qs(str(environ['QUERY_STRING']),keep_blank_values=True,strict_parsing=True,max_num_fields=2)
+                except ValueError as exc:raise RuleLabError('invalid_input','分段分页参数无效') from exc
+                if not query or set(query)-{'limit','before_id'}:
+                    raise RuleLabError('invalid_input','分段列表只接受limit和before_id')
+                for key,values in query.items():
+                    if len(values)!=1 or not re.fullmatch(r'[1-9][0-9]{0,17}',values[0]):
+                        raise RuleLabError('invalid_input','分段分页参数无效')
+                    pagination[key]=int(values[0])
+                if pagination.get('limit',20)>50:raise RuleLabError('invalid_input','每页最多读取50个计算段')
             batch_match = re.fullmatch(r"/batches/([1-9][0-9]{0,17})(?:/(state|risk-policy|comparison-preview|export\.csv|experiments/([1-9][0-9]{0,17})(/replay)?))?", suffix)
             study_match=re.fullmatch(r"/studies/([1-9][0-9]{0,17})(?:/(state|export\.csv))?",suffix)
             if suffix in ("", "/options"):
@@ -1431,6 +1443,7 @@ class PlatformApiApplication:
             elif suffix == "/batches":
                 expected = "POST"
             elif suffix=="/studies":expected=method if method in ('GET','POST') else 'GET'
+            elif continuation_match:expected='POST' if continuation_match.group(3) in ('continuation','append') else 'GET'
             elif study_match:expected='POST' if study_match.group(2)=='state' else 'GET'
             elif batch_match:
                 expected = "POST" if batch_match.group(2) in ("state","risk-policy") or batch_match.group(4) else "GET"
@@ -1463,6 +1476,19 @@ class PlatformApiApplication:
                     payload=service.create_study(user_id,_read_json_body(environ))
                     return _json_response(start_response,201 if payload['created'] else 200,payload,headers)
                 payload=service.list_studies(user_id)
+            elif continuation_match:
+                owner_kind='batch' if continuation_match.group(1)=='batches' else 'study'
+                owner_id=int(continuation_match.group(2));action=continuation_match.group(3)
+                if action=='continuation-preview':payload=service.continuation_preview(user_id,owner_kind,owner_id)
+                elif action=='segments':payload=service.list_segments(user_id,owner_kind,owner_id,**pagination)
+                elif action=='input-coverage':payload=service.input_coverage(user_id,owner_kind,owner_id)
+                elif action=='continuation':
+                    payload=service.set_continuation(user_id,owner_kind,owner_id,_read_json_body(environ))
+                    return _json_response(start_response,201 if payload['created'] else 200,payload,headers)
+                else:
+                    payload=service.request_append(user_id,owner_kind,owner_id,_read_json_body(environ))
+                    status=202 if payload['created'] and payload['queued'] else 201 if payload['created'] and payload.get('segment') else 200
+                    return _json_response(start_response,status,payload,headers)
             elif study_match:
                 study_id=int(study_match.group(1));action=study_match.group(2)
                 if action=='state':payload=service.set_study_state(user_id,study_id,_read_json_body(environ))

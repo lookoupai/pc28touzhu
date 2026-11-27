@@ -258,7 +258,7 @@ const root = path.resolve(__dirname, '..');
         await page.getByLabel('批次名称',{exact:true}).fill('组合历史条件观察');
         await page.getByLabel('投注玩法',{exact:true}).selectOption('combo');
         await page.getByRole('radio',{name:'历史回测',exact:true}).check();
-        assert.match(await page.locator('#labModeHelp').innerText(),/不会自动延长.*尚不支持追加日期/);
+        assert.match(await page.locator('#labModeHelp').innerText(),/增量续算.*手动追加.*每日自动续算/);
         const beforeInvalid=creates;
         await page.getByRole('button',{name:'生成并保存',exact:true}).click();
         assert.equal(await page.getByLabel('开始日期',{exact:true}).getAttribute('aria-invalid'),'true');

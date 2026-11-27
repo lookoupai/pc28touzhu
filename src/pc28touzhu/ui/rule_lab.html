@@ -71,7 +71,7 @@ __APP_SHELL__
     </section>
 
     <section id="labResults" class="lab-panel" aria-labelledby="labResultTitle" hidden>
-        <div class="lab-section-heading"><div><p class="lab-kicker">批次结果</p><h2 id="labResultTitle" tabindex="-1"></h2></div><div class="lab-actions"><button id="labBatchStateButton" class="lab-button" type="button">启动模拟</button><button id="labExportButton" class="lab-button" type="button" title="导出当前批次结果">导出 CSV</button></div></div>
+        <div class="lab-section-heading"><div><p class="lab-kicker">批次结果</p><h2 id="labResultTitle" tabindex="-1"></h2></div><div class="lab-actions"><button id="labContinuationButton" class="lab-button" type="button" aria-controls="labContinuationPanel" aria-expanded="false" hidden>增量续算</button><button id="labBatchStateButton" class="lab-button" type="button">启动模拟</button><button id="labExportButton" class="lab-button" type="button" title="导出当前批次结果">导出 CSV</button></div></div>
         <p id="labBatchMeta" class="lab-muted"></p><p id="labBatchNotice" class="lab-note" hidden></p><p id="labBatchError" class="lab-feedback is-error" hidden></p><p id="labSkipCounts" class="lab-muted" hidden></p>
         <p id="labBatchRiskSummary" class="lab-note"></p><button id="labEditRiskButton" class="lab-button" type="button" hidden>配置风控</button>
         <button id="labCompareButton" class="lab-button" type="button" hidden>比较风控方案</button>
@@ -87,12 +87,45 @@ __APP_SHELL__
 
     <section class="lab-panel" aria-labelledby="labStudiesHeading"><div class="lab-section-heading"><h2 id="labStudiesHeading">风控比较队列</h2></div><p class="lab-muted">每次运行一个风控方案，其余方案依次等待。运行中的成绩会自动更新；全部方案完成后才显示相对基准差异。</p><div id="labStudyList"><p class="lab-empty">读取中…</p></div></section>
     <section id="labStudyResults" class="lab-panel" hidden aria-labelledby="labStudyTitle">
-        <div class="lab-section-heading"><h2 id="labStudyTitle"></h2><div class="lab-actions"><button id="labStudyStateButton" class="lab-button" type="button">启动比较队列</button><button id="labStudyExportButton" class="lab-button" type="button">导出比较 CSV</button></div></div>
+        <div class="lab-section-heading"><h2 id="labStudyTitle"></h2><div class="lab-actions"><button id="labStudyContinuationButton" class="lab-button" type="button" aria-controls="labContinuationPanel" aria-expanded="false">增量续算</button><button id="labStudyStateButton" class="lab-button" type="button">启动比较队列</button><button id="labStudyExportButton" class="lab-button" type="button">导出比较 CSV</button></div></div>
         <p id="labStudyMeta" class="lab-muted"></p><p id="labStudyNotice" class="lab-note"></p><div id="labStudyProgress"></div>
         <div class="lab-form-grid"><div class="lab-field"><label for="labStudyVariant">风控方案筛选</label><select id="labStudyVariant"><option value="">全部风控方案</option></select></div><div class="lab-field"><label for="labStudySettlement">结算筛选</label><select id="labStudySettlement"><option value="">两套OK结算</option><option value="pc28_netdisk_regular">OK游戏网盘</option><option value="pc28_high_regular">OK游戏高赔常规</option></select></div><div class="lab-field"><label for="labStudyCondition">触发条件筛选</label><select id="labStudyCondition"><option value="">全部条件</option></select></div></div>
         <p class="lab-muted">各行是互斥模拟，不合计为实际利润。ROI差为百分点，回撤差为方案减基准（负值代表更小）；没有足够样本不代表稳定优势。</p>
         <div class="lab-table-scroll" role="region" aria-label="风控比较表，可横向滚动" tabindex="0"><table class="lab-table"><caption>同条件、同OK结算下比较风控；未完成或输入不一致时不展示相对差异。</caption><thead><tr><th>条件</th><th>OK结算</th><th>风控</th><th>结算数</th><th>投注额</th><th>净利</th><th>ROI</th><th>回撤</th><th>最差日</th><th>盈利日 / 投注日</th><th>完成轮</th><th>Δ净利</th><th>ΔROI(pp)</th><th>Δ回撤</th><th>样本</th><th>明细</th></tr></thead><tbody id="labStudyRows"></tbody></table></div>
         <div class="lab-pagination"><span id="labStudyPageInfo" class="lab-muted"></span><div class="lab-actions"><button id="labStudyPrevious" class="lab-button" type="button">上一页比较</button><button id="labStudyNext" class="lab-button" type="button">下一页比较</button></div></div>
+    </section>
+
+    <section id="labContinuationPanel" class="lab-panel lab-continuation" aria-labelledby="labContinuationTitle" hidden>
+        <div class="lab-section-heading"><div><p class="lab-kicker">继续积累原实验成绩</p><h2 id="labContinuationTitle" tabindex="-1">增量续算</h2></div><div class="lab-actions"><button id="labContinuationRefresh" class="lab-button" type="button">刷新续算状态</button><button id="labContinuationClose" class="lab-button" type="button">关闭面板</button></div></div>
+        <p id="labContinuationOwner" class="lab-muted"></p>
+        <p id="labContinuationBasis" class="lab-note"></p>
+        <dl id="labContinuationSummary" class="lab-summary"></dl>
+        <p id="labContinuationBlockers" class="lab-feedback is-error" role="status" hidden></p>
+        <p id="labContinuationRequest" class="lab-muted"></p>
+        <form id="labContinuationSettings" class="lab-continuation-settings" novalidate>
+            <div class="lab-continuation-switches">
+                <label class="lab-toggle" for="labContinuationCapture"><input id="labContinuationCapture" type="checkbox"><span><strong>保留后续数据</strong><small>在存储预算内保存新增预测和开奖，供以后续算使用。</small></span></label>
+                <label class="lab-toggle" for="labContinuationCompute"><input id="labContinuationCompute" type="checkbox"><span><strong>每日自动续算</strong><small>每天追加截至前一天的数据；关闭后不再生成新的每日任务。</small></span></label>
+            </div>
+            <div class="lab-field lab-continuation-time"><label for="labContinuationDaily">每日续算时间（北京时间）</label><input id="labContinuationDaily" type="time" value="00:10" step="60" required></div>
+            <p id="labContinuationSettingsHelp" class="lab-muted">自动续算需同时保留后续数据。关闭自动续算不会暂停正在计算的追加段。</p>
+            <button id="labContinuationSave" class="lab-button lab-button-primary" type="submit">保存续算设置</button>
+        </form>
+        <div class="lab-continuation-append">
+            <h3>手动追加</h3><p class="lab-muted">从上次实际处理的下一期继续，不重跑已完成历史。手动追加不会开启每日自动续算。</p>
+            <form id="labContinuationAppendForm" class="lab-continuation-append-form" novalidate>
+                <div class="lab-field"><label for="labContinuationEndDate">追加至日期（北京时间）</label><input id="labContinuationEndDate" type="date" required aria-describedby="labContinuationAppendHelp"></div>
+                <button id="labContinuationAppend" class="lab-button lab-button-primary" type="submit">立即追加</button>
+            </form>
+            <p id="labContinuationAppendHelp" class="lab-muted">每次最多追加90天；选择今天时，只计算已经保存的期数，不代表今天已完整结束。</p>
+            <div class="lab-actions"><button id="labContinuationPause" class="lab-button" type="button" hidden>暂停本段计算</button><span id="labContinuationPauseHelp" class="lab-muted"></span></div>
+        </div>
+        <p id="labContinuationFeedback" class="lab-feedback" role="status" tabindex="-1"></p>
+        <button id="labContinuationRetry" class="lab-button" type="button" hidden>重试原提交</button>
+        <details id="labContinuationCoverageDetails" class="lab-budget"><summary>输入覆盖与存储</summary><p id="labContinuationCoverage" class="lab-muted"></p><p id="labContinuationGaps" class="lab-note" hidden></p></details>
+        <div class="lab-section-heading lab-continuation-history-heading"><h3>历史计算段</h3><button id="labContinuationMore" class="lab-button" type="button" hidden>加载更早计算段</button></div>
+        <p class="lab-muted">每段保留当时的累计成绩。本次新增净利和结算数可单独核对；不同实验的收益不合计，累计最大回撤也不按段相加。</p>
+        <div id="labContinuationSegments"><p class="lab-empty">尚未接入增量续算。</p></div>
     </section>
 
     <section id="labExperimentDetail" class="lab-panel" aria-labelledby="labDetailTitle" hidden>
@@ -109,6 +142,7 @@ __APP_SHELL__
             <dl id="labMonthlySummary" class="lab-summary"></dl>
             <div id="labMonthlyChart" class="lab-monthly-chart"></div>
             <div class="lab-table-scroll" role="region" aria-label="月度成绩表，可横向滚动" tabindex="0"><table class="lab-table"><caption>北京时间自然月；部分月份与无交易月份不计入月度胜率。月内回撤按日结算统计，可能低于逐笔回撤。</caption><thead><tr><th scope="col">月份</th><th scope="col">统计状态</th><th scope="col">结算笔数</th><th scope="col">累计投注额</th><th scope="col">月度净利润</th><th scope="col">投注收益率</th><th scope="col">盈利 / 亏损 / 投注天数</th><th scope="col">最差单日盈亏</th><th scope="col">最大回撤金额（日结）</th></tr></thead><tbody id="labMonthlyBody"></tbody></table></div>
+            <details id="labMonthlySnapshots" class="lab-budget" hidden><summary>已保存的月报版本</summary><p class="lab-muted">查看当时保存的月份结果；后续修订会保留旧版本。</p><div id="labMonthlySnapshotList"></div></details>
             <h3 class="lab-report-subtitle">资金表现</h3>
             <p id="labCapitalStake" class="lab-note"></p>
             <div class="lab-field lab-initial-capital"><label for="labInitialCapital">初始资金</label><input id="labInitialCapital" type="number" min="0" max="1000000000" step="1" placeholder="例如：1000" aria-describedby="labCapitalBasis"><span id="labCapitalBasis" class="lab-muted">本金用于计算当前回测的资金曲线与收益率。要改变每注金额，请使用下方“按新金额重新回测”。</span></div>

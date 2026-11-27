@@ -63,7 +63,7 @@ class RuleLabStore:
         self.detail_retention_days = max(1, int(detail_retention_days))
 
     @contextmanager
-    def _connect(self, *, write=False):
+    def _connect(self, *, write=False, reserve=False):
         conn = None
         try:
             conn = sqlite3.connect(str(self.db_path), timeout=.25)
@@ -74,7 +74,7 @@ class RuleLabStore:
             if write:
                 current = conn.execute('PRAGMA page_count').fetchone()[0]
                 size = conn.execute('PRAGMA page_size').fetchone()[0]
-                max_pages = max(current, int(self.budget_bytes*.8)//size, 1)
+                max_pages = max(current, int(self.budget_bytes*(.9 if reserve else .8))//size, 1)
                 conn.execute('PRAGMA max_page_count=%s' % max_pages)
                 conn.execute('PRAGMA wal_autocheckpoint=64')
                 conn.execute('PRAGMA journal_size_limit=1048576')
@@ -108,7 +108,7 @@ class RuleLabStore:
             connection.execute('PRAGMA journal_mode=WAL')
         with self._connect(write=True) as c:
             version = c.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2, 3):
+            if version not in (0, 1, 2, 3, 4):
                 raise RuleLabError('store_unavailable', '模拟账本版本不兼容', 503)
             statements = [
                 '''CREATE TABLE IF NOT EXISTS lab_batches (
@@ -187,17 +187,24 @@ class RuleLabStore:
                 study_id INTEGER NOT NULL REFERENCES lab_studies(id),batch_id INTEGER NOT NULL UNIQUE REFERENCES lab_batches(id),
                 variant_key TEXT NOT NULL,position INTEGER NOT NULL,label TEXT NOT NULL,change_json TEXT NOT NULL,
                 PRIMARY KEY(study_id,variant_key))''')
-            c.execute('PRAGMA user_version=3')
+            from pc28touzhu.services.rule_lab_archive import init_schema as archive_schema
+            from pc28touzhu.services.rule_lab_series import init_schema as series_schema
+            archive_schema(c)
+            series_schema(c)
+            c.execute('PRAGMA user_version=4')
 
     def storage_status(self):
         total = 0
         if self.db_path.parent.exists():
-            for path in self.db_path.parent.iterdir():
-                if path.is_file() and not path.is_symlink():
-                    try:
-                        total += path.stat().st_size
-                    except FileNotFoundError:
-                        pass
+            for root,dirs,files in os.walk(self.db_path.parent,followlinks=False):
+                dirs[:]=[name for name in dirs if not (Path(root)/name).is_symlink()]
+                for name in files:
+                    path=Path(root)/name
+                    if path.is_file() and not path.is_symlink():
+                        try:
+                            total += path.stat().st_size
+                        except FileNotFoundError:
+                            pass
         return dict(used_bytes=total, budget_bytes=self.budget_bytes, detail_retention_days=self.detail_retention_days)
 
     def _require_space(self):
@@ -223,7 +230,7 @@ class RuleLabStore:
         relation=c.execute('SELECT study_id,variant_key FROM lab_study_batches WHERE batch_id=?',(row['id'],)).fetchone()
         saved=c.execute("SELECT settlement_snapshot_json FROM lab_experiments WHERE batch_id=? AND settlement_rule_id='pc28_netdisk_regular' ORDER BY id LIMIT 1",(row['id'],)).fetchone()
         legacy_odds=bool(saved and RuleLabStore._legacy_netdisk_odds(_load(saved[0])))
-        return dict(id=row['id'],name=row['name'],mode=row['mode'],predictor_id=row['predictor_id'],predictor_name=row['predictor_name'],
+        result=dict(id=row['id'],name=row['name'],mode=row['mode'],predictor_id=row['predictor_id'],predictor_name=row['predictor_name'],
                     metric=row['metric'],template_pack=row['template_pack'],stake_amount=row['stake_cents']/100,
                     start_date=row['start_date'],end_date=row['end_date'],status=row['status'],phase=row['phase'],
                     experiment_count=count,processed_issues=row['processed_issues'],total_issues=row['total_issues'],
@@ -234,6 +241,9 @@ class RuleLabStore:
                     review_required=RuleLabStore._replay_review_required(row),
                     risk_policy=_load(row['risk_policy_json']),risk_editable=RuleLabStore._risk_editable(c,row),
                     study_id=relation['study_id'] if relation else None,variant_key=relation['variant_key'] if relation else None)
+        from pc28touzhu.services.rule_lab_series import public_summary
+        result['continuation']=public_summary(c,row)
+        return result
 
     @staticmethod
     def _risk_editable(c,row):
@@ -342,6 +352,11 @@ class RuleLabStore:
             row = self._owned(c,user_id,batch_id)
             if c.execute('SELECT 1 FROM lab_study_batches WHERE batch_id=?',(batch_id,)).fetchone():
                 raise RuleLabError('study_managed','比较组子批次请从比较队列启动或暂停',409)
+            from pc28touzhu.services.rule_lab_series import series_for_batch,set_active_state
+            series=series_for_batch(c,batch_id)
+            if series:
+                set_active_state(self,c,series,state,now)
+                return self._batch(c,self._owned(c,user_id,batch_id))
             if row['status']==state:
                 return self._batch(c,row)
             if row['status']=='completed':
@@ -427,9 +442,16 @@ class RuleLabStore:
         waiting=''
         if row['status']=='queued':
             waiting='等待其他批次释放运行额度（需要%s，当前剩余%s）'%(needed,capacity['remaining_running']) if needed>capacity['remaining_running'] else '等待队列调度'+('并冻结共同历史截止' if not row['cutoff_issue'] else '')
-        return dict(id=row['id'],name=row['name'],source_batch_id=row['source_batch_id'],status=row['status'],created_at=row['created_at'],
+        result=dict(id=row['id'],name=row['name'],source_batch_id=row['source_batch_id'],status=row['status'],created_at=row['created_at'],
                     updated_at=row['updated_at'],cutoff_issue=row['cutoff_issue'],cutoff_at=row['cutoff_at'],error=row['error'],waiting_reason=waiting,
                     children=children,completed_children=complete,total_children=len(children),comparable=comparable,comparison_reason=reason,actual_coverage=coverage,review_required=review_required)
+        from pc28touzhu.services.rule_lab_series import study_summary
+        continuation=study_summary(c,row)
+        result['continuation']=continuation
+        if continuation['active_segment_id']:
+            result['comparable']=False
+            result['comparison_reason']='当前追加尚未全部完成，请查看上一共同完成段'
+        return result
 
     def create_study(self,user_id,source_batch_id,name,request_id,*,now):
         if type(source_batch_id) is not int or source_batch_id<=0 or not isinstance(name,str) or not 1<=len(name.strip())<=80:
@@ -509,6 +531,11 @@ class RuleLabStore:
         if state not in ('running','paused'):raise RuleLabError('invalid_input','比较组状态只支持启动或暂停')
         with self._connect(write=True) as c:
             study=self._owned_study(c,user_id,study_id)
+            from pc28touzhu.services.rule_lab_series import set_active_state
+            series=c.execute("SELECT * FROM lab_series WHERE owner_kind='study' AND owner_id=?",(study_id,)).fetchone()
+            if series:
+                set_active_state(self,c,series,state,now)
+                return self._study(c,self._owned_study(c,user_id,study_id))
             if study['status']=='completed':raise RuleLabError('invalid_transition','比较组已完成，不能重置成绩',409)
             if state=='paused':
                 c.execute("UPDATE lab_studies SET status='paused',updated_at=? WHERE id=?",(now,study_id))
@@ -522,7 +549,7 @@ class RuleLabStore:
 
     def advance_studies(self,*,now,cutoff=None):
         with self._connect(write=True) as c:
-            for study in c.execute("SELECT * FROM lab_studies WHERE status='running' ORDER BY id").fetchall():
+            for study in c.execute("SELECT * FROM lab_studies WHERE status='running' AND id NOT IN (SELECT owner_id FROM lab_series WHERE owner_kind='study') ORDER BY id").fetchall():
                 children=c.execute('''SELECT b.* FROM lab_batches b JOIN lab_study_batches s ON s.batch_id=b.id
                     WHERE s.study_id=? ORDER BY s.position''',(study['id'],)).fetchall()
                 failed=next((b for b in children if b['status'] in ('error','resource_paused')),None)
@@ -531,7 +558,7 @@ class RuleLabStore:
                 elif all(b['status']=='completed' for b in children):
                     c.execute("UPDATE lab_studies SET status='completed',updated_at=? WHERE id=?",(now,study['id']))
                 elif not any(b['status']=='running' for b in children):self._enqueue(c,study['id'],now)
-            for study in c.execute("SELECT * FROM lab_studies WHERE status='queued' ORDER BY queue_order,id").fetchall():
+            for study in c.execute("SELECT * FROM lab_studies WHERE status='queued' AND id NOT IN (SELECT owner_id FROM lab_series WHERE owner_kind='study') ORDER BY queue_order,id").fetchall():
                 child=c.execute('''SELECT b.* FROM lab_study_batches s JOIN lab_batches b ON b.id=s.batch_id
                     WHERE s.study_id=? AND b.status!='completed' ORDER BY s.position LIMIT 1''',(study['id'],)).fetchone()
                 if child is None:
@@ -622,6 +649,13 @@ class RuleLabStore:
         from pc28touzhu.domain.rule_lab_monthly import monthly_report, report_window
         now=datetime.now(timezone.utc).isoformat()
         internal=RuleLabStore._internal_batch(batch)
+        from pc28touzhu.services.rule_lab_series import public_summary, snapshots_for_experiment
+        internal['continuation']=public_summary(c,batch)
+        internal['continuation']['pending_counts']={r['month']:r['n'] for r in c.execute('''SELECT
+            substr(COALESCE(risk_date,date(datetime(decided_at,'+8 hours'))),1,7) AS month,COUNT(*) AS n
+            FROM lab_decisions WHERE experiment_id=? AND status='pending' GROUP BY month''',(experiment['id'],))}
+        if internal['continuation']['enabled']:
+            internal['end_date']=internal['continuation']['effective_end_date']
         _,end,first=report_window(internal,now=now)
         daily=[dict(r) for r in c.execute('''SELECT * FROM lab_daily WHERE experiment_id=?
             AND stat_date>=? AND stat_date<=? ORDER BY stat_date LIMIT 3720''',
@@ -642,8 +676,10 @@ class RuleLabStore:
         cutoff=study[0] if study else opened(cursor.get('replay_max_issue'))
         first_observed=opened(cursor.get('warm_before_issue') or (cursor.get('evidence') or {}).get('first_issue'))
         pending=c.execute("SELECT MIN(decided_at) FROM lab_decisions WHERE experiment_id=? AND status='pending'",(experiment['id'],)).fetchone()[0]
-        return monthly_report(internal,_load(experiment['stats_json']),daily,now=now,observed_at=observed,
+        result=monthly_report(internal,_load(experiment['stats_json']),daily,now=now,observed_at=observed,
                               cutoff_at=cutoff,first_observed_at=first_observed,pending_since=pending)
+        result['snapshots']=snapshots_for_experiment(c,experiment['id'])
+        return result
 
     def worker_status(self,*,now):
         with self._connect() as c:
@@ -674,7 +710,13 @@ class RuleLabStore:
             rows=c.execute('''SELECT b.* FROM lab_batches b WHERE status='running' OR EXISTS(
                 SELECT 1 FROM lab_experiments e JOIN lab_decisions d ON d.experiment_id=e.id
                 WHERE e.batch_id=b.id AND d.status='pending') ORDER BY CASE b.mode WHEN 'live' THEN 0 ELSE 1 END,b.id LIMIT 50''').fetchall()
-            return [self._internal_batch(r) for r in rows]
+            from pc28touzhu.services.rule_lab_series import work_context
+            result=[]
+            for row in rows:
+                item=self._internal_batch(row);context=work_context(c,row)
+                if context:item['continuation']=context
+                result.append(item)
+            return result
 
     def get_work_item(self,batch_id):
         with self._connect() as c:
@@ -690,6 +732,13 @@ class RuleLabStore:
             study=c.execute('''SELECT s.id,s.cutoff_issue,s.cutoff_at FROM lab_studies s JOIN lab_study_batches b
                 ON b.study_id=s.id WHERE b.batch_id=?''',(batch_id,)).fetchone()
             internal['study']=dict(study) if study else None
+            from pc28touzhu.services.rule_lab_series import work_context
+            context=work_context(c,batch)
+            if context:
+                internal['continuation']=context
+                internal['end_date']=context['effective_end_date']
+                if internal['study']:
+                    internal['study'].update(cutoff_issue=context['cutoff_issue'],cutoff_at=context['cutoff_at'])
             return dict(batch=internal,experiments=experiments)
 
     def input_evidence(self,predictor_id,issue_no):
@@ -774,7 +823,9 @@ class RuleLabStore:
                 reserve_only = outcome_keys.issubset(pending_keys) and all(str(d['issue_no']) in {key[1] for key in outcome_keys} for d in draws)
             if (decisions or draws or predictions) and not reserve_only:
                 self._require_space()
-            self._cache(c,draws,predictions)
+            from pc28touzhu.services.rule_lab_series import validate_step_inputs
+            continuous=validate_step_inputs(c,batch,draws,predictions,decisions,outcomes)
+            if not continuous:self._cache(c,draws,predictions)
             experiments={r['id']:dict(r) for r in c.execute('SELECT * FROM lab_experiments WHERE batch_id=?',(batch_id,))}
             stats={eid:_load(e['stats_json']) for eid,e in experiments.items()}
             policy=_load(batch['risk_policy_json'])
@@ -790,7 +841,7 @@ class RuleLabStore:
                     raise ValueError('决策与实验不一致')
                 if issue<=max(old_watermark,experiments[eid]['last_decided_issue']):
                     continue
-                conflict=c.execute('''SELECT COALESCE((SELECT conflict FROM lab_predictions WHERE predictor_id=? AND issue_no=?),0)
+                conflict=False if continuous else c.execute('''SELECT COALESCE((SELECT conflict FROM lab_predictions WHERE predictor_id=? AND issue_no=?),0)
                     OR COALESCE((SELECT conflict FROM lab_draws WHERE issue_no=?),0)''',
                     (batch['predictor_id'],str(decision['issue_no']),str(decision['issue_no']))).fetchone()[0]
                 round_no=None;risk_date=None
@@ -831,7 +882,7 @@ class RuleLabStore:
                     # Preserve chronological equity/drawdown, including across separate worker ticks.
                     continue
                 if outcome['status']=='settled':
-                    draw=c.execute('SELECT conflict FROM lab_draws WHERE issue_no=?',(str(outcome['issue_no']),)).fetchone()
+                    draw=None if continuous else c.execute('SELECT conflict FROM lab_draws WHERE issue_no=?',(str(outcome['issue_no']),)).fetchone()
                     if draw and draw['conflict']:
                         progress.update(status='error',error='开奖输入冲突，待核对后恢复；已冻结决策仍保留')
                         continue
@@ -897,6 +948,8 @@ class RuleLabStore:
             # Keep the latest feature window, each pending issue, and active replay warm-up floors.
             latest_floor=c.execute('SELECT issue_key FROM lab_draws ORDER BY issue_key DESC LIMIT 1 OFFSET 99').fetchone()
             floor=latest_floor[0] if latest_floor else 0
+            from pc28touzhu.services.rule_lab_series import protected_floors
+            for protected in protected_floors(c).values():floor=min(floor,protected)
             for active in c.execute("SELECT cursor_json FROM lab_batches WHERE mode='backtest' AND status='running'"):
                 history_floor=_load(active['cursor_json']).get('history_floor_issue')
                 if not history_floor:
@@ -914,3 +967,73 @@ class RuleLabStore:
                         (input_cutoff,floor,remaining))
                     removed['draws']=cur.rowcount
             return removed
+
+    def continuation_preview(self,user_id,owner_kind,owner_id,*,now):
+        from pc28touzhu.services.rule_lab_series import continuation_preview
+        return continuation_preview(self,user_id,owner_kind,owner_id,now=now)
+
+    def set_continuation(self,user_id,owner_kind,owner_id,payload,*,now):
+        from pc28touzhu.services.rule_lab_series import set_continuation
+        return set_continuation(self,user_id,owner_kind,owner_id,payload,now=now)
+
+    def request_append(self,user_id,owner_kind,owner_id,payload,*,now):
+        from pc28touzhu.services.rule_lab_series import request_append
+        return request_append(self,user_id,owner_kind,owner_id,payload,now=now)
+
+    def list_segments(self,user_id,owner_kind,owner_id,*,limit=20,before_id=None):
+        from pc28touzhu.services.rule_lab_series import list_segments
+        return list_segments(self,user_id,owner_kind,owner_id,limit=limit,before_id=before_id)
+
+    def input_coverage(self,user_id,owner_kind,owner_id):
+        from pc28touzhu.services.rule_lab_series import input_coverage
+        return input_coverage(self,user_id,owner_kind,owner_id)
+
+    def capture_work_items(self,*,now,limit=10):
+        from pc28touzhu.services.rule_lab_archive import capture_work_items,seed_cache_page
+        with self._connect(write=True,reserve=True) as c:
+            rows=c.execute('''SELECT DISTINCT s.stream_id FROM lab_series s JOIN lab_capture_streams t ON t.id=s.stream_id
+                WHERE s.capture_enabled=1 AND t.seed_after_issue<t.seed_until_issue ORDER BY t.updated_at,t.id LIMIT ?''',(max(1,min(10,limit)),)).fetchall()
+            for row in rows:seed_cache_page(c,row['stream_id'],limit=200,now=now)
+        return capture_work_items(self,now=now,limit=limit)
+
+    def commit_capture(self,stream_id,expected_revision,*,draws,predictions,coverage,next_issue,now,highest_seen_issue=None,source_identity=None):
+        from pc28touzhu.services.rule_lab_archive import commit_capture
+        return commit_capture(self,stream_id,expected_revision,draws=draws,predictions=predictions,
+            coverage=coverage,next_issue=next_issue,now=now,highest_seen_issue=highest_seen_issue,source_identity=source_identity)
+
+    def set_capture_error(self,stream_id,code,message,*,now):
+        state=code if code in ('archive_gap','storage_paused','source_unavailable') else 'storage_paused' if code=='storage_limit' else 'source_unavailable'
+        with self._connect(write=True,reserve=True) as c:
+            c.execute('UPDATE lab_capture_streams SET state=?,error=?,updated_at=? WHERE id=?',(state,str(message)[:300],now,stream_id))
+            c.execute("INSERT INTO lab_runtime(key,value_json) VALUES('capture_last_stream',?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",(_dump(stream_id),))
+            c.execute('UPDATE lab_series SET state=?,error=?,updated_at=? WHERE stream_id=?',(state,str(message)[:300],now,stream_id))
+
+    def prepare_due_appends(self,*,now,limit=10):
+        from pc28touzhu.services.rule_lab_series import prepare_due_appends
+        return prepare_due_appends(self,now=now,limit=limit)
+
+    def archive_source(self,batch_id):
+        from pc28touzhu.services.rule_lab_series import archive_source
+        return archive_source(self,batch_id)
+
+    def complete_segment(self,batch_id,expected_revision,*,cursor,now):
+        from pc28touzhu.services.rule_lab_series import complete_segment
+        return complete_segment(self,batch_id,expected_revision,cursor=cursor,now=now)
+
+    def monthly_snapshots(self,user_id,batch_id,experiment_id):
+        from pc28touzhu.services.rule_lab_series import monthly_snapshots
+        return monthly_snapshots(self,user_id,batch_id,experiment_id)
+
+    def create_archive_replay(self,user_id,batch_id,experiment_id,config,*,now):
+        from pc28touzhu.services.rule_lab_series import create_archive_replay
+        return create_archive_replay(self,user_id,batch_id,experiment_id,config,now=now)
+
+    def maintain_archive(self,*,now,limit=200):
+        from pc28touzhu.services.rule_lab_archive import maintenance
+        from pc28touzhu.services.rule_lab_series import protected_floors
+        with self._connect() as c:floors=protected_floors(c)
+        return maintenance(self,now=now,protected_floors=floors,limit=limit)
+
+    def continuation_receipt(self,user_id,owner_kind,owner_id,payload,request_kind):
+        from pc28touzhu.services.rule_lab_series import continuation_receipt
+        return continuation_receipt(self,user_id,owner_kind,owner_id,payload,request_kind)

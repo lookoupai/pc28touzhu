@@ -222,6 +222,98 @@ class RuleLabSource:
                 skips['invalid_prediction'] = skips.get('invalid_prediction', 0) + 1
         return dict(items=items, skip_counts=skips)
 
+    def capture_page(self, predictor_id, *, after_issue='', limit=200, observed_at):
+        """Read one consistent page with evidence for absent predictions.
+
+        A missing row is not evidence that the prediction never existed. The
+        per-predictor archive summary tells us which dates may have been purged.
+        Sources without that metadata remain conservatively incomplete.
+        """
+        if type(predictor_id) is not int or predictor_id <= 0:
+            raise ValueError('预测器编号无效')
+        limit = _page_limit(limit)
+        after = _cursor(str(after_issue))
+        reference = datetime.fromisoformat(_utc(observed_at).replace('Z', '+00:00'))
+        with self._read() as (c, deadline):
+            c.execute('BEGIN')
+            allowed = self._query(c, deadline, 'SELECT id FROM predictors WHERE id=? AND ' + _PUBLIC, (predictor_id,))
+            if not allowed:
+                raise RuleLabError('source_unavailable', '来源已停用或不再共享逐期预测，已暂停保存后续数据', 403)
+            columns = {r['name'] for r in self._query(c, deadline, 'PRAGMA table_info(predictors)')}
+            identity_created = None
+            if 'created_at' in columns:
+                identity_created = self._query(c, deadline, 'SELECT created_at FROM predictors WHERE id=?', (predictor_id,))[0][0]
+            identity = _hash([str(self.db_path), predictor_id, identity_created])
+            base = 'SELECT ' + _DRAW_COLUMNS + " FROM lottery_draws WHERE lottery_type='pc28'"
+            latest = self._query(c, deadline, "SELECT issue_no FROM lottery_draws WHERE lottery_type='pc28' ORDER BY issue_no DESC LIMIT 1")
+            highest = str(latest[0][0]) if latest else (after or '0')
+            # A synthetic/start cursor can have one fewer digit than the stored
+            # issue range. Pad that bound without casting the indexed column.
+            seek_after = after.zfill(len(highest)) if after.isdigit() and len(after)<len(highest) else after
+            rows = self._query(c, deadline, base + ' AND issue_no>? ORDER BY issue_no LIMIT ?', (seek_after, limit))
+            metadata = self._query(c, deadline, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='pc28_prediction_daily_summary'")
+            archived_through = None
+            if metadata:
+                archived_through = self._query(c, deadline,
+                    'SELECT MAX(summary_date) FROM pc28_prediction_daily_summary WHERE predictor_id=?', (predictor_id,))[0][0]
+            issues = [str(r['issue_no']) for r in rows]
+            prediction_rows = self._query(c, deadline, '''SELECT id,predictor_id,issue_no,prediction_big_small,
+                prediction_odd_even,prediction_combo,status,created_at,settled_at FROM predictions
+                WHERE predictor_id=? AND lottery_type='pc28' AND issue_no IN (''' + ','.join('?' for _ in issues) + ')',
+                [predictor_id] + issues) if issues else []
+        by_issue = {str(r['issue_no']): r for r in prediction_rows}
+        draws, predictions, coverage = [], [], []
+        previous = int(after) if after.isdigit() else None
+        for row in rows:
+            issue = _issue(row['issue_no'])
+            if previous is not None and int(issue) > previous + 1:
+                coverage.append(dict(issue_no=str(previous + 1), **{'class': 'archive_gap'},
+                    details={'reason': 'missing_draw', 'through_issue': str(int(issue) - 1)}))
+            previous = int(issue)
+            try:
+                draw = self._draw(row, observed_at)
+            except (ValueError, TypeError, KeyError):
+                coverage.append(dict(issue_no=issue, **{'class':'archive_gap'}, details={'reason':'invalid_draw'}))
+                continue
+            draws.append(draw)
+            category, details = 'present', {}
+            if max(datetime.fromisoformat(draw[key].replace('Z','+00:00')) for key in ('open_at','source_created_at')) > reference:
+                category, details = 'waiting', {'reason': 'draw_not_available'}
+            prediction_row = by_issue.get(issue)
+            if prediction_row is None:
+                draw_day = datetime.fromisoformat(draw['open_at'].replace('Z','+00:00')).astimezone(SHANGHAI).date().isoformat()
+                if category != 'waiting':
+                    # A prediction generated just before midnight may target the
+                    # next date. Old cleanup used creation date, so also protect
+                    # the day immediately following the last archived date.
+                    uncertain_through = (date.fromisoformat(archived_through)+timedelta(days=1)).isoformat() if archived_through else None
+                    if not metadata or (uncertain_through and draw_day <= uncertain_through):
+                        category, details = 'archive_gap', {'reason': 'prediction_may_be_archived', 'archived_through': archived_through}
+                    else:
+                        category, details = 'no_prediction', {'reason': 'successful_read_in_retained_range', 'archived_through': archived_through}
+            else:
+                try:
+                    created = _utc(prediction_row['created_at'])
+                    if prediction_row['status'] not in {'pending', 'settled'}:
+                        raise ValueError('unusable_prediction')
+                    settled = _utc(prediction_row['settled_at']) if prediction_row['settled_at'] else None
+                    values = {metric: prediction_row['prediction_' + metric] or None for metric in _VALUES}
+                    if any(value is not None and value not in _VALUES[metric] for metric, value in values.items()):
+                        raise ValueError('invalid_direction')
+                    predictions.append(dict(predictor_id=predictor_id,issue_no=issue,source_id=prediction_row['id'],
+                        created_at=created,settled_at=settled,observed_at=_utc(observed_at),status=prediction_row['status'],
+                        **values,input_hash=_hash([predictor_id, issue, created, values])))
+                except (ValueError, TypeError, KeyError):
+                    if category != 'waiting':
+                        category, details = 'invalid_prediction', {'reason': 'source_row_unusable'}
+            coverage.append(dict(issue_no=issue, **{'class':category}, details=details))
+        if not rows and after.isdigit() and highest.isdigit() and int(highest)>int(after):
+            coverage.append(dict(issue_no=str(int(after)+1), **{'class':'archive_gap'},
+                details={'reason':'missing_draw','through_issue':highest}))
+        return dict(draws=draws,predictions=predictions,coverage=coverage,
+                    next_issue=str(rows[-1]['issue_no']) if rows else (after or None),
+                    highest_seen_issue=highest,source_identity=identity,has_more=len(rows)==limit)
+
     def find_start_issue(self, start_date, *, observed_at):
         """Seek a monotonic PC28 date using indexed single-row probes, never a date scan."""
         start = date.fromisoformat(start_date)
