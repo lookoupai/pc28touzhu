@@ -20,6 +20,7 @@ SHANGHAI = timezone(timedelta(hours=8))
 MAX_TOTAL_EXPERIMENTS = 500
 MAX_RUNNING_EXPERIMENTS = 100
 LEGACY_REPLAY_NOTICE = '此成绩由旧版按轮回放生成：时间预算耗尽时可能漏过入场机会，需复核后再用于方案比较。原成绩已保留。'
+LEGACY_ODDS_NOTICE = '本批次OK游戏网盘使用旧赔率1.98 / 3.60 / 4.20；当前已更正为1.998 / 3.71 / 4.32。历史成绩未重算，不能当作当前赔率的结果。'
 
 
 class RuleLabError(Exception):
@@ -220,13 +221,16 @@ class RuleLabStore:
     def _batch(c, row):
         count = c.execute('SELECT COUNT(*) FROM lab_experiments WHERE batch_id=?',(row['id'],)).fetchone()[0]
         relation=c.execute('SELECT study_id,variant_key FROM lab_study_batches WHERE batch_id=?',(row['id'],)).fetchone()
+        saved=c.execute("SELECT settlement_snapshot_json FROM lab_experiments WHERE batch_id=? AND settlement_rule_id='pc28_netdisk_regular' ORDER BY id LIMIT 1",(row['id'],)).fetchone()
+        legacy_odds=bool(saved and RuleLabStore._legacy_netdisk_odds(_load(saved[0])))
         return dict(id=row['id'],name=row['name'],mode=row['mode'],predictor_id=row['predictor_id'],predictor_name=row['predictor_name'],
                     metric=row['metric'],template_pack=row['template_pack'],stake_amount=row['stake_cents']/100,
                     start_date=row['start_date'],end_date=row['end_date'],status=row['status'],phase=row['phase'],
                     experiment_count=count,processed_issues=row['processed_issues'],total_issues=row['total_issues'],
                     created_at=row['created_at'],started_at=row['started_at'],updated_at=row['updated_at'],error=row['error'],
                     skip_counts=_load(row['skip_counts_json']),
-                    history_notice=(LEGACY_REPLAY_NOTICE+' ' if RuleLabStore._replay_review_required(row) else '')+('历史回放使用现存预测记录，不能证明历史预测版本从未修改。' if row['mode']=='backtest' else ''),
+                    history_notice=(LEGACY_ODDS_NOTICE+' ' if legacy_odds else '')+(LEGACY_REPLAY_NOTICE+' ' if RuleLabStore._replay_review_required(row) else '')+('历史回放使用现存预测记录，不能证明历史预测版本从未修改。' if row['mode']=='backtest' else ''),
+                    legacy_odds=legacy_odds,
                     review_required=RuleLabStore._replay_review_required(row),
                     risk_policy=_load(row['risk_policy_json']),risk_editable=RuleLabStore._risk_editable(c,row),
                     study_id=relation['study_id'] if relation else None,variant_key=relation['variant_key'] if relation else None)
@@ -286,11 +290,21 @@ class RuleLabStore:
                     **{k:runtime[k] for k in ('completed_rounds','profit_rounds','loss_rounds','flat_rounds','invalid_rounds','round_profit_stops','round_loss_stops')})
 
     @staticmethod
+    def _legacy_netdisk_odds(snapshot):
+        odds=snapshot.get('resolved_odds') or snapshot.get('implemented_odds') or {}
+        combo=odds.get('combo') or {}
+        return snapshot.get('settlement_rule_id')=='pc28_netdisk_regular' and (
+            odds.get('big_small')==1.98 or odds.get('odd_even')==1.98 or
+            any(combo.get(value)==old for value,old in [('小单',3.6),('大双',3.6),('大单',4.2),('小双',4.2)]))
+
+    @staticmethod
     def _experiment(c,row):
         stats = _load(row['stats_json'])
         snapshot = _load(row['settlement_snapshot_json'])
         return dict(id=row['id'],batch_id=row['batch_id'],name=row['name'],condition=_load(row['condition_json']),
                     settlement_rule_id=row['settlement_rule_id'],settlement_rule_name=snapshot['rule']['name'],
+                    settlement_odds=snapshot.get('resolved_odds') or snapshot.get('implemented_odds') or {},
+                    legacy_odds=RuleLabStore._legacy_netdisk_odds(snapshot),
                     **{key:stats[key] for key in ('settled_count','hit_count','refund_count','miss_count','direction_hit_count',
                                                   'max_loss_streak','trigger_count','skipped_count')},
                     stake_total=stats['stake_cents']/100,net_profit=stats['net_cents']/100,

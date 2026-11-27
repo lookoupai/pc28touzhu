@@ -62,7 +62,7 @@ class Pc28ProfitRuleTests(unittest.TestCase):
                 bet_value="大",
                 profit_rule_id="not-a-rule",
             ),
-            1.98,
+            1.998,
         )
 
     def test_nested_combo_overrides_and_flat_keys(self):

@@ -41,18 +41,18 @@ def _regular_play_odds(big_small_odd_even: float, small_odd_big_even: float, big
 PC28_PROFIT_RULES = {
     "pc28_netdisk": {
         "big_small": {
-            "regular": {"odds": 1.98},
+            "regular": {"odds": 1.998},
             "abc": {"odds": 1.98},
         },
         "odd_even": {
-            "regular": {"odds": 1.98},
+            "regular": {"odds": 1.998},
             "abc": {"odds": 1.98},
         },
         "combo": {
             "regular": {
                 "group_odds": {
-                    COMBO_GROUP_SMALL_ODD_BIG_EVEN: 3.6,
-                    COMBO_GROUP_BIG_ODD_SMALL_EVEN: 4.2,
+                    COMBO_GROUP_SMALL_ODD_BIG_EVEN: 3.71,
+                    COMBO_GROUP_BIG_ODD_SMALL_EVEN: 4.32,
                 }
             },
             "abc": {

@@ -124,7 +124,7 @@
         pc28_fullpay_3_2_regular: "彩28满赔3.2",
     };
     const SETTLEMENT_RULE_UI_PRESETS = {
-        pc28_netdisk_regular: {bigSmall: 1.98, comboSmallOddBigEven: 3.6, comboBigOddSmallEven: 4.2, refundHint: "无回本。OK游戏网盘 1.98 / 3.6 / 4.2。"},
+        pc28_netdisk_regular: {bigSmall: 1.998, comboSmallOddBigEven: 3.71, comboBigOddSmallEven: 4.32, refundHint: "无回本。OK游戏网盘 1.998 / 3.71 / 4.32，13/14正常赔付。"},
         pc28_netdisk_abc: {bigSmall: 1.98, comboSmallOddBigEven: 4.8, comboBigOddSmallEven: 3.1, refundHint: "无回本。OK游戏网盘 ABC 目录。"},
         pc28_high_regular: {bigSmall: 2.846, comboSmallOddBigEven: 6.78, comboBigOddSmallEven: 6.33, refundHint: "中奖时遇 13/14、对子、顺子、豹子退本。这是 OK游戏高赔常规 2.846 / 6.78 / 6.33，与彩28满赔2.8 的 2.84 / 6.79 不是同一套。"},
         pc28_high_abc: {bigSmall: 1.98, comboSmallOddBigEven: 4.9, comboBigOddSmallEven: 3.1, refundHint: "中奖时遇 13/14、对子、顺子、豹子退本。OK游戏高赔 ABC 目录。"},

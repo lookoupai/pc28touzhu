@@ -13,6 +13,32 @@ from pc28touzhu.domain.settlement_rules import (
 
 
 class SettlementRuleTests(unittest.TestCase):
+    def test_ok_netdisk_current_prices_and_normal_13_14_payout(self):
+        snapshot=build_settlement_snapshot(rule_source='subscription_fixed',settlement_rule_id='pc28_netdisk_regular',fallback_profit_ratio=1,resolved_from='test')
+        self.assertEqual(snapshot['resolved_odds']['big_small'],1.998)
+        self.assertEqual(snapshot['resolved_odds']['odd_even'],1.998)
+        self.assertEqual(snapshot['resolved_odds']['combo'],{'小单':3.71,'大双':3.71,'大单':4.32,'小双':4.32})
+        for metric,value,balls,stake,expected in [('big_small','小',[1,5,7],1000,998),('odd_even','双',[1,5,8],1000,998),
+            ('combo','小单',[1,5,7],1,2.71),('combo','大双',[1,5,8],1,2.71),
+            ('combo','大单',[3,6,8],500,1660),('combo','小双',[1,3,6],500,1660)]:
+            signal=dict(lottery_type='pc28',bet_type=metric,bet_value=value)
+            result=resolve_pc28_result_for_signal(signal=signal,settlement_rule_id='pc28_netdisk_regular',draw_context={'triplet':balls},rule=snapshot['rule'])
+            self.assertEqual(result['result_type'],'hit');self.assertIsNone(result['refund_reason'])
+            self.assertEqual(resolve_pc28_settled_hit_profit(stake_amount=stake,signal=signal,settlement_rule_id='pc28_netdisk_regular',draw_snapshot=result['draw_snapshot'],snapshot=snapshot),expected)
+        abc=build_settlement_snapshot(rule_source='subscription_fixed',settlement_rule_id='pc28_netdisk_abc',fallback_profit_ratio=1,resolved_from='test')
+        self.assertEqual(abc['resolved_odds']['big_small'],1.98)
+        self.assertEqual(abc['resolved_odds']['combo']['小单'],4.8)
+        high=build_settlement_snapshot(rule_source='subscription_fixed',settlement_rule_id='pc28_high_regular',fallback_profit_ratio=1,resolved_from='test')
+        self.assertEqual(high['resolved_odds']['big_small'],2.846)
+
+    def test_old_frozen_netdisk_keeps_its_price_after_catalog_correction(self):
+        import copy
+        snapshot=build_settlement_snapshot(rule_source='subscription_fixed',settlement_rule_id='pc28_netdisk_regular',fallback_profit_ratio=1,resolved_from='test')
+        old=copy.deepcopy(snapshot);old['resolved_odds'].update(big_small=1.98,odd_even=1.98,combo={'小单':3.6,'大双':3.6,'大单':4.2,'小双':4.2})
+        for metric,value,expected in [('big_small','大',.98),('combo','大单',3.2)]:
+            signal=dict(lottery_type='pc28',bet_type=metric,bet_value=value)
+            self.assertEqual(resolve_pc28_settled_hit_profit(stake_amount=1,signal=signal,settlement_rule_id='pc28_netdisk_regular',snapshot=old),expected)
+
     def test_high_rule_refunds_special_sum(self):
         result = resolve_pc28_result_for_signal(
             signal={"lottery_type": "pc28", "bet_type": "big_small", "bet_value": "大"},

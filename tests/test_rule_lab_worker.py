@@ -93,7 +93,7 @@ class RuleLabWorkerTests(unittest.TestCase):
         self.settle_target()
         RuleLabWorker(self.store, self.source).tick(now=stamp(self.now))
         first = self.store.list_experiments(1, batch['id'])[:2]
-        self.assertEqual([r['net_profit'] for r in first], [.98, 1.85])
+        self.assertEqual([r['net_profit'] for r in first], [1.0, 1.85])
         self.worker.tick(now=stamp(self.now + timedelta(seconds=15)))
         self.assertEqual(self.store.list_experiments(1, batch['id'])[:2], first)
 
@@ -104,7 +104,7 @@ class RuleLabWorkerTests(unittest.TestCase):
             self.fixture.draw(1100+i,opened,balls=(3,6,8) if i<0 or i>0 else (1,3,5))
             self.fixture.prediction(1100+i,opened)
         self.now=self.opened+timedelta(hours=1)
-        p=policy();p['round'].update(profit_target=1,loss_limit=10);p['day']['enabled']=False
+        p=policy();p['round'].update(profit_target=2,loss_limit=10);p['day']['enabled']=False
         payload=dict(name='按轮测试',mode='backtest',predictor_id=1,metric='big_small',start_date='2026-11-26',end_date='2026-11-26',risk_policy=p)
         config=normalize_batch_payload(payload,now=stamp(self.now))
         b=self.store.create_batch(1,config,'source',build_experiments('big_small'),now=stamp(self.now))
@@ -119,7 +119,10 @@ class RuleLabWorkerTests(unittest.TestCase):
             detail=self.store.get_experiment_detail(1,b['id'],e['id'])
             issues={d['issue_no'] for d in detail['recent']}
             self.assertIn('1100',issues);self.assertIn('1101',issues)  # Loss broke condition, active round continues.
-        self.assertNotEqual(entered[0]['risk_state']['completed_rounds'],entered[1]['risk_state']['completed_rounds'])
+        rounds=[self.store.get_experiment_detail(1,b['id'],e['id'])['recent_rounds'] for e in entered]
+        # Both may finish one round after the odds update, but must stop on different
+        # issues because their independently accumulated profit crosses 2 at different times.
+        self.assertNotEqual(rounds[0][-1]['end_issue'],rounds[1][-1]['end_issue'])
 
     def test_round_replay_waits_for_result_publication_before_future_bets(self):
         for i in range(4):
@@ -225,7 +228,7 @@ class RuleLabWorkerTests(unittest.TestCase):
         b = self.store.get_batch(1, batch['id'])
         self.assertEqual(b['status'], 'completed', b)
         baseline = self.store.list_experiments(1, batch['id'])[0]
-        self.assertEqual((baseline['settled_count'], baseline['net_profit']), (5, 4.9))
+        self.assertEqual((baseline['settled_count'], baseline['net_profit']), (5, 5.0))
         detail = self.store.get_experiment_detail(1, batch['id'], baseline['id'])
         self.assertEqual(detail['daily'][0]['date'], '2026-11-26')
         self.assertEqual(detail['daily'][0]['settled_count'], 5)

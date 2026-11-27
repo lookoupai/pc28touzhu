@@ -1203,8 +1203,8 @@ class DatabaseRepositoryTests(unittest.TestCase):
             progression_event_id=event["id"],
         )
 
-        self.assertEqual(settled["financial"]["realized_profit"], 9.8)
-        self.assertEqual(settled["financial"]["net_profit"], 9.8)
+        self.assertEqual(settled["financial"]["realized_profit"], 9.98)
+        self.assertEqual(settled["financial"]["net_profit"], 9.98)
 
     def test_progression_event_settlement_uses_pc28_rule_for_combo(self):
         user_id = self.repo.create_user("sub-pc28-combo-profit-user")

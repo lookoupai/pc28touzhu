@@ -1,0 +1,294 @@
+{
+  "standard_reproduces_existing_sim": true,
+  "live_odds_and_voids_reproduce_actual": true,
+  "missing_actual_issues": [],
+  "extra_replayed_issues": [],
+  "different_common": [],
+  "days": [
+    {
+      "day": "2026-11-12",
+      "ok_sim": {
+        "count": 19,
+        "net": 20.6
+      },
+      "live_odds_sim": {
+        "count": 19,
+        "net": 21.76
+      },
+      "live_odds_skip_voids_sim": {
+        "count": 19,
+        "net": 21.76
+      },
+      "actual": {
+        "count": 19,
+        "net": 21.76
+      }
+    },
+    {
+      "day": "2026-11-13",
+      "ok_sim": {
+        "count": 20,
+        "net": -8.0
+      },
+      "live_odds_sim": {
+        "count": 20,
+        "net": -7.65
+      },
+      "live_odds_skip_voids_sim": {
+        "count": 20,
+        "net": -7.65
+      },
+      "actual": {
+        "count": 20,
+        "net": -7.65
+      }
+    },
+    {
+      "day": "2026-11-14",
+      "ok_sim": {
+        "count": 41,
+        "net": -0.8
+      },
+      "live_odds_sim": {
+        "count": 41,
+        "net": 0.37
+      },
+      "live_odds_skip_voids_sim": {
+        "count": 64,
+        "net": 21.23
+      },
+      "actual": {
+        "count": 64,
+        "net": 21.23
+      }
+    },
+    {
+      "day": "2026-11-15",
+      "ok_sim": {
+        "count": 21,
+        "net": -1.2
+      },
+      "live_odds_sim": {
+        "count": 21,
+        "net": -0.62
+      },
+      "live_odds_skip_voids_sim": {
+        "count": 21,
+        "net": -0.62
+      },
+      "actual": {
+        "count": 21,
+        "net": -0.62
+      }
+    },
+    {
+      "day": "2026-11-16",
+      "ok_sim": {
+        "count": 41,
+        "net": -2.0
+      },
+      "live_odds_sim": {
+        "count": 41,
+        "net": -0.85
+      },
+      "live_odds_skip_voids_sim": {
+        "count": 37,
+        "net": -0.56
+      },
+      "actual": {
+        "count": 37,
+        "net": -0.56
+      }
+    },
+    {
+      "day": "2026-11-17",
+      "ok_sim": {
+        "count": 20,
+        "net": -8.0
+      },
+      "live_odds_sim": {
+        "count": 20,
+        "net": -7.65
+      },
+      "live_odds_skip_voids_sim": {
+        "count": 20,
+        "net": -7.65
+      },
+      "actual": {
+        "count": 20,
+        "net": -7.65
+      }
+    },
+    {
+      "day": "2026-11-18",
+      "ok_sim": {
+        "count": 29,
+        "net": -2.6
+      },
+      "live_odds_sim": {
+        "count": 29,
+        "net": -1.81
+      },
+      "live_odds_skip_voids_sim": {
+        "count": 29,
+        "net": -1.81
+      },
+      "actual": {
+        "count": 29,
+        "net": -1.81
+      }
+    },
+    {
+      "day": "2026-11-19",
+      "ok_sim": {
+        "count": 32,
+        "net": 20.2
+      },
+      "live_odds_sim": {
+        "count": 26,
+        "net": 20.35
+      },
+      "live_odds_skip_voids_sim": {
+        "count": 36,
+        "net": 21.48
+      },
+      "actual": {
+        "count": 36,
+        "net": 21.48
+      }
+    },
+    {
+      "day": "2026-11-20",
+      "ok_sim": {
+        "count": 85,
+        "net": 0.8
+      },
+      "live_odds_sim": {
+        "count": 85,
+        "net": 3.28
+      },
+      "live_odds_skip_voids_sim": {
+        "count": 85,
+        "net": 3.28
+      },
+      "actual": {
+        "count": 85,
+        "net": 3.28
+      }
+    },
+    {
+      "day": "2026-11-21",
+      "ok_sim": {
+        "count": 41,
+        "net": -3.8
+      },
+      "live_odds_sim": {
+        "count": 41,
+        "net": -2.68
+      },
+      "live_odds_skip_voids_sim": {
+        "count": 41,
+        "net": -2.68
+      },
+      "actual": {
+        "count": 41,
+        "net": -2.68
+      }
+    },
+    {
+      "day": "2026-11-22",
+      "ok_sim": {
+        "count": 160,
+        "net": 20.6
+      },
+      "live_odds_sim": {
+        "count": 68,
+        "net": 20.33
+      },
+      "live_odds_skip_voids_sim": {
+        "count": 68,
+        "net": 20.33
+      },
+      "actual": {
+        "count": 68,
+        "net": 20.33
+      }
+    },
+    {
+      "day": "2026-11-23",
+      "ok_sim": {
+        "count": 54,
+        "net": 21.0
+      },
+      "live_odds_sim": {
+        "count": 51,
+        "net": 21.88
+      },
+      "live_odds_skip_voids_sim": {
+        "count": 51,
+        "net": 21.88
+      },
+      "actual": {
+        "count": 51,
+        "net": 21.88
+      }
+    },
+    {
+      "day": "2026-11-24",
+      "ok_sim": {
+        "count": 20,
+        "net": -11.6
+      },
+      "live_odds_sim": {
+        "count": 20,
+        "net": -11.36
+      },
+      "live_odds_skip_voids_sim": {
+        "count": 20,
+        "net": -11.36
+      },
+      "actual": {
+        "count": 20,
+        "net": -11.36
+      }
+    },
+    {
+      "day": "2026-11-25",
+      "ok_sim": {
+        "count": 20,
+        "net": -4.4
+      },
+      "live_odds_sim": {
+        "count": 20,
+        "net": -3.94
+      },
+      "live_odds_skip_voids_sim": {
+        "count": 20,
+        "net": -3.94
+      },
+      "actual": {
+        "count": 20,
+        "net": -3.94
+      }
+    },
+    {
+      "day": "2026-11-26",
+      "ok_sim": {
+        "count": 20,
+        "net": -7.4
+      },
+      "live_odds_sim": {
+        "count": 20,
+        "net": -7.04
+      },
+      "live_odds_skip_voids_sim": {
+        "count": 20,
+        "net": -7.04
+      },
+      "actual": {
+        "count": 20,
+        "net": -7.04
+      }
+    }
+  ]
+}

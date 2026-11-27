@@ -120,6 +120,12 @@
     }
     function today() { return new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); }
     function modeName(mode) { return mode === "backtest" ? "历史回测" : "前向模拟"; }
+    function settlementName(item) {return item.settlement_rule_name+(item.legacy_odds?'（旧赔率）':'');}
+    function frozenOddsText(item) {
+        const odds=item.settlement_odds||{},metric=item.condition?.metric;
+        const n=value=>typeof value==='number'?String(value):'未知';
+        return metric==='combo'?'小单/大双 '+n(odds.combo?.['小单'])+'；大单/小双 '+n(odds.combo?.['大单']):n(odds[metric]);
+    }
     function conditionName(c) {
         if (!c || typeof c !== "object") return "条件信息不可用";
         const compare = c.operator === "lte" ? "≤" : "≥";
@@ -362,7 +368,7 @@
         $("labResultPageInfo").textContent = list.length ? "显示 " + (start + 1) + "–" + Math.min(start + pageSize, list.length) + "，共 " + list.length + " 个实验版本" : "没有实验版本";
         list.slice(start, start + pageSize).forEach((item, index) => {
             const row = element("tr"); if (sort === "paired" && index > 0 && index % 2 === 0) row.className = "lab-pair-start";
-            row.append(element("td", conditionName(item.condition), "lab-condition"), element("td", item.settlement_rule_name),
+            row.append(element("td", conditionName(item.condition), "lab-condition"), element("td", settlementName(item)),
                 element("td", item.settled_count, "lab-number"), element("td", money(item.net_profit, true), "lab-number " + profitClass(item.net_profit)),
                 element("td", percent(item.roi_percent), "lab-number"), element("td", money(item.max_drawdown), "lab-number"),
                 element("td", item.max_loss_streak, "lab-number"), element("td", resultCounts(item), "lab-number"));
@@ -509,7 +515,7 @@
         closeDetail(false); state.detailId = item.id; state.detailTrigger = button;
         const revision = ++state.detailRevision, batchId = state.selectedId;
         button.setAttribute("aria-expanded", "true"); $("labExperimentDetail").hidden = false;
-        $("labDetailTitle").textContent = conditionName(item.condition) + " · " + item.settlement_rule_name;
+        $("labDetailTitle").textContent = conditionName(item.condition) + " · " + settlementName(item);
         const packName=(state.options?.template_packs||[]).find(pack=>pack.id===state.batch?.template_pack)?.name||state.batch?.template_pack||'基础条件 v1';
         $("labDetailMeta").textContent = packName+" · 固定金额 · 北京时间 · "+riskSummary(state.batch?.risk_policy);
         $("labDetailStats").replaceChildren(); $("labDailyBody").replaceChildren(); $("labRecentBody").replaceChildren();$("labRoundsBody").replaceChildren();
@@ -519,6 +525,7 @@
             if (revision !== state.detailRevision || batchId !== state.selectedId) return;
             if (!result.experiment || !Array.isArray(result.daily) || !Array.isArray(result.recent)) throw responseError("明细数据不完整，请关闭后重试", 0, "invalid_response");
             const exp = result.experiment;
+            $("labDetailMeta").append(document.createTextNode(' · 本实验冻结赔率：'+frozenOddsText(exp)+(exp.legacy_odds?'。旧赔率成绩保留，未按当前赔率重算。':'')));
             state.reportExperiment=exp;
             state.monthly=result.monthly||null;
             renderMonthly();
@@ -652,7 +659,7 @@
         state.studyPage=Math.min(state.studyPage,Math.max(0,Math.ceil(rows.length/pageSize)-1));const start=state.studyPage*pageSize;
         $("labStudyRows").replaceChildren();rows.slice(start,start+pageSize).forEach(r=>{const tr=element('tr');
             const child=study.children.find(child=>child.batch_id===r.batch_id);
-            [conditionName(r.condition),r.settlement_rule_name,r.variant_label,r.settled_count,money(r.stake_total),money(r.net_profit,true),percent(r.roi_percent),money(r.max_drawdown),money(r.worst_day_profit,true),r.profitable_days+' / '+r.betting_days,r.completed_rounds,money(r.delta_net_profit,true),r.delta_roi_pp===null?'—':money(r.delta_roi_pp,true),money(r.delta_drawdown,true),sampleLabel(r,{...child,study_id:study.id})].forEach(v=>tr.append(element('td',v,'lab-number')));
+            [conditionName(r.condition),settlementName(r),r.variant_label,r.settled_count,money(r.stake_total),money(r.net_profit,true),percent(r.roi_percent),money(r.max_drawdown),money(r.worst_day_profit,true),r.profitable_days+' / '+r.betting_days,r.completed_rounds,money(r.delta_net_profit,true),r.delta_roi_pp===null?'—':money(r.delta_roi_pp,true),money(r.delta_drawdown,true),sampleLabel(r,{...child,study_id:study.id})].forEach(v=>tr.append(element('td',v,'lab-number')));
             const td=element('td');td.append(actionButton('子批次',()=>selectBatch(r.batch_id)));
             const monthly=actionButton('月度成绩',async()=>{if(locked())return;await selectBatch(r.batch_id);const item=state.experiments.find(item=>item.id===r.experiment_id);if(state.selectedId===r.batch_id&&item)await openDetail(item,monthly,true);});td.append(monthly);tr.append(td);$("labStudyRows").append(tr);});
         $("labStudyPageInfo").textContent=rows.length?'显示 '+(start+1)+'–'+Math.min(start+pageSize,rows.length)+'，共 '+rows.length+' 行':'当前筛选无结果';

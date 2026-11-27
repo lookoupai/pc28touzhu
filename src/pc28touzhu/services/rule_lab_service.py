@@ -199,7 +199,7 @@ class RuleLabService:
 
     def export_study_csv(self,user_id,study_id):
         data=self.store.study_comparison(user_id,study_id);study=data['study']
-        fields=['experiment_id','batch_id','condition','settlement_rule_name','variant_key','variant_label','risk_policy',
+        fields=['experiment_id','batch_id','condition','settlement_rule_name','settlement_odds','legacy_odds','variant_key','variant_label','risk_policy',
             'settled_count','stake_total','net_profit','roi_percent','max_drawdown','worst_day_profit','profitable_days','betting_days',
             'completed_rounds','sample_label','cutoff_issue','cutoff_at','comparable','comparison_reason','input_digest',
             'delta_net_profit','delta_roi_pp','delta_drawdown']
@@ -207,6 +207,7 @@ class RuleLabService:
         digest={coverage['variant_key']:coverage.get('digest') for coverage in study['actual_coverage']}
         for source in data['rows']:
             row={**source,'condition':json.dumps(source['condition'],ensure_ascii=False,separators=(',',':')),
+                 'settlement_odds':json.dumps(source['settlement_odds'],ensure_ascii=False,separators=(',',':')),
                  'risk_policy':json.dumps(source['risk_policy'],ensure_ascii=False,separators=(',',':')),
                  'cutoff_issue':study['cutoff_issue'],'cutoff_at':study['cutoff_at'],'comparison_reason':study['comparison_reason'],
                  'input_digest':digest[source['variant_key']]}
@@ -253,7 +254,7 @@ class RuleLabService:
         # The ledger returns at most 100 owned experiments; no source access or replay.
         batch=self.store.get_batch(user_id, batch_id)
         experiments = self.store.list_experiments(user_id, batch_id)
-        fields = ['experiment_id', 'name', 'condition', 'settlement_rule', 'settled_count', 'hit_count',
+        fields = ['experiment_id', 'name', 'condition', 'settlement_rule', 'settlement_odds', 'legacy_odds', 'settled_count', 'hit_count',
                   'refund_count', 'miss_count', 'stake_total', 'net_profit', 'roi_percent', 'max_drawdown',
                   'max_loss_streak', 'trigger_count', 'skipped_count','risk_mode','risk_policy','started_rounds','completed_rounds',
                   'profit_rounds','loss_rounds','flat_rounds','invalid_rounds','round_profit_stops','round_loss_stops','round_net_profit','risk_state','stop_reason']
@@ -262,6 +263,7 @@ class RuleLabService:
         writer.writerow(fields)
         for experiment in experiments:
             row = dict(experiment, experiment_id=experiment['id'], settlement_rule=experiment['settlement_rule_name'],
+                       settlement_odds=json.dumps(experiment['settlement_odds'],ensure_ascii=False,separators=(',',':')),
                        condition=json.dumps(experiment['condition'], ensure_ascii=False, separators=(',', ':')))
             row.update(experiment['risk_state']);row.update(risk_mode=batch['risk_policy']['mode'],
                 risk_policy=json.dumps(batch['risk_policy'],ensure_ascii=False,separators=(',',':')),risk_state=experiment['risk_state']['state'])

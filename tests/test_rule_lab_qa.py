@@ -60,7 +60,7 @@ class RuleLabIndependentQaTests(unittest.TestCase):
 
     def test_all_thousand_triplets_follow_independent_ok_payout_oracle(self):
         # Compare to the published rules rather than calling the same production helper twice.
-        netdisk_odds = {'big_small': 1.98, 'odd_even': 1.98}
+        netdisk_odds = {'big_small': 1.998, 'odd_even': 1.998}
         high_odds = {'big_small': 2.846, 'odd_even': 2.846}
         directions = {'big_small': ('大', '小'), 'odd_even': ('单', '双'),
                       'combo': ('大单', '大双', '小单', '小双')}
@@ -82,7 +82,7 @@ class RuleLabIndependentQaTests(unittest.TestCase):
                     for high, snapshot in enumerate(snapshots[metric]):
                         hit = actual[metric] == value
                         odds = ((6.78 if value in ('小单', '大双') else 6.33) if high else
-                                (3.6 if value in ('小单', '大双') else 4.2)) if metric == 'combo' else (
+                                (3.71 if value in ('小单', '大双') else 4.32)) if metric == 'combo' else (
                                     high_odds if high else netdisk_odds)[metric]
                         expected_type = 'miss' if not hit else 'refund' if high and special else 'hit'
                         expected_cents = -100 if not hit else 0 if high and special else int(round(round(odds - 1, 2) * 100))

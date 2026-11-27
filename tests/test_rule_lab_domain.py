@@ -154,7 +154,7 @@ class RuleLabDomainTests(unittest.TestCase):
         definitions = build_experiments('big_small')
         netdisk, high = [d['settlement_snapshot'] for d in definitions[:2]]
         self.assertEqual(settle_bet(high, 'big_small', '大', 100, [3,6,8])['net_cents'],185)
-        self.assertEqual(settle_bet(netdisk,'big_small','大',100,[3,6,8])['net_cents'],98)
+        self.assertEqual(settle_bet(netdisk,'big_small','大',100,[3,6,8])['net_cents'],100)
         for balls in [[4,4,9], [4,5,6], [9,9,9], [1,5,7], [1,5,8], [0,1,9]]:
             target = '大' if sum(balls)>=14 else '小'
             out = settle_bet(high,'big_small',target,100,balls)

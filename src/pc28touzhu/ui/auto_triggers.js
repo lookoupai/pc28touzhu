@@ -83,7 +83,7 @@
         ["pc28_fullpay_3_2_regular", "彩28满赔3.2"],
     ];
     const SETTLEMENT_RULE_UI_PRESETS = {
-        pc28_netdisk_regular: {bigSmall: 1.98, comboSmallOddBigEven: 3.6, comboBigOddSmallEven: 4.2, refundHint: "无回本。OK游戏网盘"},
+        pc28_netdisk_regular: {bigSmall: 1.998, comboSmallOddBigEven: 3.71, comboBigOddSmallEven: 4.32, refundHint: "无回本，13/14正常赔付。OK游戏网盘"},
         pc28_netdisk_abc: {bigSmall: 1.98, comboSmallOddBigEven: 4.8, comboBigOddSmallEven: 3.1, refundHint: "无回本。OK游戏网盘 ABC"},
         pc28_high_regular: {bigSmall: 2.846, comboSmallOddBigEven: 6.78, comboBigOddSmallEven: 6.33, refundHint: "中奖遇 13/14、对子、顺子、豹子退本（旧高赔 2.846）"},
         pc28_high_abc: {bigSmall: 1.98, comboSmallOddBigEven: 4.9, comboBigOddSmallEven: 3.1, refundHint: "中奖遇 13/14、对子、顺子、豹子退本"},

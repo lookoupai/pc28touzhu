@@ -86,6 +86,9 @@ class RuleLabApiTests(unittest.TestCase):
         self.assertEqual(data['predictors'], [{'id': 7, 'name': '公开预测器'}])
         self.assertEqual([r['id'] for r in data['settlement_rules']], ['pc28_netdisk_regular', 'pc28_high_regular'])
         self.assertEqual(data['settlement_rules'][1]['big_small_odds'], 2.846)
+        self.assertEqual(data['settlement_rules'][0]['big_small_odds'],1.998)
+        self.assertEqual(data['settlement_rules'][0]['small_odd_big_even_odds'],3.71)
+        self.assertEqual(data['settlement_rules'][0]['big_odd_small_even_odds'],4.32)
         self.assertEqual(data['limits']['max_running_experiments'], 100)
         self.assertTrue(data['source_available'])
 

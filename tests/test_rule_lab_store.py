@@ -11,6 +11,20 @@ NOW='2026-11-26T04:00:00Z'
 
 
 class RuleLabStoreTests(unittest.TestCase):
+    def test_old_odds_are_labeled_without_changing_saved_results_or_snapshot(self):
+        eid=self.store.list_experiments(1,self.batch['id'])[0]['id']
+        with sqlite3.connect(self.path) as c:
+            snapshot=json.loads(c.execute('SELECT settlement_snapshot_json FROM lab_experiments WHERE id=?',(eid,)).fetchone()[0])
+            snapshot['resolved_odds'].update(big_small=1.98,odd_even=1.98,combo={'小单':3.6,'大双':3.6,'大单':4.2,'小双':4.2})
+            c.execute('UPDATE lab_experiments SET settlement_snapshot_json=? WHERE id=?',(json.dumps(snapshot),eid))
+            before=c.execute('SELECT * FROM lab_experiments WHERE id=?',(eid,)).fetchone()
+        batch=self.store.get_batch(1,self.batch['id']);detail=self.store.get_experiment_detail(1,self.batch['id'],eid)
+        self.assertTrue(batch['legacy_odds']);self.assertIn('历史成绩未重算',batch['history_notice'])
+        self.assertTrue(detail['experiment']['legacy_odds']);self.assertEqual(detail['experiment']['settlement_odds']['combo']['大单'],4.2)
+        with sqlite3.connect(self.path) as c:self.assertEqual(c.execute('SELECT * FROM lab_experiments WHERE id=?',(eid,)).fetchone(),before)
+        fresh=self.create();self.assertFalse(self.store.get_batch(1,fresh['id'])['legacy_odds'])
+        self.assertEqual(self.store.list_experiments(1,fresh['id'])[0]['settlement_odds']['combo']['大单'],4.32)
+
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory()
         self.path=Path(self.tmp.name)/'lab.db'
