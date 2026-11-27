@@ -44,13 +44,13 @@ __APP_SHELL__
                     <span id="labPredictorError" class="lab-field-error"></span>
                 </div>
                 <div class="lab-field">
-                    <label for="labMetric">投注玩法</label><select id="labMetric" name="metric"><option value="big_small">大小</option><option value="odd_even" selected>单双</option><option value="combo">组合</option></select>
+                    <label for="labMetric">投注玩法</label><select id="labMetric" name="metric" aria-describedby="labMetricHelp"><option value="big_small">大小</option><option value="odd_even" selected>单双</option><option value="combo">组合</option></select><span id="labMetricHelp" class="lab-muted">每批选择一种玩法；通过条件模板，在同一批次比较多种触发条件。</span>
                 </div>
                 <div class="lab-field">
-                    <label for="labStake">每期模拟金额</label><input id="labStake" name="stake_amount" type="number" min="0.01" max="10000" step="0.01" value="1" required aria-describedby="labStakeHelp labStakeError">
-                    <span id="labStakeHelp" class="lab-muted">模拟资金单位；每个实验独立记账。</span><span id="labStakeError" class="lab-field-error"></span>
+                    <label for="labStake">每注模拟金额</label><input id="labStake" name="stake_amount" type="number" min="0" max="10000" step="1" value="1" required aria-describedby="labStakeHelp labStakeError">
+                    <span id="labStakeHelp" class="lab-muted">每次下注使用此金额，每个实验独立记账；加减按钮每次调整1元。</span><span id="labStakeError" class="lab-field-error"></span>
                 </div>
-                <div class="lab-field"><label for="labTemplatePack">条件模板</label><select id="labTemplatePack" name="template_pack" aria-describedby="labTemplateHelp"><option value="basic_v1">基础条件 v1</option></select><span id="labTemplateHelp" class="lab-muted">含无条件跟随基准、连续条件与窗口命中率。</span></div>
+                <div class="lab-field"><label for="labTemplatePack">条件模板</label><select id="labTemplatePack" name="template_pack" aria-describedby="labTemplateHelp labTemplateGuide"><option value="basic_v1">基础条件 v1（多种触发）</option></select><span id="labTemplateHelp" class="lab-muted">含无条件跟随基准、连续条件与窗口命中率。</span><span id="labTemplateGuide" class="lab-muted">比较连错、连中、走势与命中率，选“基础条件”；只比较组合长连错门槛，选“组合长连错”。</span></div>
                 <fieldset class="lab-mode-field"><legend>观察方式</legend><div class="lab-radio-options"><label><input type="radio" name="mode" value="live" checked> 前向模拟</label><label><input type="radio" name="mode" value="backtest"> 历史回测</label></div><p id="labModeHelp" class="lab-muted"></p></fieldset>
                 <div id="labDates" class="lab-dates" hidden>
                     <div class="lab-field"><label for="labStartDate">开始日期</label><input id="labStartDate" name="start_date" type="date" aria-describedby="labDateHelp labStartDateError"><span id="labStartDateError" class="lab-field-error"></span></div>
@@ -110,11 +110,26 @@ __APP_SHELL__
             <div id="labMonthlyChart" class="lab-monthly-chart"></div>
             <div class="lab-table-scroll" role="region" aria-label="月度成绩表，可横向滚动" tabindex="0"><table class="lab-table"><caption>北京时间自然月；部分月份与无交易月份不计入月度胜率。月内回撤按日结算统计，可能低于逐笔回撤。</caption><thead><tr><th scope="col">月份</th><th scope="col">统计状态</th><th scope="col">结算笔数</th><th scope="col">累计投注额</th><th scope="col">月度净利润</th><th scope="col">投注收益率</th><th scope="col">盈利 / 亏损 / 投注天数</th><th scope="col">最差单日盈亏</th><th scope="col">最大回撤金额（日结）</th></tr></thead><tbody id="labMonthlyBody"></tbody></table></div>
             <h3 class="lab-report-subtitle">资金表现</h3>
-            <div class="lab-field lab-initial-capital"><label for="labInitialCapital">初始资金</label><input id="labInitialCapital" type="number" min="0.01" max="1000000000" step="0.01" placeholder="例如：1000" aria-describedby="labCapitalBasis"><span id="labCapitalBasis" class="lab-muted">填入用于分析的本金，金额单位与每注金额一致。仅换算已有回测结果，不改变下注金额，也未模拟资金不足停投。</span></div>
+            <p id="labCapitalStake" class="lab-note"></p>
+            <div class="lab-field lab-initial-capital"><label for="labInitialCapital">初始资金</label><input id="labInitialCapital" type="number" min="0" max="1000000000" step="1" placeholder="例如：1000" aria-describedby="labCapitalBasis"><span id="labCapitalBasis" class="lab-muted">本金用于计算当前回测的资金曲线与收益率。要改变每注金额，请使用下方“按新金额重新回测”。</span></div>
             <div id="labCapitalFeedback" class="lab-feedback" role="status"></div>
             <dl id="labCapitalSummary" class="lab-summary"></dl>
             <div id="labEquityChart" class="lab-monthly-chart"></div>
             <p class="lab-muted">资金曲线按每日结算统计；最大回撤率 = 各日相对此前最高资金的下降比例中的最大值。日内亏损可能更大。当前结果未单独建模费用或多策略同时占款，初始资金只是报表参数，不是最低本金建议。</p>
+            <details id="labStakeReplay" class="lab-risk-box lab-amount-replay">
+                <summary>按新金额重新回测</summary>
+                <form id="labReplayForm" novalidate>
+                    <p class="lab-muted">为当前条件和当前赔率版本生成1个新实验，沿用本次来源与日期，逐笔重算盈亏和风控。保存后点击“启动模拟”；完成后查看新实验的资金表现。</p>
+                    <div class="lab-form-grid lab-replay-fields">
+                        <div class="lab-field"><label for="labReplayStake">新回测每注金额</label><input id="labReplayStake" type="number" min="0" max="10000" step="1" required aria-describedby="labReplayFeedback"></div>
+                        <div class="lab-field"><label for="labReplayRiskMode">止盈止损金额</label><select id="labReplayRiskMode"><option value="scale">随每注金额同比调整</option><option value="keep">保留原金额</option></select></div>
+                    </div>
+                    <p id="labReplayRiskPreview" class="lab-note"></p>
+                    <p class="lab-muted">同比调整包含单轮、每日及附加日保护的止盈止损，四舍五入到分；次数、冷却期和命中率门槛保持原值。仅修改每注金额时，停轮时点可能改变。历史数据已清理的区间可能无法完整重测。</p>
+                    <button id="labReplayCreateButton" class="lab-button lab-button-primary" type="submit">生成新金额回测（暂停）</button>
+                    <p id="labReplayFeedback" class="lab-feedback" role="status"></p>
+                </form>
+            </details>
         </section>
         <h3>最近轮次</h3><div class="lab-table-scroll" role="region" aria-label="轮次结果表，可横向滚动" tabindex="0"><table class="lab-table"><caption>最多显示最近30轮；区间结束时未完结轮仍保留实际净利，不强制收工。无有效投注轮单列，不算盈利成功。</caption><thead><tr><th scope="col">轮次</th><th scope="col">开始时间</th><th scope="col">结束时间</th><th scope="col">冻结 / 已结算期数</th><th scope="col">净收益</th><th scope="col">状态</th><th scope="col">停止原因</th></tr></thead><tbody id="labRoundsBody"></tbody></table></div>
         <h3>最近每日成绩</h3><div class="lab-table-scroll" role="region" aria-label="每日成绩表，可横向滚动" tabindex="0"><table class="lab-table"><caption>最多显示最近 90 天；未显示的日期不等于没有记录。</caption><thead><tr><th scope="col">日期</th><th scope="col">结算数</th><th scope="col">实赔 / 退本 / 全亏</th><th scope="col">投注额</th><th scope="col">净收益</th></tr></thead><tbody id="labDailyBody"></tbody></table></div>

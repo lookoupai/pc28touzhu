@@ -1,0 +1,73 @@
+/* Real WSGI/SQLite: amount controls, one-version replay and exact settlement. */
+const assert=require('node:assert/strict');
+const path=require('node:path');
+const {spawn}=require('node:child_process');
+const {chromium}=require(path.join(process.env.PC28_UI_NODE_MODULES||'/tmp/pc28-cycle-ui-tools/node_modules','playwright-core'));
+const root=path.resolve(__dirname,'..');
+(async()=>{
+ const server=spawn(process.env.PYTHON||'python3',['-u','-m','tests.rule_lab_ui_server'],{cwd:root,stdio:['pipe','pipe','pipe']});
+ let browser,stderr='';server.stderr.on('data',data=>stderr+=data);
+ try{
+  const info=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(new Error(stderr)),20000);
+   server.on('exit',code=>{clearTimeout(timer);reject(new Error('fixture '+code+stderr));});
+   server.stdout.on('data',data=>{output+=data;if(output.includes('\n')){clearTimeout(timer);resolve(JSON.parse(output.split('\n')[0]));}});
+  });
+  browser=await chromium.launch({headless:true,executablePath:process.env.PC28_UI_CHROMIUM||'/root/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome',args:['--no-sandbox']});
+  const context=await browser.newContext({viewport:{width:1440,height:1000}});await context.addCookies([{name:info.cookie_name,value:info.cookie,url:info.url}]);
+  await context.route('**/*',route=>new URL(route.request().url()).origin===info.url?route.continue():route.abort());
+  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(String(error)));
+  await page.goto(info.url+'/rule-lab');await page.waitForFunction(()=>!document.getElementById('labRefreshButton').disabled);
+  assert.match(await page.locator('#labTemplateGuide').innerText(),/连错、连中、走势与命中率/);
+  const inputs=page.locator('#labBatchForm input[type=number]');
+  for(let i=0;i<await inputs.count();i++)assert.equal(await inputs.nth(i).getAttribute('step'),'1');
+  await page.getByLabel('每注模拟金额',{exact:true}).focus();await page.keyboard.press('ArrowUp');assert.equal(await page.locator('#labStake').inputValue(),'2');
+  await page.keyboard.press('ArrowDown');assert.equal(await page.locator('#labStake').inputValue(),'1');
+  await page.getByLabel('批次名称',{exact:true}).fill('金额回测原批次');
+  await page.getByRole('radio',{name:'历史回测',exact:true}).check();
+  const day=new Date(Date.now()+8*3600000).toISOString().slice(0,10);
+  await page.getByLabel('开始日期',{exact:true}).fill(day);await page.getByLabel('结束日期',{exact:true}).fill(day);
+  await page.locator('#labRiskPreset').selectOption('6:9:7:odd_even');
+  await page.locator('#labRiskRoundProfit').focus();await page.keyboard.press('ArrowUp');assert.equal(await page.locator('#labRiskRoundProfit').inputValue(),'11');
+  await page.keyboard.press('ArrowDown');
+  async function saved(suffix,click){const pending=page.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname.endsWith(suffix));await click();const r=await pending;assert.ok([200,201].includes(r.status()),await r.text());return r.json();}
+  const original=await saved('/batches',()=>page.getByRole('button',{name:'生成并保存',exact:true}).click());const bid=original.batch.id;
+  await page.waitForFunction(()=>!document.getElementById('labRefreshButton').disabled);
+  await saved('/state',()=>page.locator('#labBatchStateButton').click());
+  assert.equal(await page.evaluate(async id=>(await fetch('/__fixture/settle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({batch_id:id})})).status,bid),200);
+  await page.locator('#labRefreshButton').click();await page.waitForFunction(()=>!document.getElementById('labRefreshButton').disabled);
+  const openFirst=async()=>{await page.locator('#labResultsBody tr').first().getByRole('button',{name:'详情',exact:true}).click();await page.locator('#labMonthlyBody tr').first().waitFor();};
+  await openFirst();assert.match(await page.locator('#labCapitalStake').innerText(),/每注 1.00/);
+  await page.locator('#labInitialCapital').fill('1000');await page.locator('#labInitialCapital').focus();await page.keyboard.press('ArrowUp');assert.equal(await page.locator('#labInitialCapital').inputValue(),'1001');await page.keyboard.press('ArrowDown');
+  await page.locator('#labStakeReplay > summary').click();await page.locator('#labReplayStake').fill('10');
+  assert.match(await page.locator('#labReplayRiskPreview').innerText(),/单轮止盈 100 \/ 止损 100/);
+  assert.match(await page.locator('#labReplayRiskPreview').innerText(),/日止盈 200 \/ 止损 200/);
+  await page.locator('#labReplayRiskMode').selectOption('keep');assert.match(await page.locator('#labReplayRiskPreview').innerText(),/单轮止盈 10 \/ 止损 10/);
+  await page.locator('#labReplayRiskMode').selectOption('scale');
+  await page.locator('#labReplayStake').fill('1e300');assert.match(await page.locator('#labReplayRiskPreview').innerText(),/填写0.01/);
+  await page.locator('#labReplayStake').fill('0');await page.locator('#labReplayCreateButton').click();assert.match(await page.locator('#labReplayFeedback').innerText(),/请输入/);
+  await page.locator('#labReplayStake').fill('10');
+  assert.equal(await page.locator('#labReplayFeedback').innerText(),'');
+  await page.locator('#labStakeReplay').scrollIntoViewIfNeeded();await page.screenshot({path:'/tmp/pc28-lab-amount-desktop.png'});
+  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+  await page.locator('#labStakeReplay').scrollIntoViewIfNeeded();await page.screenshot({path:'/tmp/pc28-lab-amount-mobile.png'});
+  const child=await saved('/replay',()=>page.locator('#labReplayCreateButton').click());
+  assert.equal(child.generated_count,1);assert.equal(child.batch.status,'paused');assert.equal(child.batch.stake_amount,10);
+  assert.equal(child.batch.risk_policy.round.profit_target,100);assert.equal(child.batch.risk_policy.day.hit_rate_gate.threshold,25);
+  assert.equal(child.batch.risk_policy.cooldown_issues,10);
+  await page.waitForFunction(()=>!document.getElementById('labRefreshButton').disabled);
+  assert.match(await page.locator('#labResultPageInfo').innerText(),/共 1 个/);
+  await saved('/state',()=>page.locator('#labBatchStateButton').click());
+  await page.evaluate(async id=>await fetch('/__fixture/settle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({batch_id:id})}),child.batch.id);
+  await page.locator('#labRefreshButton').click();await page.waitForFunction(()=>!document.getElementById('labRefreshButton').disabled);
+  await openFirst();assert.match(await page.locator('#labCapitalStake').innerText(),/每注 10.00/);
+  assert.match(await page.locator('#labCapitalSummary').innerText(),/期末资金\s+1009.96/);
+  assert.match(await page.locator('#labCapitalSummary').innerText(),/每注金额 \/ 占初始资金\s+10.00 \/ 1.00%/);
+  const old=await page.evaluate(async id=>await(await fetch('/api/platform/rule-lab/batches/'+id)).json(),bid);assert.equal(old.experiments[0].net_profit,1);assert.equal(old.batch.stake_amount,1);
+  // A lost create response refreshes the list once; it never retries the POST.
+  await page.locator('#labStakeReplay > summary').click();await page.locator('#labReplayStake').fill('20');let posts=0;
+  await page.route('**/experiments/*/replay',async route=>{posts++;await route.fetch();await route.abort();});
+  await page.locator('#labReplayCreateButton').click();await page.locator('#statusMessage').filter({hasText:'生成结果暂时无法确认'}).waitFor();
+  assert.equal(posts,1);const overview=await page.evaluate(async()=>await(await fetch('/api/platform/rule-lab')).json());assert.equal(overview.batches.length,3);
+  assert.deepEqual(errors,[]);console.log('Amount UI passed: integer arrows, template help, scaling/keep preview, one-version replay, exact rounded payout, preserved original, lost-response safety and mobile.');
+ }catch(error){console.error(stderr);throw error;}finally{if(browser)await browser.close();server.stdin.end();}
+})().catch(error=>{console.error(error);process.exitCode=1;});

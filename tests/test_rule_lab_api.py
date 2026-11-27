@@ -4,6 +4,8 @@ from __future__ import annotations
 import csv
 import io
 import json
+import copy
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -209,6 +211,81 @@ class RuleLabApiTests(unittest.TestCase):
         self.assertEqual(data['worker']['state'], 'starting')
         self.assertGreater(data['storage']['used_bytes'], 0)
         self.assertEqual(data['storage']['detail_retention_days'], 30)
+
+    def replay_parent(self,**changes):
+        data=dict(name='金额重测',mode='backtest',predictor_id=7,metric='combo',template_pack='combo_long_miss_v1',
+            stake_amount=1,start_date='2026-11-01',end_date='2026-11-26',risk_policy=policy())
+        data.update(changes)
+        batch=self.service.create_batch(1,data,now=NOW)['batch']
+        experiment=self.store.list_experiments(1,batch['id'])[10]
+        path=PREFIX+'/batches/%s/experiments/%s/replay'%(batch['id'],experiment['id'])
+        return batch,experiment,path
+
+    def test_amount_replay_copies_one_frozen_experiment_and_scales_only_money(self):
+        p=policy(cooldown_issues=10);p['day']['hit_rate_gate'].update(enabled=True,threshold=25)
+        p['round']['max_bets']=40;p['day']['max_rounds']=3
+        guard=copy.deepcopy(p['day']);guard.update(profit_target=35,loss_limit=45)
+        p['additional_day_guards']=[guard]
+        batch,experiment,path=self.replay_parent(risk_policy=p)
+        # Preserve a historical frozen price even if the current catalog differs.
+        with sqlite3.connect(self.store.db_path) as c:
+            raw=json.loads(c.execute('SELECT settlement_snapshot_json FROM lab_experiments WHERE id=?',(experiment['id'],)).fetchone()[0])
+            raw['resolved_odds']['combo']['大单']=4.2
+            c.execute('UPDATE lab_experiments SET settlement_snapshot_json=? WHERE id=?',(json.dumps(raw),experiment['id']))
+        before=self.service.batch_detail(1,batch['id'])
+        response=self.request(path,{'stake_amount':10,'risk_amount_mode':'scale'})
+        self.assertEqual(response['status_code'],201,response)
+        child=response['json']['batch'];self.assertEqual(child['status'],'paused')
+        self.assertEqual(child['experiment_count'],1);self.assertEqual(child['stake_amount'],10)
+        expected=copy.deepcopy(p)
+        for control in [expected['round'],expected['day']]+expected['additional_day_guards']:
+            for key in ('profit_target','loss_limit'):control[key]*=10
+        self.assertEqual(child['risk_policy'],expected)
+        self.assertEqual((child['predictor_id'],child['start_date'],child['end_date']),(7,'2026-11-01','2026-11-26'))
+        saved=self.store.list_experiments(1,child['id'])[0]
+        self.assertEqual(saved['condition'],experiment['condition']);self.assertEqual(saved['settlement_rule_id'],experiment['settlement_rule_id'])
+        self.assertEqual(saved['settlement_odds']['combo']['大单'],4.2)
+        self.assertEqual((saved['settled_count'],saved['net_profit']),(0,0))
+        self.assertEqual(self.service.batch_detail(1,batch['id']),before)
+
+    def test_amount_replay_keep_mode_and_rounding(self):
+        batch,experiment,path=self.replay_parent(stake_amount=3)
+        kept=self.request(path,{'stake_amount':10,'risk_amount_mode':'keep'})
+        self.assertEqual(kept['status_code'],201,kept)
+        self.assertEqual(kept['json']['batch']['risk_policy'],batch['risk_policy'])
+        scaled=self.request(path,{'stake_amount':1,'risk_amount_mode':'scale'})
+        self.assertEqual(scaled['json']['batch']['risk_policy']['round']['profit_target'],3.33)
+        self.assertEqual(scaled['json']['batch']['risk_policy']['day']['profit_target'],6.67)
+
+    def test_amount_replay_validates_owner_route_source_and_payload_without_creating(self):
+        batch,experiment,path=self.replay_parent()
+        payload={'stake_amount':10,'risk_amount_mode':'scale'}
+        for uid,expected in [(None,401),(self.regular['id'],403),(self.other['id'],404)]:
+            self.assertEqual(self.request(path,payload,uid=uid)['status_code'],expected)
+        self.assertEqual(self.request(path)['status_code'],405)
+        self.assertEqual(self.request(path.replace('/experiments/'+str(experiment['id']),'/experiments/9999'),payload)['status_code'],404)
+        for value in ({},[],{'stake_amount':True,'risk_amount_mode':'scale'},{'stake_amount':0,'risk_amount_mode':'scale'},
+                      {'stake_amount':10001,'risk_amount_mode':'keep'},{'stake_amount':1.001,'risk_amount_mode':'scale'},
+                      {'stake_amount':1,'risk_amount_mode':[]},{**payload,'risk_policy':{}}):
+            result=self.request(path,value);self.assertEqual(result['status_code'],400,result)
+        self.source.shared=False
+        self.assertEqual(self.request(path,payload)['status_code'],400)
+        self.assertEqual(len(self.service.overview(1)['batches']),1)
+
+    def test_amount_replay_rejects_limits_that_overflow_or_round_to_zero(self):
+        p=policy();p['round']['profit_target']=.01
+        batch,experiment,path=self.replay_parent(stake_amount=100,risk_policy=p)
+        self.assertEqual(self.request(path,{'stake_amount':1,'risk_amount_mode':'scale'})['status_code'],400)
+        p=policy();p['round']['profit_target']=100000000
+        batch,experiment,path=self.replay_parent(risk_policy=p)
+        self.assertEqual(self.request(path,{'stake_amount':10,'risk_amount_mode':'scale'})['status_code'],400)
+        with patch('pc28touzhu.services.rule_lab_store.MAX_TOTAL_EXPERIMENTS',52):
+            self.assertEqual(self.request(path,{'stake_amount':10,'risk_amount_mode':'keep'})['status_code'],409)
+
+    def test_amount_replay_rejects_forward_batch(self):
+        batch=self.create();eid=self.store.list_experiments(1,batch['id'])[0]['id']
+        path=PREFIX+'/batches/%s/experiments/%s/replay'%(batch['id'],eid)
+        self.assertEqual(self.request(path,{'stake_amount':10,'risk_amount_mode':'keep'})['status_code'],400)
 
     def test_monthly_detail_is_owned_read_only_and_compatible(self):
         batch=self.create();bid=batch['id'];eid=self.store.list_experiments(1,bid)[0]['id']

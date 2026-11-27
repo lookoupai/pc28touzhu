@@ -15,6 +15,33 @@ from tests.test_rule_lab_risk import policy
 
 
 class RuleLabWorkerTests(unittest.TestCase):
+    def test_amount_replay_recalculates_per_bet_rounding_and_exit_dates(self):
+        from pc28touzhu.services.rule_lab_service import RuleLabService
+        for i in range(6):
+            opened=self.opened+timedelta(seconds=210*i)
+            self.fixture.draw(1100+i,opened);self.fixture.prediction(1100+i,opened)
+        now=stamp(self.opened+timedelta(hours=1))
+        p=policy(cooldown_issues=50);p['round'].update(profit_target=2,loss_limit=10);p['day']['enabled']=False
+        config=normalize_batch_payload(dict(name='原金额',mode='backtest',predictor_id=1,metric='big_small',
+            stake_amount=1,start_date='2026-11-26',end_date='2026-11-26',risk_policy=p),now=now)
+        parent=self.store.create_batch(1,config,'source',build_experiments('big_small')[:1],now=now)
+        eid=self.store.list_experiments(1,parent['id'])[0]['id']
+        service=RuleLabService(self.store,self.source)
+        keep=service.replay_experiment(1,parent['id'],eid,dict(stake_amount=10,risk_amount_mode='keep'),now=now)['batch']
+        scale=service.replay_experiment(1,parent['id'],eid,dict(stake_amount=10,risk_amount_mode='scale'),now=now)['batch']
+        batches=[parent,keep,scale]
+        for batch in batches:self.store.set_batch_state(1,batch['id'],'running',now=now)
+        for _ in range(30):
+            self.worker.tick(now=now)
+            if all(self.store.get_batch(1,b['id'])['status']=='completed' for b in batches):break
+        results=[]
+        for batch in batches:
+            self.assertEqual(self.store.get_batch(1,batch['id'])['status'],'completed')
+            results.append(self.store.list_experiments(1,batch['id'])[0])
+        # At 1.998 odds, 1-unit wins round to 1; 10-unit wins yield 9.98.
+        # A 20-unit target therefore needs three wins, not a scaled two-win result.
+        self.assertEqual([(r['settled_count'],r['net_profit']) for r in results],[(2,2),(1,9.98),(3,29.94)])
+
     def test_budget_expiring_before_due_settlement_does_not_skip_next_entry(self):
         for i in range(8):
             opened=self.opened+timedelta(seconds=210*i)

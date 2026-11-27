@@ -87,6 +87,7 @@ def main():
                 store.initialize()
                 batch_id = int(body["batch_id"])
                 work = store.get_work_item(batch_id)
+                stake_cents=work['batch']['stake_cents']
                 now = datetime.now(timezone.utc).replace(microsecond=0)
                 for i, balls in enumerate(([3, 6, 8], [1, 1, 3], [2, 4, 8])):
                     work = store.get_work_item(batch_id)
@@ -96,10 +97,10 @@ def main():
                     for exp in work["experiments"][:2]:
                         issue = str(1001 + i)
                         decisions.append(dict(experiment_id=exp["id"], issue_no=issue, bet_value="单",
-                            stake_cents=100, decided_at=decided, decision_mode="live",
+                            stake_cents=stake_cents, decided_at=decided, decision_mode=work['batch']['mode'],
                             feature_issue_no=str(1000 + i), condition_value=1,condition_matched=True,
                             risk_date=datetime.fromisoformat(timestamp.replace('Z','+00:00')).astimezone(timezone(timedelta(hours=8))).date().isoformat()))
-                        result = settle_bet(exp["settlement_snapshot"], "odd_even", "单", 100, balls)
+                        result = settle_bet(exp["settlement_snapshot"], "odd_even", "单", stake_cents, balls)
                         outcomes.append(dict(experiment_id=exp["id"], issue_no=issue, status="settled",
                                              settled_at=timestamp, skip_reason="", **result))
                     store.commit_step(batch_id, work["batch"]["revision"], cursor={"last_issue_no": str(1001 + i)},

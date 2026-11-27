@@ -1423,7 +1423,7 @@ class PlatformApiApplication:
             path = str(environ.get("PATH_INFO") or "")
             method = str(environ.get("REQUEST_METHOD") or "GET").upper()
             suffix = path[len("/api/platform/rule-lab"):]
-            batch_match = re.fullmatch(r"/batches/([1-9][0-9]{0,17})(?:/(state|risk-policy|comparison-preview|export\.csv|experiments/([1-9][0-9]{0,17})))?", suffix)
+            batch_match = re.fullmatch(r"/batches/([1-9][0-9]{0,17})(?:/(state|risk-policy|comparison-preview|export\.csv|experiments/([1-9][0-9]{0,17})(/replay)?))?", suffix)
             study_match=re.fullmatch(r"/studies/([1-9][0-9]{0,17})(?:/(state|export\.csv))?",suffix)
             if suffix in ("", "/options"):
                 expected = "GET"
@@ -1433,7 +1433,7 @@ class PlatformApiApplication:
             elif suffix=="/studies":expected=method if method in ('GET','POST') else 'GET'
             elif study_match:expected='POST' if study_match.group(2)=='state' else 'GET'
             elif batch_match:
-                expected = "POST" if batch_match.group(2) in ("state","risk-policy") else "GET"
+                expected = "POST" if batch_match.group(2) in ("state","risk-policy") or batch_match.group(4) else "GET"
             else:
                 return _json_response(start_response, 404, {"error": "实验接口不存在", "code": "not_found"}, headers)
             if method != expected:
@@ -1487,6 +1487,9 @@ class PlatformApiApplication:
                         ("X-Content-Type-Options", "nosniff")] + headers)
                     return [body]
                 elif action and action.startswith("experiments/"):
+                    if batch_match.group(4):
+                        payload=service.replay_experiment(user_id,batch_id,int(batch_match.group(3)),_read_json_body(environ))
+                        return _json_response(start_response,201,payload,headers)
                     payload = service.experiment_detail(user_id, batch_id, int(batch_match.group(3)))
                 else:
                     payload = service.batch_detail(user_id, batch_id)

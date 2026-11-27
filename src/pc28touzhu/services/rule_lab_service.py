@@ -7,6 +7,7 @@ import json
 import sqlite3
 import copy
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
 
 from pc28touzhu.domain.rule_lab import ALLOWED_SETTLEMENT_RULE_IDS, COMBO_LONG_MISS_THRESHOLDS, build_conditions, build_experiments, normalize_batch_payload
 from pc28touzhu.domain.settlement_rules import build_settlement_snapshot
@@ -163,7 +164,7 @@ class RuleLabService:
         return dict(predictors=predictors, metrics=[dict(id=k, name=v) for k, v in
                     [('big_small', '大小'), ('odd_even', '单双'), ('combo', '组合')]],
                     settlement_rules=rules, template_pack='basic_v1',
-                    template_packs=[dict(id='basic_v1',name='基础条件 v1',metrics=['big_small','odd_even','combo'],
+                    template_packs=[dict(id='basic_v1',name='基础条件 v1（多种触发）',metrics=['big_small','odd_even','combo'],
                         condition_counts={metric:len(build_conditions(metric)) for metric in ('big_small','odd_even','combo')},
                         description='无条件跟随、预测连错3～7期、连中、连续开出/不出及窗口命中率。'),
                         dict(id='combo_long_miss_v1',name='组合长连错 · 7～30期',metrics=['combo'],
@@ -235,6 +236,41 @@ class RuleLabService:
         try:policy=self._risk_snapshot(user_id,payload['risk_policy'],batch['metric'])
         except ValueError as exc:raise RuleLabError('invalid_input',str(exc)) from exc
         return dict(batch=self.store.set_risk_policy(user_id,batch_id,policy,now=_now(now)))
+
+    def replay_experiment(self,user_id,batch_id,experiment_id,payload,*,now=None):
+        if (not isinstance(payload,dict) or set(payload)!={'stake_amount','risk_amount_mode'}
+                or payload['risk_amount_mode'] not in ('scale','keep')):
+            raise RuleLabError('invalid_input','请提供每注金额和止盈止损调整方式（scale或keep）')
+        batch,definition=self.store.replay_definition(user_id,batch_id,experiment_id)
+        if batch['mode']!='backtest':
+            raise RuleLabError('invalid_input','请从历史回测实验发起金额重测')
+        timestamp=_now(now)
+        data={key:batch[key] for key in ('name','mode','predictor_id','metric','template_pack','start_date','end_date','risk_policy')}
+        data['stake_amount']=payload['stake_amount']
+        try:
+            config=normalize_batch_payload(data,now=timestamp)
+            policy=config['risk_policy']
+            if payload['risk_amount_mode']=='scale' and policy['mode']=='round':
+                ratio=Decimal(config['stake_cents'])/(Decimal(str(batch['stake_amount']))*100)
+                for control in [policy['round'],policy['day']]+policy['additional_day_guards']:
+                    for key in ('profit_target','loss_limit'):
+                        old=Decimal(str(control[key]))
+                        scaled=(old*ratio).quantize(Decimal('.01'),rounding=ROUND_HALF_UP)
+                        if old>0 and scaled==0:
+                            raise ValueError('同比调整后的止盈止损小于0.01，请提高单注金额或保留原风控金额')
+                        control[key]=float(scaled)
+                if policy.get('source'):policy['source']['modified']=True
+            config['risk_policy']=normalize_risk_policy(policy)
+        except ValueError as exc:
+            raise RuleLabError('invalid_input',str(exc)) from exc
+        self._source_predictor(batch['predictor_id'])
+        # Retain the original rule, condition, period and risk snapshot. The worker
+        # settles the new amount per bet, including rounding and all exit gates.
+        rule_name=definition['settlement_snapshot']['rule']['name']
+        stake=format(Decimal(config['stake_cents'])/100,'f')
+        config['name']=(definition['name']+' · '+rule_name+' · 每注'+stake+' · '+('同比风控' if payload['risk_amount_mode']=='scale' else '原额风控'))[:80]
+        result=self.store.create_batch(user_id,config,batch['predictor_name'],[definition],now=timestamp)
+        return dict(batch=result,generated_count=1,source_batch_id=batch_id,source_experiment_id=experiment_id)
 
     def set_batch_state(self, user_id, batch_id, payload, *, now=None):
         if not isinstance(payload, dict) or set(payload) != {'state'} or payload['state'] not in ('running', 'paused'):

@@ -584,6 +584,18 @@ class RuleLabStore:
             self._owned(c,user_id,batch_id)
             return [self._experiment(c,r) for r in c.execute('SELECT * FROM lab_experiments WHERE batch_id=? ORDER BY id LIMIT 100',(batch_id,))]
 
+    def replay_definition(self,user_id,batch_id,experiment_id):
+        """Copy the owned experiment's frozen inputs, never its result or runtime."""
+        with self._connect() as c:
+            c.execute('BEGIN')
+            batch=self._batch(c,self._owned(c,user_id,batch_id))
+            row=c.execute('SELECT * FROM lab_experiments WHERE batch_id=? AND id=?',(batch_id,experiment_id)).fetchone()
+            if row is None:
+                raise RuleLabError('not_found','实验版本不存在',404)
+            definition=dict(condition_key=row['condition_key'],name=row['name'],condition=_load(row['condition_json']),
+                settlement_rule_id=row['settlement_rule_id'],settlement_snapshot=_load(row['settlement_snapshot_json']))
+            return batch,definition
+
     def get_experiment_detail(self,user_id,batch_id,experiment_id):
         with self._connect() as c:
             # The worker may commit between queries; all detail metrics share one read snapshot.
