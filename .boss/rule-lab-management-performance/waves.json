@@ -421,7 +421,51 @@
       "dependsOn": [
         "wave-4-qa"
       ],
-      "status": "pending"
+      "status": "passed",
+      "evidence": {
+        "release_commit": "390aa45",
+        "rollout": {
+          "exit_code": 0,
+          "session_id": 77762,
+          "log": "/tmp/pc28-management-rollout-20261127T155206Z.json",
+          "write_pause_seconds": 71.946,
+          "old_tables": 22,
+          "old_rows": 1739112,
+          "all_old_column_hashes_equal": true,
+          "saved_experiment_ids_preserved": 602,
+          "schema_version": 5,
+          "auto_vacuum": 2,
+          "database_bytes_before": 478371840,
+          "database_bytes_after": 436006912,
+          "backup_retained": true,
+          "note": "数据库文件缩小量不等于服务器净释放量；独立备份仍保留。"
+        },
+        "online": {
+          "exit_code": 0,
+          "session_id": 82220,
+          "log": "/tmp/pc28-management-online.json",
+          "posts": 0,
+          "errors": 0,
+          "desktop_width": 1440,
+          "mobile_width": 390,
+          "worker_cpu_cores": 1,
+          "worker_memory_max_bytes": 268435456,
+          "executor_online": true,
+          "executor_heartbeat_seconds": 2,
+          "source_pid_unchanged": 1250128
+        },
+        "progress_resumed": {
+          "batch_12": [
+            15532,
+            15715
+          ],
+          "batch_16": [
+            15880,
+            16015
+          ]
+        },
+        "operator": "ROOT执行，release agent执行权已撤销；本次文档更新不执行任何发布操作"
+      }
     }
   ],
   "agents": {

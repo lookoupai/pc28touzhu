@@ -111,4 +111,12 @@
 
 最终内部接口补充见plan§3：management_receipt先恢复原始请求回执，edit/fork的request_payload用于区分原始载荷与规范化配置，start_queued_batch原子复核清单hash/opt-out/未启动状态及运行额度，overview.management_jobs恢复删除对象已消失时的任务状态。ID allocator覆盖archive/series稳定身份。
 
-W1～W3专项已通过，新管理真实浏览器完整流程退出码0（/tmp/pc28-management-ui-final.log，归档原工具输出非重跑）；W4独立QA8/8和CLI5/5、三条原浏览器均通过。首轮ROOT全量1194项中1193通过、1失败：未知服务状态的CLI guard在该进程导入旧模块后才完成修复；修复后新进程专项8/8及5/5通过。冻结修复代码完整重跑1197项全部通过，0失败、0跳过，329.800秒，实际退出码0（session21060），日志/tmp/pc28-management-full-final-root.log。W4已放行，W5仍pending，等待实际发布及线上核验。本次未提交或部署。
+W1～W3专项已通过，新管理真实浏览器完整流程退出码0（/tmp/pc28-management-ui-final.log，归档原工具输出非重跑）；W4独立QA8/8和CLI5/5、三条原浏览器均通过。首轮ROOT全量1194项中1193通过、1失败：未知服务状态的CLI guard在该进程导入旧模块后才完成修复；修复后新进程专项8/8及5/5通过。冻结修复代码完整重跑1197项全部通过，0失败、0跳过，329.800秒，实际退出码0（session21060），日志/tmp/pc28-management-full-final-root.log。W4已放行；ROOT已完成390aa45发布及只读线上核验，W5已通过。本次未提交或部署。
+
+## 最终发布状态（CM9）
+
+ROOT执行发布脚本并观测退出码0：`/tmp/pc28-management-rollout-20261127T155206Z.json`（session77762）。实验写入暂停71.946秒，22张原表共1,739,112行旧列哈希全部相同，602个实验ID、批准队列及批次状态/游标保持。schema5、auto_vacuum=2；实验数据库文件478,371,840→436,006,912字节。独立备份保留，以上文件缩小不能说成服务器净释放空间。
+
+线上只读检查退出码0：`/tmp/pc28-management-online.json`（session82220），0 POST、无页面错误，1440/390桌面手机通过；worker仍1核/256MiB，执行器在线心跳2秒，上游PID1250128不变。恢复后批次12处理数15532→15715、批次16处理数15880→16015，证明原运行工作继续推进。CM9已由实际发布/进度证据关闭；W1～W5均通过。
+
+正式发布版本390aa45；详细过程由ROOT维护deploy-report.md，QA由其owner更新。本文仅登记已提供的实际证据，未再次部署或提交。
