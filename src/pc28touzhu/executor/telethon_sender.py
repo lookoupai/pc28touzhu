@@ -28,6 +28,8 @@ except ImportError:  # pragma: no cover - production runs on Linux
 SESSION_LOCK_TIMEOUT_SECONDS = 30.0
 SESSION_LOCK_POLL_SECONDS = 0.05
 TELEGRAM_OPERATION_TIMEOUT_SECONDS = 10.0
+PRE_SEND_CONNECTION_ERRORS = (TimeoutError, ConnectionError, OSError, EOFError)
+RECONCILIATION_READ_BUDGET_SECONDS = 5.0
 
 
 def _telegram_call(client: Any, callback: Callable[[], Any], *, timeout: float = TELEGRAM_OPERATION_TIMEOUT_SECONDS) -> Any:
@@ -106,6 +108,18 @@ class TelethonMessageSender:
         self.session = str(session or "").strip() or "telegram-session"
         self._client = None
         self._session_lock: Any = None
+        self._read_deadline = None
+        self._read_cancelled = None
+
+    def _operation_timeout(self, maximum=TELEGRAM_OPERATION_TIMEOUT_SECONDS):
+        if self._read_deadline is None:
+            return maximum
+        if self._read_cancelled and self._read_cancelled():
+            raise TimeoutError('foreground send takes priority')
+        remaining = self._read_deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('reconciliation read budget exhausted')
+        return min(maximum, remaining)
 
     def connect(self) -> None:
         if self._client is not None:
@@ -122,7 +136,7 @@ class TelethonMessageSender:
 
         session_path = ensure_telethon_session_writable(self.session)
         session_path.parent.mkdir(parents=True, exist_ok=True)
-        session_lock = _session_file_lock(self.session)
+        session_lock = _session_file_lock(self.session, timeout=self._operation_timeout(SESSION_LOCK_TIMEOUT_SECONDS))
         session_lock.__enter__()
         self._session_lock = session_lock
         client = None
@@ -133,8 +147,8 @@ class TelethonMessageSender:
                 request_retries=0, connection_retries=0, retry_delay=0,
                 auto_reconnect=False, flood_sleep_threshold=0, raise_last_call_error=True,
             )
-            _telegram_call(client, client.connect)
-            if not _telegram_call(client, client.is_user_authorized):
+            _telegram_call(client, client.connect, timeout=self._operation_timeout())
+            if not _telegram_call(client, client.is_user_authorized, timeout=self._operation_timeout()):
                 raise ValueError("当前 session 未授权，请先在账号管理中完成登录或导入有效 Session")
             self._client = client
         except Exception:
@@ -142,7 +156,7 @@ class TelethonMessageSender:
                 try:
                     disconnect = getattr(client, "disconnect", None)
                     if callable(disconnect):
-                        _telegram_call(client, disconnect)
+                        _telegram_call(client, disconnect, timeout=1 if self._read_deadline is not None else TELEGRAM_OPERATION_TIMEOUT_SECONDS)
                 except Exception:
                     pass
             self._session_lock = None
@@ -154,7 +168,7 @@ class TelethonMessageSender:
         self._client = None
         try:
             if client is not None:
-                _telegram_call(client, client.disconnect)
+                _telegram_call(client, client.disconnect, timeout=1 if self._read_deadline is not None else TELEGRAM_OPERATION_TIMEOUT_SECONDS)
         except Exception:
             pass
         finally:
@@ -171,12 +185,16 @@ class TelethonMessageSender:
         candidates.extend(_build_numeric_candidates(target_key))
         for candidate in candidates:
             try:
-                return _telegram_call(self._client, lambda: self._client.get_input_entity(candidate))
+                return _telegram_call(self._client, lambda: self._client.get_input_entity(candidate), timeout=self._operation_timeout())
+            except PRE_SEND_CONNECTION_ERRORS:
+                raise
             except Exception:
                 continue
 
         try:
-            dialogs = list(_telegram_call(self._client, self._client.get_dialogs))
+            dialogs = list(_telegram_call(self._client, self._client.get_dialogs, timeout=self._operation_timeout()))
+        except PRE_SEND_CONNECTION_ERRORS:
+            raise
         except Exception:
             dialogs = []
 
@@ -209,7 +227,14 @@ class TelethonMessageSender:
     ) -> Dict[str, Any]:
         if self._client is None:
             raise RuntimeError("Telethon client 尚未连接")
-        entity = self._resolve_entity(target_key)
+        try:
+            entity = self._resolve_entity(target_key)
+        except PRE_SEND_CONNECTION_ERRORS as exc:
+            # Entity lookup precedes the send RPC, so this is a known unsent failure.
+            raise JobSendRetryable(str(exc) or type(exc).__name__, details={
+                'retryable': True, 'failure_stage': 'connect', 'preparation_stage': 'resolve_entity',
+                'exception_type': type(exc).__name__,
+            }) from exc
         if before_send is not None:
             before_send()
         started = datetime.now(timezone.utc)
@@ -230,12 +255,13 @@ class TelethonMessageSender:
                 message = response if isinstance(response, UpdateShortSentMessage) else self._client._get_response_message(request, response, entity)
                 if not message or not getattr(message, 'id', None):
                     raise JobSendUnconfirmed('Telegram 回执缺少消息标识，需核对', details={'reason':'send_unconfirmed'})
-        except (TimeoutError, ConnectionError, OSError) as exc:
+        except PRE_SEND_CONNECTION_ERRORS as exc:
             # 请求可能已送达，回执不明时不得自动重发，避免重复消息或跨期补发。
             raise JobSendUnconfirmed(
                 "Telegram 发送回执未确认，已停止自动重试，请核对群消息",
                 details={"reason": "send_unconfirmed", "stage": "send_message",
-                         "cause": str(exc) or exc.__class__.__name__, "send_started_at": started.isoformat()},
+                         "cause": str(exc) or exc.__class__.__name__, "send_started_at": started.isoformat(),
+                         "cause_type": type(exc).__name__},
             ) from exc
         except Exception as exc:
             if isinstance(exc, JobSendUnconfirmed):
@@ -264,6 +290,25 @@ class TelethonMessageSender:
                  'reply_to':getattr(m, 'reply_to_msg_id', None), 'date':m.date.isoformat()}
                 for m in messages]
 
+    def read_message(self, target_key, message_id):
+        entity = self._resolve_entity(target_key)
+        message = _telegram_call(self._client,
+            lambda: self._client.get_messages(entity, ids=int(message_id)), timeout=self._operation_timeout(3))
+        if not message:
+            return None
+        return {'id': message.id, 'sender_id': message.sender_id, 'text': message.raw_text or '',
+                'reply_to': getattr(message, 'reply_to_msg_id', None), 'date': message.date.isoformat(),
+                'out': bool(getattr(message, 'out', False))}
+
+    def read_reconciliation_messages(self, target_key, *, after_id):
+        """Bounded historical slice after the original message, never latest-only evidence."""
+        entity = self._resolve_entity(target_key)
+        messages = _telegram_call(self._client,
+            lambda: self._client.get_messages(entity, limit=100, min_id=int(after_id), reverse=True), timeout=self._operation_timeout(3))
+        return [{'id': m.id, 'sender_id': m.sender_id, 'text': m.raw_text or '',
+                 'reply_to': getattr(m, 'reply_to_msg_id', None), 'date': m.date.isoformat()}
+                for m in messages]
+
 
 class TelethonSenderPool:
     """Reuse sender objects while opening a session only for one send operation."""
@@ -281,6 +326,7 @@ class TelethonSenderPool:
         self.job_validator = job_validator
         self._senders: Dict[str, TelethonMessageSender] = {}
         self._account_locks: Dict[str, threading.RLock] = {}
+        self._foreground_waiters: Dict[str, int] = {}
         self._pool_lock = threading.Lock()
 
     def _account_key(self, job: ExecutorJob) -> str:
@@ -308,6 +354,21 @@ class TelethonSenderPool:
                 self._senders[account_key] = sender
             account_lock = self._account_locks.setdefault(account_key, threading.RLock())
         return sender, account_lock
+
+    @contextmanager
+    def _foreground_send(self, account_key, account_lock):
+        with self._pool_lock:
+            self._foreground_waiters[account_key] = self._foreground_waiters.get(account_key, 0) + 1
+        try:
+            with account_lock:
+                yield
+        finally:
+            with self._pool_lock:
+                self._foreground_waiters[account_key] -= 1
+
+    def _foreground_waiting(self, account_key):
+        with self._pool_lock:
+            return self._foreground_waiters.get(account_key, 0) > 0
 
     def _ensure_send_window(self, job: ExecutorJob) -> Dict[str, Any]:
         if datetime.now(timezone.utc) >= job.expire_at:
@@ -343,14 +404,17 @@ class TelethonSenderPool:
                     raise JobSendBlocked('任务已停止或领取失效',details=verdict)
             window_snapshot.update(self._ensure_send_window(job))
 
-        with account_lock:
+        with self._foreground_send(self._account_key(job), account_lock):
             try:
                 before_send()
                 preparation_started = datetime.now(timezone.utc)
                 try:
                     sender.connect()
-                except (TimeoutError, ConnectionError, OSError) as exc:
-                    raise JobSendRetryable(str(exc) or type(exc).__name__, details={'retryable':True,'failure_stage':'connect'}) from exc
+                except PRE_SEND_CONNECTION_ERRORS as exc:
+                    raise JobSendRetryable(str(exc) or type(exc).__name__, details={
+                        'retryable': True, 'failure_stage': 'connect', 'preparation_stage': 'connect',
+                        'exception_type': type(exc).__name__,
+                    }) from exc
                 connection_ready = datetime.now(timezone.utc)
                 before_send()
                 if protocol['mode'] != 'legacy':
@@ -382,6 +446,13 @@ class TelethonSenderPool:
                     result = sender.send_text(job.target.key, job.message_text, **options)
                 else:
                     result = sender.send_text(job.target.key, job.message_text)
+                result.update(telegram_account_id=job.telegram_account.id if job.telegram_account else None,
+                              issue_no=job.issue_no, opening_evidence=dict(opening),
+                              sender_session_path=(job.telegram_account.session_path if job.telegram_account
+                                                   and job.telegram_account.session_path else self.default_session))
+                if job.transport_evidence_callback:
+                    # A crash during business acknowledgement must retain the RPC's message ID.
+                    job.transport_evidence_callback(dict(result))
                 if protocol['mode'] != 'legacy':
                     acceptance = {'state':'unconfirmed','reason':'acceptance_reply_missing'}
                     ack_deadline = time.monotonic() + protocol['ack_timeout_seconds']
@@ -390,7 +461,12 @@ class TelethonSenderPool:
                             replies = sender.read_target_messages(job.target.key, after_id=int(result['message_id']))
                             current = target_readiness(sender.read_target_messages(job.target.key), protocol, job.issue_no,
                                 datetime.now(timezone.utc), job.expire_at) if protocol['mode'] == 'announcement' else {}
+                            result['current_opening_evidence'] = current
+                            result['acceptance_checked_at'] = datetime.now(timezone.utc).isoformat()
                             acceptance = parse_acceptance(replies, protocol, result['message_id'], job.issue_no, job.message_text, opening, current)
+                            if acceptance.get('reply_message_id'):
+                                result['acceptance_reply'] = next((dict(reply) for reply in replies
+                                    if str(reply.get('id')) == str(acceptance['reply_message_id'])), {})
                             if acceptance['state'] != 'unconfirmed' or acceptance['reason'] != 'acceptance_reply_missing':
                                 break
                         except Exception:
@@ -407,6 +483,73 @@ class TelethonSenderPool:
             finally:
                 # Never keep a SQLite-backed Telethon client open between jobs.
                 sender.disconnect()
+
+    def reconcile_text(self, job: ExecutorJob, evidence: Dict[str, Any]) -> Dict[str, Any]:
+        """Only read an original message and its replies; never submit a bet."""
+        unknown = {'outcome': 'unknown', 'evidence': {}, 'reason': 'message_id_unavailable'}
+        message_id = evidence.get('message_id')
+        if isinstance(message_id, bool) or not str(message_id or '').isdigit() or int(message_id) <= 0:
+            return unknown
+        account_id = job.telegram_account.id if job.telegram_account else None
+        if any(evidence.get(key) not in (None, expected) for key, expected in (
+            ('target_key', job.target.key), ('telegram_account_id', account_id),
+            ('text', job.message_text), ('issue_no', job.issue_no),
+        )):
+            return {**unknown, 'reason': 'original_identity_mismatch'}
+        explicit_session = job.telegram_account.session_path if job.telegram_account else None
+        session = explicit_session or self.default_session
+        if not explicit_session and evidence.get('sender_session_path') != session:
+            return {**unknown, 'reason': 'original_session_unavailable'}
+        sender, account_lock = self._get_sender_and_lock(job)
+        if getattr(sender, 'session', session) != session:
+            return {**unknown, 'reason': 'original_session_unavailable'}
+        account_key = self._account_key(job)
+        if self._foreground_waiting(account_key):
+            return {**unknown, 'reason': 'account_busy'}
+        if not account_lock.acquire(blocking=False):
+            return {**unknown, 'reason': 'account_busy'}
+        sender._read_deadline = time.monotonic() + RECONCILIATION_READ_BUDGET_SECONDS
+        sender._read_cancelled = lambda: self._foreground_waiting(account_key)
+        try:
+            sender.connect()
+            message = sender.read_message(job.target.key, int(message_id))
+            if (not message or str(message.get('id')) != str(message_id)
+                    or not message.get('out') or message.get('text') != job.message_text):
+                return {**unknown, 'reason': 'original_message_not_verified'}
+            sent_at = datetime.fromisoformat(str(message['date']).replace('Z', '+00:00'))
+            if sent_at.tzinfo is None:
+                sent_at = sent_at.replace(tzinfo=timezone.utc)
+            if not job.execute_after.timestamp() - 2 <= sent_at.timestamp() <= job.expire_at.timestamp() + 2:
+                return {**unknown, 'reason': 'original_message_outside_window'}
+            verified = {**evidence, 'message_id': int(message_id), 'target_key': job.target.key,
+                        'telegram_account_id': account_id, 'text': job.message_text, 'issue_no': job.issue_no,
+                        'telegram_message_date': sent_at.isoformat(), 'verified_message': message,
+                        'provenance': 'remote_history'}
+            protocol = normalize_protocol((job.target.metadata or {}).get('betting_protocol'))
+            if protocol['mode'] == 'legacy':
+                return {'outcome': 'transport_confirmed', 'evidence': verified, 'reason': 'original_message_verified'}
+            replies = sender.read_reconciliation_messages(job.target.key, after_id=int(message_id))
+            acceptance = parse_acceptance(replies, protocol, int(message_id), job.issue_no, job.message_text,
+                evidence.get('opening_evidence') or {}, evidence.get('current_opening_evidence') or {})
+            verified['acceptance'] = acceptance
+            if acceptance.get('reply_message_id'):
+                verified['acceptance_reply'] = next((dict(reply) for reply in replies
+                    if str(reply.get('id')) == str(acceptance['reply_message_id'])), {})
+            if acceptance.get('state') in ('accepted', 'rejected'):
+                round_id = str(acceptance.get('target_round_id') or '')
+                if acceptance['state'] == 'accepted' and not (round_id.isdigit() and len(round_id) < 20):
+                    # Saved opening snapshots describe the original acknowledgement poll,
+                    # not the period associated with a newly fetched historical reply.
+                    return {'outcome': 'unknown', 'evidence': verified, 'reason': 'historical_round_mapping_unavailable'}
+                return {'outcome': acceptance['state'], 'evidence': verified, 'reason': acceptance.get('reason', '')}
+            return {'outcome': 'unknown', 'evidence': verified, 'reason': acceptance.get('reason') or 'acceptance_unverified'}
+        except Exception as exc:
+            return {**unknown, 'reason': 'reconciliation_read_failed:' + type(exc).__name__}
+        finally:
+            sender.disconnect()
+            sender._read_deadline = None
+            sender._read_cancelled = None
+            account_lock.release()
 
     def disconnect(self) -> None:
         with self._pool_lock:

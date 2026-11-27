@@ -60,6 +60,7 @@
         max_starts_per_day: "今日启动次数已满", manual_stop: "已人工结束本轮",
         profit_target_hit: "规则日止盈已触发", loss_limit_hit: "规则日止损已触发",
         daily_hit_rate_low: "规则日命中率熔断已触发",
+        delivery_uncertain_expired: "上一轮发送结果未确认，已结束该轮执行",
     };
     const operatorOptions = [
         ["lt", "低于"],
@@ -484,6 +485,85 @@
         return money ? Number(value).toFixed(2) : String(value);
     }
 
+    function cycleHistoryItemsHtml(items) {
+        const labels = {
+            awaiting_reconciliation: "历史结果待核对",
+            awaiting_settlement: "历史投注待结算",
+            resolved: "历史账务已处理",
+        };
+        return items.map(function (item) {
+            const credit = item.capital_credit === null || item.capital_credit === undefined ? "尚未确定" : cycleNumber(item.capital_credit, true);
+            const creditLabel = item.capital_disposition === "independent_cycle_return" ? "独立周期返还" :
+                (item.credit_applied_run_id ? "已用于后续轮次的返还" : "待用于后续轮次的返还");
+            return '<li class="cycle-history-item"><div class="cycle-history-head"><strong>轮次 #' + escapeHtml(item.rule_run_id) +
+                '</strong><span>' + escapeHtml(labels[item.status] || "状态未知") + '</span></div>' +
+                '<p class="meta-line">原统计日 ' + escapeHtml(item.stat_date || "—") + ' · 路由 #' + escapeHtml(item.route_id) +
+                (item.issue_no ? ' · 第 ' + escapeHtml(item.issue_no) + ' 期' : '') + '</p>' +
+                '<p class="meta-line">保留本金 ' + escapeHtml(cycleNumber(item.reserved_stake, true)) + ' · ' + creditLabel + ' ' + escapeHtml(credit) + '</p>' +
+                (item.credit_applied_run_id ? '<p class="meta-line">已记入轮次 #' + escapeHtml(item.credit_applied_run_id) + '</p>' : '') +
+                (item.detached_at ? '<p class="meta-line">执行结束于 ' + escapeHtml(item.detached_at) + '</p>' : '') +
+                (item.recovery_error ? '<p class="meta-line cycle-recovery-error">历史账务数据异常，后台保留原记录继续核查。</p>' : '') + '</li>';
+        }).join("");
+    }
+
+    function cycleRecoveryHtml(rule, runtime) {
+        if (!runtime.last_interrupted_run_id && !(Number(runtime.unresolved_run_count) > 0) && !(Number(runtime.pending_capital_credit) > 0)) return "";
+        const panelId = "cycle-history-" + rule.id + "-" + runtime.subscription_id;
+        return '<aside class="cycle-recovery-summary" aria-label="历史轮次账务"><strong>历史轮次账务</strong>' +
+            '<p class="meta-line">未决旧轮 ' + escapeHtml(cycleNumber(runtime.unresolved_run_count)) + ' · 保留本金 ' +
+            escapeHtml(cycleNumber(runtime.reserved_stake, true)) + ' · 待用于后续轮次的返还 ' +
+            escapeHtml(cycleNumber(runtime.pending_capital_credit, true)) + '</p>' +
+            '<p class="meta-line">旧轮已结束执行，历史核对不占用当前轮次。后续启动仍按原计划、次数与风控执行。</p>' +
+            '<p class="meta-line">以上为策略资金记录，不是目标账户实时余额。</p>' +
+            '<button class="tiny-btn cycle-history-toggle" type="button" data-id="' + escapeHtml(rule.id) +
+            '" data-subscription-id="' + escapeHtml(runtime.subscription_id) + '" aria-expanded="false" aria-controls="' + escapeHtml(panelId) +
+            '">查看历史账务</button><div class="cycle-history-panel" id="' + escapeHtml(panelId) + '" hidden></div></aside>';
+    }
+
+    async function loadCycleHistory(button, append) {
+        const summary = button.closest(".cycle-recovery-summary");
+        const panel = summary && summary.querySelector(".cycle-history-panel");
+        if (!panel || panel.dataset.loading === "true") return;
+        const toggle = summary.querySelector(".cycle-history-toggle");
+        const ruleId = Number(toggle.dataset.id);
+        const subscriptionId = Number(toggle.dataset.subscriptionId);
+        if (!Number.isSafeInteger(ruleId) || ruleId <= 0 || !Number.isSafeInteger(subscriptionId) || subscriptionId <= 0) return;
+        const token = dataLoadToken;
+        const cursor = append ? Number(panel.dataset.cursor) : null;
+        panel.hidden = false;
+        toggle.setAttribute("aria-expanded", "true");
+        toggle.textContent = "收起历史账务";
+        panel.dataset.loading = "true";
+        panel.setAttribute("aria-busy", "true");
+        if (!append) panel.innerHTML = '<ul class="cycle-history-list"></ul>';
+        const previousFeedback = panel.querySelector(".cycle-history-feedback");
+        if (previousFeedback) previousFeedback.remove();
+        const more = panel.querySelector(".cycle-history-more");
+        if (more) more.remove();
+        panel.insertAdjacentHTML("beforeend", '<div class="cycle-history-feedback" role="status">正在加载历史账务…</div>');
+        try {
+            const payload = await request("/api/platform/auto-trigger-rules/" + ruleId + "/cycle-recoveries?subscription_id=" + subscriptionId +
+                "&limit=20" + (cursor ? "&before_id=" + cursor : ""));
+            if (token !== dataLoadToken || !panel.isConnected) return;
+            if (!Array.isArray(payload.items) || payload.items.some(item => !item || typeof item !== "object")) throw new Error("invalid history response");
+            const next = payload.next_cursor;
+            if (next !== null && next !== undefined && (!Number.isSafeInteger(next) || next <= 0 || (cursor && next >= cursor))) throw new Error("invalid history cursor");
+            panel.querySelector(".cycle-history-list").insertAdjacentHTML("beforeend", cycleHistoryItemsHtml(payload.items));
+            panel.querySelector(".cycle-history-feedback").remove();
+            if (!panel.querySelector(".cycle-history-item")) panel.insertAdjacentHTML("beforeend", '<p class="meta-line cycle-history-feedback" role="status">暂无中断轮次账务。</p>');
+            panel.dataset.loaded = "true";
+            panel.dataset.cursor = next || "";
+            if (next) panel.insertAdjacentHTML("beforeend", '<button class="tiny-btn cycle-history-more" type="button">加载更早账务</button>');
+        } catch (error) {
+            if (token !== dataLoadToken || !panel.isConnected) return;
+            const feedback = panel.querySelector(".cycle-history-feedback");
+            feedback.innerHTML = '<p class="meta-line" role="alert">历史账务加载失败，请重试。</p><button class="tiny-btn cycle-history-retry" type="button" data-append="' + (append ? "true" : "false") + '">重新加载历史账务</button>';
+        } finally {
+            panel.dataset.loading = "false";
+            panel.removeAttribute("aria-busy");
+        }
+    }
+
     function cycleResumeBlock(rule, runtime) {
         if (runtime.outside_scope) return "已移出规则范围，仅保留运行记录";
         if (rule.status !== "active") return "规则未启用";
@@ -519,9 +599,10 @@
             const routeMarkup = routes.map(function (route) {
                 const inherited = !(rule.routes || []).length;
                 const routeName = inherited ? ("继承方案投递" + (route.route_name ? " · " + route.route_name : "")) : (route.route_name || "投递群组");
-                return '<li><strong>' + escapeHtml(routeName) + '</strong><p class="meta-line">余额 ' + escapeHtml(cycleNumber(route.balance, true)) +
+                return '<li><strong>' + escapeHtml(routeName) + '</strong><p class="meta-line">策略余额 ' + escapeHtml(cycleNumber(route.balance, true)) +
                     ' · 滚仓注额 ' + escapeHtml(cycleNumber(route.cycle_stake, true)) + ' · 连续盈利 ' +
                     escapeHtml(cycleNumber(route.win_streak)) + ' / ' + escapeHtml(cycleNumber(route.target_streak)) + ' 关</p>' +
+                    (Number(route.current_top_up_amount) > 0 ? '<p class="meta-line">本轮补充策略本金 ' + escapeHtml(cycleNumber(route.current_top_up_amount, true)) + '</p>' : '') +
                     (route.pending_issue ? '<p class="meta-line">第 <span class="mono">' + escapeHtml(route.pending_issue) + '</span> 期待结算</p>' : '') + '</li>';
             }).join("");
             const startDate = runtime.start_stat_date;
@@ -536,6 +617,7 @@
                 (routes.length ? '<ul class="cycle-route-states">' + routeMarkup + '</ul>' : '<p class="meta-line">尚未启动过关轮次。</p>') +
                 (runtime.status === "running" && !routes.some(function (route) { return route.pending_issue; }) ? '<p class="meta-line">等待下一期信号。</p>' : '') +
                 (runtime.status === "continuation" ? '<p class="meta-line">等待下一可投注信号，不重新等待触发条件。</p>' : '') +
+                cycleRecoveryHtml(rule, runtime) +
                 (!historical && ["day_closed", "blocked"].includes(runtime.status) ? '<div class="cycle-runtime-actions"><button class="tiny-btn resume-cycle-btn" type="button" data-id="' + escapeHtml(rule.id) + '" data-subscription-id="' + escapeHtml(runtime.subscription_id) + '" aria-label="' + escapeHtml('恢复规则“' + rule.name + '”下方案“' + name + '”待命') + '"' + (blockReason ? ' disabled' : '') + '>恢复本方案待命</button>' + (blockReason ? '<p class="meta-line">' + escapeHtml(blockReason) + '</p>' : '') + '</div>' : '') + '</section>';
         });
         const content = cards.slice(0, 3).join("") + (cards.length > 3 ? '<details class="cycle-runtime-more"><summary>展开其余 ' + (cards.length - 3) + ' 个方案</summary>' + cards.slice(3).join("") + '</details>' : '');
@@ -1546,6 +1628,25 @@
         });
         document.addEventListener("click", async function (event) {
             const target = event.target;
+            if (target instanceof HTMLElement && target.classList.contains("cycle-history-toggle")) {
+                const panel = target.closest(".cycle-recovery-summary").querySelector(".cycle-history-panel");
+                if (target.getAttribute("aria-expanded") === "true") {
+                    panel.hidden = true;
+                    target.setAttribute("aria-expanded", "false");
+                    target.textContent = "查看历史账务";
+                } else if (panel.dataset.loaded === "true" || panel.dataset.loading === "true") {
+                    panel.hidden = false;
+                    target.setAttribute("aria-expanded", "true");
+                    target.textContent = "收起历史账务";
+                } else {
+                    await loadCycleHistory(target, false);
+                }
+                return;
+            }
+            if (target instanceof HTMLElement && (target.classList.contains("cycle-history-more") || target.classList.contains("cycle-history-retry"))) {
+                await loadCycleHistory(target, target.classList.contains("cycle-history-more") || target.dataset.append === "true");
+                return;
+            }
             if (!(target instanceof HTMLElement)) {
                 return;
             }

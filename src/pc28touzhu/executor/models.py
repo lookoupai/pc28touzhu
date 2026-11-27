@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 
 class JobSendBlocked(RuntimeError):
@@ -80,6 +80,7 @@ class ExecutorJob:
     attempt_token: Optional[str] = None
     attempt_no: int = 0
     telegram_random_id: Optional[int] = None
+    transport_evidence_callback: Optional[Callable[[Dict[str, Any]], None]] = None
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any]) -> "ExecutorJob":

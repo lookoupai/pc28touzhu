@@ -2874,9 +2874,15 @@ def run_auto_trigger_cycle(
     else:
         rules = repository.list_auto_trigger_rules(user_id=normalized_user_id, status="active")
 
+    from pc28touzhu.services.cycle_recovery_service import detach_expired_delivery_cycles, resolve_archived_cycles
+    recovery = detach_expired_delivery_cycles(repository, now=now, user_id=normalized_user_id, rule_id=normalized_rule_id)
+    archive_resolution = resolve_archived_cycles(repository, now=now, user_id=normalized_user_id)
+
     result = {
         "summary": {"rule_count": len(rules), "checked_count": 0, "triggered_count": 0, "skipped_count": 0, "failed_count": 0},
         "rules": [],
+        "cycle_recovery": recovery,
+        "archive_resolution": archive_resolution,
     }
     draw_data_cache: dict = {}
     for rule in rules:

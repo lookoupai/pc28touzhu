@@ -2792,6 +2792,14 @@ def list_platform_alerts(
                 )
             )
 
+    if hasattr(repository,'list_unresolved_cycle_alerts'):
+        for item in repository.list_unresolved_cycle_alerts(user_id=int(user_id) if user_id is not None else None,limit=bounded_limit):
+            alerts.append(_alert_item(severity='warning',alert_type='cycle_history_unresolved',
+                title='历史轮次已中断，旧账后台核对中',
+                message='轮次 #%s 已保留未决本金 %.2f；后续按原计划启动，旧投注不会补发。' %
+                    (item['rule_run_id'],float(item['reserved_stake'])),
+                metadata=item,key_parts={'rule_run_id':item['rule_run_id'],'user_id':item['user_id']}))
+
     severity_order = {"critical": 0, "warning": 1, "info": 2}
     alerts.sort(key=lambda item: (severity_order.get(item["severity"], 99), item["alert_type"], item["title"]))
     alerts = alerts[:bounded_limit]

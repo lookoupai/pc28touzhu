@@ -238,9 +238,10 @@ def evaluate_roll_rule(repository: Any, rule: dict, subscriptions: list[dict], *
                     route_strategy = _route_effective_strategy(strategy, route, context)
                     policy = auto_roll_policy(route_strategy, cycle_policy, legacy_policy)
                     previous = unit.get_auto_trigger_cycle_state(**owner, route_id=int(route['id'])) or {}
-                    account = previous.get('balance') if policy.get('roll_mode') == 'chain' else None
-                    if account is not None:
-                        account = max(float(account), float(policy['base_amount']))
+                    capital = unit.prepare_auto_trigger_cycle_capital(**owner, route_id=int(route['id']),
+                        rule_run_id=int(run['id']), previous_balance=previous.get('balance'), policy=policy,
+                        previous_state=previous)
+                    account = capital['account_balance']
                     state = create_cycle_state(policy, stat_date=day, account_balance=account)
                     if previous.get('stat_date') == day:
                         state['day_pnl'] = previous.get('day_pnl')

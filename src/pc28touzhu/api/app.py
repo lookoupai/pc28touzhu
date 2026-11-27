@@ -659,6 +659,14 @@ class PlatformApiApplication:
             )
             return _json_response(start_response, 200, payload)
 
+        if path == '/api/executor/reconciliations/pull':
+            if method != 'GET':
+                return _json_response(start_response,405,{'error':'method not allowed'})
+            items=self.repository.claim_execution_reconciliations(
+                executor_id=str(environ.get('HTTP_X_EXECUTOR_ID') or '').strip(),
+                limit=int(_query_value(environ,'limit','1') or '1'))
+            return _json_response(start_response,200,{'items':items})
+
         if path == "/api/executor/heartbeat":
             if method != "POST":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
@@ -897,6 +905,23 @@ class PlatformApiApplication:
             return _json_response(start_response, 200, payload)
 
         auto_trigger_rule_prefix = "/api/platform/auto-trigger-rules/"
+        if path.startswith(auto_trigger_rule_prefix) and path.endswith('/cycle-recoveries'):
+            if method != 'GET':
+                return _json_response(start_response,405,{'error':'method not allowed'})
+            rule_id=int(path[len(auto_trigger_rule_prefix):-len('/cycle-recoveries')])
+            rule=self.repository.get_auto_trigger_rule(rule_id)
+            if not rule:
+                return _json_response(start_response,404,{'error':'规则不存在'})
+            if int(rule['user_id'])!=int(current_user['id']) and not self._is_admin_user(current_user):
+                return _json_response(start_response,403,{'error':'无权查看该规则历史轮次'})
+            from pc28touzhu.services.cycle_recovery_service import list_cycle_recoveries
+            sub=_query_value(environ,'subscription_id');before=_query_value(environ,'before_id')
+            if (sub and int(sub)<1) or (before and int(before)<1):
+                raise ValueError('分页标识必须为正整数')
+            payload=list_cycle_recoveries(self.repository,user_id=int(rule['user_id']),rule_id=rule_id,
+                subscription_id=int(sub) if sub else None,before_id=int(before) if before else None,
+                limit=int(_query_value(environ,'limit','20') or '20'))
+            return _json_response(start_response,200,payload)
         if path.startswith(auto_trigger_rule_prefix) and path.endswith("/resume-cycle"):
             if method != "POST":
                 return _json_response(start_response, 405, {"error": "method not allowed"})
@@ -1344,6 +1369,13 @@ class PlatformApiApplication:
             return _json_response(start_response, 200, payload)
 
         report_prefix = "/api/executor/jobs/"
+        if path.startswith(report_prefix) and path.endswith('/reconcile'):
+            if method != 'POST':
+                return _json_response(start_response,405,{'error':'method not allowed'})
+            payload=self.repository.reconcile_execution_delivery(
+                job_id=int(path[len(report_prefix):-len('/reconcile')]),
+                executor_id=str(environ.get('HTTP_X_EXECUTOR_ID') or '').strip(),payload=_read_json_body(environ))
+            return _json_response(start_response,200,payload)
         if path.startswith(report_prefix) and path.endswith('/validate'):
             if method != 'POST':
                 return _json_response(start_response,405,{'error':'method not allowed'})

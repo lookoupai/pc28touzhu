@@ -923,3 +923,12 @@ select[multiple].text-input {
 }
 .rule-launch-preview { white-space: pre-line; line-height: 1.7; margin: 12px 0; padding: 14px; border: 1px solid var(--line, #dbe3ef); border-radius: 12px; font-size: 13px; }
 .rule-settlement-summary { overflow-wrap: anywhere; }
+.cycle-recovery-summary { margin-top: 12px; padding: 12px; border: 1px solid var(--line, #dbe3ef); border-radius: 10px; min-width: 0; }
+.cycle-recovery-summary > strong { font-size: 13px; }
+.cycle-history-panel { margin-top: 10px; overflow-wrap: anywhere; }
+.cycle-history-list { list-style: none; padding: 0; margin: 0; }
+.cycle-history-item { padding: 10px 0; border-top: 1px solid var(--line, #dbe3ef); }
+.cycle-history-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; font-size: 12px; }
+.cycle-history-feedback { margin: 10px 0; font-size: 12px; }
+.cycle-history-more, .cycle-history-retry { margin-top: 8px; }
+.cycle-recovery-error { color: var(--danger, #b34545); }

@@ -1,0 +1,3 @@
+PASS recovery DOM: independent current state, reserve, read-only history, paging/retry/empty, null/zero, escaping, legacy fields.
+PASS recovery Chromium: desktop 1440/mobile 390, real history pages, independent active state, no overflow/errors/writes.
+PASS recovery real WSGI/SQLite: authenticated history, cursor pages, new active run with archived old principal, no writes.

@@ -85,7 +85,8 @@ def _resolve_pending_win_streak_cycles(repository: Any) -> Dict[str, Any]:
             if any(event is None for event in leg_events):
                 waiting_count += 1
                 continue
-            if any(str(event.get("status") or "pending") not in TERMINAL_CYCLE_LEG_STATUSES for event in leg_events):
+            if any(not unit.is_terminal_cycle_event(event) if hasattr(unit, 'is_terminal_cycle_event')
+                   else str(event.get("status") or "pending") not in TERMINAL_CYCLE_LEG_STATUSES for event in leg_events):
                 waiting_count += 1
                 continue
             policy = row.get("policy") or {}
@@ -97,7 +98,7 @@ def _resolve_pending_win_streak_cycles(repository: Any) -> Dict[str, Any]:
                 float(event.get("stake_amount") or 0) + float(event.get("net_delta") or 0)
                 for event in leg_events
             ), 2)
-            all_void = all(event['status']=='void' for event in leg_events)
+            all_void = all(event['status'] in ('void','cancelled') for event in leg_events)
             new_state = dict(snapshot_state) if all_void else apply_period_outcome(policy, snapshot_state, stake_total=stake_total, payout_total=payout_total)
             day_close = resolve_day_close_action(policy, new_state)
             close_result: Dict[str, Any] = {"closed": False}
@@ -110,6 +111,9 @@ def _resolve_pending_win_streak_cycles(repository: Any) -> Dict[str, Any]:
                 if close_result.get("closed"):
                     closed_day_count += 1
             if automatic:
+                owning_run = unit.get_auto_trigger_rule_run(int(row.get('rule_run_id') or 0)) or {}
+                if owning_run.get('status') == 'stopped' and new_state.get('status') != 'stopped':
+                    new_state.update(status='stopped', stop_reason=owning_run.get('stop_reason') or 'manual_stop')
                 unit.upsert_auto_trigger_cycle_state(**owner, rule_run_id=row.get("rule_run_id"),
                     state=new_state, policy=policy, pending_plan=None)
                 from pc28touzhu.services.auto_trigger_cycle_service import finish_roll_session
@@ -149,6 +153,9 @@ def run_pc28_auto_settlement_cycle(
     draw_limit: int = 60,
     fetcher: Optional[Fetcher] = None,
 ) -> Dict[str, Any]:
+    from pc28touzhu.services.cycle_recovery_service import detach_expired_delivery_cycles, resolve_archived_cycles
+    recovery = detach_expired_delivery_cycles(repository)
+    archive_resolution = resolve_archived_cycles(repository)
     users = repository.list_users() if hasattr(repository, "list_users") else []
     pending_users: List[Dict[str, Any]] = []
     pending_count = 0
@@ -185,6 +192,8 @@ def run_pc28_auto_settlement_cycle(
             "users": [],
             "cycle_items": list(cycle_resolution.get("items") or []),
             "draw_source": "",
+            "cycle_recovery": recovery,
+            "archive_resolution": archive_resolution,
         }
 
     fetch_result = fetch_pc28_recent_draws_deep(
@@ -235,4 +244,6 @@ def run_pc28_auto_settlement_cycle(
         "users": results,
         "cycle_items": list(cycle_resolution.get("items") or []),
         "draw_source": draw_source,
+        "cycle_recovery": recovery,
+        "archive_resolution": resolve_archived_cycles(repository),
     }

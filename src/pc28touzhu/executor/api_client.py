@@ -45,3 +45,12 @@ class ExecutorApiClient:
         return self._request('POST','/api/executor/jobs/%s/validate' % job.job_id,
                              payload={'attempt_token':job.attempt_token})
 
+    def pull_reconciliation_jobs(self, *, limit: int = 1) -> List[Dict[str, Any]]:
+        path = '/api/executor/reconciliations/pull?' + urllib.parse.urlencode({'limit': str(max(1, min(int(limit), 10)))})
+        payload = self._request('GET', path)
+        items = payload.get('items') or []
+        return items if isinstance(items, list) else []
+
+    def reconcile_job(self, *, job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._request('POST', '/api/executor/jobs/%s/reconcile' % job_id, payload=payload)
+

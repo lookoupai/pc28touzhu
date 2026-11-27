@@ -8,6 +8,7 @@ import calendar
 import sqlite3
 import secrets
 import hashlib
+import math
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
@@ -25,7 +26,8 @@ from pc28touzhu.domain.subscription_strategy import (
     upgrade_subscription_strategy,
 )
 from pc28touzhu.executor.profit_reporting import ensure_profit_reporting
-from pc28touzhu.domain.betting_protocol import normalize_protocol
+from pc28touzhu.domain.betting_protocol import normalize_protocol, parse_acceptance
+from pc28touzhu.domain.win_streak_roll import CYCLE_DAY_STOP_REASONS
 
 
 SHANGHAI_TZ = timezone(timedelta(hours=8))
@@ -1151,6 +1153,64 @@ class DatabaseRepository:
             migrated_at TEXT NOT NULL)''')
         conn.execute('''CREATE INDEX IF NOT EXISTS idx_auto_cycle_pending
                         ON auto_trigger_cycle_states(user_id) WHERE pending_plan_json != '' ''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS auto_trigger_cycle_archives (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL, rule_id INTEGER NOT NULL, subscription_id INTEGER NOT NULL,
+            route_id INTEGER NOT NULL, rule_run_id INTEGER NOT NULL,
+            stat_date TEXT NOT NULL, issue_no TEXT NOT NULL DEFAULT '',
+            state_json TEXT NOT NULL, policy_json TEXT NOT NULL, pending_plan_json TEXT NOT NULL,
+            settled_net_at_detach REAL NOT NULL DEFAULT 0,
+            initial_reserved_stake REAL NOT NULL DEFAULT 0 CHECK(initial_reserved_stake >= 0),
+            reserved_stake REAL NOT NULL DEFAULT 0 CHECK(reserved_stake >= 0),
+            spendable_balance_at_detach REAL NOT NULL DEFAULT 0,
+            capital_credit REAL, credit_applied_run_id INTEGER, credit_applied_at TEXT,
+            status TEXT NOT NULL DEFAULT 'awaiting_reconciliation'
+                CHECK(status IN ('awaiting_reconciliation','awaiting_settlement','resolved')),
+            reason TEXT NOT NULL DEFAULT 'delivery_uncertain_expired',
+            detached_at TEXT NOT NULL, resolved_at TEXT, updated_at TEXT NOT NULL,
+            UNIQUE(rule_run_id, route_id),
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            FOREIGN KEY(rule_id) REFERENCES auto_trigger_rules(id),
+            FOREIGN KEY(subscription_id) REFERENCES user_subscriptions(id),
+            FOREIGN KEY(rule_run_id) REFERENCES auto_trigger_rule_runs(id),
+            FOREIGN KEY(credit_applied_run_id) REFERENCES auto_trigger_rule_runs(id))''')
+        conn.execute('''CREATE INDEX IF NOT EXISTS idx_cycle_archives_pending
+            ON auto_trigger_cycle_archives(status, updated_at, id)''')
+        conn.execute('''CREATE INDEX IF NOT EXISTS idx_cycle_archives_owner
+            ON auto_trigger_cycle_archives(user_id,rule_id,subscription_id,route_id,id)''')
+        conn.execute('''CREATE INDEX IF NOT EXISTS idx_cycle_archives_credit
+            ON auto_trigger_cycle_archives(rule_id,subscription_id,route_id)
+            WHERE status='resolved' AND credit_applied_run_id IS NULL''')
+        for table in ('auto_trigger_cycle_states','auto_trigger_cycle_archives'):
+            columns = {str(row['name']) for row in conn.execute('PRAGMA table_info('+table+')')}
+            for column in ('recovery_checked_at','recovery_error'):
+                if column not in columns:
+                    conn.execute('ALTER TABLE '+table+' ADD COLUMN '+column+" TEXT NOT NULL DEFAULT ''")
+        archive_columns={str(row['name']) for row in conn.execute('PRAGMA table_info(auto_trigger_cycle_archives)')}
+        for column,definition in {'capital_route_id':'INTEGER','carry_applied_run_id':'INTEGER'}.items():
+            if column not in archive_columns:
+                conn.execute('ALTER TABLE auto_trigger_cycle_archives ADD COLUMN '+column+' '+definition)
+        conn.execute('''CREATE TABLE IF NOT EXISTS execution_reconciliation_state (
+            leader_job_id INTEGER PRIMARY KEY, lease_token TEXT, lease_executor TEXT, lease_until TEXT,
+            original_attempt_token TEXT, next_check_at TEXT NOT NULL DEFAULT '',
+            check_count INTEGER NOT NULL DEFAULT 0, last_outcome TEXT NOT NULL DEFAULT '',
+            last_reason TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
+            FOREIGN KEY(leader_job_id) REFERENCES execution_jobs(id))''')
+        conn.execute('''CREATE INDEX IF NOT EXISTS idx_execution_reconciliation_due
+            ON execution_reconciliation_state(next_check_at,lease_until)''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS execution_reconciliation_audits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, leader_job_id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+            executor_id TEXT NOT NULL, reconciliation_token TEXT NOT NULL UNIQUE,
+            original_attempt_token TEXT, outcome TEXT NOT NULL, delivery_status TEXT NOT NULL,
+            evidence_json TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+            FOREIGN KEY(leader_job_id) REFERENCES execution_jobs(id),FOREIGN KEY(user_id) REFERENCES users(id))''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS execution_ignored_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, leader_job_id INTEGER NOT NULL,
+            executor_id TEXT NOT NULL, attempt_token TEXT NOT NULL DEFAULT '', attempt_no INTEGER NOT NULL,
+            reported_status TEXT NOT NULL, effective_status TEXT NOT NULL, remote_message_id TEXT,
+            raw_result_json TEXT NOT NULL, error_message TEXT, executed_at TEXT NOT NULL, created_at TEXT NOT NULL,
+            UNIQUE(leader_job_id,executor_id,attempt_token,attempt_no),
+            FOREIGN KEY(leader_job_id) REFERENCES execution_jobs(id))''')
 
     def _migrate_legacy_cycle_states(self, conn: sqlite3.Connection) -> None:
         """只迁移能够证明唯一归属的旧周期，原始证据永久保留且不改历史账本。"""
@@ -1451,6 +1511,585 @@ class DatabaseRepository:
             row['participating_route_ids'] = [int(value) for value in _safe_json_loads_list(row.get('participating_route_ids_json'))]
         return row
 
+    @staticmethod
+    def _cycle_archive_row(row: dict) -> dict:
+        item = dict(row)
+        for key in ('state', 'policy', 'pending_plan'):
+            item[key] = _safe_json_loads(item.pop(key + '_json', None))
+        return item
+
+    def list_auto_trigger_cycle_archives(self, *, user_id: int, rule_id: Optional[int] = None,
+                                        subscription_id: Optional[int] = None,
+                                        before_id: Optional[int] = None, limit: int = 50) -> list[dict]:
+        conditions, params = ['user_id=?'], [int(user_id)]
+        if rule_id is not None:
+            rule = self.get_auto_trigger_rule(int(rule_id))
+            if not rule or int(rule['user_id']) != int(user_id):
+                raise ValueError('规则不存在或无权查看历史轮次')
+            conditions.append('rule_id=?'); params.append(int(rule_id))
+        if subscription_id is not None:
+            conditions.append('subscription_id=?'); params.append(int(subscription_id))
+        if before_id is not None:
+            conditions.append('id<?'); params.append(int(before_id))
+        params.append(max(1, min(int(limit), 100)))
+        return [self._cycle_archive_row(row) for row in self._fetch_all(
+            'SELECT * FROM auto_trigger_cycle_archives WHERE ' + ' AND '.join(conditions) +
+            ' ORDER BY id DESC LIMIT ?', tuple(params))]
+
+    def list_unresolved_cycle_alerts(self, *, user_id: Optional[int] = None, limit: int = 50) -> list[dict]:
+        condition='';params=[]
+        if user_id is not None:
+            condition=' AND user_id=?';params.append(int(user_id))
+        params.append(max(1,min(int(limit),200)))
+        return self._fetch_all('''SELECT user_id,rule_id,subscription_id,rule_run_id,
+            SUM(reserved_stake) reserved_stake,MIN(detached_at) detached_at
+            FROM auto_trigger_cycle_archives WHERE status!='resolved' '''+condition+'''
+            GROUP BY user_id,rule_id,subscription_id,rule_run_id ORDER BY detached_at LIMIT ?''',tuple(params))
+
+    @staticmethod
+    def _cycle_event_terminal(conn: sqlite3.Connection, event: dict) -> bool:
+        if event.get('status') == 'settled':
+            return True
+        if event.get('status') not in ('void', 'cancelled'):
+            return False
+        # A cancellation is a no-bet outcome only if no send can still exist.
+        return conn.execute("""SELECT 1 FROM execution_jobs j
+            WHERE j.progression_event_id=? AND (j.status IN ('sending','unconfirmed','delivered')
+                OR EXISTS (SELECT 1 FROM execution_attempts a
+                    WHERE a.job_id=j.id AND (a.delivery_status='delivered' OR
+                        (a.delivery_status='unconfirmed' AND j.status!='rejected')))) LIMIT 1""",
+            (int(event['id']),)).fetchone() is None
+
+    def is_terminal_cycle_event(self, event: dict) -> bool:
+        with self._connect() as conn:
+            return self._cycle_event_terminal(conn, event)
+
+    def _cycle_archive_events(self, conn: sqlite3.Connection, owner: dict, pending: dict) -> list[dict]:
+        raw_ids=pending.get('leg_event_ids') or []
+        if not isinstance(raw_ids,list) or any(isinstance(value,bool) or not isinstance(value,int) or value<1 for value in raw_ids):
+            raise ValueError('历史周期投注流水标识不合法')
+        ids = list(raw_ids)
+        if not ids:
+            if pending:
+                raise ValueError('历史周期缺少投注流水，不能释放运行占用')
+            return []
+        if len(ids) != len(set(ids)):
+            raise ValueError('历史周期投注流水重复')
+        rows = conn.execute('SELECT * FROM subscription_progression_events WHERE id IN (%s)' %
+                            ','.join('?' for _ in ids), ids).fetchall()
+        if len(rows) != len(ids):
+            raise ValueError('历史周期投注流水不完整')
+        events = [dict(row) for row in rows]
+        for event in events:
+            mapping = {'rule_id':'auto_trigger_rule_id', 'rule_run_id':'auto_trigger_rule_run_id',
+                       'route_id':'auto_trigger_route_id', 'subscription_id':'subscription_id', 'user_id':'user_id'}
+            if any(int(event.get(field) or 0) != int(owner[key]) for key, field in mapping.items()):
+                raise ValueError('历史周期投注归属不匹配')
+            if str(event['issue_no']) != str(pending.get('issue_no') or ''):
+                raise ValueError('历史周期投注期号不匹配')
+        expected = conn.execute('''SELECT id FROM subscription_progression_events
+            WHERE user_id=? AND auto_trigger_rule_id=? AND subscription_id=?
+              AND COALESCE(auto_trigger_route_id,0)=? AND auto_trigger_rule_run_id=? AND issue_no=?''',
+            (owner['user_id'],owner['rule_id'],owner['subscription_id'],owner['route_id'],owner['rule_run_id'],
+             str(pending.get('issue_no') or ''))).fetchall()
+        if {int(row['id']) for row in expected} != set(ids):
+            raise ValueError('历史周期遗漏投注流水')
+        total = sum(float(event['stake_amount'] or 0) for event in events)
+        if not math.isfinite(total) or any(float(event['stake_amount'] or 0)<0 for event in events):
+            raise ValueError('历史周期本金不合法')
+        if _round_money(total) != _round_money(pending.get('stake_total')):
+            raise ValueError('历史周期本金与计划不一致')
+        return events
+
+    def detach_expired_auto_trigger_cycles(self, *, now: Optional[datetime] = None,
+                                          user_id: Optional[int] = None,
+                                          rule_id: Optional[int] = None, limit: int = 50) -> dict:
+        """Release expired uncertain runs while retaining every route's original ledger."""
+        instant = now or _parse_iso8601(_utc_now_iso())
+        stamp = _format_iso8601(instant)
+        clauses, params = [], [stamp, stamp]
+        if user_id is not None:
+            clauses.append('cs.user_id=?'); params.append(int(user_id))
+        if rule_id is not None:
+            clauses.append('cs.rule_id=?'); params.append(int(rule_id))
+        where = (' AND ' + ' AND '.join(clauses)) if clauses else ''
+        params.append(max(1, min(int(limit), 200)))
+        candidates = self._fetch_all('''SELECT DISTINCT cs.rule_id,cs.subscription_id,cs.user_id,cs.rule_run_id
+            FROM auto_trigger_cycle_states cs
+            JOIN auto_trigger_cycle_sessions s ON s.rule_id=cs.rule_id AND s.subscription_id=cs.subscription_id
+                AND s.user_id=cs.user_id AND s.active_run_id=cs.rule_run_id
+            JOIN subscription_progression_events e ON e.auto_trigger_rule_run_id=cs.rule_run_id
+                AND COALESCE(e.auto_trigger_route_id,0)=cs.route_id AND e.user_id=cs.user_id
+            JOIN execution_jobs j ON j.progression_event_id=e.id
+            WHERE cs.pending_plan_json!='' AND j.expire_at<=?
+              AND (j.status='unconfirmed' OR (j.status='sending' AND COALESCE(j.claim_until,'')<=?))
+            ''' + where + ' ORDER BY cs.recovery_checked_at,cs.rule_run_id LIMIT ?', tuple(params))
+        items, errors = [], []
+        for candidate in candidates:
+            try:
+                with self.transaction() as unit:
+                    result = unit._detach_expired_auto_trigger_cycle(candidate, instant)
+                    if result:
+                        items.append(result)
+            except ValueError as exc:
+                errors.append({'rule_run_id':candidate['rule_run_id'], 'reason':str(exc)})
+                with self._connect() as conn:
+                    conn.execute('''UPDATE auto_trigger_cycle_states SET recovery_checked_at=?,recovery_error=?
+                        WHERE rule_run_id=? AND user_id=?''',(stamp,str(exc),candidate['rule_run_id'],candidate['user_id']))
+        return {'detached_count':len(items), 'items':items, 'errors':errors}
+
+    def _detach_expired_auto_trigger_cycle(self, candidate: dict, now: datetime) -> Optional[dict]:
+        conn = self._transaction_connection
+        owner = {key:int(candidate[key]) for key in ('rule_id','subscription_id','user_id')}
+        run_id = int(candidate['rule_run_id'])
+        session = self.get_auto_trigger_cycle_session(**owner) or {}
+        if int(session.get('active_run_id') or 0) != run_id:
+            return None
+        self._validate_auto_cycle_owner(**owner, rule_run_id=run_id)
+        run = self.get_auto_trigger_rule_run(run_id) or {}
+        if run.get('status') not in ('active','stopped'):
+            return None
+        route_ids = session.get('participating_route_ids') or []
+        if not route_ids:
+            raise ValueError('历史周期缺少参与路由')
+        states = []
+        triggered = False
+        for route_id in route_ids:
+            row = self.get_auto_trigger_cycle_state(**owner, route_id=int(route_id))
+            if not row or int(row.get('rule_run_id') or 0) != run_id:
+                raise ValueError('历史周期参与路由不完整')
+            if row.get('pending_plan_json'):
+                try:
+                    valid_pending = json.loads(row['pending_plan_json'])
+                except (ValueError, TypeError) as exc:
+                    raise ValueError('历史周期待处理快照损坏') from exc
+                if not isinstance(valid_pending, dict) or not valid_pending:
+                    raise ValueError('历史周期待处理快照不完整')
+            pending = row.get('pending_plan') or {}
+            events = self._cycle_archive_events(conn, {**owner,'route_id':route_id,'rule_run_id':run_id}, pending)
+            for event in events:
+                jobs = conn.execute('SELECT * FROM execution_jobs WHERE progression_event_id=?',(event['id'],)).fetchall()
+                for job in jobs:
+                    if _parse_iso8601(job['expire_at']) <= now and (
+                        job['status']=='unconfirmed' or (job['status']=='sending'
+                            and (not job['claim_until'] or _parse_iso8601(job['claim_until'])<=now))):
+                        triggered = True
+            states.append(row)
+        if not triggered:
+            return None
+        stamp = _format_iso8601(now)
+        reason = 'delivery_uncertain_expired'
+        archives = []
+        for row in states:
+            pending = row.get('pending_plan') or {}
+            route_id = int(row['route_id'])
+            scope = {**owner, 'route_id':route_id, 'rule_run_id':run_id}
+            events = self._cycle_archive_events(conn, scope, pending)
+            # Only unattempted queue work or a classified pre-send failure can be cancelled.
+            for event in events:
+                jobs = conn.execute('SELECT * FROM execution_jobs WHERE progression_event_id=?',(event['id'],)).fetchall()
+                for job in jobs:
+                    raw = _safe_json_loads(job['delivery_evidence_json'])
+                    attempts = conn.execute('SELECT delivery_status,raw_result FROM execution_attempts WHERE job_id=?',(job['id'],)).fetchall()
+                    before_send_only = all(a['delivery_status']=='failed' and
+                        _safe_json_loads(a['raw_result']).get('failure_stage')=='connect' and
+                        _safe_json_loads(a['raw_result']).get('retryable') is True for a in attempts)
+                    known_unsent = (job['status']=='pending' and before_send_only) or (
+                        job['status']=='failed' and raw.get('failure_stage')=='connect' and raw.get('retryable') is True)
+                    if known_unsent:
+                        conn.execute("UPDATE execution_jobs SET status='expired',retry_eligible=0,error_message=?,updated_at=? WHERE id=?",
+                                     (reason,stamp,job['id']))
+                    elif job['status'] in ('sending','pending','failed'):
+                        conn.execute("UPDATE execution_jobs SET status='unconfirmed',acceptance_status='unconfirmed',retry_eligible=0,error_message=?,updated_at=? WHERE id=?",
+                                     (reason,stamp,job['id']))
+                self._sync_progression_event_delivery_status(conn,progression_event_id=event['id'],now=stamp)
+            events = self._cycle_archive_events(conn, scope, pending)
+            saved_state=pending.get('state') if pending else row
+            if not isinstance(saved_state,dict):
+                raise ValueError('历史周期资金快照不合法')
+            snapshot = dict(saved_state)
+            try:
+                balances=[float(snapshot.get('balance') or 0),
+                          *[float(e['net_delta'] or 0) for e in events]]
+            except (ValueError,TypeError) as exc:
+                raise ValueError('历史周期金额不合法') from exc
+            if not all(math.isfinite(value) for value in balances):
+                raise ValueError('历史周期金额不合法')
+            known_net = _round_money(sum(float(e['net_delta'] or 0) for e in events if e['status']=='settled'))
+            unresolved = [e for e in events if not self._cycle_event_terminal(conn,e)]
+            reserve = _round_money(sum(float(e['stake_amount'] or 0) for e in unresolved))
+            balance = _round_money(float(snapshot.get('balance') or 0) + known_net - reserve)
+            if balance < 0:
+                raise ValueError('历史周期本金超过可核对策略余额')
+            unknown = any(e['status'] != 'placed' for e in unresolved)
+            status = 'awaiting_reconciliation' if unknown else ('awaiting_settlement' if unresolved else 'resolved')
+            cursor = conn.execute('''INSERT INTO auto_trigger_cycle_archives
+                (user_id,rule_id,subscription_id,route_id,rule_run_id,stat_date,issue_no,state_json,policy_json,
+                 pending_plan_json,settled_net_at_detach,initial_reserved_stake,reserved_stake,
+                 spendable_balance_at_detach,capital_credit,status,reason,detached_at,resolved_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                (owner['user_id'],owner['rule_id'],owner['subscription_id'],route_id,run_id,row['stat_date'],
+                 str(pending.get('issue_no') or ''),_safe_json_dumps(row),_safe_json_dumps(row.get('policy') or {}),
+                 _safe_json_dumps(pending),known_net,reserve,reserve,balance,0.0 if not unresolved else None,
+                 status,reason,stamp,stamp if not unresolved else None,stamp))
+            archives.append(int(cursor.lastrowid))
+            stopped = {**snapshot, 'balance':balance, 'status':'stopped','stop_reason':reason,
+                       'last_cycle_stop_reason':reason, 'day_closed':False,'day_close_scope':None}
+            if stopped.get('day_pnl') is not None:
+                stopped['day_pnl'] = _round_money(float(stopped['day_pnl']) + known_net)
+            self.upsert_auto_trigger_cycle_state(**owner,route_id=route_id,rule_run_id=run_id,
+                                                state=stopped,policy=row.get('policy') or {},pending_plan=None)
+        conn.execute("UPDATE auto_trigger_rule_runs SET status='closed',stop_reason=?,stopped_at=?,updated_at=? WHERE id=? AND status='active'",
+                     (reason,stamp,stamp,run_id))
+        conn.execute("""UPDATE auto_trigger_route_subscription_runtime_runs
+            SET status='closed',ended_at=COALESCE(ended_at,?),end_reason=CASE WHEN end_reason='' THEN ? ELSE end_reason END,updated_at=?
+            WHERE auto_trigger_rule_run_id=? AND user_id=? AND status='active'""",(stamp,reason,stamp,run_id,owner['user_id']))
+        conn.execute("""UPDATE subscription_runtime_runs SET status='closed',ended_at=COALESCE(ended_at,?),
+            end_reason=CASE WHEN end_reason='' THEN ? ELSE end_reason END,updated_at=?
+            WHERE auto_trigger_rule_run_id=? AND user_id=? AND status='active'""",(stamp,reason,stamp,run_id,owner['user_id']))
+        next_status, stop_reason = 'waiting', reason
+        if session.get('status') in ('blocked','day_closed'):
+            next_status, stop_reason = session['status'], session.get('stop_reason') or reason
+        if run.get('status') == 'stopped':
+            stop_reason = run.get('stop_reason') or 'manual_stop'
+            next_status = 'day_closed' if stop_reason in CYCLE_DAY_STOP_REASONS else 'blocked'
+        self.upsert_auto_trigger_cycle_session(**owner, values={'status':next_status,'active_run_id':None,'stop_reason':stop_reason})
+        return {**owner,'rule_run_id':run_id,'archive_ids':archives,'status':next_status}
+
+    def resolve_auto_trigger_cycle_archives(self, *, user_id: Optional[int] = None,
+                                           now: Optional[datetime] = None, limit: int = 100) -> dict:
+        stamp = _format_iso8601(now or _parse_iso8601(_utc_now_iso()))
+        conditions, params = ["status!='resolved'"], []
+        if user_id is not None:
+            conditions.append('user_id=?');params.append(int(user_id))
+        # Filter potentially finished ledgers before LIMIT, so unknown old rows cannot starve them.
+        conditions.append("""NOT EXISTS (SELECT 1 FROM subscription_progression_events e
+            JOIN json_each(json_extract(CASE WHEN json_valid(auto_trigger_cycle_archives.pending_plan_json)
+                THEN auto_trigger_cycle_archives.pending_plan_json ELSE '{}' END,'$.leg_event_ids')) leg ON leg.value=e.id
+            WHERE e.status NOT IN ('settled','void','cancelled'))""")
+        params.append(max(1,min(int(limit),500)))
+        candidates=self._fetch_all('SELECT id FROM auto_trigger_cycle_archives WHERE '+' AND '.join(conditions)+' ORDER BY recovery_checked_at,id LIMIT ?',tuple(params))
+        resolved=[];errors=[]
+        for candidate in candidates:
+            try:
+                with self.transaction() as unit:
+                    conn=unit._transaction_connection
+                    raw=conn.execute('SELECT * FROM auto_trigger_cycle_archives WHERE id=?',(candidate['id'],)).fetchone()
+                    if not raw or raw['status']=='resolved':
+                        continue
+                    try:
+                        pending=json.loads(raw['pending_plan_json'])
+                    except (TypeError,ValueError) as exc:
+                        raise ValueError('历史归档待处理快照损坏') from exc
+                    if not isinstance(pending,dict) or not pending.get('leg_event_ids'):
+                        raise ValueError('未结清历史归档缺少原投注流水')
+                    archive=unit._cycle_archive_row(dict(raw))
+                    events=unit._cycle_archive_events(conn,archive,pending)
+                    if any(not unit._cycle_event_terminal(conn,event) for event in events):
+                        conn.execute('UPDATE auto_trigger_cycle_archives SET recovery_checked_at=?,recovery_error=? WHERE id=?',
+                                     (stamp,'取消/作废流水仍有未确认发送证据',archive['id']))
+                        continue
+                    net=_round_money(sum(float(e['net_delta'] or 0) for e in events if e['status']=='settled'))
+                    credit=_round_money(float(archive['initial_reserved_stake']) + net - float(archive['settled_net_at_detach']))
+                    if credit < 0:
+                        raise ValueError('历史周期返还金额不一致，需核对原账本')
+                    conn.execute("""UPDATE auto_trigger_cycle_archives SET status='resolved',reserved_stake=0,
+                        capital_credit=?,resolved_at=?,updated_at=?,recovery_checked_at=?,recovery_error=''
+                        WHERE id=? AND status!='resolved'""",(credit,stamp,stamp,stamp,archive['id']))
+                    resolved.append({'id':archive['id'],'rule_run_id':archive['rule_run_id'],'capital_credit':credit})
+            except ValueError as exc:
+                errors.append({'id':candidate['id'],'reason':str(exc)})
+                with self._connect() as conn:
+                    conn.execute('UPDATE auto_trigger_cycle_archives SET recovery_checked_at=?,recovery_error=? WHERE id=?',
+                                 (stamp,str(exc),candidate['id']))
+        return {'resolved_count':len(resolved),'items':resolved,'errors':errors}
+
+    def _refresh_archive_delivery_status(self, conn: sqlite3.Connection, members: list[int], stamp: str) -> None:
+        archives=conn.execute('''SELECT DISTINCT a.* FROM auto_trigger_cycle_archives a
+            JOIN subscription_progression_events e ON e.auto_trigger_rule_run_id=a.rule_run_id
+                AND COALESCE(e.auto_trigger_route_id,0)=a.route_id AND e.user_id=a.user_id
+            JOIN execution_jobs j ON j.progression_event_id=e.id
+            WHERE a.status!='resolved' AND j.id IN (%s)''' % ','.join('?' for _ in members),members).fetchall()
+        for raw in archives:
+            archive=self._cycle_archive_row(dict(raw))
+            try:
+                events=self._cycle_archive_events(conn,archive,archive['pending_plan'])
+                pending=[e for e in events if not self._cycle_event_terminal(conn,e)]
+                state='awaiting_settlement' if pending and all(e['status']=='placed' for e in pending) else 'awaiting_reconciliation'
+                if pending and state!=archive['status']:
+                    conn.execute('UPDATE auto_trigger_cycle_archives SET status=?,updated_at=? WHERE id=?',
+                                 (state,stamp,archive['id']))
+            except ValueError:
+                continue  # The bounded archive validator records the specific error.
+
+    def prepare_auto_trigger_cycle_capital(self, *, rule_id: int, subscription_id: int, route_id: int,
+                                           user_id: int, rule_run_id: int, previous_balance: Optional[float],
+                                           policy: dict, previous_state: Optional[dict] = None) -> dict:
+        """Apply proven historical credits only at an atomic new-run boundary."""
+        if self._transaction_connection is None:
+            raise ValueError('周期本金准备必须在开轮事务内')
+        self._validate_auto_cycle_owner(rule_id=rule_id,subscription_id=subscription_id,route_id=route_id,
+                                       user_id=user_id,rule_run_id=rule_run_id)
+        conn=self._transaction_connection
+        run=conn.execute('SELECT * FROM auto_trigger_rule_runs WHERE id=?',(rule_run_id,)).fetchone()
+        audit=_safe_json_loads(run['capital_audit_json'])
+        routes=audit.setdefault('routes',{})
+        if str(route_id) in routes:
+            return routes[str(route_id)]
+        base=float(policy['base_amount'])
+        chain=policy.get('roll_mode')=='chain'
+        legacy_carry=0.0;legacy_carry_ids=[]
+        route=conn.execute('SELECT * FROM auto_trigger_rule_routes WHERE id=?',(route_id,)).fetchone()
+        if route and route['is_implicit']:
+            legacy=conn.execute('''SELECT * FROM auto_trigger_cycle_archives WHERE user_id=? AND rule_id=?
+                AND subscription_id=? AND route_id=0 ORDER BY id DESC''',(user_id,rule_id,subscription_id)).fetchall()
+            for old in legacy:
+                original_pending=_safe_json_loads(old['pending_plan_json'])
+                ids=original_pending.get('leg_event_ids') or []
+                if not ids:
+                    continue
+                targets={row[0] for row in conn.execute('SELECT DISTINCT delivery_target_id FROM execution_jobs WHERE progression_event_id IN (%s)' %
+                    ','.join('?' for _ in ids),ids)}
+                if targets!={route['delivery_target_id']}:
+                    continue  # No guessed mapping when one old route had multiple targets.
+                if old['capital_route_id'] not in (None,route_id):
+                    continue
+                conn.execute('UPDATE auto_trigger_cycle_archives SET capital_route_id=? WHERE id=?',(route_id,old['id']))
+                if chain and _safe_json_loads(old['policy_json']).get('roll_mode','chain')=='chain' and old['carry_applied_run_id'] is None and previous_balance is None:
+                    previous_balance=float(old['spendable_balance_at_detach'])
+                    legacy_carry=previous_balance;legacy_carry_ids.append(int(old['id']))
+                    conn.execute('UPDATE auto_trigger_cycle_archives SET carry_applied_run_id=? WHERE id=?',(rule_run_id,old['id']))
+        rows=conn.execute("""SELECT * FROM auto_trigger_cycle_archives
+            WHERE user_id=? AND rule_id=? AND subscription_id=? AND (route_id=? OR capital_route_id=?)
+              AND status='resolved' AND credit_applied_run_id IS NULL ORDER BY id""",
+            (user_id,rule_id,subscription_id,route_id,route_id)).fetchall()
+        credited=[];independent=[];credit=0.0
+        for row in rows:
+            original_chain=_safe_json_loads(row['policy_json']).get('roll_mode','chain')=='chain'
+            if original_chain and not chain:
+                continue  # A temporary switch to all-in must not consume chain money.
+            if original_chain:
+                credit+=float(row['capital_credit'] or 0);credited.append(int(row['id']))
+            else:
+                independent.append(int(row['id']))
+            conn.execute('UPDATE auto_trigger_cycle_archives SET credit_applied_run_id=?,credit_applied_at=? WHERE id=? AND credit_applied_run_id IS NULL',
+                         (rule_run_id,_utc_now_iso(),row['id']))
+        carry=float(previous_balance) if previous_balance is not None else 0.0
+        adjusted=_round_money(carry+credit) if chain else 0.0
+        result={'roll_mode':policy.get('roll_mode'),'carry_balance':carry if chain else 0.0,
+                'previous_cycle_state':copy.deepcopy(previous_state or {}),
+                'legacy_carry_balance':legacy_carry,'legacy_carry_archive_ids':legacy_carry_ids,
+                'applied_credit':_round_money(credit),'credit_archive_ids':credited,
+                'independent_return_archive_ids':independent,
+                'top_up_amount':_round_money(max(0,base-adjusted)),
+                'account_balance':_round_money(max(base,adjusted)) if chain else None}
+        routes[str(route_id)]=result
+        conn.execute('UPDATE auto_trigger_rule_runs SET capital_audit_json=? WHERE id=?',(_safe_json_dumps(audit),rule_run_id))
+        return result
+
+    def _execution_reconciliation_payload(self, conn: sqlite3.Connection, leader: dict) -> dict:
+        identity=_safe_json_loads(leader['delivery_identity_json'])
+        if not identity or not identity.get('target_key'):
+            raise ValueError('original_identity_unavailable')
+        target=conn.execute('SELECT * FROM delivery_targets WHERE id=?',(leader['delivery_target_id'],)).fetchone()
+        if not target or int(target['user_id']) != int(leader['user_id']):
+            raise ValueError('original_target_unavailable')
+        account=None
+        if leader['telegram_account_id']:
+            account=conn.execute('SELECT * FROM telegram_accounts WHERE id=? AND user_id=?',
+                (leader['telegram_account_id'],leader['user_id'])).fetchone()
+            if not account or str(account['session_path']) != str(identity.get('session_path') or ''):
+                raise ValueError('original_account_identity_unavailable')
+        if identity.get('account_id') != leader['telegram_account_id']:
+            raise ValueError('original_account_identity_mismatch')
+        signal=conn.execute('SELECT * FROM normalized_signals WHERE id=?',(leader['signal_id'],)).fetchone()
+        if not signal:
+            raise ValueError('original_signal_unavailable')
+        members=self._delivery_job_ids(conn,int(leader['id']))
+        rows=[dict(row) for row in conn.execute('SELECT * FROM execution_jobs WHERE id IN (%s) ORDER BY id' %
+            ','.join('?' for _ in members),members).fetchall()]
+        if any(row['user_id']!=leader['user_id'] or row['signal_id']!=leader['signal_id'] or
+               row['delivery_identity_json']!=leader['delivery_identity_json'] or row['betting_protocol_json']!=leader['betting_protocol_json']
+               for row in rows):
+            raise ValueError('combined_original_identity_mismatch')
+        rows.sort(key=lambda row:(row['id']!=leader['id'],row['id']))
+        stake=_safe_json_loads(leader['stake_plan_json'])
+        stake['amount']=_round_money(sum(float(_safe_json_loads(row['stake_plan_json']).get('amount') or 0) for row in rows))
+        attempt=conn.execute('SELECT * FROM execution_attempts WHERE job_id=? ORDER BY id DESC LIMIT 1',(leader['id'],)).fetchone()
+        original={'token':attempt['attempt_token'] if attempt else leader['claim_token'],
+                  'no':int(attempt['attempt_no']) if attempt else 1,
+                  'executor_id':attempt['executor_instance_id'] if attempt else leader['claim_executor'],
+                  'executed_at':attempt['executed_at'] if attempt else leader['created_at']}
+        evidence=_safe_json_loads(leader['delivery_evidence_json'])
+        if attempt and attempt['remote_message_id'] and not evidence.get('message_id'):
+            evidence['message_id']=attempt['remote_message_id']
+        return {'job_id':str(leader['id']),'signal_id':str(leader['signal_id']),
+                'lottery_type':str(signal['lottery_type']),'issue_no':str(signal['issue_no']),
+                'bet_type':str(signal['bet_type']),'bet_value':str(signal['bet_value']),
+                'message_text':' '.join(str(row['planned_message_text']) for row in rows),
+                'stake_plan':stake,'idempotency_key':leader['idempotency_key'],
+                'execute_after':leader['execute_after'],'expire_at':leader['expire_at'],
+                'target':{'type':target['executor_type'],'key':identity['target_key'],'name':target['target_name'],
+                          'metadata':{'betting_protocol':normalize_protocol(_safe_json_loads(leader['betting_protocol_json']))}},
+                'telegram_account':{'id':int(account['id']),'label':account['label'],'phone':account['phone'],
+                                    'session_path':account['session_path']} if account else None,
+                'original_attempt':original,'delivery_evidence':evidence}
+
+    def claim_execution_reconciliations(self, *, executor_id: str, limit: int = 1) -> list[dict]:
+        if not executor_id or not self._fetch_one('SELECT 1 FROM executor_instances WHERE executor_id=?',(executor_id,)):
+            raise ValueError('执行器未注册')
+        now=_parse_iso8601(_utc_now_iso());stamp=_format_iso8601(now)
+        items=[]
+        with self.transaction() as unit:
+            conn=unit._transaction_connection
+            candidates=conn.execute('''SELECT j.* FROM execution_jobs j
+                LEFT JOIN execution_reconciliation_state r ON r.leader_job_id=j.id
+                WHERE j.status='unconfirmed' AND j.send_with_job_id IS NULL
+                  AND COALESCE((SELECT a.executor_instance_id FROM execution_attempts a WHERE a.job_id=j.id ORDER BY a.id DESC LIMIT 1),j.claim_executor)=?
+                  AND COALESCE(r.next_check_at,'')<=? AND COALESCE(r.lease_until,'')<=?
+                ORDER BY COALESCE(r.next_check_at,''),j.id LIMIT ?''',
+                (executor_id,stamp,stamp,max(10,min(int(limit),10)*5))).fetchall()
+            for raw in candidates:
+                leader=dict(raw)
+                try:
+                    payload=unit._execution_reconciliation_payload(conn,leader)
+                except ValueError as exc:
+                    conn.execute('''INSERT INTO execution_reconciliation_state(leader_job_id,next_check_at,last_reason,updated_at)
+                        VALUES(?,?,?,?) ON CONFLICT(leader_job_id) DO UPDATE SET next_check_at=excluded.next_check_at,
+                        last_reason=excluded.last_reason,updated_at=excluded.updated_at''',
+                        (leader['id'],_format_iso8601(now+timedelta(hours=1)),str(exc),stamp))
+                    continue
+                token=secrets.token_hex(16)
+                conn.execute('''INSERT INTO execution_reconciliation_state
+                    (leader_job_id,lease_token,lease_executor,lease_until,original_attempt_token,updated_at)
+                    VALUES(?,?,?,?,?,?) ON CONFLICT(leader_job_id) DO UPDATE SET lease_token=excluded.lease_token,
+                        lease_executor=excluded.lease_executor,lease_until=excluded.lease_until,
+                        original_attempt_token=excluded.original_attempt_token,updated_at=excluded.updated_at''',
+                    (leader['id'],token,executor_id,_format_iso8601(now+timedelta(seconds=30)),payload['original_attempt']['token'],stamp))
+                payload['reconciliation_token']=token;items.append(payload)
+                if len(items)>=max(1,min(int(limit),10)):
+                    break
+        return items
+
+    @staticmethod
+    def _verified_reconciliation_result(payload: dict, outcome: str, evidence: dict) -> tuple[str,dict]:
+        for field in ('verified_message','acceptance_reply','opening_evidence','current_opening_evidence','acceptance'):
+            if field in evidence and evidence[field] is not None and not isinstance(evidence[field],dict):
+                raise ValueError('核对证据 %s 必须为对象' % field)
+        def evidence_time(value: Any) -> datetime:
+            if not isinstance(value,str) or not value.strip():
+                raise ValueError('核对证据时间必须为 ISO 字符串')
+            return _parse_iso8601(value)
+        account_id=(payload.get('telegram_account') or {}).get('id')
+        if (evidence.get('target_key')!=payload['target']['key'] or evidence.get('telegram_account_id')!=account_id
+                or evidence.get('text')!=payload['message_text'] or str(evidence.get('issue_no') or '')!=payload['issue_no']):
+            raise ValueError('核对证据的原账号、目标、内容或期号不匹配')
+        message_id=evidence.get('message_id')
+        if isinstance(message_id,bool) or not str(message_id or '').isdigit() or int(message_id)<=0:
+            raise ValueError('核对证据缺少原消息标识')
+        date=evidence.get('telegram_message_date')
+        if not date:
+            raise ValueError('核对证据缺少原消息时间')
+        sent=evidence_time(date)
+        if not (_parse_iso8601(payload['execute_after'])-timedelta(seconds=2)<=sent<=
+                _parse_iso8601(payload['expire_at'])+timedelta(seconds=2)):
+            raise ValueError('原消息时间不在原发送窗口内')
+        provenance=evidence.get('provenance')
+        if provenance=='remote_history':
+            verified=evidence.get('verified_message') or {}
+            if (str(verified.get('id'))!=str(message_id) or verified.get('out') is not True
+                    or verified.get('text')!=payload['message_text'] or evidence_time(verified.get('date'))!=sent):
+                raise ValueError('历史消息证据不完整')
+        elif provenance!='local_result':
+            raise ValueError('核对证据来源无效')
+        protocol=normalize_protocol(payload['target']['metadata']['betting_protocol'])
+        if outcome=='transport_confirmed':
+            if protocol['mode']!='legacy':
+                raise ValueError('本目标须有受理回执，消息送达不足以结算')
+            return 'delivered',{}
+        reply=evidence.get('acceptance_reply')
+        if not isinstance(reply,dict) or reply.get('sender_id')!=protocol.get('bot_id') or str(reply.get('reply_to'))!=str(message_id):
+            raise ValueError('缺少可信机器人对应原消息的回复')
+        if (isinstance(reply.get('id'),bool) or not str(reply.get('id') or '').isdigit()
+                or int(reply['id'])<=0 or not isinstance(reply.get('text'),str) or not reply.get('date')):
+            raise ValueError('受理回复证据不完整')
+        replied=evidence_time(reply['date'])
+        if replied<sent-timedelta(seconds=2):
+            raise ValueError('受理回复早于原消息')
+        parsed=parse_acceptance([reply],protocol,int(message_id),payload['issue_no'],payload['message_text'],
+                                evidence.get('opening_evidence') or {},evidence.get('current_opening_evidence') or {})
+        if parsed.get('state')!=outcome:
+            raise ValueError('受理证据的期号、玩法、金额或结论不匹配')
+        period=str(parsed.get('target_round_id') or '')
+        if outcome=='accepted' and not (period.isdigit() and len(period)<20):
+            if provenance!='local_result' or not evidence.get('acceptance_checked_at') or not evidence.get('send_finished_at'):
+                raise ValueError('历史不透明轮号缺少当时映射证据')
+            checked=evidence_time(evidence['acceptance_checked_at']);finished=evidence_time(evidence['send_finished_at'])
+            if not (finished-timedelta(seconds=2)<=replied<=checked+timedelta(seconds=2)
+                    and 0<=(checked-finished).total_seconds()<=protocol['ack_timeout_seconds']+6
+                    and replied<=_parse_iso8601(payload['expire_at'])+timedelta(seconds=protocol['ack_timeout_seconds']+6)):
+                raise ValueError('不透明轮号受理证据时序不一致')
+        return ('delivered' if outcome=='accepted' else 'rejected'),parsed
+
+    def reconcile_execution_delivery(self, *, job_id: int, executor_id: str, payload: dict) -> dict:
+        token=payload.get('reconciliation_token');outcome=payload.get('outcome')
+        if not isinstance(token,str) or not token or outcome not in {'unknown','transport_confirmed','accepted','rejected'}:
+            raise ValueError('核对标识或结论不合法')
+        evidence=payload.get('evidence') or {}
+        if not isinstance(evidence,dict) or len(_safe_json_dumps(evidence))>24000:
+            raise ValueError('核对证据不合法或过长')
+        reason=str(payload.get('reason') or '')[:500]
+        stamp=_utc_now_iso();now=_parse_iso8601(stamp)
+        with self.transaction() as unit:
+            conn=unit._transaction_connection
+            members=unit._delivery_job_ids(conn,int(job_id));leader=conn.execute('SELECT * FROM execution_jobs WHERE id=?',(members[0],)).fetchone()
+            if not leader or not executor_id:
+                raise ValueError('原任务或执行器不存在')
+            prior=conn.execute('SELECT * FROM execution_reconciliation_audits WHERE reconciliation_token=?',(token,)).fetchone()
+            if prior:
+                if prior['executor_id']!=executor_id or int(prior['leader_job_id'])!=int(leader['id']):
+                    raise ValueError('核对标识归属不匹配')
+                return {'job_id':str(leader['id']),'delivery_status':prior['delivery_status'],'duplicate':True}
+            lease=conn.execute('SELECT * FROM execution_reconciliation_state WHERE leader_job_id=?',(leader['id'],)).fetchone()
+            if (not lease or lease['lease_token']!=token or lease['lease_executor']!=executor_id
+                    or not lease['lease_until'] or _parse_iso8601(lease['lease_until'])<=now
+                    or lease['original_attempt_token']!=payload.get('original_attempt_token')):
+                raise ValueError('核对租约或原发送标识不匹配')
+            original=unit._execution_reconciliation_payload(conn,dict(leader))
+            if original['original_attempt']['executor_id']!=executor_id or original['original_attempt']['token']!=payload.get('original_attempt_token'):
+                raise ValueError('原发送尝试已改变')
+            status=str(leader['status'])
+            verified={}
+            if outcome!='unknown':
+                desired,verified=unit._verified_reconciliation_result(original,outcome,evidence)
+                if status not in ('unconfirmed',desired):
+                    outcome='unknown';reason='conflicting_delivery_evidence'
+                elif status=='unconfirmed':
+                    status=desired
+                    combined={**evidence,'acceptance':verified} if verified else evidence
+                    for member in members:
+                        current=conn.execute('SELECT * FROM execution_jobs WHERE id=?',(member,)).fetchone()
+                        if current['status']!='unconfirmed':
+                            raise ValueError('合并发送成员的核对状态不一致')
+                        conn.execute('''UPDATE execution_jobs SET status=?,acceptance_status=?,delivery_evidence_json=?,
+                            retry_eligible=0,error_message=NULL,updated_at=? WHERE id=?''',
+                            (status,verified.get('state',''),_safe_json_dumps(combined),stamp,member))
+                    for member in members:
+                        event=conn.execute('SELECT progression_event_id FROM execution_jobs WHERE id=?',(member,)).fetchone()
+                        if event['progression_event_id']:
+                            unit._sync_progression_event_delivery_status(conn,progression_event_id=event['progression_event_id'],now=stamp)
+                    unit._refresh_archive_delivery_status(conn,members,stamp)
+            conn.execute('''INSERT INTO execution_reconciliation_audits
+                (leader_job_id,user_id,executor_id,reconciliation_token,original_attempt_token,outcome,
+                 delivery_status,evidence_json,reason,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)''',
+                (leader['id'],leader['user_id'],executor_id,token,payload.get('original_attempt_token'),outcome,status,
+                 _safe_json_dumps(evidence),reason,stamp))
+            delay=min(3600,30*2**min(int(lease['check_count']),7))
+            conn.execute('''UPDATE execution_reconciliation_state SET lease_until=NULL,check_count=check_count+1,
+                next_check_at=?,last_outcome=?,last_reason=?,updated_at=? WHERE leader_job_id=?''',
+                (_format_iso8601(now+timedelta(seconds=delay)),outcome,reason,stamp,leader['id']))
+        return {'job_id':str(leader['id']),'delivery_status':status,'outcome':outcome}
+
     def upsert_auto_trigger_cycle_session(self, *, rule_id: int, subscription_id: int, user_id: int, values: dict) -> dict:
         self._validate_auto_cycle_owner(rule_id=rule_id, subscription_id=subscription_id, user_id=user_id)
         with self.transaction() as unit:
@@ -1633,6 +2272,29 @@ class DatabaseRepository:
                         (int(rule_run_id), route_id, int(subscription_id), int(user_id))).fetchone()
                     if has_events:
                         continue
+                    run_row = conn.execute('SELECT capital_audit_json FROM auto_trigger_rule_runs WHERE id=?',
+                                           (int(rule_run_id),)).fetchone()
+                    audit = _safe_json_loads(run_row['capital_audit_json']) if run_row else {}
+                    capital = (audit.get('routes') or {}).pop(str(route_id), None)
+                    if capital:
+                        conn.execute('''UPDATE auto_trigger_cycle_archives SET credit_applied_run_id=NULL,credit_applied_at=NULL
+                            WHERE credit_applied_run_id=? AND (route_id=? OR capital_route_id=?) AND user_id=?''',
+                            (int(rule_run_id),route_id,route_id,int(user_id)))
+                        conn.execute('''UPDATE auto_trigger_cycle_archives SET carry_applied_run_id=NULL
+                            WHERE carry_applied_run_id=? AND capital_route_id=? AND user_id=?''',
+                            (int(rule_run_id),route_id,int(user_id)))
+                        previous = capital.get('previous_cycle_state') or {}
+                        if previous:
+                            unit.upsert_auto_trigger_cycle_state(rule_id=rule_id,subscription_id=subscription_id,
+                                route_id=route_id,user_id=user_id,rule_run_id=previous.get('rule_run_id'),
+                                state=previous,policy=previous.get('policy') or {},pending_plan=previous.get('pending_plan'))
+                        else:
+                            conn.execute('''UPDATE auto_trigger_cycle_states SET balance=? WHERE rule_id=?
+                                AND subscription_id=? AND route_id=? AND user_id=? AND rule_run_id=?''',
+                                (capital.get('carry_balance') or 0,rule_id,subscription_id,route_id,user_id,rule_run_id))
+                        audit.setdefault('discarded_routes',{})[str(route_id)]={'reason':'cycle_route_not_started'}
+                        conn.execute('UPDATE auto_trigger_rule_runs SET capital_audit_json=? WHERE id=?',
+                                     (_safe_json_dumps(audit),rule_run_id))
                     now = _utc_now_iso()
                     conn.execute('''UPDATE auto_trigger_route_subscription_runtime_runs
                         SET status='closed', ended_at=?, end_reason='cycle_route_not_started', updated_at=?
@@ -1685,6 +2347,13 @@ class DatabaseRepository:
             if (strategy.get('staking_policy') or {}).get('mode') != 'win_streak_roll' and not session and not existing_state:
                 continue
             daily = self.get_auto_trigger_cycle_daily_starts(**owner,stat_date=str(stat_date))
+            recovery_rows=self._fetch_all('SELECT * FROM auto_trigger_cycle_archives WHERE rule_id=? AND subscription_id=? AND user_id=? ORDER BY id DESC',
+                (int(rule_id),int(sub['id']),int(user_id)))
+            unresolved={int(a['rule_run_id']) for a in recovery_rows if a['status']!='resolved'}
+            def pending_credit(archive):
+                return float(archive.get('capital_credit') or 0) if archive['status']=='resolved' and archive.get('credit_applied_run_id') is None and _safe_json_loads(archive.get('policy_json')).get('roll_mode','chain')=='chain' else 0.0
+            current_run=self.get_auto_trigger_rule_run(int(session['active_run_id'])) if session.get('active_run_id') else None
+            capital_routes=((current_run or {}).get('capital_audit') or {}).get('routes') or {}
             states = self._fetch_all('''SELECT c.*,r.name AS route_name,t.target_name FROM auto_trigger_cycle_states c
                 LEFT JOIN auto_trigger_rule_routes r ON r.id=c.route_id LEFT JOIN delivery_targets t ON t.id=r.delivery_target_id
                 WHERE c.rule_id=? AND c.subscription_id=? AND c.user_id=? ORDER BY c.route_id''',
@@ -1694,6 +2363,9 @@ class DatabaseRepository:
                 pending = _safe_json_loads(row.get('pending_plan_json'))
                 routes.append({key:row.get(key) for key in ('route_id','status','balance','cycle_stake','win_streak','target_streak')} | {
                     'route_name':str(row.get('route_name') or row.get('target_name') or '继承方案投递'), 'pending_issue':str(pending.get('issue_no') or ''),
+                    'reserved_stake':_round_money(sum(float(a['reserved_stake']) for a in recovery_rows if a['route_id']==row['route_id'])),
+                    'pending_capital_credit':_round_money(sum(pending_credit(a) for a in recovery_rows if a['route_id']==row['route_id'])),
+                    'current_top_up_amount':float((capital_routes.get(str(row['route_id'])) or {}).get('top_up_amount') or 0),
                 })
             maximum = (rule.get('cycle_policy') or {}).get('max_starts_per_day')
             if maximum is None:
@@ -1707,6 +2379,13 @@ class DatabaseRepository:
                 'active_run_id':session.get('active_run_id'),'start_stat_date':str(session.get('start_stat_date') or ''),
                 'last_completed_issue':str(session.get('last_completed_issue') or ''),'stop_reason':str(session.get('stop_reason') or ''), 'routes':routes,
                 'outside_scope': bool(outside_scope),
+                'unresolved_run_count':len(unresolved),
+                'reserved_stake':_round_money(sum(float(a['reserved_stake']) for a in recovery_rows)),
+                'pending_capital_credit':_round_money(sum(pending_credit(a) for a in recovery_rows)),
+                'last_interrupted_run_id':recovery_rows[0]['rule_run_id'] if recovery_rows else None,
+                'last_interrupted_at':recovery_rows[0]['detached_at'] if recovery_rows else None,
+                'last_interruption_reason':recovery_rows[0]['reason'] if recovery_rows else '',
+                'recovery_errors':[{'rule_run_id':a['rule_run_id'],'reason':a['recovery_error']} for a in recovery_rows if a.get('recovery_error')],
                 'max_starts_per_window':int(window_limit),
                 'window_starts':[{**window, 'starts_count':window_counts.get(str(window['id']), 0)}
                     for window in (rule.get('schedule') or {}).get('windows', [])],
@@ -2115,6 +2794,9 @@ class DatabaseRepository:
         if "window_id" not in columns:
             conn.execute("ALTER TABLE auto_trigger_rule_runs ADD COLUMN window_id TEXT NOT NULL DEFAULT ''")
         self._rebuild_auto_trigger_rule_runs_with_window_unique(conn)
+        columns = {str(row['name']) for row in conn.execute('PRAGMA table_info(auto_trigger_rule_runs)')}
+        if 'capital_audit_json' not in columns:
+            conn.execute("ALTER TABLE auto_trigger_rule_runs ADD COLUMN capital_audit_json TEXT NOT NULL DEFAULT '{}'")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_auto_trigger_rule_runs_subscription "
             "ON auto_trigger_rule_runs(subscription_id, user_id, id)"
@@ -2544,6 +3226,7 @@ class DatabaseRepository:
             "stopped_at": row.get("stopped_at"),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
+            "capital_audit": _safe_json_loads(row.get('capital_audit_json')),
         }
 
     def _serialize_auto_trigger_rule_route_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
@@ -4958,6 +5641,9 @@ class DatabaseRepository:
                 return False
             if current["status"] != "archived":
                 raise ValueError("请先归档自动触发规则，再执行删除")
+            if conn.execute('SELECT 1 FROM auto_trigger_cycle_archives WHERE rule_id=? AND user_id=? LIMIT 1',
+                            (int(rule_id),int(user_id))).fetchone():
+                raise ValueError('规则存在历史中断账本及资金归属，须保留归档记录')
             route_ids_sql = "SELECT id FROM auto_trigger_rule_routes WHERE rule_id = :rule_id AND user_id = :user_id"
             event_filter = f"(auto_trigger_rule_id = :rule_id OR auto_trigger_route_id IN ({route_ids_sql}))"
             unfinished = conn.execute(
@@ -5234,7 +5920,11 @@ class DatabaseRepository:
                  WHERE subscription_id = ?
                    AND user_id = ?
                    AND auto_trigger_route_id = ?
-                   AND status IN ('pending', 'placed')) AS open_event_count,
+                   AND status IN ('pending', 'placed')
+                   AND NOT EXISTS (SELECT 1 FROM auto_trigger_cycle_archives a
+                     WHERE a.rule_run_id=subscription_progression_events.auto_trigger_rule_run_id
+                       AND a.route_id=COALESCE(subscription_progression_events.auto_trigger_route_id,0)
+                       AND a.user_id=subscription_progression_events.user_id)) AS open_event_count,
                 (SELECT COUNT(1)
                  FROM execution_jobs
                  WHERE subscription_id = ?
@@ -6694,20 +7384,32 @@ class DatabaseRepository:
         with self._connect() as conn:
             if user_id is None:
                 runs_cursor = conn.execute(
-                    "DELETE FROM auto_trigger_rule_runs WHERE stat_date < ?",
+                    """DELETE FROM auto_trigger_rule_runs WHERE stat_date < ?
+                       AND NOT EXISTS (SELECT 1 FROM auto_trigger_cycle_archives a
+                           WHERE a.rule_run_id=auto_trigger_rule_runs.id
+                              OR a.credit_applied_run_id=auto_trigger_rule_runs.id)""",
                     (str(runs_cutoff or ""),),
                 )
                 stats_cursor = conn.execute(
-                    "DELETE FROM auto_trigger_rule_daily_stats WHERE stat_date < ?",
+                    """DELETE FROM auto_trigger_rule_daily_stats WHERE stat_date < ?
+                       AND NOT EXISTS (SELECT 1 FROM auto_trigger_cycle_archives a
+                           WHERE a.rule_id=auto_trigger_rule_daily_stats.rule_id
+                             AND a.stat_date=auto_trigger_rule_daily_stats.stat_date)""",
                     (str(stats_cutoff or ""),),
                 )
             else:
                 runs_cursor = conn.execute(
-                    "DELETE FROM auto_trigger_rule_runs WHERE user_id = ? AND stat_date < ?",
+                    """DELETE FROM auto_trigger_rule_runs WHERE user_id = ? AND stat_date < ?
+                       AND NOT EXISTS (SELECT 1 FROM auto_trigger_cycle_archives a
+                           WHERE a.rule_run_id=auto_trigger_rule_runs.id
+                              OR a.credit_applied_run_id=auto_trigger_rule_runs.id)""",
                     (int(user_id), str(runs_cutoff or "")),
                 )
                 stats_cursor = conn.execute(
-                    "DELETE FROM auto_trigger_rule_daily_stats WHERE user_id = ? AND stat_date < ?",
+                    """DELETE FROM auto_trigger_rule_daily_stats WHERE user_id = ? AND stat_date < ?
+                       AND NOT EXISTS (SELECT 1 FROM auto_trigger_cycle_archives a
+                           WHERE a.rule_id=auto_trigger_rule_daily_stats.rule_id
+                             AND a.stat_date=auto_trigger_rule_daily_stats.stat_date)""",
                     (int(user_id), str(stats_cutoff or "")),
                 )
         return {
@@ -6950,6 +7652,9 @@ class DatabaseRepository:
                 return False
             if current["status"] != "archived":
                 raise ValueError("请先归档跟单策略，再执行删除")
+            if conn.execute('SELECT 1 FROM auto_trigger_cycle_archives WHERE subscription_id=? AND user_id=? LIMIT 1',
+                            params).fetchone():
+                raise ValueError('方案存在历史中断账本及资金归属，须保留归档记录')
             unfinished = conn.execute(
                 """
                 SELECT 1 FROM subscription_progression_events
@@ -9686,8 +10391,9 @@ class DatabaseRepository:
         unknown = conn.execute("SELECT 1 FROM execution_jobs WHERE progression_event_id=? AND status IN ('unconfirmed','sending') LIMIT 1", (int(progression_event_id),)).fetchone()
         retryable_new = conn.execute("SELECT 1 FROM execution_jobs WHERE progression_event_id=? AND status='failed' AND retry_eligible=1 AND retry_policy_version=1 AND expire_at>? LIMIT 1", (int(progression_event_id),now)).fetchone()
         if unknown:
-            conn.execute('UPDATE subscription_progression_events SET result_context_json=?,updated_at=? WHERE id=?',
-                         (_safe_json_dumps({**context,'delivery_state':'unconfirmed'}),now,int(progression_event_id)))
+            if context.get('delivery_state') != 'unconfirmed':
+                conn.execute('UPDATE subscription_progression_events SET result_context_json=?,updated_at=? WHERE id=?',
+                             (_safe_json_dumps({**context,'delivery_state':'unconfirmed'}),now,int(progression_event_id)))
             return
         retryable_combined = conn.execute(
             """SELECT 1 FROM execution_jobs j
@@ -10854,6 +11560,24 @@ class DatabaseRepository:
             if leader['claim_token']:
                 if token != leader['claim_token'] or executor_id != leader['claim_executor']:
                     raise ValueError('执行领取标识不匹配')
+            if conn.execute('''SELECT 1 FROM execution_ignored_reports
+                    WHERE leader_job_id=? AND executor_id=? AND attempt_token=? AND attempt_no=?''',
+                    (leader['id'],executor_id,str(token or ''),int(attempt_no))).fetchone():
+                return {'job_id':normalized_job_id,'executor_id':executor_id,'delivery_status':leader['status'],'duplicate':True,'ignored':True}
+            verified_reconciliation=conn.execute('''SELECT 1 FROM execution_reconciliation_audits
+                WHERE leader_job_id=? AND delivery_status IN ('delivered','rejected')
+                  AND outcome IN ('transport_confirmed','accepted','rejected') LIMIT 1''',(leader['id'],)).fetchone()
+            if verified_reconciliation and leader['status'] in ('delivered','rejected'):
+                # The original attempt can finish after a lease-expiry reconciliation.
+                # Keep it outside effective attempts: a stale reported 'delivered'
+                # must not override verified rejection in later aggregate queries.
+                conn.execute('''INSERT INTO execution_ignored_reports
+                    (leader_job_id,executor_id,attempt_token,attempt_no,reported_status,effective_status,
+                     remote_message_id,raw_result_json,error_message,executed_at,created_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                    (leader['id'],executor_id,str(token or ''),int(attempt_no),delivery_status,leader['status'],
+                     remote_message_id,_safe_json_dumps(raw),error_message,executed_at,now))
+                return {'job_id':normalized_job_id,'executor_id':executor_id,'delivery_status':leader['status'],'ignored':True}
             if conn.execute("SELECT 1 FROM execution_attempts WHERE job_id IN (%s) AND delivery_status='delivered' LIMIT 1" % ','.join('?' for _ in members),members).fetchone() and delivery_status!='delivered':
                 return {'job_id':normalized_job_id,'executor_id':executor_id,'delivery_status':'delivered','ignored':True}
             if delivery_status=='pending':

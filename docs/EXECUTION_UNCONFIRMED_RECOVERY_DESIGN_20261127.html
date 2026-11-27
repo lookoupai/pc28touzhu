@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>过关轮次卡住：发送确认与生命周期恢复方案</title>
+<style>
+:root{color-scheme:light;--ink:#182b39;--muted:#5b6b77;--line:#dce3e8;--accent:#176d65;--paper:#fff;--bg:#f2f5f6}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.85 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:1120px;margin:32px auto;padding:44px 48px;background:var(--paper);border:1px solid var(--line);border-radius:12px}h1{font-size:30px;line-height:1.45;letter-spacing:-.5px;margin:0 0 12px}h2{font-size:22px;margin:38px 0 14px;padding-bottom:9px;border-bottom:1px solid var(--line)}h3{font-size:18px;margin:24px 0 8px}p{margin:10px 0}.meta,.small{font-size:14px;color:var(--muted)}.lead{background:#eef7f5;border-left:4px solid var(--accent);padding:16px 20px;margin:24px 0}.note{background:#f7f8fa;padding:14px 18px;border:1px solid var(--line);border-radius:6px}a{color:var(--accent)}a:focus-visible,summary:focus-visible{outline:3px solid #348dce;outline-offset:4px}nav{display:flex;flex-wrap:wrap;gap:6px 20px;font-size:14px;padding:16px 0}code{font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;background:#f0f3f5;padding:2px 4px}pre{padding:16px;background:#f3f5f7;overflow:auto;font:13px/1.7 ui-monospace,monospace;white-space:pre-wrap}table{width:100%;border-collapse:collapse;font-size:14px;margin:14px 0}th,td{border:1px solid var(--line);padding:10px 12px;vertical-align:top;text-align:left}th{background:#f2f6f7;font-weight:600}.table{overflow:auto}li{margin:6px 0}ol,ul{padding-left:24px}.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:18px 0}.flow span{border:1px solid var(--line);border-radius:5px;padding:8px 12px;font-size:14px}.flow b{color:var(--muted)}details{margin:18px 0;border:1px solid var(--line);border-radius:6px;padding:12px 16px}summary{cursor:pointer;font-weight:600}section{scroll-margin-top:16px}.tag{display:inline-block;background:#edf5f4;color:#145e56;border-radius:4px;padding:2px 8px;font-size:13px}
+@media(max-width:720px){main{margin:0;padding:24px 18px;border:0;border-radius:0}h1{font-size:25px}h2{font-size:20px}table{min-width:680px}.flow{gap:5px}.flow span{padding:6px 8px}}
+@media print{body{background:white}main{max-width:none;margin:0;padding:0;border:0}nav{display:none}h2,h3{break-after:avoid}tr,.note,.lead{break-inside:avoid}.table{overflow:visible}table{min-width:0}details{display:block}}
+</style>
+</head>
+<body><main>
+<header><span class="tag">修订方案 · 开发中</span>
+<h1>异常轮次退出调度，历史账务独立核对</h1>
+<p class="meta">2026-11-27 · 设计基线 43fd8a2 · 规则 13「jnd28 短记忆反向模型 过三关 每天 4 次」</p>
+<p class="lead"><strong>最新原则：</strong>一期只有 210 秒。超过原发送截止后，异常轮次自动结束执行，后续仍按原定时窗口启动；未确认账目按原轮次保存并保留本金，后台核对，不再以人工处理作为开新轮的前提。</p>
+<p class="small">本版取代之前“先核对旧单再解除调度阻塞”的方案。用户已授权开始修复；本文是施工依据，不代表代码、迁移或生产恢复已经完成。</p></header>
+<nav aria-label="方案目录"><a href="#flow">现有流程</a><a href="#findings">缺口</a><a href="#detach">自动结束异常轮</a><a href="#capital">本金与迟到结算</a><a href="#evidence">后台核对</a><a href="#data">数据/API</a><a href="#incident">本次旧轮</a><a href="#tests">验收</a></nav>
+<section id="flow"><h2>1. 现有流程与本次改变</h2>
+<div class="flow"><span>定时开轮</span><b>→</b><span>两腿分账 / 一条消息</span><b>→</b><span>发送及受理回报</span><b>→</b><span>逐腿结算</span><b>→</b><span>下一关或闭轮</span></div>
+<p>新轮由自动触发 worker 认领，日额度、run、session、路由 runtime 与首单在同一个写事务建立；轮内后续期由来源同步派发。主辅两腿共用 pending_plan，必须全部处理完成才能正常推进关数。正常轮次可以跨日完成，仍归原开轮日。</p>
+<p>当前周期表以“规则 + 方案 + 路由”为主键，只保存一份当前状态。之前的未确认单占着 pending_plan，旧 session 一直 running，导致后续开轮被 cycle_running 拦截。</p>
+<p><strong>修复后拆成两个生命周期：</strong>执行生命周期在异常期原截止后结束；账务生命周期继续保存、核对并结算历史单。新轮拥有自己的状态，旧单的迟到结果不能覆盖新轮关数、注码或 pending。</p></section>
+<section id="findings"><h2>2. 已验证的故障与相关缺口</h2>
+<p>北京时间 11 月 26 日 02:02:24 开轮1937，02:05:18 第一关净盈利3.93；02:05:51 第二关3510978期“<strong>双9 大单4</strong>”出现 IncompleteReadError。任务64488/64489、流水64481/64482保留未确认，截止已经过去但轮次没有退出。</p>
+<div class="table"><table><thead><tr><th>问题</th><th>验证</th><th>修复</th></tr></thead><tbody>
+<tr><td>连接阶段EOF漏分类</td><td>模拟connect失败，发送函数未调用，也被标为unconfirmed。</td><td>按RPC是否开始区分；发送前临时失败可在原窗口重试，发送后未知不盲目重发。</td></tr>
+<tr><td>同attempt补成功被去重</td><td>先unknown再accepted仍保留unknown。</td><td>独立核对证据入口与追加审计，不放宽原回报幂等规则。</td></tr>
+<tr><td>仅作废不会闭轮</td><td>void后pending清空但session仍running。</td><td>异常执行收尾有独立的归档与结束逻辑。</td></tr>
+<tr><td>cancelled不在周期终态</td><td>手动停止后可能留下无法推进的pending。</td><td>只有证明未发送的取消才是零损益终态；人工停止意图不自动解除。</td></tr>
+<tr><td>当前表不支持历史并存</td><td>新轮会覆盖同归属当前快照。</td><td>增量run/route归档，旧pending完整保留。</td></tr>
+</tbody></table></div>
+<p class="note">实际历史异常阶段没有足够日志，不能由离线复现推出这笔一定没发送。它在恢复调度后仍保留真实的“未确认”账务状态。</p></section>
+<section id="detach"><h2>3. 到期自动退出执行</h2>
+<ol>
+<li>巡检识别原发送截止已过、且本轮存在未确认或发送租约失效的任务。正常placed待开奖本身不触发异常退出，日期变化也不触发。</li>
+<li>锁定用户、规则、方案、run及所有参与路由，在同一SQLite写事务保存完整原状态、策略、pending计划和每笔事件归属。</li>
+<li>某一路由触发时，对同会话全部路由归档；其他已发送待开奖也保存在原档案。取消可证明尚未发送的排队任务；已经发送中或未知的任务保留未知。</li>
+<li>按第4节公式一次性保留本金，结束旧run和路由runtime的发送入口，再清当前session活动指针。原任务、尝试和账务事件不删除。</li>
+<li>若没有独立人工停止/日风控/禁用/迁移阻塞，session回waiting。下一轮重新经过原时段、新信号、冷却、每日及每窗口次数检查，不立即补发。</li>
+</ol>
+<p>派单、自动/手动重试、任务领取和发送前最终复核均要拒绝旧run。事务外已经开始的RPC可能仍返回，归档和保留金额承接其后果。</p>
+<p><strong>原规则保持：</strong>02:01、08:01、14:01、20:01起的四个北京时间窗口，每窗口最多一轮，每天最多四轮。旧日次数不退回，不补错过窗口，不在今天继续昨天的三关进度。</p></section>
+<section id="capital"><h2>4. 未决本金与迟到结算</h2>
+<p>保留金额是未决占用，不是假定亏损。当前策略余额不是已核实的目标账户钱包余额，两者不得混用。</p>
+<div class="table"><table><thead><tr><th>记号</th><th>定义</th></tr></thead><tbody>
+<tr><td>B</td><td>原pending.state.balance，即原待处理期开始前余额。</td></tr>
+<tr><td>K</td><td>归档事务时，本期已经settled的腿的实际净盈亏；确认void/cancelled为0。</td></tr>
+<tr><td>R</td><td>本期尚未终态的腿本金之和，包括unknown和placed待开奖。</td></tr>
+<tr><td>C = B + K − R</td><td>异常退出后供chain模式后续轮次继承的可用余额，R只扣一次。</td></tr>
+<tr><td>credit = R + N − K</td><td>全部历史腿结清后，N为该期总净盈亏；此公式得到应释放的本金/返还，避免K重复入账。</td></tr>
+</tbody></table></div>
+<p>credit保存在历史档案，<strong>只在下一次新开轮事务消费一次</strong>，不修改正在运行的新轮余额、当前注码、关数或pending。派单事务失败时，credit消费也回滚。</p>
+<p>现有chain策略会将不足base的余额补到base。本次保留该规则，但明确记录新增本金top_up_amount；不能将补充本金称为旧单已返还。all_in本来每轮独立投入base，历史返还明确记为独立周期返还，不改变新轮base。旧chain信用只允许未来chain轮消费；用户中途切成all_in时保留未应用，不能标为已用却丢失资金。</p>
+<p class="note"><strong>本次例子：</strong>B=22.39，K=0，R=13，C=9.39。下一轮base=10时新增本金0.61，历史13继续保留。旧单若实际输13，credit=0；确认未发则credit=13；净赢5则credit=18。结果只记旧轮并在以后开轮边界释放资金。</p>
+<p>旧事件仍使用原赔率快照、原期真实开奖和原统计日。<strong>同统计日的真实盈亏仍可触发当天风控</strong>；这属于正常风险控制，不能因“旧轮隔离”而屏蔽。禁止的是旧周期直接覆盖新周期的资金过程与关数。</p></section>
+<section id="evidence"><h2>5. 自动核对不占调度时间</h2>
+<ul>
+<li>执行器优先读取本地持久化的原任务结果，其次按已知消息ID精确读取原目标消息和可信关联回执。</li>
+<li>使用原冻结账号、目标、协议、期号与内容。账号session或目标身份变化不能用新身份替查；没有唯一证据就保持未知。</li>
+<li>严格协议校验可信机器人、回复关联、原期号、玩法和金额；legacy只确认发送，不伪装为平台受理。历史不透明轮号必须有原期证据映射。</li>
+<li>无消息ID、查无消息、相同文本多条或取数失败都不能认定“没下注”。后台限次退避，历史状态保持未决，后续调度照常评估。</li>
+<li>只读核对不发送试探消息；与正常发送分开预算、使用账号锁，单次有界。核对网络请求不占数据库写事务。</li>
+<li>有效迟到证据通过独立接口追加审计，整组主辅任务原子更新。已接受结果不被unknown覆盖，矛盾证据进入冲突记录，不静默翻转已结账事实。</li>
+</ul>
+<p>人工只用于最终账务争议，既不是每期投注动作，也不是未来定时开轮的必经步骤。修复不要求先把本次13元判成输或未发。</p></section>
+<section id="data"><h2>6. 数据、API与显示</h2>
+<p>新增<code>auto_trigger_cycle_archives</code>，唯一键<code>(rule_run_id,route_id)</code>。保存原归属、统计日、期号、完整state/policy/pending、K/R、保留金额、待应用credit、应用到的新run和审计时间。当前周期主键不变。</p>
+<p>归档状态为awaiting_reconciliation、awaiting_settlement、resolved。已经resolved但credit未消费的档案仍需保留；日常清理、删除规则/方案/路由不得丢失未决事件归属或返还权。</p>
+<div class="table"><table><thead><tr><th>接口</th><th>作用与约束</th></tr></thead><tbody>
+<tr><td>GET /api/platform/auto-trigger-rules/{id}/cycle-recoveries</td><td>用户授权内的历史归档列表，有界分页，纯只读。</td></tr>
+<tr><td>GET /api/executor/reconciliations/pull</td><td>领取有界核对任务，沿用现有executor认证与pull惯例；只写独立核对租约，没有发送资格。</td></tr>
+<tr><td>POST /api/executor/jobs/{id}/reconcile</td><td>原attempt身份+核对租约+证据；unknown只退避，可信送达/受理/拒绝单调推进，追加审计。</td></tr>
+</tbody></table></div>
+<p>规则现有cycle_runtime增量返回未决历史轮数、保留本金、待应用credit、最近异常run/时间/原因；路由也显示自身保留金额。页面应表达“当前等待下一窗口；旧轮执行已结束，历史投注待核对”，不再只显示running，也不给过期任务重发按钮。</p>
+<details><summary>执行器最小核对契约</summary>
+<p>pull项复用原job DTO，加reconciliation_token、original_attempt及delivery_evidence。原target/account/protocol来自冻结identity，不提供新的发送attempt_token。</p>
+<p>reconcile含reconciliation_token、original_attempt_token、outcome、evidence、reason。首版outcome限unknown、transport_confirmed、accepted、rejected。无证据的not_sent不开放。远端查证和财务应用分离，组级证据和所有者在事务中复核。</p></details></section>
+<section id="incident"><h2>7. 轮次1937的恢复顺序</h2>
+<ol>
+<li>保存规则13/方案21/路由13/run1937及两笔任务、流水、原pending和执行器记录的快照。</li>
+<li>增量迁移后运行有界恢复服务：归档旧轮，保留13元，结束旧轮执行并解除running占用，不改历史任务为未发或亏损。</li>
+<li>第一关已实现3.93保留；旧日启动1次保留。当前资金可用部分与未来补充本金按公式记录。</li>
+<li>今天下一有效窗口由原定时规则自然开轮。无需等待这笔历史结果人工确认，不补投昨日第二关，也不补足漏掉次数。</li>
+<li>后台自动核对原消息；查明后补结算旧账并生成一次性credit。证据始终不足时，历史未决持续可见，但不重新锁住调度。</li>
+</ol>
+<p class="small">以上为实施目标；生产恢复结果以发布验证为准。</p></section>
+<section id="tests"><h2>8. 必须通过的验收</h2>
+<div class="table"><table><thead><tr><th>场景</th><th>结果</th></tr></thead><tbody>
+<tr><td>connect阶段EOF / RPC后的EOF</td><td>前者发送调用0次且可安全重试；后者未知且不盲目重发。</td></tr>
+<tr><td>unknown原截止已过</td><td>旧run退出，档案与本金保留，下一有效窗口正常开轮。</td></tr>
+<tr><td>正常placed跨午夜等待开奖</td><td>继续原轮并归原日，不能被异常巡检误关。</td></tr>
+<tr><td>某route未知，其他route已发待开奖</td><td>全部参与route原子归档，历史结果各归原账，旧发送入口关闭。</td></tr>
+<tr><td>一腿已settled、一腿未知</td><td>K/R公式正确，不重复计已结收益；后续credit恰好释放差额。</td></tr>
+<tr><td>重复扫描、重复回执、新开轮并发</td><td>同本金只扣一次，credit只消费一次，旧账不覆盖新关数/stake/pending。</td></tr>
+<tr><td>人工stop、禁用、日风险并发</td><td>释放旧执行占用不撤销独立停止；同日真实风控仍有效。</td></tr>
+<tr><td>查无消息/错群/错机器人/错期/错金额</td><td>保持未知，不虚构未下注或受理，不阻塞后续调度。</td></tr>
+<tr><td>已resolve但credit未消费</td><td>清理及删除不能丢返还权。</td></tr>
+<tr><td>all_in / chain / 双腿 / 单腿 / 多用户</td><td>模式语义和归属隔离均正确，不将全仓独立本金误当chain余额。</td></tr>
+</tbody></table></div>
+<p>设计阶段已执行9组现有回归144项，47.993秒全部通过；它们不含新增恢复能力。实施阶段还须新增RED复现、API/数据库集成、前端状态验证、独立QA和生产副本演练，不能以旧测试全过宣称新功能完成。</p></section>
+<section id="release"><h2>9. 实施与发布</h2>
+<p>先修发送分类及阶段证据，接着实现增量档案、退出调度和资本调整，再实现后台只读核对与状态显示。使用现有Python/SQLite/WSGI/执行器架构，不加消息队列或新框架。</p>
+<p>发布前在一致数据库副本上核验迁移和1937恢复，证明原事件及已实现盈亏不改、保留金额正确、重复执行幂等。生产先备份再迁移与恢复，观察自然窗口，不发送测试投注。回退保留新档案和审计，不能用旧数据库覆盖新增业务。</p>
+<p class="small">工程施工契约：.boss/cycle-recovery/architecture.md、tech-review.md、plan.md、tasks.md。生产状态、测试证据和最终发布结果由实施报告单独记录。</p></section>
+</main></body></html>

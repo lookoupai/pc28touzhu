@@ -1,0 +1,493 @@
+{
+  "feature": "cycle-recovery",
+  "workingDirectory": "/www/wwwroot/pc28touzhu-cycle-recovery",
+  "baseline": "43fd8a2",
+  "authorization": "用户在修订为按轮归档、未决本金占用和后续调度不等待人工后明确要求开始修复；同范围无需重复确认。",
+  "waves": [
+    {
+      "id": "W1-foundations",
+      "title": "发送阶段与归档模型",
+      "scope": "transport classification and additive archive persistence",
+      "tasks": [
+        "T01",
+        "T02"
+      ],
+      "dependsOn": [],
+      "writeSet": [
+        "src/pc28touzhu/executor/telethon_sender.py",
+        "src/pc28touzhu/executor/runtime.py",
+        "src/pc28touzhu/executor/models.py",
+        "src/pc28touzhu/executor/db_repository.py",
+        "tests/test_executor_recovery.py",
+        "tests/test_cycle_recovery.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_executor_recovery.TransportClassificationTests",
+          "-v"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_cycle_recovery.CycleRecoveryMigrationTests",
+          "-v"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_executor_recovery.TransportClassificationTests",
+          "tests.test_cycle_recovery.CycleRecoveryMigrationTests",
+          "tests.test_executor_send_window",
+          "tests.test_execution_acceptance",
+          "tests.test_cycle_repository",
+          "-q"
+        ],
+        [
+          "python3",
+          "-m",
+          "compileall",
+          "-q",
+          "src/pc28touzhu"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "CM-1",
+        "CM-11"
+      ],
+      "stopCondition": "RED必须因缺失行为失败；迁移不得改历史记录；发送后EOF仍禁止重发；既有回归失败不得进入W2。",
+      "status": "done",
+      "evidence": {
+        "validated_by": "root",
+        "tests_passed": 58,
+        "duration_seconds": 12.795,
+        "compileall": "passed",
+        "diff_check": "passed",
+        "dependency_changes": false,
+        "package_changes": false
+      }
+    },
+    {
+      "id": "W2-cycle-lifecycle",
+      "title": "异常摘离、原账结算与后续调度",
+      "scope": "run isolation, reserve, deferred capital credit and scheduler recovery",
+      "tasks": [
+        "T03",
+        "T04",
+        "T05"
+      ],
+      "dependsOn": [
+        "W1-foundations"
+      ],
+      "writeSet": [
+        "src/pc28touzhu/executor/db_repository.py",
+        "src/pc28touzhu/services/cycle_recovery_service.py",
+        "src/pc28touzhu/services/pc28_auto_settlement_service.py",
+        "src/pc28touzhu/services/auto_trigger_service.py",
+        "src/pc28touzhu/services/auto_trigger_cycle_service.py",
+        "src/pc28touzhu/services/job_service.py",
+        "tests/test_cycle_recovery.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_cycle_recovery.CycleRecoveryDetachTests",
+          "tests.test_cycle_recovery.CycleRecoverySettlementTests",
+          "tests.test_cycle_recovery.CycleRecoveryExposureTests",
+          "tests.test_cycle_recovery.CycleRecoverySchedulingTests",
+          "-v"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_cycle_recovery",
+          "tests.test_executor_send_window",
+          "tests.test_execution_acceptance",
+          "tests.test_cycle_repository",
+          "tests.test_cycle_runtime",
+          "tests.test_cycle_qa",
+          "tests.test_schedule_window_cycles",
+          "tests.test_win_streak_roll_dispatch",
+          "tests.test_win_streak_roll_stop",
+          "tests.test_pc28_auto_settlement_service",
+          "-q"
+        ],
+        [
+          "python3",
+          "-m",
+          "compileall",
+          "-q",
+          "src/pc28touzhu"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "CM-2",
+        "CM-3",
+        "CM-4",
+        "CM-5",
+        "CM-9"
+      ],
+      "stopCondition": "资金R/K/credit只能各应用一次；不得void未知或污染新run；正常跨日/人工风控/额度回归失败则停止并修复。",
+      "status": "done",
+      "evidence": {
+        "validated_by": "root",
+        "tests_passed": 168,
+        "duration_seconds": 54.137,
+        "compileall": "passed",
+        "diff_check": "passed",
+        "dependency_changes": false,
+        "package_changes": false
+      }
+    },
+    {
+      "id": "W2-transport-reconciliation",
+      "title": "执行器后台只读核对（离线合同）",
+      "scope": "durable transport evidence and bounded read-only reconciliation against frozen DTO",
+      "tasks": [
+        "T07"
+      ],
+      "dependsOn": [
+        "W1-foundations"
+      ],
+      "contractPrerequisites": [
+        "architecture.md §5 DTO frozen; backend implementation is not prerequisite"
+      ],
+      "writeSet": [
+        "src/pc28touzhu/executor/state.py",
+        "src/pc28touzhu/executor/api_client.py",
+        "src/pc28touzhu/executor/runtime.py",
+        "src/pc28touzhu/executor/telethon_sender.py",
+        "tests/test_executor_recovery.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_executor_recovery.TransportReconciliationTests",
+          "-v"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_executor_recovery",
+          "tests.test_executor_runtime",
+          "tests.test_executor_send_window",
+          "tests.test_execution_acceptance",
+          "-q"
+        ],
+        [
+          "python3",
+          "-m",
+          "compileall",
+          "-q",
+          "src/pc28touzhu/executor"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "CM-1",
+        "CM-7"
+      ],
+      "stopCondition": "只使用离线fake，不调用真实发送；缺证据不改未发；原身份/协议不变；查证错误不得结束正常循环。与BE-core生命周期写集互斥；真实后端接口兼容性留W3集成验证。",
+      "status": "done",
+      "evidence": {
+        "validated_by": "root",
+        "tests_passed": 51,
+        "duration_seconds": 5.016,
+        "command": [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_executor_recovery",
+          "tests.test_executor_send_window",
+          "tests.test_executor_runtime",
+          "tests.test_execution_acceptance",
+          "-q"
+        ],
+        "compileall_executor": "passed",
+        "diff_check": "passed",
+        "dependency_changes": false,
+        "package_changes": false,
+        "integration_scope": "offline DTO; real WSGI remains required in W3"
+      }
+    },
+    {
+      "id": "W3-reconciliation-ui",
+      "title": "后台核对、API与真实页面流程",
+      "scope": "authenticated reconciliation APIs and UI integrated with completed lifecycle and executor work",
+      "tasks": [
+        "T06",
+        "T08",
+        "T09",
+        "T10"
+      ],
+      "dependsOn": [
+        "W2-cycle-lifecycle",
+        "W2-transport-reconciliation"
+      ],
+      "writeSet": [
+        "src/pc28touzhu/executor/db_repository.py",
+        "src/pc28touzhu/services/cycle_recovery_service.py",
+        "src/pc28touzhu/services/platform_service.py",
+        "src/pc28touzhu/api/app.py",
+        "src/pc28touzhu/ui/auto_triggers.js",
+        "src/pc28touzhu/ui/ui_text.js",
+        "src/pc28touzhu/ui/records.js",
+        "src/pc28touzhu/ui/auto_triggers.css",
+        "tests/test_cycle_recovery_api.py",
+        "tests/test_cycle_recovery_ui.cjs",
+        "tests/cycle_recovery_ui_server.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_cycle_recovery_api",
+          "-v"
+        ],
+        [
+          "node",
+          "tests/test_cycle_recovery_ui.cjs"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_cycle_recovery",
+          "tests.test_cycle_recovery_api",
+          "tests.test_executor_recovery",
+          "tests.test_cycle_api",
+          "tests.test_api",
+          "-q"
+        ],
+        [
+          "node",
+          "tests/test_cycle_recovery_ui.cjs"
+        ],
+        [
+          "node",
+          "tests/test_cycle_recovery_ui.cjs",
+          "--browser"
+        ],
+        [
+          "node",
+          "tests/test_cycle_ui.cjs"
+        ],
+        [
+          "node",
+          "--check",
+          "src/pc28touzhu/ui/auto_triggers.js"
+        ],
+        [
+          "node",
+          "--check",
+          "src/pc28touzhu/ui/records.js"
+        ],
+        [
+          "python3",
+          "-m",
+          "compileall",
+          "-q",
+          "src/pc28touzhu"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "CM-6",
+        "CM-7",
+        "CM-8",
+        "CM-10"
+      ],
+      "stopCondition": "核对不得调用发送；平台历史GET无mutation；执行器pull仅写专用核对租约；越权或冲突证据不得改账；API/UI不一致、移动端关键状态不可见则停止。",
+      "status": "done",
+      "progressNote": "API/UI及真实临时 WSGI/浏览器集成已完成，父代理与独立QA核验通过。",
+      "evidence": {
+        "validated_by": [
+          "root",
+          "independent QA"
+        ],
+        "real_wsgi_integration": "passed",
+        "recovery_browser_checks_passed": 3,
+        "existing_browser_checks_passed": 5,
+        "code_review": "DONE",
+        "counts_overlap_with_final_qa": true
+      }
+    },
+    {
+      "id": "W4-independent-acceptance",
+      "title": "独立验收及发布前验证",
+      "scope": "independent concurrency, conservation, regressions and deployment rehearsal",
+      "tasks": [
+        "T11",
+        "T12"
+      ],
+      "dependsOn": [
+        "W3-reconciliation-ui"
+      ],
+      "writeSet": [
+        "tests/test_cycle_recovery_qa.py",
+        ".boss/cycle-recovery/qa-report.md",
+        ".boss/cycle-recovery/deploy-preflight.md",
+        ".boss/cycle-recovery/deploy-report.md",
+        "scripts/maintenance/rehearse_cycle_recovery.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_cycle_recovery_qa",
+          "-v"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tests",
+          "-p",
+          "test_*.py",
+          "-q"
+        ],
+        [
+          "node",
+          "tests/test_cycle_recovery_ui.cjs",
+          "--browser"
+        ],
+        [
+          "node",
+          "tests/test_cycle_ui.cjs",
+          "--browser"
+        ],
+        [
+          "python3",
+          "-m",
+          "compileall",
+          "-q",
+          "src/pc28touzhu"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "CM-1",
+        "CM-2",
+        "CM-3",
+        "CM-4",
+        "CM-5",
+        "CM-6",
+        "CM-7",
+        "CM-8",
+        "CM-9",
+        "CM-10",
+        "CM-11"
+      ],
+      "stopCondition": "QA没有新失败时记录边界验证结果，不伪造RED；有新增失败回派原owner。发布另需一致备份、DB副本幂等/原数据保持/外键与quick_check证据及父代理明确放行。",
+      "status": "in_progress",
+      "progressNote": "独立QA与代码审查完成；最终副本演练通过。仅副本验证器的精确重建/核心哈希证据收尾，生产部署等待父代理冻结提交SHA后派发；ship尚未完成。",
+      "earlyParallelPreparation": {
+        "after": "W2-cycle-lifecycle",
+        "allowed": [
+          "独立 QA 专属 tests/test_cycle_recovery_qa.py 核心验证",
+          "DevOps 隔离数据库副本迁移与恢复演练"
+        ],
+        "prohibited": [
+          "修改其他 owner 实现文件",
+          "生产迁移或发布",
+          "将准备完成当成最终 QA 放行"
+        ]
+      },
+      "evidence": {
+        "validated_by": [
+          "root",
+          "independent QA",
+          "DevOps"
+        ],
+        "full_suite": {
+          "tests_passed": 1080,
+          "duration_seconds": 232.908
+        },
+        "frozen_final_suite": {
+          "tests_passed": 109,
+          "duration_seconds": 24.931
+        },
+        "counts_overlap": true,
+        "recovery_real_browser_checks_passed": 3,
+        "existing_real_browser_checks_passed": 5,
+        "code_review": "DONE",
+        "final_clone_rehearsal": {
+          "status": "passed",
+          "duration_seconds": 224.711
+        },
+        "remaining": "validator-only exact reconstruction/core hash evidence finishing; production deployment pending frozen root SHA",
+        "production_ship": "pending"
+      }
+    }
+  ]
+}
