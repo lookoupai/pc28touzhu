@@ -6,7 +6,7 @@
 - 16个实施任务，分5个Evidence Wave。冻结后的实际写集47个文件，其中41个代码/脚本/测试/用户文档和6个本feature产物。Core独占中央store与worker，Data独占保留/档案模块，Product独占service/API/UI，QA补独立反例，Release只做受控上线。下文写集以文件为边界，禁止跨owner并行改同文件。
 - 关键路径：schema6小迁移与pending原子结算 → 有界依赖清理与新读路径 → 产品闭环 → 一致副本/完整回归 → 保留进度上线。高复杂度，初估约90～130次工具调用，实际以测试和问题闭环为准。
 - **Blast Radius：高。** 实际写集47条路径（已按冻结时git status收敛；最初67条计划路径中的未用文件未改），涉及大于10个文件、数据模型/迁移、状态机、路由和有意删除冗余数据，无依赖新增、无安装命令、无真实投注/上游数据库改动。风险确认触发项已由用户“方案设计好就开始实施”及所认可方案覆盖，记录现有授权，不重复询问。
-- 所有新增行为先写有效反例并运行RED，再实现GREEN；模块缺失导致的import失败不代替行为RED。W1～W4全部通过，最终冻结完整回归1259项通过、0失败/跳过；W5尚未发布；不能把专项结果当成发布全部门禁已通过。
+- 所有新增行为先写有效反例并运行RED，再实现GREEN；模块缺失导致的import失败不代替行为RED。W1～W5全部通过，最终冻结完整回归1259项通过、0失败/跳过；代码`d3f8c9f`已完成受控发布及真实空间回收；不能把专项结果当成发布全部门禁已通过。
 
 ## 1. Repo Preflight
 
@@ -60,7 +60,7 @@
 | T13 | Product | `docs/RULE_LAB.md`；`docs/RULE_LAB_RESULT_STORAGE_DESIGN_20261127.html`；`tests/test_rule_lab_continuous_monthly.py` | 文档更新当前实现；月报当前结果保留而历史revision不再积累 |
 | T14 | QA | `tests/test_rule_lab_results_qa.py`；`tests/rule_lab_results_benchmark.py`；`.boss/rule-lab-result-storage/qa-report.md` | 8个独立反例，生产一致副本迁移/重启/恢复，3组参数矩阵和实际容量性能 |
 | T15 | Core / Product按文件独占 | Core：`tests/test_rule_lab_comparison.py`、`tests/test_rule_lab_ops.py`；Product：`tests/test_rule_lab_api.py`、`tests/test_rule_lab_ui.cjs`、`tests/test_rule_lab_continuation_ui.cjs`、`tests/rule_lab_ui_server.py` | 真实旧契约受影响用例更新，继续保留资金和版本隔离断言；旧headless脚本本轮未执行 |
-| T16 | Release | `.boss/rule-lab-result-storage/deploy-report.md`；临时发布脚本`/tmp/pc28-results-*` | 仅准备完成；等待ROOT冻结完整QA与exact commit GO后单执行者发布 |
+| T16 | Release | `.boss/rule-lab-result-storage/deploy-report.md`；临时发布脚本`/tmp/pc28-results-*` | 已按ROOT的exact commit GO发布`d3f8c9f`，原成绩/进度与资源保持，完成真实清理及只读线上验收 |
 
 Review另拥有`tech-review.md`、`plan.md`，Scrum拥有本文与`waves.json`；与上述47文件总数一致。没有改动`domain/rule_lab.py`、`domain/rule_lab_risk.py`、`domain/rule_lab_monthly.py`、`rule_lab.css`、`rule_lab_management.py`、`domain/rule_lab_continuation.py`，没有依赖、锁文件或unit变更。
 
@@ -99,17 +99,17 @@ Review另拥有`tech-review.md`、`plan.md`，Scrum拥有本文与`waves.json`�
 | W2 | 依赖保留/快照收敛/重测覆盖/有界迁移 | W1 | 删活跃或共享输入、串冻结版本、重写已清历史、无限维护即停止 | passed（专项） |
 | W3 | API/结果页/存储真实状态与旧入口兼容 | W1、W2 | 空recent被当零投注、越权、丢响应重复、新UI未真实执行即停止 | passed |
 | W4 | 独立反例、容量性能、真实副本与冻结全回归 | W1～W3 | 非允许字段变化、未解释空间/性能回退、全量失败即停止 | passed |
-| W5 | 单执行者受控上线与物理清理收敛 | W4 | 无备份、原进度/资源/数据校验不符或健康失败即停止并按记录恢复 | pending |
+| W5 | 单执行者受控上线与物理清理收敛 | W4 | 无备份、原进度/资源/数据校验不符或健康失败即停止并按记录恢复 | passed |
 
 ## 7. 本轮实施边界
 
 不增加留全量明细开关、冷归档服务或新调度任务；不扩大预算/650版本上限；不读取用户浏览器凭证；不删除用户实验定义或上游数据。完整QA通过后才允许上线，用户已授权方案中的冗余清理，不再另请确认。
 
-运行时代码与相应专项已冻结，实际写集已按git status收敛，具体最终契约和证据见下节。ROOT最终冻结完整回归1259项全部通过，W4已放行，W5仍等待生产发布验收。
+运行时代码与相应专项已冻结，实际写集已按git status收敛，具体最终契约和证据见下节。ROOT最终冻结完整回归1259项全部通过，W4已放行；W5已完成生产受控切换、保护字段核验和真实空间回收，所有门禁结束。
 
 **STATUS: DONE**
 
-**REASON:** 最终实现、专项与冻结完整回归均已通过并登记，W1～W4完成；W5等待发布，不能提前将任务标为已上线。
+**REASON:** 最终实现、专项、冻结完整回归与生产发布均已通过，W1～W5全部完成，已记录真实空间和原数据保护证据。
 
 
 ## 8. 最终实现契约补充
@@ -124,7 +124,7 @@ Review另拥有`tech-review.md`、`plan.md`，Scrum拥有本文与`waves.json`�
 - Product使用真实WSGI/SQLite+jsdom执行页面全流程；没有启动其他Chrome/profile，没有视觉截图、手机触屏或布局测量。旧页面脚本按新契约调整，但本轮不把未执行的headless脚本写为通过。
 - 新增日熔断指标不在本轮实现；原累计stats/risk算法原样复用。旧测试需要逐笔轨迹时由`tests/test_rule_lab_results_store.py`临时observer记录，仅用于测试，不写生产明细。
 
-## 9. 实际测试证据及尚未结束的门禁
+## 9. 实际测试证据
 
 | 范围 | 实际结果 | 证据 |
 | --- | --- | --- |
@@ -142,7 +142,7 @@ Review另拥有`tech-review.md`、`plan.md`，Scrum拥有本文与`waves.json`�
 | ROOT最终冻结全项目 | **1259通过/0失败/0跳过，310.386秒，exit0** | session58590，`/tmp/pc28-results-full-final-root.log` |
 | ROOT DOM再验证 | 真实WSGI/SQLite+jsdom流程通过，exit0；布局未测 | session33829，`/tmp/pc28-results-dom-root.log` |
 
-ROOT完整门禁实际命令：`env PYTHONPATH=src RULE_LAB_MIGRATION_SNAPSHOT=/tmp/pc28-continuation-baseline.db RULE_LAB_READONLY_SOURCE_DB=/www/wwwroot/AITradingSimulator/pc28_predictor.db python3 -m unittest discover -s tests -q`。最终冻结回归实际退出0，W4已放行；W5仍须生产受控切换和真实空间收敛证据。
+ROOT完整门禁实际命令：`env PYTHONPATH=src RULE_LAB_MIGRATION_SNAPSHOT=/tmp/pc28-continuation-baseline.db RULE_LAB_READONLY_SOURCE_DB=/www/wwwroot/AITradingSimulator/pc28_predictor.db python3 -m unittest discover -s tests -q`。最终冻结回归实际退出0；W5受控发布与空间收敛证据见下一节，全部门禁已完成。
 
 
 ### 首轮完整回归失败及最终关闭
@@ -153,3 +153,16 @@ ROOT完整门禁实际命令：`env PYTHONPATH=src RULE_LAB_MIGRATION_SNAPSHOT=/
 2. `tests/test_rule_lab_ops.py`假设被锁挡住的第二worker启动后`lab_runtime`必须0行；合法`result_retention`初始化元数据使原假设失效。Core新增该文件owner，改成启动前后全部lab表行保持相同且没有worker心跳，原“不推进实验”不变量更直接。`env PYTHONPATH=src python3 -m unittest tests.test_rule_lab_ops -v`实际4/0/0、0.270秒、exit0，日志`/tmp/pc28-results-core-ops-green.log`。
 
 修复后运行时代码保持冻结，ROOT重跑全部1259项通过。Review的I1（源预测和开奖同时清理）与I2（冻结前沿被最新修订污染）另经2/0/0、0.772秒独立反例关闭。完整测试、独立反例及副本证据均保留真实首轮失败记录。
+
+
+## 10. 生产发布与最终空间结果
+
+代码`d3f8c9f`已完成正式发布，实际apply session62242退出0，证据`/tmp/pc28-results-release-rollout-20261127T180555Z.json`。schema6、drain_complete=true，6439步维护，每步最大500行；维护CLI 177.983秒，实验写者暂停182.658秒，1CPU/256MiB保持。
+
+- 实验主文件由859,045,888字节（819.25MiB）降至54,837,248字节（52.30MiB），减少93.616%；实验目录实际54,874,175字节。
+- 602个实验ID、23,422条日汇总、原62条pending、541条当前必需风险日、8个series、12个segment及原配置/结果/水位的保护摘要保持一致。已结算逐笔0行、已结束轮次0行。
+- 只恢复此前因空间保护暂停且仍获批准的批次17；进度从30推进到72、后续1028，状态running且无error，没有复活用户手动暂停的实验。
+- 线上核验session55801退出0：25GET、0POST、0错误，真实DOM与原批次8经济摘要通过；上游PID1250128及其他三个业务服务PID保持，实际执行器心跳1秒。
+- 原859MB回滚备份另保留72小时，数据库缩小不能称为服务器净释放量。ROOT只清理本次777MB测试快照，未顺带删除其他旧范围备份。
+
+正式代码写集仍为47文件，此次只补发布文档。W1～W5及CM1～CM10全部关闭；布局/触屏/浏览器绘制和行覆盖率仍未实测，未将DOM或用例数冒充这些结果。
