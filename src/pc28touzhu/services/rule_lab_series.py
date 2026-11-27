@@ -131,7 +131,12 @@ def _revision(series,state_hash=None):
 
 def _summary(c,series,rows=None):
     rows=_batches(c,series) if rows is None and series else (rows or [])
-    last=_last_processed(rows);opened=_opened(c,last) if last else None
+    last=_last_processed(rows);opened=None
+    for row in rows:
+        if int(_load(row['cursor_json']).get('last_issue_no') or 0)==last:
+            opened=(_load(row['cursor_json']).get('retention_v1') or {}).get('processed_open_at')
+            if opened:break
+    opened=opened or (_opened(c,last) if last else None)
     ids=[row['id'] for row in rows]
     pending=_pending_count(c,ids)
     earliest_pending=c.execute('''SELECT MIN(d.issue_key) FROM lab_decisions d JOIN lab_experiments e ON e.id=d.experiment_id
@@ -205,7 +210,9 @@ def _preview(store,c,user_id,kind,owner_id,now):
         if any(not r['prediction_hash'] for r in warm):block('warm_prediction_missing','暖机预测缺少逐期证据，不能把缓存缺行当作原本无预测')
         if any(r['conflict'] or r['prediction_conflict'] for r in warm):block('warm_window_conflict','暖机输入存在冲突')
         for experiment in experiments:
-            if experiment['last_settled_issue'] and not c.execute('SELECT 1 FROM lab_draws WHERE issue_key=?',(experiment['last_settled_issue'],)).fetchone():
+            owner=next(r for r in rows if r['id']==experiment['batch_id'])
+            verified=(_load(owner['cursor_json']).get('retention_v1') or {}).get('frontier_verified')
+            if experiment['last_settled_issue'] and not verified and not c.execute('SELECT 1 FROM lab_draws WHERE issue_key=?',(experiment['last_settled_issue'],)).fetchone():
                 block('settlement_frontier_missing','最后已结期的可见时间证据缺失，不能安全接管旧成绩')
         if study and not store._study(c,study)['comparable']:block('incomparable_history','比较组历史输入不一致，不能共同续算')
     elif series['configuration_hash']!=config_hash:block('configuration_changed','策略配置已变化，必须建立新实验')
@@ -256,7 +263,13 @@ def _snapshot(c,row):
     ids=[e['id'] for e in experiments];marks=','.join('?' for _ in ids)
     cursor=_load(row['cursor_json']);frontier_day=_day(cursor['simulation_time']) if cursor.get('simulation_time') else row['end_date']
     last=int(cursor.get('last_issue_no') or 0)
-    visible=c.execute('SELECT MAX(source_created_at) FROM lab_draws WHERE issue_key<=?',(last,)).fetchone()[0]
+    frontier=cursor.get('retention_v1') or {}
+    visible=frontier.get('settled_available_at')
+    if not frontier.get('frontier_verified'):
+        from pc28touzhu.services.rule_lab_retention import _backfill
+        _backfill(c,row)
+        row=c.execute('SELECT * FROM lab_batches WHERE id=?',(row['id'],)).fetchone()
+        visible=(_load(row['cursor_json']).get('retention_v1') or {}).get('settled_available_at')
     return dict(batch=dict(row),experiments=experiments,settled_frontier_available_at=visible,
         risk_days=[dict(r) for r in c.execute('''SELECT * FROM lab_risk_days WHERE experiment_id IN ('''+marks+''')
             AND (stat_date>=? OR EXISTS(SELECT 1 FROM lab_decisions d WHERE d.experiment_id=lab_risk_days.experiment_id
@@ -290,7 +303,7 @@ def _adopt(store,c,rows,user_id,kind,owner_id,preview,now):
     for row in rows:
         snapshot=_checkpoint(c,seg,row,preview['configuration_hash'],now)
         item=_segment_summary(snapshot,snapshot)
-        c.execute("INSERT INTO lab_segment_batches(segment_id,batch_id,status,baseline_json,summary_json) VALUES(?,?,'completed',?,?)",(seg,row['id'],_pack(snapshot),_dump(item)))
+        c.execute("INSERT INTO lab_segment_batches(segment_id,batch_id,status,baseline_json,summary_json) VALUES(?,?,'completed',?,?)",(seg,row['id'],_pack(dict(retention_version=1,checkpoint_retained=False)),_dump(item)))
         summaries.append(item)
     c.execute('UPDATE lab_segments SET summary_json=? WHERE id=?',(_dump(dict(batches=summaries,baseline_audit=True)),seg))
     return c.execute('SELECT * FROM lab_series WHERE id=?',(sid,)).fetchone()
@@ -371,14 +384,21 @@ def list_segments(store,user_id,kind,owner_id,*,limit=20,before_id=None):
         if before_id is not None:sql+=' AND id<?';params.append(before_id)
         rows=c.execute(sql+' ORDER BY id DESC LIMIT ?',params+[limit+1]).fetchall()
         more=len(rows)>limit;rows=rows[:limit]
-        return dict(segments=[_segment_json(r) for r in rows],next_cursor=rows[-1]['id'] if more else None)
+        values=[]
+        for row in rows:
+            value=_segment_json(row)
+            value['checkpoint_retained']=bool(c.execute('SELECT 1 FROM lab_checkpoints WHERE segment_id=? LIMIT 1',(row['id'],)).fetchone())
+            values.append(value)
+        return dict(segments=values,next_cursor=rows[-1]['id'] if more else None)
 
 
 def input_coverage(store,user_id,kind,owner_id):
     with store._connect() as c:
         rows,_=_owner(store,c,user_id,kind,owner_id)
         series=c.execute('SELECT * FROM lab_series WHERE owner_kind=? AND owner_id=?',(kind,owner_id)).fetchone()
-        coverage=dict(counts={},gaps=[],state='disabled',last_success_at=None)
+        coverage=dict(counts={},gaps=[],state='disabled',last_success_at=None,retained_scope='runtime_dependencies',
+            history_notice='覆盖明细仅含计算依赖范围；已消费旧输入按结果存储策略清理，历史成绩和缺样统计保持',
+            historical_skip_counts={str(row['id']):_load(row['skip_counts_json']) for row in rows})
         if series:
             stream=c.execute('SELECT * FROM lab_capture_streams WHERE id=?',(series['stream_id'],)).fetchone()
             coverage.update(state=stream['state'],last_success_at=stream['last_success_at'],error=stream['error'],
@@ -396,15 +416,13 @@ def input_coverage(store,user_id,kind,owner_id):
 
 def _segment_summary(before,after):
     previous={e['id']:_load(e['stats_json']) for e in before['experiments']}
-    values=[]
     additive=('trigger_count','settled_count','hit_count','refund_count','miss_count','skipped_count','direction_hit_count','stake_cents','net_cents')
+    total=dict.fromkeys(additive,0)
     for e in after['experiments']:
         stats=_load(e['stats_json']);old=previous.get(e['id'],{})
-        values.append(dict(experiment_id=e['id'],incremental={k:stats.get(k,0)-old.get(k,0) for k in additive},
-            name=e['name'],condition_key=e['condition_key'],settlement_rule_id=e['settlement_rule_id'],
-            cumulative=stats,risk_runtime=_load(e['risk_runtime_json'])))
+        for key in additive:total[key]+=stats.get(key,0)-old.get(key,0)
     return dict(batch_id=after['batch']['id'],processed_issues=after['batch']['processed_issues']-before['batch']['processed_issues'],
-        last_issue_no=_load(after['batch']['cursor_json']).get('last_issue_no'),pending_count=len(after['pending']),experiments=values)
+        last_issue_no=_load(after['batch']['cursor_json']).get('last_issue_no'),pending_count=len(after['pending']),incremental=total)
 
 
 def study_summary(c,row):
@@ -415,7 +433,9 @@ def study_summary(c,row):
 
 def snapshots_for_experiment(c,experiment_id):
     return [dict(month=r['month'],revision=r['revision'],reason=r['reason'],created_at=r['created_at'],report=_load(r['payload_json']))
-        for r in c.execute('SELECT * FROM lab_monthly_snapshots WHERE experiment_id=? ORDER BY month DESC,revision DESC LIMIT 50',(experiment_id,))]
+        for r in c.execute('''SELECT * FROM lab_monthly_snapshots v WHERE experiment_id=?
+            AND revision=(SELECT MAX(q.revision) FROM lab_monthly_snapshots q WHERE q.experiment_id=v.experiment_id AND q.month=v.month)
+            ORDER BY month DESC LIMIT 120''',(experiment_id,))]
 
 
 def monthly_snapshots(store,user_id,batch_id,experiment_id):
@@ -451,7 +471,7 @@ def archive_source(store,batch_id):
         if not context:raise RuleLabError('continuation_disabled','实验尚未启用续算',409)
         stream=c.execute('SELECT * FROM lab_capture_streams WHERE id=?',(context['stream_id'],)).fetchone()
         segment=c.execute('SELECT * FROM lab_segments WHERE id=?',(context['segment_id'],)).fetchone()
-        checkpoint_id=segment['predecessor_id'] or segment['id']
+        checkpoint_id=segment['id'] if segment['status']=='completed' else segment['predecessor_id'] or segment['id']
         checkpoint=c.execute('SELECT payload FROM lab_checkpoints WHERE segment_id=? AND batch_id=?',(checkpoint_id,batch_id)).fetchone()
         warm_inputs=_unpack(checkpoint[0]).get('warm_inputs',{}) if checkpoint else {}
     return ArchiveSource(store,context['predictor_id'],context['archive_revision'],int(context['cutoff_issue']),context['cutoff_at'],
@@ -477,7 +497,7 @@ def _warm_map(c,row):
     previous={}
     if context:
         segment=c.execute('SELECT * FROM lab_segments WHERE id=?',(context['segment_id'],)).fetchone()
-        parent_id=segment['predecessor_id']
+        parent_id=segment['id'] if segment['status']=='completed' else segment['predecessor_id']
         checkpoint=c.execute('SELECT payload FROM lab_checkpoints WHERE segment_id=? AND batch_id=?',(parent_id,row['id'])).fetchone() if parent_id else None
         if checkpoint:previous=_unpack(checkpoint[0]).get('warm_inputs',{})
         stream=c.execute('SELECT * FROM lab_capture_streams WHERE id=?',(context['stream_id'],)).fetchone()
@@ -633,7 +653,7 @@ def prepare_due_appends(store,*,now,limit=10):
             for batch in batches:
                 before=_snapshot(c,batch)
                 c.execute("INSERT INTO lab_segment_batches(segment_id,batch_id,status,baseline_json) VALUES(?,?,'queued',?)",(sid,batch['id'],_pack(before)))
-                cursor=_load(batch['cursor_json'])
+                cursor=_load(before['batch']['cursor_json'])
                 cursor.update(replay_complete=False,replay_max_issue=str(through),scan_after_issue=str(last),
                     replay_scheduler_version=ENGINE_VERSION,continuation_segment_id=sid)
                 # Preserve cumulative evidence but begin a common per-segment input digest.
@@ -676,9 +696,12 @@ def _save_months(store,c,series,batch,now):
             elif 'comparable' in month:month['comparable']=True
             payload=_dump(month)
             if old and old['payload_json']==payload:continue
+            revision=old['revision']+1 if old else 1
             c.execute('''INSERT INTO lab_monthly_snapshots(series_id,batch_id,experiment_id,month,revision,payload_json,reason,created_at)
-                VALUES(?,?,?,?,?,?,?,?)''',(series['id'],batch['id'],experiment['id'],month['month'],old['revision']+1 if old else 1,
+                VALUES(?,?,?,?,?,?,?,?)''',(series['id'],batch['id'],experiment['id'],month['month'],revision,
                 payload,'late_settlement' if old else 'period_closed',now))
+            c.execute('DELETE FROM lab_monthly_snapshots WHERE series_id=? AND experiment_id=? AND month=? AND revision<?',
+                (series['id'],experiment['id'],month['month'],revision))
 
 
 def complete_segment(store,batch_id,expected_revision,*,cursor,now):
@@ -698,7 +721,8 @@ def complete_segment(store,batch_id,expected_revision,*,cursor,now):
         batch=c.execute('SELECT * FROM lab_batches WHERE id=?',(batch_id,)).fetchone()
         snapshot=_checkpoint(c,segment['id'],batch,series['configuration_hash'],now)
         summary=_segment_summary(_unpack(member['baseline_json']),snapshot)
-        c.execute("UPDATE lab_segment_batches SET status='completed',summary_json=? WHERE segment_id=? AND batch_id=?",(_dump(summary),segment['id'],batch_id))
+        c.execute("UPDATE lab_segment_batches SET status='completed',summary_json=?,baseline_json=? WHERE segment_id=? AND batch_id=?",
+            (_dump(summary),_pack(dict(retention_version=1,checkpoint_retained=False)),segment['id'],batch_id))
         remaining=c.execute("SELECT COUNT(*) FROM lab_segment_batches WHERE segment_id=? AND status!='completed'",(segment['id'],)).fetchone()[0]
         if not remaining:
             summaries=[_load(r[0]) for r in c.execute('SELECT summary_json FROM lab_segment_batches WHERE segment_id=? ORDER BY batch_id',(segment['id'],))]
@@ -880,7 +904,7 @@ def _next_replay(store,c,series,previous,batch,now):
         (series['id'],previous['sequence']+1,previous['id'],end,cutoff,series['replay_cutoff_at'],series['replay_archive_revision'],
          fingerprint(dict(previous=previous['manifest_hash'],cutoff=cutoff)),_dump(dict(time_complete=end<series['replay_target_end'])),now)).lastrowid
     c.execute("INSERT INTO lab_segment_batches(segment_id,batch_id,status,baseline_json) VALUES(?,?,'queued',?)",(seg,batch['id'],_pack(snapshot)))
-    cursor=_load(batch['cursor_json']);cursor.update(replay_complete=False,replay_max_issue=str(cutoff),continuation_segment_id=seg)
+    cursor=_load(snapshot['batch']['cursor_json']);cursor.update(replay_complete=False,replay_max_issue=str(cutoff),continuation_segment_id=seg)
     c.execute("UPDATE lab_batches SET status='paused',cursor_json=?,revision=revision+1,updated_at=? WHERE id=?",(_dump(cursor),now,batch['id']))
     _start_children(store,c,series,c.execute('SELECT * FROM lab_segments WHERE id=?',(seg,)).fetchone(),now)
     return True

@@ -9,6 +9,7 @@ from pc28touzhu.services.rule_lab_source import RuleLabSource
 from pc28touzhu.services.rule_lab_store import RuleLabStore
 from pc28touzhu.rule_lab_worker import RuleLabWorker
 from tests.test_rule_lab_source import SourceFixture,UTC,stamp
+from tests.test_rule_lab_results_store import install_settlement_trace, settlement_trace
 
 
 class LongComboWorkerTests(unittest.TestCase):
@@ -21,6 +22,7 @@ class LongComboWorkerTests(unittest.TestCase):
                 source.draw(1000+i,at,balls=(3,6,8))
                 source.prediction(1000+i,at,combo='小双')
             store=RuleLabStore(Path(tmp)/'lab.db');store.initialize()
+            install_settlement_trace(store)
             cfg=normalize_batch_payload(dict(name='long',mode='backtest',predictor_id=1,metric='combo',
                 template_pack='combo_long_miss_v1',start_date='2026-11-26',end_date='2026-11-26'),now=now)
             batch=store.create_batch(1,cfg,'source',build_experiments('combo',template_pack=cfg['template_pack']),now=now)
@@ -38,7 +40,8 @@ class LongComboWorkerTests(unittest.TestCase):
                     detail=store.get_experiment_detail(1,batch['id'],exp['id'])
                     self.assertEqual(exp['settled_count'],36-threshold)
                     self.assertEqual(exp['net_profit'],-(36-threshold))
-                    self.assertEqual(min(int(d['issue_no']) for d in detail['recent']),1000+threshold)
+                    self.assertEqual(detail['recent'],[])
+                    self.assertEqual(min(int(d['issue_no']) for d in settlement_trace(store,exp['id'])),1000+threshold)
             RuleLabWorker(store,reader).tick(now=now)
             self.assertEqual(store.list_experiments(1,batch['id']),results)
 

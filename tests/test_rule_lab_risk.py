@@ -128,7 +128,11 @@ class RiskStoreTests(unittest.TestCase):
         self.assertEqual(e['settled_count'],3)
         self.assertEqual(e['risk_state']['completed_rounds'],1)
         detail=self.store.get_experiment_detail(1,b['id'],e['id'])
-        self.assertEqual(detail['recent_rounds'][-1]['net_profit'],1.96)
+        self.assertEqual(detail['recent_rounds'],[])
+        # The closed round contributed 1.96 and the new active round 0.98.
+        self.assertEqual(e['net_profit'],2.94)
+        self.assertEqual(e['risk_state']['round_net_profit'],.98)
+        self.assertEqual(e['risk_state']['round_profit_stops'],1)
 
     def test_unstarted_edit_is_atomic_and_started_is_immutable(self):
         b=self.make();old=self.store.get_work_item(b['id'])
@@ -202,9 +206,11 @@ class RiskStoreTests(unittest.TestCase):
                 before[table]=c.execute('SELECT '+','.join(columns)+' FROM '+table+' ORDER BY rowid').fetchall()
         migrated=RuleLabStore(old_path);migrated.initialize();migrated.initialize()
         with sqlite3.connect(old_path) as c:
-            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],5)
+            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],6)
             for table,columns in old_columns.items():
-                self.assertEqual(c.execute('SELECT '+','.join(columns)+' FROM '+table+' ORDER BY rowid').fetchall(),before[table],table)
+                condition=" WHERE key!='result_retention'" if table=='lab_runtime' else ''
+                self.assertEqual(c.execute('SELECT '+','.join(columns)+' FROM '+table+condition+' ORDER BY rowid').fetchall(),before[table],table)
+            self.assertEqual(c.execute("SELECT count(*) FROM lab_runtime WHERE key='result_retention'").fetchone()[0],1)
         self.assertEqual(migrated.get_batch(1,1)['risk_policy']['mode'],'legacy')
         self.assertEqual(migrated.list_experiments(1,1)[0]['net_profit'],.98)
         self.assertEqual(len(migrated.get_pending_decisions(1)),1)

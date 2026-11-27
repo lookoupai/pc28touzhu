@@ -24,7 +24,7 @@ from tests.test_rule_lab_source import SourceFixture, UTC, stamp
 from tests.test_rule_lab_risk import policy
 
 
-def original_rows(path, columns=None):
+def original_rows(path, columns=None, *, exclude_result_metadata=False):
     """Hash every original column and row, ignoring later additive columns/tables."""
     with sqlite3.connect(Path(path).resolve().as_uri() + '?mode=ro', uri=True) as connection:
         connection.execute('PRAGMA query_only=ON')
@@ -36,7 +36,8 @@ def original_rows(path, columns=None):
         result = {}
         for table, names in columns.items():
             quoted = ','.join('"%s"' % name.replace('"', '""') for name in names)
-            rows = connection.execute('SELECT %s FROM "%s" ORDER BY rowid' % (quoted, table)).fetchall()
+            where=" WHERE key!='result_retention'" if table=='lab_runtime' and exclude_result_metadata else ''
+            rows = connection.execute('SELECT %s FROM "%s"%s ORDER BY rowid' % (quoted, table,where)).fetchall()
             digest = hashlib.sha256()
             for row in rows:
                 # Original v3 fields are SQLite scalars; preserve both type and value.
@@ -131,8 +132,7 @@ class ContinuationIndependentQaTests(unittest.TestCase):
             self.assertGreater(connection.execute("SELECT count(*) FROM lab_input_versions WHERE kind='prediction' AND issue_key=1507").fetchone()[0], 0)
             category = connection.execute('''SELECT class FROM lab_input_coverage WHERE issue_key=1000
                 ORDER BY revision DESC LIMIT 1''').fetchone()
-            self.assertIsNotNone(category)
-            self.assertEqual(category[0], 'archive_gap')
+            self.assertIsNone(category)  # Consumed A is no longer re-seeded merely to retain old coverage.
 
     def test_conflicting_ordinary_cache_does_not_replace_frozen_continuation_inputs(self):
         case = self.harness()
@@ -311,6 +311,8 @@ class ContinuationIndependentQaTests(unittest.TestCase):
             # catches up in bounded chunks after a fresh worker starts.
             automatic = RuleLabStore(root / 'automatic' / 'lab.db')
             automatic.initialize()
+            from tests.test_rule_lab_results_store import install_settlement_trace
+            install_settlement_trace(automatic)
             auto_batch = automatic.create_batch(1, config, 'fixture',
                 build_experiments('combo', template_pack='combo_long_miss_v1'), now=old_now)
             auto_id = auto_batch['id']
@@ -351,17 +353,19 @@ class ContinuationProductionSnapshotQaTests(unittest.TestCase):
     def test_production_copy_migrates_twice_without_changing_any_old_column(self):
         snapshot = Path(os.environ['RULE_LAB_MIGRATION_SNAPSHOT']).resolve()
         source_bytes = hashlib.sha256(snapshot.read_bytes()).hexdigest()
-        columns, before = original_rows(snapshot)
+        columns, before = original_rows(snapshot,exclude_result_metadata=True)
         with tempfile.TemporaryDirectory(prefix='rule-lab-production-copy-qa-') as temporary:
             copy_path = Path(temporary) / 'lab.db'
             shutil.copyfile(snapshot, copy_path)
             store = RuleLabStore(copy_path)
             store.initialize()
-            self.assertEqual(original_rows(copy_path, columns)[1], before)
+            self.assertEqual(original_rows(copy_path, columns,exclude_result_metadata=True)[1], before)
             store.initialize()
-            self.assertEqual(original_rows(copy_path, columns)[1], before)
+            self.assertEqual(original_rows(copy_path, columns,exclude_result_metadata=True)[1], before)
             with sqlite3.connect(copy_path) as connection:
-                self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 5)
+                self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 6)
+                metadata=json.loads(connection.execute("SELECT value_json FROM lab_runtime WHERE key='result_retention'").fetchone()[0])
+                self.assertEqual((metadata['mode'],metadata['removed_rows']),('results_only',0))
                 self.assertEqual(connection.execute('PRAGMA quick_check').fetchone()[0], 'ok')
                 self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
                 self.assertEqual(connection.execute('SELECT count(*) FROM lab_series').fetchone()[0], 0)
@@ -371,7 +375,7 @@ class ContinuationProductionSnapshotQaTests(unittest.TestCase):
             self.assertEqual(preview['next_issue'], '3511344')
             self.assertEqual(preview['saved_experiments'], 26)
             self.assertFalse(preview['continuation']['enabled'])
-            self.assertEqual(original_rows(copy_path, columns)[1], before)
+            self.assertEqual(original_rows(copy_path, columns,exclude_result_metadata=True)[1], before)
         self.assertEqual(hashlib.sha256(snapshot.read_bytes()).hexdigest(), source_bytes)
 
     @unittest.skipUnless(os.environ.get('RULE_LAB_MIGRATION_SNAPSHOT') and os.environ.get('RULE_LAB_READONLY_SOURCE_DB'),
@@ -390,6 +394,14 @@ class ContinuationProductionSnapshotQaTests(unittest.TestCase):
             shutil.copyfile(snapshot, copy_path)
             store = RuleLabStore(copy_path)
             store.initialize()
+            from tests.test_rule_lab_results_store import install_settlement_trace
+            install_settlement_trace(store)
+            observed_outcomes={}
+            class AuditedWorker(RuleLabWorker):
+                def _outcome(worker,experiment,decision,draw):
+                    outcome=super()._outcome(experiment,decision,draw)
+                    observed_outcomes[(experiment['id'],str(decision['issue_no']))]={**outcome,'stake_cents':decision['stake_cents']}
+                    return outcome
             with sqlite3.connect(copy_path) as connection:
                 connection.row_factory = sqlite3.Row
                 original = {row['id']: dict(row) for row in connection.execute(
@@ -409,7 +421,7 @@ class ContinuationProductionSnapshotQaTests(unittest.TestCase):
             store.request_append(1, 'batch', 8, dict(request_id='qa-copy-append',
                 expected_revision=configured['expected_revision'], end_date=today), now=now)
             max_tick_ms = 0.0
-            worker = RuleLabWorker(store, source)
+            worker = AuditedWorker(store, source)
             for index in range(300):
                 tick = worker.tick(now=now)
                 max_tick_ms = max(max_tick_ms, tick['elapsed_ms'])
@@ -420,7 +432,7 @@ class ContinuationProductionSnapshotQaTests(unittest.TestCase):
                     break
                 # A restart is an additional durability check, and also means
                 # the test does not wait on a real fifteen-second capture timer.
-                worker = RuleLabWorker(store, source)
+                worker = AuditedWorker(store, source)
             else:
                 self.fail('Production-copy continuation did not complete an append: %r' % state)
             self.assertFalse(state['continuation']['compute_enabled'])
@@ -439,14 +451,16 @@ class ContinuationProductionSnapshotQaTests(unittest.TestCase):
                     after = current[experiment_id]
                     self.assertEqual({key: after[key] for key in fixed}, {key: before[key] for key in fixed})
                     before_stats, after_stats = json.loads(before['stats_json']), json.loads(after['stats_json'])
-                    delta = connection.execute('''SELECT count(*) AS n,COALESCE(sum(net_cents),0) AS net,
-                        COALESCE(sum(stake_cents),0) AS stake FROM lab_decisions
-                        WHERE experiment_id=? AND issue_key>? AND status='settled' ''',
-                        (experiment_id, actual_last)).fetchone()
-                    self.assertEqual(after_stats['net_cents'] - before_stats['net_cents'], delta['net'])
-                    self.assertEqual(after_stats['settled_count'] - before_stats['settled_count'], delta['n'])
-                    self.assertEqual(after_stats['stake_cents'] - before_stats['stake_cents'], delta['stake'])
-                first_decision = connection.execute('SELECT MIN(issue_key) FROM lab_decisions WHERE issue_key>?',
+                    committed=connection.execute('''SELECT experiment_id,issue_no FROM test_settlement_trace
+                        WHERE experiment_id=? AND issue_key>? ORDER BY issue_key''',(experiment_id,actual_last)).fetchall()
+                    keys=[(row['experiment_id'],row['issue_no']) for row in committed]
+                    self.assertEqual(len(keys),len(set(keys)),'A pending settlement was applied twice')
+                    self.assertTrue(all(key in observed_outcomes for key in keys),'Committed settlement lacks an observed actual outcome')
+                    settled=[observed_outcomes[key] for key in keys if observed_outcomes[key]['status']=='settled']
+                    self.assertEqual(after_stats['net_cents'] - before_stats['net_cents'],sum(row['net_cents'] for row in settled))
+                    self.assertEqual(after_stats['settled_count'] - before_stats['settled_count'],len(settled))
+                    self.assertEqual(after_stats['stake_cents'] - before_stats['stake_cents'],sum(row['stake_cents'] for row in settled))
+                first_decision = connection.execute('SELECT MIN(issue_key) FROM test_settlement_trace WHERE issue_key>?',
                                                     (actual_last,)).fetchone()[0]
                 self.assertEqual(first_decision, 3511344)
                 self.assertEqual([tuple(row) for row in connection.execute(
@@ -456,7 +470,8 @@ class ContinuationProductionSnapshotQaTests(unittest.TestCase):
                                  (original_batch['start_date'], original_batch['end_date']))
                 self.assertEqual(connection.execute('PRAGMA quick_check').fetchone()[0], 'ok')
                 self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
-                decisions = connection.execute('SELECT count(*) FROM lab_decisions WHERE issue_key>?', (actual_last,)).fetchone()[0]
+                decisions = connection.execute('SELECT count(*) FROM test_settlement_trace WHERE issue_key>?', (actual_last,)).fetchone()[0]
+                self.assertEqual(connection.execute("SELECT count(*) FROM lab_decisions WHERE issue_key>? AND status!='pending'",(actual_last,)).fetchone()[0],0)
             report = dict(first_issue=3511344, calculated_through_issue=calculated, experiment_count=len(current),
                           known_available_issue=int(known_latest['issue_no']) if known_available else None,
                           new_decisions=decisions, ticks=index + 1, max_tick_ms=max_tick_ms,

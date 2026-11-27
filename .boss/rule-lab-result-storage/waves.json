@@ -1,0 +1,676 @@
+{
+  "feature": "rule-lab-result-storage",
+  "workingDirectory": "/www/wwwroot/pc28touzhu-lab-results",
+  "baseCommit": "0b3d84d",
+  "authorization": "用户已批准结果型方案并要求开始实施，含必要迁移与指定冗余数据清理；不重复审批，不扩大为删除实验定义/上游记录。",
+  "writeSetPolicy": "每个文件唯一owner；同owner内部任务串行；共享store仅Core接其他模块hook；兼容扩展路径只在实际失败需要时修改。",
+  "plannedUniquePaths": 47,
+  "owners": {
+    "Core": [
+      "src/pc28touzhu/services/rule_lab_store.py",
+      "src/pc28touzhu/rule_lab_worker.py",
+      "tests/test_rule_lab_results_store.py",
+      "tests/test_rule_lab_results_worker.py",
+      "tests/test_rule_lab_store.py",
+      "tests/test_rule_lab_worker.py",
+      "tests/test_rule_lab_risk.py",
+      "tests/test_rule_lab_long_streak_worker.py",
+      "tests/test_rule_lab_continuous_worker.py",
+      "tests/test_rule_lab_comparison.py",
+      "tests/test_rule_lab_ops.py"
+    ],
+    "Data": [
+      "src/pc28touzhu/services/rule_lab_retention.py",
+      "src/pc28touzhu/services/rule_lab_series.py",
+      "src/pc28touzhu/services/rule_lab_archive.py",
+      "src/pc28touzhu/services/rule_lab_source.py",
+      "src/pc28touzhu/services/rule_lab_storage.py",
+      "scripts/maintenance/migrate_rule_lab_results.py",
+      "tests/test_rule_lab_retention.py",
+      "tests/test_rule_lab_results_series.py",
+      "tests/test_rule_lab_results_replay.py",
+      "tests/test_rule_lab_results_migration.py",
+      "tests/test_rule_lab_archive.py",
+      "tests/test_rule_lab_series.py",
+      "tests/test_rule_lab_continuous_qa.py",
+      "tests/test_rule_lab_qa.py"
+    ],
+    "Product": [
+      "src/pc28touzhu/services/rule_lab_service.py",
+      "src/pc28touzhu/api/app.py",
+      "src/pc28touzhu/ui/rule_lab.js",
+      "src/pc28touzhu/ui/rule_lab.html",
+      "tests/test_rule_lab_results_api.py",
+      "tests/test_rule_lab_results_ui.cjs",
+      "tests/rule_lab_results_ui_server.py",
+      "docs/RULE_LAB.md",
+      "docs/RULE_LAB_RESULT_STORAGE_DESIGN_20261127.html",
+      "tests/test_rule_lab_continuous_monthly.py",
+      "tests/test_rule_lab_api.py",
+      "tests/test_rule_lab_ui.cjs",
+      "tests/test_rule_lab_continuation_ui.cjs",
+      "tests/rule_lab_ui_server.py"
+    ],
+    "QA": [
+      "tests/test_rule_lab_results_qa.py",
+      "tests/rule_lab_results_benchmark.py",
+      ".boss/rule-lab-result-storage/qa-report.md"
+    ],
+    "Release": [
+      ".boss/rule-lab-result-storage/deploy-report.md"
+    ],
+    "Review": [
+      ".boss/rule-lab-result-storage/tech-review.md",
+      ".boss/rule-lab-result-storage/plan.md"
+    ],
+    "Scrum": [
+      ".boss/rule-lab-result-storage/tasks.md",
+      ".boss/rule-lab-result-storage/waves.json"
+    ]
+  },
+  "waves": [
+    {
+      "id": "wave-1-results",
+      "title": "原子结果落库与必要当前状态",
+      "scope": "schema6 additive hooks; pending-only decisions; active state and durable frontiers",
+      "writeSet": [
+        "src/pc28touzhu/services/rule_lab_store.py",
+        "src/pc28touzhu/rule_lab_worker.py",
+        "tests/test_rule_lab_results_store.py",
+        "tests/test_rule_lab_results_worker.py",
+        "tests/test_rule_lab_store.py",
+        "tests/test_rule_lab_worker.py",
+        "tests/test_rule_lab_risk.py",
+        "tests/test_rule_lab_long_streak_worker.py",
+        "tests/test_rule_lab_continuous_worker.py",
+        "tests/test_rule_lab_comparison.py",
+        "src/pc28touzhu/services/rule_lab_retention.py",
+        "tests/test_rule_lab_ops.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_results_store",
+          "-q"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_results_worker",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_results_store",
+          "tests.test_rule_lab_results_worker",
+          "tests.test_rule_lab_store",
+          "tests.test_rule_lab_worker",
+          "tests.test_rule_lab_risk",
+          "-q"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "CM1",
+        "CM2",
+        "CM3"
+      ],
+      "stopCondition": "累计/日账值变化、重复收益、pending丢失或未保留时钟/去重状态时停止",
+      "dependsOn": [],
+      "status": "passed",
+      "evidence": {
+        "root_boundary": {
+          "passed": 26,
+          "failed": 0,
+          "skipped": 0,
+          "seconds": 2.687,
+          "exit_code": 0,
+          "log": "/tmp/pc28-results-w1-root.log"
+        },
+        "core_combined": {
+          "passed": 123,
+          "failed": 0,
+          "skipped": 0,
+          "seconds": 38.465,
+          "exit_code": 0,
+          "log": "/tmp/pc28-results-core-final.log",
+          "command": [
+            "env",
+            "PYTHONPATH=src",
+            "python3",
+            "-m",
+            "unittest",
+            "tests.test_rule_lab_results_store",
+            "tests.test_rule_lab_results_worker",
+            "tests.test_rule_lab_store",
+            "tests.test_rule_lab_risk",
+            "tests.test_rule_lab_worker",
+            "tests.test_rule_lab_long_streak_worker",
+            "tests.test_rule_lab_performance",
+            "tests.test_rule_lab_comparison",
+            "tests.test_rule_lab_continuous_worker",
+            "tests.test_rule_lab_management",
+            "tests.test_rule_lab_batch_queue",
+            "-q"
+          ]
+        },
+        "core_final_index": {
+          "passed": 21,
+          "failed": 0,
+          "skipped": 0,
+          "seconds": 1.73,
+          "exit_code": 0,
+          "log": "/tmp/pc28-results-core-index-green.log",
+          "command": [
+            "env",
+            "PYTHONPATH=src",
+            "python3",
+            "-m",
+            "unittest",
+            "tests.test_rule_lab_results_store.ResultsIndexInitializationTests",
+            "tests.test_rule_lab_results_store.ResultsOnlyStoreTests",
+            "tests.test_rule_lab_results_worker",
+            "-q"
+          ]
+        },
+        "core_ops_contract": {
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0,
+          "seconds": 0.27,
+          "exit_code": 0,
+          "command": [
+            "env",
+            "PYTHONPATH=src",
+            "python3",
+            "-m",
+            "unittest",
+            "tests.test_rule_lab_ops",
+            "-v"
+          ],
+          "log": "/tmp/pc28-results-core-ops-green.log",
+          "note": "Only test observation changed: second worker rejection preserves every original lab row; results-retention initialization metadata is valid."
+        }
+      }
+    },
+    {
+      "id": "wave-2-retention",
+      "title": "依赖保留、重测边界与有界迁移",
+      "scope": "shared input protection and checkpoint compaction; bounded cleanup and real reclaim",
+      "writeSet": [
+        "src/pc28touzhu/services/rule_lab_retention.py",
+        "src/pc28touzhu/services/rule_lab_series.py",
+        "src/pc28touzhu/services/rule_lab_archive.py",
+        "src/pc28touzhu/services/rule_lab_source.py",
+        "src/pc28touzhu/services/rule_lab_storage.py",
+        "scripts/maintenance/migrate_rule_lab_results.py",
+        "tests/test_rule_lab_retention.py",
+        "tests/test_rule_lab_results_series.py",
+        "tests/test_rule_lab_results_replay.py",
+        "tests/test_rule_lab_results_migration.py",
+        "tests/test_rule_lab_archive.py",
+        "tests/test_rule_lab_series.py",
+        "tests/test_rule_lab_continuous_qa.py",
+        "tests/test_rule_lab_qa.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_retention",
+          "-q"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_results_series",
+          "-q"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_results_replay",
+          "-q"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_results_migration",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_retention",
+          "tests.test_rule_lab_results_series",
+          "tests.test_rule_lab_results_replay",
+          "tests.test_rule_lab_results_migration",
+          "tests.test_rule_lab_archive",
+          "tests.test_rule_lab_series",
+          "tests.test_rule_lab_source",
+          "tests.test_rule_lab_storage",
+          "-q"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "CM4",
+        "CM5",
+        "CM6",
+        "CM7",
+        "CM8",
+        "CM10"
+      ],
+      "stopCondition": "误删共享/暂停/队列/pending依赖、冻结版本污染、无限扫描/清理、无备份或仅逻辑删除冒充缩文件时停止",
+      "dependsOn": [
+        "wave-1-results"
+      ],
+      "status": "passed",
+      "evidence": {
+        "data_legacy_regression": {
+          "passed": 88,
+          "failed": 0,
+          "skipped": 2,
+          "seconds": 21.172,
+          "exit_code": 0,
+          "log": "/tmp/pc28-results-data-final.log",
+          "note": "Two opt-in legacy copy tests skipped without their environment inputs; not counted as passes.",
+          "command": [
+            "env",
+            "PYTHONPATH=src",
+            "python3",
+            "-m",
+            "unittest",
+            "tests.test_rule_lab_retention",
+            "tests.test_rule_lab_results_series",
+            "tests.test_rule_lab_results_replay",
+            "tests.test_rule_lab_results_migration",
+            "tests.test_rule_lab_archive",
+            "tests.test_rule_lab_series",
+            "tests.test_rule_lab_source",
+            "tests.test_rule_lab_storage",
+            "tests.test_rule_lab_continuation",
+            "tests.test_rule_lab_continuous_qa",
+            "tests.test_rule_lab_qa",
+            "-q"
+          ]
+        },
+        "data_final_frozen": {
+          "passed": 39,
+          "failed": 0,
+          "skipped": 0,
+          "seconds": 18.028,
+          "exit_code": 0,
+          "log": "/tmp/pc28-results-data-final-frozen.log",
+          "command": [
+            "env",
+            "PYTHONPATH=src",
+            "python3",
+            "-m",
+            "unittest",
+            "tests.test_rule_lab_results_series",
+            "tests.test_rule_lab_results_replay",
+            "tests.test_rule_lab_retention",
+            "tests.test_rule_lab_results_migration",
+            "tests.test_rule_lab_continuous_worker",
+            "-q"
+          ]
+        },
+        "production_copy": {
+          "exit_code": 0,
+          "json": "/tmp/pc28-results-copy-qa.json",
+          "database_bytes_before": 777437184,
+          "database_bytes_after": 100503552,
+          "directory_bytes_after": 100536320,
+          "protected_unchanged": true,
+          "note": "Copy long process loaded code at start; later fixes covered by new targeted processes and pending root full gate."
+        },
+        "final_legacy_copy_contract": {
+          "passed": 2,
+          "failed": 0,
+          "skipped": 0,
+          "seconds": 14.803,
+          "exit_code": 0,
+          "note": "Only legacy test observation changed to temporary settlement trace, preserving original per-cent result assertions; runtime unchanged."
+        }
+      }
+    },
+    {
+      "id": "wave-3-product",
+      "title": "结果页面与真实API契约",
+      "scope": "results-only detail; replay availability; maintenance status; original workflows",
+      "writeSet": [
+        "src/pc28touzhu/services/rule_lab_service.py",
+        "src/pc28touzhu/api/app.py",
+        "src/pc28touzhu/ui/rule_lab.js",
+        "src/pc28touzhu/ui/rule_lab.html",
+        "tests/test_rule_lab_results_api.py",
+        "tests/test_rule_lab_results_ui.cjs",
+        "tests/rule_lab_results_ui_server.py",
+        "docs/RULE_LAB.md",
+        "docs/RULE_LAB_RESULT_STORAGE_DESIGN_20261127.html",
+        "tests/test_rule_lab_continuous_monthly.py",
+        "tests/test_rule_lab_api.py",
+        "tests/test_rule_lab_ui.cjs",
+        "tests/test_rule_lab_continuation_ui.cjs",
+        "tests/rule_lab_ui_server.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_results_api",
+          "-q"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_results_ui.cjs"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_results_api",
+          "tests.test_rule_lab_api",
+          "tests.test_rule_lab_continuous_api",
+          "tests.test_rule_lab_management_api",
+          "tests.test_rule_lab_monthly",
+          "tests.test_rule_lab_continuous_monthly",
+          "-q"
+        ],
+        [
+          "node",
+          "--check",
+          "src/pc28touzhu/ui/rule_lab.js"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_results_ui.cjs"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "executionConstraint": "UI脚本必须遵守本轮浏览器约束；未获准使用的headless/new Chrome不可启动。可用真实WSGI+DOM执行代替主流程自动化并明确视觉未验，不能只做静态源码匹配。",
+      "contractRows": [
+        "CM1",
+        "CM3",
+        "CM7",
+        "CM8",
+        "CM9"
+      ],
+      "stopCondition": "实际结果/API不一致、空明细显示零投注、权限回归或未执行真实主路径时停止",
+      "dependsOn": [
+        "wave-1-results",
+        "wave-2-retention"
+      ],
+      "status": "passed",
+      "evidence": {
+        "api_regression": {
+          "passed": 77,
+          "failed": 0,
+          "skipped": 0,
+          "seconds": 36.218,
+          "exit_code": 0,
+          "log": "/tmp/pc28-results-product-api-final.log"
+        },
+        "real_dom": {
+          "command": [
+            "node",
+            "tests/test_rule_lab_results_ui.cjs"
+          ],
+          "exit_code": 0,
+          "log": "/tmp/pc28-results-product-ui-final.log",
+          "execution": "Real temporary WSGI/SQLite and jsdom, no browser/profile opened",
+          "unmeasured": "layout, screenshots, touchscreen and browser rendering"
+        },
+        "root_dom_rerun": {
+          "status": "passed",
+          "exit_code": 0,
+          "log": "/tmp/pc28-results-dom-root.log",
+          "session_id": 33829,
+          "command": [
+            "node",
+            "tests/test_rule_lab_results_ui.cjs"
+          ],
+          "execution": "Real temporary WSGI/SQLite+jsdom; no browser opened; layout not measured."
+        }
+      }
+    },
+    {
+      "id": "wave-4-qa",
+      "title": "独立反例、容量性能与冻结完整回归",
+      "scope": "production snapshot copy preservation, results parity, bounded growth and complete regression",
+      "writeSet": [
+        "tests/test_rule_lab_results_qa.py",
+        "tests/rule_lab_results_benchmark.py",
+        ".boss/rule-lab-result-storage/qa-report.md"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_results_qa",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "RULE_LAB_RESULTS_MIGRATION_SNAPSHOT=/tmp/pc28-results-baseline.db",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_results_qa",
+          "-q"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "RULE_LAB_MIGRATION_SNAPSHOT=/tmp/pc28-continuation-baseline.db",
+          "RULE_LAB_READONLY_SOURCE_DB=/www/wwwroot/AITradingSimulator/pc28_predictor.db",
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tests",
+          "-q"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_results_ui.cjs"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "manualGates": [
+        "相同输入的旧/新参数矩阵经济结果与状态一致，测试轨迹只存在临时目录",
+        "固定副本只允许删除指定冗余；stats/daily/pending/cursor/config/IDs/队列保持",
+        "容量与性能测量固定1核/256MiB，记录DB/WAL/目录/备份实际字节；目标未达逐项解释",
+        "新旧页面主流程真实执行；不得为了测试启动用户禁止的其他Chrome"
+      ],
+      "contractRows": [
+        "CM1",
+        "CM2",
+        "CM3",
+        "CM4",
+        "CM5",
+        "CM6",
+        "CM7",
+        "CM8",
+        "CM9",
+        "CM10"
+      ],
+      "stopCondition": "任何未关闭实际缺陷、全回归失败、不可解释结果/空间/性能偏差或伪造通过计数都阻止发布",
+      "dependsOn": [
+        "wave-1-results",
+        "wave-2-retention",
+        "wave-3-product"
+      ],
+      "status": "passed",
+      "evidence": {
+        "independent_qa": {
+          "passed": 8,
+          "failed": 0,
+          "skipped": 0,
+          "exit_code": 0,
+          "log": "/tmp/pc28-results-qa-eight-final.log"
+        },
+        "matrix": {
+          "exit_code": 0,
+          "scenarios": [
+            "100x100",
+            "100x400",
+            "600x100"
+          ],
+          "economic_hashes_equal": true,
+          "terminal_decisions": 0,
+          "closed_rounds": 0,
+          "json": "/tmp/pc28-results-matrix-comparison.json"
+        },
+        "full_regression": {
+          "status": "passed",
+          "session_id": 58590,
+          "log": "/tmp/pc28-results-full-final-root.log",
+          "command": [
+            "env",
+            "PYTHONPATH=src",
+            "RULE_LAB_MIGRATION_SNAPSHOT=/tmp/pc28-continuation-baseline.db",
+            "RULE_LAB_READONLY_SOURCE_DB=/www/wwwroot/AITradingSimulator/pc28_predictor.db",
+            "python3",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-q"
+          ],
+          "passed": 1259,
+          "failed": 0,
+          "skipped": 0,
+          "seconds": 310.386,
+          "exit_code": 0
+        },
+        "first_full_regression": {
+          "passed": 1257,
+          "failed": 2,
+          "skipped": 0,
+          "seconds": 296.471,
+          "exit_code": 1,
+          "log": "/tmp/pc28-results-full-root.log",
+          "session_id": 91796,
+          "failures": [
+            "Legacy production-copy test summed deleted terminal decisions instead of observing per-cent settlement outcomes.",
+            "Second-worker rejection test expected zero runtime rows although results-retention initialization metadata is legitimate."
+          ],
+          "resolution": "Only test observations corrected; economic invariants strengthened/preserved; runtime stayed frozen."
+        },
+        "review_final_counterexamples": {
+          "passed": 2,
+          "failed": 0,
+          "skipped": 0,
+          "seconds": 0.772,
+          "exit_code": 0,
+          "issues": "I1 source double-deletion and I2 frozen frontier pollution independently closed."
+        }
+      }
+    },
+    {
+      "id": "wave-5-release",
+      "title": "保留已有成绩进度上线并回收空间",
+      "scope": "single controlled rollout; backup and migration; production GET and cleanup convergence",
+      "writeSet": [
+        ".boss/rule-lab-result-storage/deploy-report.md"
+      ],
+      "redTests": [],
+      "redEvidencePolicy": "复用前四wave反例，不在生产制造失败",
+      "greenGates": [
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "manualGates": [
+        "ROOT明确GO和已验收exact commit后唯一执行者停止queue→worker→API，记录原状态",
+        "一份清单管理外置备份，迁移前后保护字段/ID/队列检查，失败不覆盖恢复后新成绩",
+        "仅恢复此前活跃服务，实验1核256MiB和队列额度保持，上游与真实业务服务保持",
+        "线上只读验证结果与空间状态，后台清理达到终态0行并实际缩文件；不删除实验定义",
+        "备份单列占用与72小时保留/维护清理说明，无新增定时任务"
+      ],
+      "contractRows": [
+        "CM10"
+      ],
+      "stopCondition": "备份、保护数据、健康、队列进度、空间计量任一失败停止发布后续并据实际状态处理",
+      "dependsOn": [
+        "wave-4-qa"
+      ],
+      "status": "pending"
+    }
+  ],
+  "actualUniquePaths": 47,
+  "writeSetRecordedAt": "2026-11-27 final frozen implementation; root full regression passed",
+  "unusedPlannedChanges": [
+    "src/pc28touzhu/domain/rule_lab.py",
+    "src/pc28touzhu/domain/rule_lab_risk.py",
+    "src/pc28touzhu/domain/rule_lab_monthly.py",
+    "src/pc28touzhu/ui/rule_lab.css",
+    "src/pc28touzhu/services/rule_lab_management.py",
+    "src/pc28touzhu/domain/rule_lab_continuation.py"
+  ]
+}

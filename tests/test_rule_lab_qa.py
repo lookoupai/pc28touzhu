@@ -104,10 +104,14 @@ class RuleLabIndependentQaTests(unittest.TestCase):
                 fixture.prediction(1000 + i, opened)
             store = self.ledger('world-%d' % world)
             batch = self.batch(store)
+            with sqlite3.connect(store.db_path) as connection:
+                connection.execute('CREATE TABLE test_decision_trace(experiment_id,issue_no,issue_key,bet_value,decided_at,condition_value_json)')
+                connection.execute('''CREATE TRIGGER test_trace_decision AFTER INSERT ON lab_decisions BEGIN
+                    INSERT INTO test_decision_trace VALUES(NEW.experiment_id,NEW.issue_no,NEW.issue_key,NEW.bet_value,NEW.decided_at,NEW.condition_value_json); END''')
             self.complete(store, RuleLabSource(fixture.path), batch)
             with sqlite3.connect(store.db_path) as connection:
                 snapshots.append(connection.execute('''SELECT e.condition_key,e.settlement_rule_id,d.issue_no,
-                    d.bet_value,d.decided_at,d.condition_value_json FROM lab_decisions d
+                    d.bet_value,d.decided_at,d.condition_value_json FROM test_decision_trace d
                     JOIN lab_experiments e ON e.id=d.experiment_id WHERE d.issue_key<=1008
                     ORDER BY e.condition_key,e.settlement_rule_id,d.issue_key''').fetchall())
         self.assertTrue(snapshots[0])

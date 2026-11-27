@@ -9,6 +9,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from datetime import datetime,timedelta,timezone
 from unittest.mock import patch
 
 from pc28touzhu.api.app import PlatformApiApplication, build_testing_environ
@@ -34,6 +35,7 @@ class PublicSource:
 
     def get_predictor(self, predictor_id):
         return next((p for p in self.list_predictors() if p['id'] == predictor_id), None)
+
 
 
 class RuleLabApiTests(unittest.TestCase):
@@ -210,11 +212,25 @@ class RuleLabApiTests(unittest.TestCase):
         self.assertEqual(data['batches'], [])
         self.assertEqual(data['worker']['state'], 'starting')
         self.assertGreater(data['storage']['used_bytes'], 0)
-        self.assertEqual(data['storage']['detail_retention_days'], 30)
+        self.assertEqual(data['storage']['detail_retention_days'], 0)
+        self.assertEqual(data['storage']['retention']['mode'],'results_only')
 
     def replay_parent(self,**changes):
+        if not hasattr(self,'replay_fixture'):
+            from pc28touzhu.services.rule_lab_source import RuleLabSource
+            from tests.test_rule_lab_source import SourceFixture
+            self.replay_fixture=SourceFixture(Path(self.tmp.name)/'replay-source.db')
+            self.replay_fixture.execute("INSERT INTO predictors(id,name,lottery_type,enabled,share_predictions,share_level) VALUES(7,'公开预测器','pc28',1,1,'records')")
+            self.replay_fixture.execute('CREATE TABLE pc28_prediction_daily_summary(predictor_id INTEGER,summary_date TEXT)')
+            first=datetime(2026,10,31,16,tzinfo=timezone.utc)
+            for offset in range(-100,26):
+                at=first+(timedelta(seconds=210*offset) if offset<0 else timedelta(days=offset))
+                self.replay_fixture.draw(1100+offset,at)
+                self.replay_fixture.prediction(1100+offset,at,predictor_id=7)
+            self.source=RuleLabSource(self.replay_fixture.path)
+            self.service.source=self.source
         data=dict(name='金额重测',mode='backtest',predictor_id=7,metric='combo',template_pack='combo_long_miss_v1',
-            stake_amount=1,start_date='2026-11-01',end_date='2026-11-26',risk_policy=policy())
+            stake_amount=1,start_date='2026-11-01',end_date='2026-11-25',risk_policy=policy())
         data.update(changes)
         batch=self.service.create_batch(1,data,now=NOW)['batch']
         experiment=self.store.list_experiments(1,batch['id'])[10]
@@ -241,7 +257,7 @@ class RuleLabApiTests(unittest.TestCase):
         for control in [expected['round'],expected['day']]+expected['additional_day_guards']:
             for key in ('profit_target','loss_limit'):control[key]*=10
         self.assertEqual(child['risk_policy'],expected)
-        self.assertEqual((child['predictor_id'],child['start_date'],child['end_date']),(7,'2026-11-01','2026-11-26'))
+        self.assertEqual((child['predictor_id'],child['start_date'],child['end_date']),(7,'2026-11-01','2026-11-25'))
         saved=self.store.list_experiments(1,child['id'])[0]
         self.assertEqual(saved['condition'],experiment['condition']);self.assertEqual(saved['settlement_rule_id'],experiment['settlement_rule_id'])
         self.assertEqual(saved['settlement_odds']['combo']['大单'],4.2)
@@ -268,7 +284,7 @@ class RuleLabApiTests(unittest.TestCase):
                       {'stake_amount':10001,'risk_amount_mode':'keep'},{'stake_amount':1.001,'risk_amount_mode':'scale'},
                       {'stake_amount':1,'risk_amount_mode':[]},{**payload,'risk_policy':{}}):
             result=self.request(path,value);self.assertEqual(result['status_code'],400,result)
-        self.source.shared=False
+        self.replay_fixture.execute('UPDATE predictors SET enabled=0 WHERE id=7')
         self.assertEqual(self.request(path,payload)['status_code'],400)
         self.assertEqual(len(self.service.overview(1)['batches']),1)
 
@@ -292,7 +308,8 @@ class RuleLabApiTests(unittest.TestCase):
         path=PREFIX+'/batches/'+str(bid)+'/experiments/'+str(eid)
         result=self.request(path)
         self.assertEqual(result['status_code'],200,result)
-        self.assertEqual(set(result['json']),{'experiment','daily','recent','recent_rounds','monthly'})
+        self.assertEqual(set(result['json']),{'experiment','daily','recent','recent_rounds','monthly','detail_policy','retention_version','pending_count'})
+        self.assertEqual(result['json']['detail_policy'],'results_only')
         report=result['json']['monthly']
         self.assertEqual(report['timezone'],'Asia/Shanghai')
         self.assertFalse(report['capital']['available'])
@@ -477,7 +494,9 @@ class RuleLabApiTests(unittest.TestCase):
         detail = self.request(PREFIX + '/batches/%s/experiments/%s' % (bid, eid))['json']
         self.assertEqual(detail['experiment']['net_profit'], .98)
         self.assertEqual(detail['daily'][0]['date'], '2026-11-26')
-        self.assertEqual(detail['recent'][0]['result_type'], 'hit')
+        self.assertEqual(detail['recent'], [])
+        self.assertEqual(detail['experiment']['hit_count'],1)
+        self.assertEqual(detail['daily'][0]['hit_count'],1)
         csv_body = self.request(PREFIX + '/batches/%s/export.csv' % bid)['body'].decode('utf-8-sig')
         self.assertEqual(next(csv.DictReader(io.StringIO(csv_body)))['net_profit'], '0.98')
 

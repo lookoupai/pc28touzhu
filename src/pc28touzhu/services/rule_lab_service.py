@@ -178,7 +178,7 @@ class RuleLabService:
                     default_stake_amount=1,risk_presets=self._risk_presets(user_id),
                     limits=dict(max_experiments_per_batch=100, max_running_experiments=MAX_RUNNING_EXPERIMENTS,
                                 max_total_experiments=MAX_TOTAL_EXPERIMENTS, max_backtest_days=90,
-                                detail_retention_days=self.store.detail_retention_days,
+                                detail_retention_days=0, detail_policy='results_only',
                                 disk_budget_bytes=self.store.budget_bytes, cpu_quota_percent=20,
                                 memory_max_bytes=268435456), source_available=available, source_message=message)
 
@@ -387,6 +387,32 @@ class RuleLabService:
         except ValueError as exc:raise RuleLabError('invalid_input',str(exc)) from exc
         return dict(batch=self.store.set_risk_policy(user_id,batch_id,policy,now=_now(now)))
 
+    def replay_preview(self,user_id,batch_id,experiment_id,*,now=None):
+        """Verify the available input basis without creating or retaining history."""
+        timestamp=_now(now)
+        batch,_=self.store.replay_definition(user_id,batch_id,experiment_id)
+        preview=self.store.replay_input_preview(user_id,batch_id,experiment_id,now=timestamp)
+        if batch['mode']!='backtest':
+            return dict(preview,available=False,input_basis='unavailable',reason='只有历史回测支持金额重测')
+        if (batch.get('continuation') or {}).get('active_segment_id'):
+            return dict(preview,available=False,input_basis='unavailable',verified_range=None,
+                        reason='请等待当前追加完成后重测，不能把尚未计算完的日期作为完整重测区间')
+        self._source_predictor(batch['predictor_id'])
+        if preview['available'] and preview['input_basis']=='local_frozen':
+            return preview
+        interval=preview['requested_range']
+        if not interval or not interval.get('start_date') or not interval.get('end_date'):
+            return dict(preview,available=False,input_basis='unavailable',reason=preview.get('reason') or '尚无可重测的已计算区间')
+        days=(date.fromisoformat(interval['end_date'])-date.fromisoformat(interval['start_date'])).days+1
+        if not 1<=days<=90:
+            return dict(preview,available=False,input_basis='unavailable',verified_range=None,
+                        reason='完整本地输入已清理；当前来源重测一次最多90天，请新建可用日期范围内的实验')
+        available=self.source.replay_availability(batch['predictor_id'],interval['start_date'],interval['end_date'],observed_at=timestamp)
+        if available['available'] and available.get('verified_range')!=interval:
+            raise RuleLabError('source_unavailable','来源未完整核对所选区间，请稍后重试',503)
+        return dict(available,requested_range=interval,
+                    input_basis='current_source' if available['available'] else 'unavailable')
+
     def replay_experiment(self,user_id,batch_id,experiment_id,payload,*,now=None):
         if (not isinstance(payload,dict) or set(payload)!={'stake_amount','risk_amount_mode'}
                 or payload['risk_amount_mode'] not in ('scale','keep')):
@@ -413,18 +439,24 @@ class RuleLabService:
             config['risk_policy']=normalize_risk_policy(policy)
         except ValueError as exc:
             raise RuleLabError('invalid_input',str(exc)) from exc
-        self._source_predictor(batch['predictor_id'])
+        # Preview is only advisory; every valid submission verifies input again.
+        preview=self.replay_preview(user_id,batch_id,experiment_id,now=timestamp)
+        if not preview['available']:
+            raise RuleLabError('replay_input_unavailable',preview['reason'] or '所选区间输入不完整，原成绩仍可查看',409)
+        if preview['input_basis']=='current_source':
+            config.update(preview['verified_range'])
         # Retain the original rule, condition, period and risk snapshot. The worker
         # settles the new amount per bet, including rounding and all exit gates.
         rule_name=definition['settlement_snapshot']['rule']['name']
         stake=format(Decimal(config['stake_cents'])/100,'f')
         config['name']=(definition['name']+' · '+rule_name+' · 每注'+stake+' · '+('同比风控' if payload['risk_amount_mode']=='scale' else '原额风控'))[:80]
-        if (batch.get('continuation') or {}).get('enabled'):
-            # 长期重测由账本固定同一档案视图并分片运行，不能退回原短区间或线性放大收益。
+        if preview['input_basis']=='local_frozen':
             result=self.store.create_archive_replay(user_id,batch_id,experiment_id,config,now=timestamp)
         else:
-            result=self.store.create_batch(user_id,config,batch['predictor_name'],[definition],now=timestamp)
-        return dict(batch=result,generated_count=1,source_batch_id=batch_id,source_experiment_id=experiment_id)
+            result=self.store.create_batch(user_id,config,batch['predictor_name'],[definition],now=timestamp,
+                                           replay_input_basis='current_source')
+        return dict(batch=result,generated_count=1,source_batch_id=batch_id,source_experiment_id=experiment_id,
+                    input_basis=preview['input_basis'])
 
     def set_batch_state(self, user_id, batch_id, payload, *, now=None):
         if not isinstance(payload, dict) or set(payload) != {'state'} or payload['state'] not in ('running', 'paused'):
@@ -432,6 +464,11 @@ class RuleLabService:
         batch = self.store.get_batch(user_id, batch_id)
         if payload['state'] == 'running':
             self._source_predictor(batch['predictor_id'])
+            cursor=self.store.get_work_batch(batch_id)['cursor']
+            if cursor.get('replay_require_coverage') and not batch.get('started_at'):
+                available=self.source.replay_availability(batch['predictor_id'],batch['start_date'],batch['end_date'],observed_at=_now(now))
+                if not available['available']:
+                    raise RuleLabError('replay_input_unavailable',available.get('reason') or '重测输入已不可用，尚未启动',409)
         return dict(batch=self.store.set_batch_state(user_id, batch_id, payload['state'], now=_now(now)))
 
     def batch_detail(self, user_id, batch_id):

@@ -97,14 +97,27 @@ class RuleLabOpsTests(unittest.TestCase):
             lab = directory / 'lab'
             store = RuleLabStore(lab / 'rule_lab.db')
             store.initialize()
+            def snapshot():
+                with sqlite3.connect(lab / 'rule_lab.db') as connection:
+                    tables=[row[0] for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'lab_%' ORDER BY name")]
+                    return {table:connection.execute('SELECT * FROM '+table+' ORDER BY rowid').fetchall()
+                            for table in tables}
+            before=snapshot()
+            retention=json.loads(dict(before['lab_runtime'])['result_retention'])
+            self.assertEqual(retention['mode'],'results_only')
+            self.assertIsNone(retention['updated_at'])
+            self.assertNotIn('worker',dict(before['lab_runtime']))
             with (lab / 'worker.lock').open('a') as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 result = subprocess.run(self.command(), cwd=ROOT, env=self.environment(directory),
                                         capture_output=True, text=True, timeout=15)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('模拟进程已经运行', result.stderr)
-            with sqlite3.connect(lab / 'rule_lab.db') as connection:
-                self.assertEqual(connection.execute('SELECT COUNT(*) FROM lab_runtime').fetchone()[0], 0)
+            # Reinitialization may find its fixed policy metadata, but a rejected
+            # worker cannot advance maintenance, results, cursors or heartbeat.
+            self.assertEqual(snapshot(),before)
+            self.assertNotIn('worker',dict(snapshot()['lab_runtime']))
             self.assertFalse((directory / 'absent-source.db').exists())
 
 

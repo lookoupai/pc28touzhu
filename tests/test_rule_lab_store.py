@@ -91,7 +91,9 @@ class RuleLabStoreTests(unittest.TestCase):
         self.assertEqual(detail['experiment']['settled_count'],1)
         self.assertEqual(detail['experiment']['net_profit'],.98)
         self.assertEqual(detail['daily'][0]['net_profit'],.98)
-        self.assertEqual(detail['recent'][0]['status'],'settled')
+        self.assertEqual(detail['recent'],[])
+        self.assertEqual(detail['pending_count'],0)
+        self.assertEqual(detail['detail_policy'],'results_only')
 
     def test_revision_pause_and_pending_settlement(self):
         work=self.start(); d=self.decision(work)
@@ -167,7 +169,9 @@ class RuleLabStoreTests(unittest.TestCase):
         self.assertEqual(result['settled'],0)
         detail=self.store.get_experiment_detail(1,self.batch['id'],d['experiment_id'])
         self.assertEqual(detail['experiment']['net_profit'],0)
-        self.assertEqual(detail['recent'][0]['skip_reason'],'input_conflict')
+        self.assertEqual(detail['experiment']['skipped_count'],1)
+        self.assertEqual(detail['pending_count'],0)
+        self.assertEqual(detail['recent'],[])
 
     def test_long_term_watermark_survives_cleanup_even_without_cursor(self):
         work=self.start();d=self.decision(work)
@@ -178,7 +182,7 @@ class RuleLabStoreTests(unittest.TestCase):
         self.assertEqual(result['inserted_decisions'],0)
         self.assertEqual(self.store.list_experiments(1,self.batch['id'])[0]['settled_count'],1)
 
-    def test_newly_completed_old_backtest_keeps_thirty_days_of_evidence(self):
+    def test_newly_completed_old_backtest_keeps_results_without_detail_retention(self):
         config=normalize_batch_payload(dict(name='历史',mode='backtest',predictor_id=1,metric='big_small',
                                            start_date='2026-10-01',end_date='2026-10-01'),now=NOW)
         batch=self.store.create_batch(1,config,'公开来源',build_experiments('big_small'),now=NOW)
@@ -189,7 +193,8 @@ class RuleLabStoreTests(unittest.TestCase):
         self.store.commit_step(batch['id'],work['batch']['revision'],cursor={'last_issue_no':'1001'},now=NOW,decisions=[d],outcomes=[out])
         self.store.prune(now=NOW)
         detail=self.store.get_experiment_detail(1,batch['id'],d['experiment_id'])
-        self.assertEqual(len(detail['recent']),1)
+        self.assertEqual(detail['recent'],[])
+        self.assertEqual(detail['experiment']['settled_count'],1)
         self.assertEqual(detail['daily'][0]['date'],'2026-10-01')
         self.store.prune(now='2026-12-27T04:00:00Z')
         self.assertEqual(self.store.get_experiment_detail(1,batch['id'],d['experiment_id'])['recent'],[])
@@ -199,12 +204,15 @@ class RuleLabStoreTests(unittest.TestCase):
         pred=dict(predictor_id=1,issue_no='1001',source_id=1,created_at=NOW,settled_at=None,observed_at=NOW,
                   status='pending',big_small='大',odd_even='单',combo='大单',input_hash='original')
         self.store.commit_step(self.batch['id'],work['batch']['revision'],cursor={},now=NOW,predictions=[pred],decisions=[d])
+        self.assertEqual(self.store.get_pending_decisions(self.batch['id'])[0]['bet_value'],'大')
         work=self.work();pred.update(big_small='小',input_hash='changed')
         result=self.store.commit_step(self.batch['id'],work['batch']['revision'],cursor={},now=NOW,predictions=[pred],outcomes=[self.outcome(d)])
         self.assertEqual(result['settled'],1)
         detail=self.store.get_experiment_detail(1,self.batch['id'],d['experiment_id'])
         self.assertEqual(detail['experiment']['net_profit'],.98)
-        self.assertEqual(detail['recent'][0]['bet_value'],'大')
+        self.assertEqual(detail['experiment']['hit_count'],1)
+        self.assertEqual(detail['pending_count'],0)
+        self.assertEqual(detail['recent'],[])
 
     def test_draw_conflict_quarantines_pending_without_changing_balance(self):
         work=self.start();d=self.decision(work)
@@ -224,7 +232,8 @@ class RuleLabStoreTests(unittest.TestCase):
                     triplet=[3,6,8],input_hash=str(i)) for i in range(1000,1150)]
         self.store.commit_step(self.batch['id'],work['batch']['revision'],cursor={},now=NOW,draws=draws,decisions=[d])
         removed=self.store.prune(now=NOW)
-        self.assertEqual(removed['draws'],49)
+        self.assertGreaterEqual(removed['processed_rows'],49)
+        with sqlite3.connect(self.path) as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM lab_draws').fetchone()[0],101)
         self.assertEqual(self.store.get_history(1,before_issue='1002')[0]['issue_no'],'1001')
         self.assertEqual(len(self.store.get_history(1,before_issue='1150')),100)
         self.assertEqual(len(self.store.get_pending_decisions(self.batch['id'])),1)

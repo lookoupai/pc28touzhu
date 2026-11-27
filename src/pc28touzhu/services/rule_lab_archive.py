@@ -197,24 +197,22 @@ def ensure_stream(c, predictor_id, last_issue, now, history_start_issue=None, so
     if type(predictor_id) is not int or predictor_id <= 0:
         raise ValueError('预测来源无效')
     last = _issue(last_issue,zero=True)
-    if history_start_issue is None:
-        first_row = c.execute('SELECT MIN(issue_key) FROM lab_draws WHERE issue_key<=?',(last,)).fetchone()
-        history_start_issue = first_row[0] if first_row and first_row[0] is not None else max(1,last-99)
-    first = _issue(history_start_issue)
+    # A completed history is a result, not a seed for another history archive.
+    first=max(1,last-99)
     from pc28touzhu.services.rule_lab_management import allocate_id
     if not c.execute('SELECT 1 FROM lab_capture_streams WHERE source_key=? AND predictor_id=?',(source_key,predictor_id)).fetchone():
         c.execute('''INSERT INTO lab_capture_streams(id,source_key,predictor_id,after_issue,highest_seen_issue,
             covered_through_issue,seed_after_issue,seed_until_issue,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)''',
-            (allocate_id(c,'lab_capture_streams'),source_key,predictor_id,last,last,last,first-1,last,now,now))
+            (allocate_id(c,'lab_capture_streams'),source_key,predictor_id,last,last,last,last,last,now,now))
     stream = dict(c.execute('SELECT * FROM lab_capture_streams WHERE source_key=? AND predictor_id=?',
         (source_key,predictor_id)).fetchone())
-    # Warm input is available immediately; the rest of A is copied in later bounded pages.
+    # Only the boundary feature window is copied. New input is captured forward.
     draws,predictions,coverage = _cached_page(c,stream,max(1,last-99),last,limit=100)
     if draws:
         _save_page(c,stream,draws,predictions,coverage,now)
-    c.execute('''UPDATE lab_capture_streams SET seed_after_issue=MIN(seed_after_issue,?),
+    c.execute('''UPDATE lab_capture_streams SET seed_after_issue=MAX(seed_until_issue,?),
         seed_until_issue=MAX(seed_until_issue,?),highest_seen_issue=MAX(highest_seen_issue,?),updated_at=? WHERE id=?''',
-        (first-1,last,last,now,stream['id']))
+        (last,last,last,now,stream['id']))
     stream = dict(c.execute('SELECT * FROM lab_capture_streams WHERE id=?',(stream['id'],)).fetchone())
     stream['archive_revision'] = archive_revision(c)
     return stream
@@ -225,21 +223,9 @@ def seed_cache_page(c, stream_id, *, limit=200, now):
     stream = c.execute('SELECT * FROM lab_capture_streams WHERE id=?',(stream_id,)).fetchone()
     if stream is None:
         raise RuleLabError('not_found','输入采集来源不存在',404)
-    if stream['seed_after_issue'] >= stream['seed_until_issue']:
-        return dict(seeded=0,done=True,archive_revision=archive_revision(c))
-    draws,predictions,coverage = _cached_page(c,stream,stream['seed_after_issue']+1,stream['seed_until_issue'],limit=limit)
-    if draws:
-        # Never replace a previously observed version with older cached metadata.
-        fresh_draws = [d for d in draws if read_input(c,stream['source_key'],'draw',0,d['issue_no']) is None]
-        fresh_predictions = [p for p in predictions if read_input(c,stream['source_key'],'prediction',stream['predictor_id'],p['issue_no']) is None]
-        fresh_coverage = [x for x in coverage if not c.execute('SELECT 1 FROM lab_input_coverage WHERE stream_id=? AND issue_key=? LIMIT 1',
-            (stream_id,int(x['issue_no']))).fetchone()]
-        _save_page(c,stream,fresh_draws,fresh_predictions,fresh_coverage,now)
-        after = int(draws[-1]['issue_no'])
-    else:
-        after = stream['seed_until_issue']
-    c.execute('UPDATE lab_capture_streams SET seed_after_issue=?,updated_at=? WHERE id=?',(after,now,stream_id))
-    return dict(seeded=len(draws),done=after>=stream['seed_until_issue'],archive_revision=archive_revision(c))
+    if stream['seed_after_issue']<stream['seed_until_issue']:
+        c.execute('UPDATE lab_capture_streams SET seed_after_issue=seed_until_issue,updated_at=? WHERE id=?',(now,stream_id))
+    return dict(seeded=0,done=True,archive_revision=archive_revision(c))
 
 
 def _advance_coverage(c, stream_id, current, through):
@@ -257,7 +243,7 @@ def commit_capture(store, stream_id, expected_revision, *, draws, predictions, c
                    highest_seen_issue=None, source_identity=None):
     if len(draws)>200 or len(predictions)>200 or len(coverage)>400:
         raise ValueError('单次档案采集超过批量限制')
-    store._require_space()
+    store._require_space(reserve=True)
     with store._connect(write=True,reserve=True) as c:
         stream = c.execute('SELECT * FROM lab_capture_streams WHERE id=?',(stream_id,)).fetchone()
         if stream is None:
@@ -268,6 +254,16 @@ def commit_capture(store, stream_id, expected_revision, *, draws, predictions, c
         identity = source_identity or stream['source_identity']
         if stream['source_identity'] and identity != stream['source_identity']:
             raise RuleLabError('source_changed','预测来源身份发生变化，不能合并到原输入档案',409)
+        if c.execute('SELECT 1 FROM lab_series WHERE stream_id=? LIMIT 1',(stream_id,)).fetchone():
+            from pc28touzhu.services.rule_lab_retention import dependencies,input_required
+            protection=dependencies(c)
+            opened={int(value['issue_no']):value.get('open_at') for value in draws}
+            def needed(value,kind):
+                issue=int(value['issue_no'])
+                return issue>stream['after_issue'] or input_required(protection,kind,stream['predictor_id'],issue,opened.get(issue))
+            draws=[value for value in draws if needed(value,'draw')]
+            predictions=[value for value in predictions if needed(value,'prediction')]
+            coverage=[value for value in coverage if needed(value,'prediction')]
         revision = _save_page(c,stream,draws,predictions,coverage,now)
         scanned_issues={int(row['issue_no']) for row in draws}
         attempted_pending=c.execute('''SELECT issue_key FROM lab_input_rechecks WHERE stream_id=?
@@ -467,34 +463,7 @@ class ArchiveSource:
         return dict(draw=draw,prediction=prediction)
 
 
-def maintenance(store, *, now, protected_floors, limit=200):
-    """Compress old consumed payloads, delete only unreferenced data older than two years."""
-    limit=_limit(limit);reference=_time(now)
-    cold=(reference-timedelta(days=90)).isoformat().replace('+00:00','Z')
-    expired=(reference-timedelta(days=731)).isoformat().replace('+00:00','Z')
-    floors={int(k):max(0,int(v)) for k,v in protected_floors.items()}
-    draw_floor=min(floors.values()) if floors else 0
-    result=dict(compressed=0,deleted=0)
-    eligible=[];parameters=[]
-    if draw_floor:
-        eligible.append("(kind='draw' AND issue_key<?)");parameters.append(draw_floor)
-    for predictor,floor in floors.items():
-        if floor:
-            eligible.append("(kind='prediction' AND predictor_id=? AND issue_key<?)");parameters.extend([predictor,floor])
-    if not eligible:return result
-    with store._connect(write=True,reserve=True) as c:
-        rows=c.execute('''SELECT * FROM lab_input_versions WHERE observed_at<?
-            AND (payload_json IS NOT NULL OR observed_at<?) AND ('''+ ' OR '.join(eligible)+
-            ') ORDER BY observed_at,id LIMIT ?',[cold,expired]+parameters+[limit]).fetchall()
-        for row in rows:
-            floor=draw_floor if row['kind']=='draw' else floors.get(row['predictor_id'],0)
-            if not floor or row['issue_key']>=floor:continue
-            if row['observed_at']<expired:
-                c.execute('DELETE FROM lab_input_versions WHERE id=?',(row['id'],));result['deleted']+=1
-            elif row['payload_json'] is not None:
-                _payload(row)
-                raw=row['payload_json'].encode();compressed=zlib.compress(raw,6)
-                if zlib.decompress(compressed)!=raw:raise RuleLabError('archive_corrupt','档案压缩校验失败',409)
-                c.execute('UPDATE lab_input_versions SET payload_blob=?,payload_json=NULL WHERE id=?',(compressed,row['id']))
-                result['compressed']+=1
-    return result
+def maintenance(store, *, now, protected_floors=None, limit=200):
+    """Compatibility entry; all cleanup uses current consumer dependencies."""
+    from pc28touzhu.services.rule_lab_retention import maintain
+    return maintain(store,now=now,limit=limit)

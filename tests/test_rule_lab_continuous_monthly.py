@@ -12,7 +12,7 @@ from pc28touzhu.domain.rule_lab_monthly import monthly_report, report_window
 from pc28touzhu.rule_lab_worker import RuleLabWorker
 from pc28touzhu.services.rule_lab_service import RuleLabService
 from pc28touzhu.services.rule_lab_source import RuleLabSource
-from pc28touzhu.services.rule_lab_store import RuleLabStore
+from pc28touzhu.services.rule_lab_store import RuleLabError, RuleLabStore
 from tests.test_rule_lab_monthly import day
 from tests.test_rule_lab_source import SourceFixture, stamp
 
@@ -89,7 +89,7 @@ class ContinuousMonthlyTests(unittest.TestCase):
 
 
 class ContinuousMoneyReplayTests(unittest.TestCase):
-    def test_new_stake_replays_the_archived_extended_interval_over_ninety_days(self):
+    def test_long_history_results_survive_cleanup_without_promising_full_replay(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
             fixture=SourceFixture(root/'source.db')
@@ -128,7 +128,7 @@ class ContinuousMoneyReplayTests(unittest.TestCase):
                 expected_revision=preview['expected_revision'],capture_enabled=True,compute_enabled=False,
                 daily_at='00:10',timezone='Asia/Shanghai'),now=now)
             run_until(lambda:service.continuation_preview(1,'batch',bid,now=now)['continuation']['captured_through_issue']=='1202')
-            historical_snapshots=[]
+            historical_months=[]
             for end in ('2026-10-30','2026-11-10'):
                 preview=service.continuation_preview(1,'batch',bid,now=now)
                 service.request_append(1,'batch',bid,dict(request_id='long-replay-'+end,
@@ -137,12 +137,12 @@ class ContinuousMoneyReplayTests(unittest.TestCase):
                           not service.continuation_preview(1,'batch',bid,now=now)['continuation']['active_segment_id'] and
                           service.continuation_preview(1,'batch',bid,now=now)['latest_request']['status']=='completed')
                 eid=store.list_experiments(1,bid)[0]['id']
-                snapshots=service.experiment_detail(1,bid,eid)['monthly']['snapshots']
-                if not historical_snapshots:
-                    historical_snapshots=[row for row in snapshots if row['month'] in ('2026-08','2026-09')]
-                    self.assertEqual(len(historical_snapshots),2)
+                months=service.experiment_detail(1,bid,eid)['monthly']['rows']
+                if not historical_months:
+                    historical_months=[row for row in months if row['month'] in ('2026-08','2026-09')]
+                    self.assertEqual(len(historical_months),2)
                 else:
-                    self.assertEqual([row for row in snapshots if row['month'] in ('2026-08','2026-09')],historical_snapshots)
+                    self.assertEqual([row for row in months if row['month'] in ('2026-08','2026-09')],historical_months)
             original=store.list_experiments(1,bid)[0]
             eid=original['id']
             monthly=service.experiment_detail(1,bid,eid)['monthly']
@@ -150,22 +150,19 @@ class ContinuousMoneyReplayTests(unittest.TestCase):
             self.assertIn('2026-10',[row['month'] for row in monthly['rows']])
             with sqlite3.connect(store.db_path) as connection:
                 before=connection.execute('SELECT stats_json,risk_runtime_json FROM lab_experiments WHERE id=?',(eid,)).fetchone()
-            # 源已删除旧逐期数据时，重测仍必须消费已保存的同一档案。
+            # 已消费A按新策略不再永久保留；旧成绩可读，但不能承诺原区间重测。
             fixture.execute('DELETE FROM predictions')
             fixture.execute('DELETE FROM lottery_draws')
-            result=service.replay_experiment(1,bid,eid,dict(stake_amount=10,risk_amount_mode='keep'),now=now)
-            child=result['batch']
-            self.assertEqual(child['status'],'paused')
-            self.assertEqual(child['experiment_count'],1)
-            self.assertEqual(child['start_date'],'2026-08-01')
-            self.assertEqual((child.get('continuation') or {}).get('effective_end_date'),'2026-11-10')
-            service.set_batch_state(1,child['id'],{'state':'running'},now=now)
-            run_until(lambda:store.get_batch(1,child['id'])['status']=='completed')
-            replayed=store.list_experiments(1,child['id'])[0]
-            self.assertGreater(replayed['settled_count'],90)
-            self.assertAlmostEqual(replayed['net_profit'],replayed['settled_count']*9.98,places=2)
-            self.assertNotEqual(replayed['net_profit'],original['net_profit']*10)
-            self.assertEqual(service.experiment_detail(1,child['id'],replayed['id'])['monthly']['window']['end'],'2026-11-10')
+            available=service.replay_preview(1,bid,eid,now=now)
+            self.assertFalse(available['available']);self.assertEqual(available['input_basis'],'unavailable')
+            with self.assertRaises(RuleLabError) as denied:
+                service.replay_experiment(1,bid,eid,dict(stake_amount=10,risk_amount_mode='keep'),now=now)
+            self.assertEqual(denied.exception.code,'replay_input_unavailable')
+            self.assertEqual(len(store.list_batches(1)),1)
+            after_monthly=service.experiment_detail(1,bid,eid)['monthly']
+            self.assertEqual(after_monthly['window']['end'],'2026-11-10')
+            self.assertEqual(after_monthly['rows'],monthly['rows'])
+            self.assertEqual(after_monthly['capital']['net_profit'],original['net_profit'])
             with sqlite3.connect(store.db_path) as connection:
                 after=connection.execute('SELECT stats_json,risk_runtime_json FROM lab_experiments WHERE id=?',(eid,)).fetchone()
             self.assertEqual(before,after)

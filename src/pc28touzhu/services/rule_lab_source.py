@@ -370,3 +370,82 @@ class RuleLabSource:
                 return found
             except (ValueError, TypeError, IndexError) as exc:
                 raise RuleLabError('source_unavailable', '开奖期号或时间顺序异常，无法定位回放起点', 503) from exc
+
+    @staticmethod
+    def _absence_allowed(c,deadline,query,params):
+        missing=RuleLabSource._query(c,deadline,query,params)
+        if not missing or missing[0][0] is None:return True
+        metadata=RuleLabSource._query(c,deadline,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='pc28_prediction_daily_summary'")
+        if not metadata:return False
+        predictor_id=params[0]
+        archived=RuleLabSource._query(c,deadline,'SELECT MAX(summary_date) FROM pc28_prediction_daily_summary WHERE predictor_id=?',(predictor_id,))[0][0]
+        if not archived:return True
+        earliest=datetime.fromisoformat(_utc(missing[0][0],SHANGHAI).replace('Z','+00:00')).astimezone(SHANGHAI).date()
+        return earliest>date.fromisoformat(archived)+timedelta(days=1)
+
+    def replay_availability(self,predictor_id,start_date,end_date,*,observed_at):
+        """Prove current rows cover a bounded replay, including its warm window.
+
+        Each read retains the existing short SQLite deadline. No input is copied
+        or frozen here; the caller labels this view current_source and rechecks
+        pages when execution later starts.
+        """
+        begin,end=date.fromisoformat(start_date),date.fromisoformat(end_date)
+        requested=dict(start_date=start_date,end_date=end_date)
+        base=dict(available=False,reason='当前来源未完整保留所选区间及暖机数据',requested_range=requested,
+                  verified_range=None,input_basis='unavailable')
+        if end<begin or (end-begin).days>=90:return dict(base,reason='当前来源重测最多支持90天；完整长期档案已不再保留')
+        if self.get_predictor(predictor_id) is None:raise RuleLabError('source_unavailable','来源已停用或不再共享逐期预测',403)
+        first=self.find_start_issue(start_date,observed_at=observed_at)
+        following=self.find_start_issue((end+timedelta(days=1)).isoformat(),observed_at=observed_at)
+        if first is None:return base
+        low=max(1,int(first)-100)
+        if int(first)-low!=100:return base
+        with self._read() as (c,deadline):
+            c.execute('BEGIN')
+            allowed=self._query(c,deadline,'SELECT id FROM predictors WHERE id=? AND '+_PUBLIC,(predictor_id,))
+            if not allowed:raise RuleLabError('source_unavailable','来源已停用或不再共享逐期预测',403)
+            bounds=' AND issue_no<?' if following else ''
+            args=[following] if following else []
+            tail=self._query(c,deadline,"SELECT issue_no,open_time FROM lottery_draws WHERE lottery_type='pc28'"+bounds+' ORDER BY issue_no DESC LIMIT 1',args)
+            head=self._query(c,deadline,"SELECT issue_no,open_time FROM lottery_draws WHERE lottery_type='pc28' AND issue_no=?",(first,))
+            if not head or not tail:return base
+            last=_issue(tail[0]['issue_no'])
+            if (_time_day(head[0]['open_time'])!=start_date or _time_day(tail[0]['open_time'])!=end_date):return base
+            if int(last)<int(first):return base
+            size=self._query(c,deadline,"SELECT COUNT(*) FROM lottery_draws WHERE lottery_type='pc28' AND issue_no>=? AND issue_no<=?",(str(low),last))[0][0]
+            if size!=int(last)-low+1:return dict(base,reason='当前开奖或暖机区间存在缺期，不能缩短区间重测')
+            # Inspect every range membership through an indexed join. MIN is
+            # only used for absence age, not as a substitute for interior proof.
+            query="""SELECT MIN(d.open_time) FROM lottery_draws d LEFT JOIN predictions p
+                ON p.predictor_id=? AND p.issue_no=d.issue_no AND p.lottery_type='pc28'
+                WHERE d.lottery_type='pc28' AND d.issue_no>=? AND d.issue_no<=? AND p.id IS NULL"""
+            if not self._absence_allowed(c,deadline,query,[predictor_id,str(low),last]):
+                return dict(base,reason='当前来源的预测已清理或缺少可验证覆盖，不能完整重测')
+        return dict(base,available=True,reason='',verified_range=requested,input_basis='current_source')
+
+    def validate_replay_page(self,predictor_id,draws,predictions,*,observed_at):
+        """Recheck absent predictions after preview; a cleared row is not a loss."""
+        _utc(observed_at)
+        if len(draws)>200:raise ValueError('读取批次超过200期')
+        present={str(p['issue_no']) for p in predictions}
+        missing=[_issue(d['issue_no']) for d in draws if str(d['issue_no']) not in present]
+        if not missing:return True
+        with self._read() as (c,deadline):
+            c.execute('BEGIN')
+            if not self._query(c,deadline,'SELECT id FROM predictors WHERE id=? AND '+_PUBLIC,(predictor_id,)):
+                raise RuleLabError('source_unavailable','来源已停用或不再共享逐期预测',403)
+            existing=self._query(c,deadline,"SELECT issue_no FROM lottery_draws WHERE lottery_type='pc28' AND issue_no IN ("+
+                ','.join('?' for _ in missing)+')',missing)
+            if {str(row['issue_no']) for row in existing}!=set(missing):
+                raise RuleLabError('replay_input_unavailable','重测期间所需开奖已清理，已保留当前结果并停止',409)
+            query="""SELECT MIN(d.open_time) FROM lottery_draws d LEFT JOIN predictions p
+                ON p.predictor_id=? AND p.issue_no=d.issue_no AND p.lottery_type='pc28'
+                WHERE d.lottery_type='pc28' AND d.issue_no IN ("""+','.join('?' for _ in missing)+') AND p.id IS NULL'
+            if not self._absence_allowed(c,deadline,query,[predictor_id]+missing):
+                raise RuleLabError('replay_input_unavailable','重测期间所需预测已清理，已保留当前结果并停止；不能把缺档当作无预测',409)
+        return True
+
+
+def _time_day(value):
+    return datetime.fromisoformat(_utc(value,SHANGHAI).replace('Z','+00:00')).astimezone(SHANGHAI).date().isoformat()

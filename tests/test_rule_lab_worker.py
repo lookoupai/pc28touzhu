@@ -12,11 +12,16 @@ from pc28touzhu.services.rule_lab_source import RuleLabSource
 from pc28touzhu.services.rule_lab_store import RuleLabStore
 from tests.test_rule_lab_source import SourceFixture, UTC, stamp
 from tests.test_rule_lab_risk import policy
+from tests.test_rule_lab_results_store import install_settlement_trace, settlement_trace
 
 
 class RuleLabWorkerTests(unittest.TestCase):
     def test_amount_replay_recalculates_per_bet_rounding_and_exit_dates(self):
         from pc28touzhu.services.rule_lab_service import RuleLabService
+        boundary=self.opened.replace(hour=0)-timedelta(hours=8)
+        for issue in range(1000,1100):
+            opened=boundary-timedelta(seconds=210*(1100-issue))
+            self.fixture.draw(issue,opened);self.fixture.prediction(issue,opened)
         for i in range(6):
             opened=self.opened+timedelta(seconds=210*i)
             self.fixture.draw(1100+i,opened);self.fixture.prediction(1100+i,opened)
@@ -78,6 +83,7 @@ class RuleLabWorkerTests(unittest.TestCase):
         self.source = RuleLabSource(self.fixture.path)
         self.store = RuleLabStore(Path(self.tmp.name) / 'lab' / 'lab.db')
         self.store.initialize()
+        install_settlement_trace(self.store)
         self.opened = datetime(2026, 11, 26, 4, tzinfo=UTC)
         self.now = self.opened + timedelta(seconds=60)
         self.worker = RuleLabWorker(self.store, self.source)
@@ -144,12 +150,13 @@ class RuleLabWorkerTests(unittest.TestCase):
         self.assertEqual(len(entered),2)
         for e in entered:
             detail=self.store.get_experiment_detail(1,b['id'],e['id'])
-            issues={d['issue_no'] for d in detail['recent']}
+            self.assertEqual(detail['recent'],[])
+            issues={d['issue_no'] for d in settlement_trace(self.store,e['id'])}
             self.assertIn('1100',issues);self.assertIn('1101',issues)  # Loss broke condition, active round continues.
-        rounds=[self.store.get_experiment_detail(1,b['id'],e['id'])['recent_rounds'] for e in entered]
+        rounds=[max(int(d['issue_no']) for d in settlement_trace(self.store,e['id']) if d['round_no']==1) for e in entered]
         # Both may finish one round after the odds update, but must stop on different
         # issues because their independently accumulated profit crosses 2 at different times.
-        self.assertNotEqual(rounds[0][-1]['end_issue'],rounds[1][-1]['end_issue'])
+        self.assertNotEqual(rounds[0],rounds[1])
 
     def test_round_replay_waits_for_result_publication_before_future_bets(self):
         for i in range(4):
@@ -174,7 +181,8 @@ class RuleLabWorkerTests(unittest.TestCase):
             if self.store.get_batch(1,b['id'])['status']=='completed':break
         exp=self.store.list_experiments(1,b['id'])[0]
         detail=self.store.get_experiment_detail(1,b['id'],exp['id'])
-        self.assertEqual({d['issue_no'] for d in detail['recent']},{'1100','1103'})
+        self.assertEqual(detail['recent'],[])
+        self.assertEqual({d['issue_no'] for d in settlement_trace(self.store,exp['id'])},{'1100','1103'})
         self.assertEqual(exp['settled_count'],2)
         other=self.store.create_batch(1,cfg,'source',build_experiments('big_small'),now=stamp(self.now))
         self.store.set_batch_state(1,other['id'],'running',now=stamp(self.now))
@@ -185,7 +193,8 @@ class RuleLabWorkerTests(unittest.TestCase):
         other_detail=self.store.get_experiment_detail(1,other['id'],other_exp['id'])
         self.assertEqual(other_exp['net_profit'],exp['net_profit'])
         self.assertEqual(other_exp['risk_state'],exp['risk_state'])
-        self.assertEqual({d['issue_no'] for d in other_detail['recent']},{'1100','1103'})
+        self.assertEqual(other_detail['recent'],[])
+        self.assertEqual({d['issue_no'] for d in settlement_trace(self.store,other_exp['id'])},{'1100','1103'})
 
     def test_late_actual_open_is_skipped_instead_of_charged(self):
         self.prepare_live()
@@ -198,7 +207,9 @@ class RuleLabWorkerTests(unittest.TestCase):
         self.assertEqual(result['settled_count'], 0)
         self.assertEqual(result['skipped_count'], 1)
         detail = self.store.get_experiment_detail(1, batch['id'], result['id'])
-        self.assertEqual(detail['recent'][0]['skip_reason'], 'late_decision')
+        self.assertEqual(result['net_profit'],0)
+        self.assertEqual(detail['pending_count'],0)
+        self.assertEqual(detail['recent'],[])
 
     def test_paused_batch_settles_frozen_bets_without_new_decisions(self):
         self.prepare_live()
@@ -445,14 +456,14 @@ class RuleLabWorkerTests(unittest.TestCase):
         self.assertTrue(all(e['trigger_count'] == 0 for e in continuous))
         self.assertGreater(self.store.get_batch(1, batch['id'])['skip_counts'].get('draw_gap', 0), 0)
 
-    def test_pruning_runs_once_per_five_minutes_in_bounded_batches(self):
-        with patch.object(self.store, 'prune', return_value={'decisions': 500, 'predictions': 0, 'draws': 0}) as prune:
+    def test_result_retention_runs_each_tick_in_bounded_batches(self):
+        with patch.object(self.store, 'retention_maintenance', return_value=dict(processed_rows=500,scanned_rows=500,maintenance_pending=True,phase='decisions')) as prune:
             self.worker.tick(now=stamp(self.now))
             self.worker.tick(now=stamp(self.now + timedelta(seconds=15)))
             self.worker.tick(now=stamp(self.now + timedelta(seconds=299)))
-            self.assertEqual(prune.call_count, 1)
+            self.assertEqual(prune.call_count, 3)
             self.worker.tick(now=stamp(self.now + timedelta(seconds=300)))
-            self.assertEqual(prune.call_count, 2)
+            self.assertEqual(prune.call_count, 4)
             self.assertTrue(all(call.kwargs['limit'] == 500 for call in prune.call_args_list))
 
     def test_pruning_continues_after_storage_pressure_pauses_batch(self):
@@ -460,7 +471,7 @@ class RuleLabWorkerTests(unittest.TestCase):
         batch = self.batch()
         limited = RuleLabStore(self.store.db_path, budget_bytes=1024)
         worker = RuleLabWorker(limited, self.source)
-        with patch.object(limited, 'prune', wraps=limited.prune) as prune:
+        with patch.object(limited, 'retention_maintenance', wraps=limited.retention_maintenance) as prune:
             worker.tick(now=stamp(self.now))
             self.assertEqual(self.store.get_batch(1, batch['id'])['status'], 'resource_paused')
             worker.tick(now=stamp(self.now + timedelta(seconds=300)))

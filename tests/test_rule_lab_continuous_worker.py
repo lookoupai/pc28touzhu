@@ -13,6 +13,7 @@ from pc28touzhu.domain.rule_lab import build_experiments, normalize_batch_payloa
 from pc28touzhu.rule_lab_worker import RuleLabWorker
 from pc28touzhu.services.rule_lab_source import RuleLabSource
 from pc28touzhu.services.rule_lab_store import RuleLabError, RuleLabStore
+from tests.test_rule_lab_results_store import install_settlement_trace, settlement_trace
 from tests.test_rule_lab_risk import policy
 from tests.test_rule_lab_source import SourceFixture, UTC, stamp
 
@@ -57,6 +58,7 @@ class ContinuousWorkerTests(unittest.TestCase):
         if store is None:
             store = RuleLabStore(self.root / name / 'lab.db')
             store.initialize()
+        install_settlement_trace(store)
         risk = policy(cooldown_issues=2) if round_mode else None
         if risk:
             risk['round'].update(profit_target=2, loss_limit=3)
@@ -151,7 +153,8 @@ class ContinuousWorkerTests(unittest.TestCase):
                          for row in connection.execute('SELECT * FROM lab_risk_days ORDER BY experiment_id,stat_date')]
             rounds = [(row['experiment_id'], row['round_no'], row['status'], json.loads(row['summary_json']))
                       for row in connection.execute('SELECT * FROM lab_rounds ORDER BY experiment_id,round_no')]
-        return dict(experiments=experiments, decisions=decisions, days=days, risk_days=risk_days, rounds=rounds)
+        return dict(experiments=experiments, decisions=decisions, days=days, risk_days=risk_days, rounds=rounds,
+                    settled_trace=settlement_trace(store))
 
     def test_capture_continues_with_automatic_computation_disabled(self):
         store, batch_id = self.make_baseline('capture')
@@ -193,8 +196,8 @@ class ContinuousWorkerTests(unittest.TestCase):
         self.assertEqual(split.get_batch(1, split_id)['start_date'], '2026-11-29')
         self.assertEqual(split.get_batch(1, split_id)['end_date'], '2026-11-29')
         if round_mode:
-            decisions = self.economic_state(split)['decisions']
-            self.assertNotIn('1104', {row[1] for row in decisions},
+            decisions = self.economic_state(split)['settled_trace']
+            self.assertNotIn('1104', {row['issue_no'] for row in decisions},
                              'A still-pending November result must prevent the next round bet')
 
     def test_archived_replay_does_not_read_deleted_upstream_inputs(self):
@@ -206,8 +209,8 @@ class ContinuousWorkerTests(unittest.TestCase):
         self.append(store, batch_id, '2026-12-01', 'append-archived-period')
         self.finish_append(store, batch_id, '1106')
         state = self.economic_state(store)
-        self.assertTrue(any(row[1] == '1101' for row in state['decisions']))
-        self.assertTrue(any(row[1] == '1105' for row in state['decisions']))
+        self.assertTrue(any(row['issue_no'] == '1101' for row in state['settled_trace']))
+        self.assertTrue(any(row['issue_no'] == '1105' for row in state['settled_trace']))
         self.assertEqual(store.get_batch(1, batch_id)['status'], 'completed')
 
     def test_a_revoked_source_does_not_stop_another_capture_stream(self):

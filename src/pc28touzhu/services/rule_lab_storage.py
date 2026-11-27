@@ -32,11 +32,13 @@ def _size(path):
 def storage_status(store):
     path=store.db_path
     result=dict(used_bytes=directory_bytes(path.parent),budget_bytes=store.budget_bytes,
-        detail_retention_days=store.detail_retention_days,database_bytes=_size(path),
+        detail_retention_days=0,database_bytes=_size(path),
         wal_bytes=_size(Path(str(path)+'-wal')),shm_bytes=_size(Path(str(path)+'-shm')),
         allocated_bytes=0,reusable_bytes=0,reclaimable_bytes=0,auto_vacuum=0,incremental_ready=False,reclaim_job=None)
     if path.exists():
         with store._connect() as c:
+            from pc28touzhu.services.rule_lab_retention import status
+            result['retention']=status(c)
             size=c.execute('PRAGMA page_size').fetchone()[0]
             result['allocated_bytes']=c.execute('PRAGMA page_count').fetchone()[0]*size
             result['reusable_bytes']=c.execute('PRAGMA freelist_count').fetchone()[0]*size

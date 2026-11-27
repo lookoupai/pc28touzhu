@@ -41,8 +41,17 @@ class SeriesTests(unittest.TestCase):
     def tearDown(self):self.tmp.cleanup()
     def snapshot(self):
         with sqlite3.connect(self.path) as c:
-            return {table:c.execute('SELECT * FROM '+table+' ORDER BY rowid').fetchall()
-                for table in ('lab_batches','lab_experiments','lab_draws','lab_predictions','lab_daily','lab_decisions','lab_risk_days','lab_rounds')}
+            result={}
+            for table in ('lab_batches','lab_experiments','lab_draws','lab_predictions','lab_daily','lab_decisions','lab_risk_days','lab_rounds'):
+                rows=c.execute('SELECT * FROM '+table+' ORDER BY rowid').fetchall()
+                if table=='lab_batches':
+                    columns=[r[1] for r in c.execute('PRAGMA table_info(lab_batches)')];index=columns.index('cursor_json')
+                    values=[]
+                    for row in rows:
+                        row=list(row);cursor=json.loads(row[index]);cursor.pop('retention_v1',None);row[index]=json.dumps(cursor,sort_keys=True);values.append(tuple(row))
+                    rows=values
+                result[table]=rows
+            return result
     def preview(self):return self.store.continuation_preview(1,'batch',self.batch['id'],now=NOW)
     def enable(self,**changes):
         payload=dict(request_id='configure-series-1',expected_revision=self.preview()['expected_revision'],
@@ -51,7 +60,7 @@ class SeriesTests(unittest.TestCase):
         return self.store.set_continuation(1,'batch',self.batch['id'],payload,now=NOW),payload
 
     def test_schema_migration_is_additive_idempotent_and_default_off(self):
-        with sqlite3.connect(self.path) as c:self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],5)
+        with sqlite3.connect(self.path) as c:self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],6)
         before=self.snapshot();self.store.initialize();self.assertEqual(self.snapshot(),before)
         preview=self.preview();self.assertTrue(preview['eligible']);self.assertFalse(preview['continuation']['enabled'])
         self.assertEqual(preview['next_issue'],'1101');self.assertEqual(preview['saved_experiments'],26)

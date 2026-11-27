@@ -84,10 +84,16 @@ class ArchiveTests(unittest.TestCase):
             self.fixture.draw(1000+index,opened)
             self.fixture.prediction(1000+index,opened,status='pending' if index==0 else 'settled')
         stream=self.stream();self.capture(stream,self.page())
+        from pc28touzhu.domain.rule_lab import normalize_batch_payload,build_experiments
+        cfg=normalize_batch_payload(dict(name='real consumer',mode='backtest',predictor_id=1,metric='big_small',
+            start_date='2026-11-26',end_date='2026-11-26'),now=self.now)
+        consumer=self.store.create_batch(1,cfg,'source',build_experiments('big_small')[:1],now=self.now)
         with self.store._connect(write=True) as c:
+            c.execute("UPDATE lab_batches SET status='completed',started_at=?,cursor_json=? WHERE id=?",
+                (self.now,json.dumps(dict(last_issue_no='1030',replay_complete=True)),consumer['id']))
             c.execute('''INSERT INTO lab_series(owner_kind,owner_id,user_id,predictor_id,stream_id,
-                configuration_hash,capture_enabled,created_at,updated_at) VALUES('batch',1,1,1,?,'test',1,?,?)''',
-                (stream['id'],self.now,self.now))
+                configuration_hash,capture_enabled,created_at,updated_at) VALUES('batch',?,1,1,?,'test',1,?,?)''',
+                (consumer['id'],stream['id'],self.now,self.now))
         settled=stamp(self.opened+timedelta(hours=3))
         self.fixture.execute("UPDATE predictions SET status='settled',settled_at=? WHERE issue_no='1000'",(settled,))
         visited=[]
@@ -153,7 +159,7 @@ class ArchiveTests(unittest.TestCase):
         second=self.capture(stream,self.page())
         self.assertEqual(second['covered_through_issue'],1002)
 
-    def test_cache_bootstrap_preserves_warm_and_pages_old_inputs(self):
+    def test_cache_bootstrap_preserves_only_warm_and_does_not_seed_old_inputs(self):
         archive=self.archive()
         draws=[];predictions=[]
         for i in range(230):
@@ -173,20 +179,25 @@ class ArchiveTests(unittest.TestCase):
             self.assertTrue(result['done'])
             revision=archive.archive_revision(c)
         reader=archive.ArchiveSource(self.store,1,revision,'1229',self.now)
-        self.assertEqual(reader.find_start_issue('2026-11-26',observed_at=self.now),'1000')
+        self.assertEqual(reader.find_start_issue('2026-11-26',observed_at=self.now),'1130')
+        self.assertEqual(result['seeded'],0)
 
-    def test_compression_is_lossless_and_protected_inputs_remain(self):
+    def test_runtime_dependencies_replace_two_year_archive_retention(self):
+        from pc28touzhu.domain.rule_lab import normalize_batch_payload,build_experiments
         self.fixture.draw(1000,self.opened);self.fixture.prediction(1000,self.opened)
         stream=self.stream();result=self.capture(stream,self.page())
+        cfg=normalize_batch_payload(dict(name='queued',mode='backtest',predictor_id=1,metric='big_small',
+            start_date='2026-11-26',end_date='2026-11-26'),now=self.now)
+        batch=self.store.create_batch(1,cfg,'source',build_experiments('big_small')[:1],now=self.now)
         archive=self.archive();reader=archive.ArchiveSource(self.store,1,result['archive_revision'],'1000',self.now)
         before=reader.get_history(1,before_issue='1001')
         later=stamp(self.opened+timedelta(days=800))
-        archive.maintenance(self.store,now=later,protected_floors={1:1000},limit=200)
+        archive.maintenance(self.store,now=later,protected_floors={1:2000},limit=200)
         self.assertEqual(reader.get_history(1,before_issue='1001'),before)
-        archive.maintenance(self.store,now=stamp(self.opened+timedelta(days=100)),protected_floors={1:2000},limit=200)
-        self.assertEqual(reader.get_history(1,before_issue='1001'),before)
-        with self.store._connect() as c:
-            self.assertEqual(c.execute('SELECT count(*) FROM lab_input_versions WHERE payload_blob IS NOT NULL').fetchone()[0],2)
+        with self.store._connect(write=True) as c:
+            c.execute("UPDATE lab_batches SET status='deleting' WHERE id=?",(batch['id'],))
+        archive.maintenance(self.store,now=stamp(self.opened+timedelta(days=801)),limit=200)
+        self.assertEqual(reader.get_history(1,before_issue='1001'),[])
 
     def test_source_identity_change_cannot_merge_into_same_stream(self):
         self.fixture.draw(1000,self.opened);self.fixture.prediction(1000,self.opened)

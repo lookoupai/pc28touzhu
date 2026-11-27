@@ -38,6 +38,17 @@ def make_source(path):
         conn.execute("INSERT INTO predictors VALUES(2,?,'pc28',1,1,'records')",
                      ('公开来源 <img src=x onerror="window.labXss=1">',))
         now=datetime.now(timezone.utc).replace(microsecond=0)
+        local_midnight=now.astimezone(timezone(timedelta(hours=8))).replace(hour=0,minute=0,second=0)
+        # A real predecessor window lets amount-replay availability verify the
+        # actually requested day; it is not mocked into being available by the browser.
+        for offset in range(100):
+            opened=(local_midnight-timedelta(seconds=210*(100-offset))).astimezone(timezone.utc)
+            conn.execute("INSERT INTO lottery_draws(lottery_type,issue_no,open_time,result_number,source_payload,created_at) VALUES('pc28',?,?,?,?,?)",
+                (str(1900+offset),opened.astimezone(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S'),17,
+                 json.dumps({'number':'3+6+8'}),(opened+timedelta(seconds=10)).strftime('%Y-%m-%d %H:%M:%S')))
+            conn.execute("INSERT INTO predictions(predictor_id,lottery_type,issue_no,prediction_big_small,prediction_odd_even,prediction_combo,status,created_at,settled_at) VALUES(1,'pc28',?,'大','单','大单','settled',?,?)",
+                (str(1900+offset),(opened-timedelta(seconds=120)).strftime('%Y-%m-%d %H:%M:%S'),(opened+timedelta(seconds=15)).strftime('%Y-%m-%d %H:%M:%S')))
+        conn.execute('CREATE TABLE pc28_prediction_daily_summary(predictor_id INTEGER,summary_date TEXT)')
         for index in range(6):
             opened=now-timedelta(seconds=1800-index*210)
             conn.execute("INSERT INTO lottery_draws(lottery_type,issue_no,open_time,result_number,source_payload,created_at) VALUES('pc28',?,?,?,?,?)",

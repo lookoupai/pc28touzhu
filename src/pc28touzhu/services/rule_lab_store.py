@@ -57,11 +57,13 @@ def _issue(value):
 
 
 class RuleLabStore:
-    def __init__(self, db_path=None, *, budget_bytes=1073741824, detail_retention_days=30):
+    def __init__(self, db_path=None, *, budget_bytes=1073741824, detail_retention_days=0):
         root = Path(__file__).resolve().parents[3]
         self.db_path = Path(db_path) if db_path is not None else Path(os.environ.get('RULE_LAB_DATA_DIR', str(root/'data'/'rule_lab')))/'rule_lab.db'
         self.budget_bytes = max(1024, int(budget_bytes))
-        self.detail_retention_days = max(1, int(detail_retention_days))
+        # Accept the legacy constructor keyword without re-enabling historical
+        # detail retention. Terminal rows are no longer part of saved results.
+        self.detail_retention_days = 0
         self._worker_local = threading.local()
 
     @contextmanager
@@ -154,7 +156,7 @@ class RuleLabStore:
             connection.execute('PRAGMA journal_mode=WAL')
         with self._connect(write=True) as c:
             version = c.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2, 3, 4, 5):
+            if version not in (0, 1, 2, 3, 4, 5, 6):
                 raise RuleLabError('store_unavailable', '模拟账本版本不兼容', 503)
             statements = [
                 '''CREATE TABLE IF NOT EXISTS lab_batches (
@@ -192,8 +194,6 @@ class RuleLabStore:
                 feature_issue_no TEXT, condition_value_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
                 skip_reason TEXT NOT NULL DEFAULT '', settled_at TEXT, finalized_at TEXT, result_type TEXT, net_cents INTEGER,
                 refund_reason TEXT NOT NULL DEFAULT '', UNIQUE(experiment_id,issue_no))''',
-                'CREATE INDEX IF NOT EXISTS lab_decisions_pending ON lab_decisions(status,issue_key)',
-                'CREATE INDEX IF NOT EXISTS lab_decisions_finished ON lab_decisions(status,finalized_at)',
                 '''CREATE TABLE IF NOT EXISTS lab_daily (
                 experiment_id INTEGER NOT NULL REFERENCES lab_experiments(id), stat_date TEXT NOT NULL,
                 settled_count INTEGER NOT NULL DEFAULT 0, hit_count INTEGER NOT NULL DEFAULT 0,
@@ -205,6 +205,11 @@ class RuleLabStore:
             ]
             for statement in statements:
                 c.execute(statement)
+            if version==0:
+                # Existing ledgers retain their indexes until bounded terminal
+                # cleanup finishes. Reinitialization must not scan old history
+                # or recreate the retired finished-record indexes.
+                c.execute("CREATE INDEX IF NOT EXISTS lab_decisions_pending ON lab_decisions(status,issue_key) WHERE status='pending'")
             additions={
                 'lab_batches': [('risk_policy_json',"TEXT NOT NULL DEFAULT '{\"version\":1,\"mode\":\"legacy\"}'")],
                 'lab_experiments':[('risk_runtime_json',"TEXT NOT NULL DEFAULT '{}'" )],
@@ -221,7 +226,6 @@ class RuleLabStore:
                 experiment_id INTEGER NOT NULL REFERENCES lab_experiments(id),round_no INTEGER NOT NULL,
                 status TEXT NOT NULL,summary_json TEXT NOT NULL,finalized_at TEXT,
                 PRIMARY KEY(experiment_id,round_no))''')
-            c.execute('CREATE INDEX IF NOT EXISTS lab_rounds_finished ON lab_rounds(status,finalized_at)')
             c.execute('''CREATE TABLE IF NOT EXISTS lab_studies (
                 id INTEGER PRIMARY KEY,user_id INTEGER NOT NULL,request_id TEXT NOT NULL,name TEXT NOT NULL,
                 source_batch_id INTEGER NOT NULL REFERENCES lab_batches(id),request_hash TEXT NOT NULL,
@@ -239,15 +243,17 @@ class RuleLabStore:
             series_schema(c)
             from pc28touzhu.services.rule_lab_management import init_schema as management_schema
             management_schema(c)
-            c.execute('PRAGMA user_version=5')
+            from pc28touzhu.services.rule_lab_retention import init_schema as retention_schema
+            retention_schema(c)
+            c.execute('PRAGMA user_version=6')
 
     def storage_status(self):
         from pc28touzhu.services.rule_lab_storage import storage_status
         return storage_status(self)
 
-    def _require_space(self):
+    def _require_space(self,*,reserve=False):
         from pc28touzhu.services.rule_lab_storage import directory_bytes
-        if directory_bytes(self.db_path.parent) >= int(self.budget_bytes*15/16):
+        if directory_bytes(self.db_path.parent) >= int(self.budget_bytes*(.9 if reserve else .8)):
             raise RuleLabError('storage_limit', '模拟存储接近预算上限，请清理已完成明细后恢复', 503)
 
     @staticmethod
@@ -315,6 +321,11 @@ class RuleLabStore:
     @staticmethod
     def _save_round(c,eid,summary,now):
         if summary is None:return
+        if summary['status']=='closed':
+            # The completed round is already part of risk_runtime's counters.
+            # Keep only the in-flight row needed to resume the current round.
+            c.execute('DELETE FROM lab_rounds WHERE experiment_id=? AND round_no=?',(eid,summary['round_no']))
+            return
         c.execute('''INSERT INTO lab_rounds(experiment_id,round_no,status,summary_json,finalized_at) VALUES(?,?,?,?,?)
             ON CONFLICT(experiment_id,round_no) DO UPDATE SET status=excluded.status,summary_json=excluded.summary_json,
             finalized_at=COALESCE(lab_rounds.finalized_at,excluded.finalized_at)''',
@@ -361,7 +372,9 @@ class RuleLabStore:
                     max_drawdown=stats['max_drawdown_cents']/100,sample_label='样本较少' if stats['settled_count']<100 else '仍需验证',
                     risk_state=RuleLabStore._risk_view(c,row))
 
-    def create_batch(self, user_id, config, predictor_name, experiments, *, now):
+    def create_batch(self, user_id, config, predictor_name, experiments, *, now, replay_input_basis=None):
+        if replay_input_basis not in (None,'current_source'):
+            raise RuleLabError('invalid_input','重测输入基础无效')
         if not 1 <= len(experiments) <= 100 or any(e['settlement_rule_id'] not in ALLOWED_SETTLEMENT_RULE_IDS for e in experiments):
             raise RuleLabError('invalid_input','实验仅支持两套OK规则，且每批最多100个版本')
         with self._connect(write=True) as c:
@@ -377,6 +390,9 @@ class RuleLabStore:
             c.execute('''INSERT INTO lab_batches (id,user_id,name,mode,predictor_id,predictor_name,metric,template_pack,
                 stake_cents,start_date,end_date,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',[bid]+params)
             c.execute('UPDATE lab_batches SET risk_policy_json=? WHERE id=?',(_dump(normalize_risk_policy(config.get('risk_policy'))),bid))
+            if replay_input_basis is not None:
+                c.execute('UPDATE lab_batches SET cursor_json=? WHERE id=?',
+                    (_dump(dict(replay_input_basis=replay_input_basis,replay_require_coverage=True)),bid))
             for e in experiments:
                 if e['settlement_snapshot'].get('settlement_rule_id') != e['settlement_rule_id']:
                     raise ValueError('冻结规则与实验不一致')
@@ -680,14 +696,9 @@ class RuleLabStore:
             daily=[dict(date=r['stat_date'],settled_count=r['settled_count'],hit_count=r['hit_count'],refund_count=r['refund_count'],
                         miss_count=r['miss_count'],stake_total=r['stake_cents']/100,net_profit=r['net_cents']/100)
                    for r in c.execute('SELECT * FROM lab_daily WHERE experiment_id=? ORDER BY stat_date DESC LIMIT 90',(experiment_id,))]
-            recent=[dict(issue_no=r['issue_no'],decided_at=r['decided_at'],settled_at=r['settled_at'],bet_value=r['bet_value'],
-                         stake_amount=r['stake_cents']/100,status=r['status'],result_type=r['result_type'],
-                         net_profit=r['net_cents']/100 if r['net_cents'] is not None else None,skip_reason=r['skip_reason'],refund_reason=r['refund_reason'])
-                    for r in c.execute('SELECT * FROM lab_decisions WHERE experiment_id=? ORDER BY issue_key DESC LIMIT 50',(experiment_id,))]
-            rounds=[]
-            for item in c.execute('SELECT summary_json FROM lab_rounds WHERE experiment_id=? ORDER BY round_no DESC LIMIT 30',(experiment_id,)):
-                summary=_load(item[0]);summary['net_profit']=summary.pop('net_cents')/100;rounds.append(summary)
-            return dict(experiment=self._experiment(c,row),daily=list(reversed(daily)),recent=recent,recent_rounds=rounds,
+            pending=c.execute("SELECT COUNT(*) FROM lab_decisions WHERE experiment_id=? AND status='pending'",(experiment_id,)).fetchone()[0]
+            return dict(experiment=self._experiment(c,row),daily=list(reversed(daily)),recent=[],recent_rounds=[],
+                        detail_policy='results_only',retention_version=1,pending_count=pending,
                         monthly=self._monthly_report(c,batch,row))
 
     @staticmethod
@@ -707,11 +718,12 @@ class RuleLabStore:
             AND stat_date>=? AND stat_date<=? ORDER BY stat_date LIMIT 3720''',
             (experiment['id'],first.isoformat(),end.isoformat()))]
         cursor=internal['cursor']
+        frontier=cursor.get('retention_v1') or {}
         def opened(issue):
             if not issue:return None
             row=c.execute('SELECT open_at FROM lab_draws WHERE issue_key=?',(_issue(issue),)).fetchone()
             return row[0] if row else None
-        observed=opened(cursor.get('last_issue_no'))
+        observed=frontier.get('processed_open_at') or opened(cursor.get('last_issue_no'))
         if not observed and cursor.get('simulation_time'):
             observed=(_time(cursor['simulation_time'])+timedelta(seconds=40)).isoformat()
         if not observed and daily:
@@ -719,8 +731,8 @@ class RuleLabStore:
             observed=daily[-1]['stat_date']+'T00:00:00+08:00'
         study=c.execute('''SELECT s.cutoff_at FROM lab_studies s JOIN lab_study_batches b
             ON b.study_id=s.id WHERE b.batch_id=?''',(batch['id'],)).fetchone()
-        cutoff=study[0] if study else opened(cursor.get('replay_max_issue'))
-        first_observed=opened(cursor.get('warm_before_issue') or (cursor.get('evidence') or {}).get('first_issue'))
+        cutoff=study[0] if study else frontier.get('replay_cutoff_at') or opened(cursor.get('replay_max_issue'))
+        first_observed=frontier.get('first_open_at') or opened(cursor.get('warm_before_issue') or (cursor.get('evidence') or {}).get('first_issue'))
         pending=c.execute("SELECT MIN(decided_at) FROM lab_decisions WHERE experiment_id=? AND status='pending'",(experiment['id'],)).fetchone()[0]
         result=monthly_report(internal,_load(experiment['stats_json']),daily,now=now,observed_at=observed,
                               cutoff_at=cutoff,first_observed_at=first_observed,pending_since=pending)
@@ -858,7 +870,7 @@ class RuleLabStore:
         if set(progress)-permitted or progress.get('status') not in {None,'completed','error','resource_paused'}:
             raise ValueError('无效的进度更新')
         result=dict(committed=False,reason='',inserted_decisions=0,settled=0,skipped=0)
-        with self._connect(write=True) as c:
+        with self._connect(write=True,reserve=bool(outcomes and not decisions and not predictions)) as c:
             batch=c.execute('SELECT * FROM lab_batches WHERE id=?',(batch_id,)).fetchone()
             if batch is None:
                 raise RuleLabError('not_found','实验批次不存在',404)
@@ -893,6 +905,7 @@ class RuleLabStore:
                 raise ValueError('按轮模式必须逐期准入并结算，不能批量提前冻结多期')
             dirty=set()
             input_conflict_outcomes=[]
+            applied_outcomes=[]
             for decision in sorted(decisions,key=lambda d:(_issue(d['issue_no']),d['experiment_id'])):
                 eid=decision['experiment_id']; issue=_issue(decision['issue_no'])
                 if eid not in experiments or decision['stake_cents']!=batch['stake_cents'] or decision['decision_mode']!=batch['mode']:
@@ -968,8 +981,10 @@ class RuleLabStore:
                     self._save_risk_day(c,eid,settled_risk['day'])
                     self._save_round(c,eid,settled_risk['closed_round'] or runtimes[eid]['active_round'],now)
                 dirty.add(eid)
-                c.execute('''UPDATE lab_decisions SET status=?,settled_at=?,finalized_at=?,result_type=?,net_cents=?,refund_reason=?,skip_reason=? WHERE id=?''',
-                          (outcome['status'],outcome['settled_at'],now,outcome.get('result_type'),outcome.get('net_cents'),outcome.get('refund_reason',''),outcome.get('skip_reason',''),pending['id']))
+                # Persist results and remove their pending input in the same
+                # transaction. Last-decided/settled watermarks survive deletion.
+                c.execute('DELETE FROM lab_decisions WHERE id=?',(pending['id'],))
+                applied_outcomes.append(outcome)
             for eid in dirty:
                 c.execute('UPDATE lab_experiments SET stats_json=?,risk_runtime_json=? WHERE id=?',(_dump(stats[eid]),_dump(runtimes[eid]),eid))
             if cursor.get('evidence') is not None:
@@ -983,6 +998,8 @@ class RuleLabStore:
             delta=progress.get('processed_issues_delta',0)
             if type(delta) is not int or delta<0:
                 raise ValueError('处理期数无效')
+            from pc28touzhu.services.rule_lab_retention import update_frontier
+            cursor=update_frontier(c,batch,cursor,draws=draws,outcomes=applied_outcomes)
             c.execute('''UPDATE lab_batches SET revision=revision+1,cursor_json=?,updated_at=?,processed_issues=processed_issues+?,
                 total_issues=?,skip_counts_json=?,phase=?,status=?,error=? WHERE id=?''',
                 (_dump(cursor),now,delta,progress.get('total_issues',batch['total_issues']),_dump(skips),progress.get('phase',batch['phase']),
@@ -990,41 +1007,8 @@ class RuleLabStore:
             return {**result,'committed':True}
 
     def prune(self,*,now,limit=500):
-        limit=max(1,min(500,int(limit)))
-        cutoff=(_time(now)-timedelta(days=self.detail_retention_days)).isoformat().replace('+00:00','Z')
-        input_cutoff=(_time(now)-timedelta(days=90)).isoformat().replace('+00:00','Z')
-        removed=dict(decisions=0,predictions=0,draws=0,rounds=0)
-        with self._connect(write=True) as c:
-            cur=c.execute("DELETE FROM lab_decisions WHERE id IN (SELECT id FROM lab_decisions WHERE status IN ('settled','skipped') AND finalized_at<? ORDER BY finalized_at LIMIT ?)",(cutoff,limit))
-            removed['decisions']=cur.rowcount
-            remaining=limit-cur.rowcount
-            if remaining:
-                cur=c.execute('''DELETE FROM lab_rounds WHERE rowid IN (SELECT r.rowid FROM lab_rounds r WHERE status='closed'
-                    AND finalized_at<? AND NOT EXISTS(SELECT 1 FROM lab_decisions d WHERE d.experiment_id=r.experiment_id
-                    AND d.round_no=r.round_no AND d.status='pending') ORDER BY finalized_at LIMIT ?)''',(cutoff,remaining))
-                removed['rounds']=cur.rowcount;remaining-=cur.rowcount
-            # Keep the latest feature window, each pending issue, and active replay warm-up floors.
-            latest_floor=c.execute('SELECT issue_key FROM lab_draws ORDER BY issue_key DESC LIMIT 1 OFFSET 99').fetchone()
-            floor=latest_floor[0] if latest_floor else 0
-            from pc28touzhu.services.rule_lab_series import protected_floors
-            for protected in protected_floors(c).values():floor=min(floor,protected)
-            for active in c.execute("SELECT cursor_json FROM lab_batches WHERE mode='backtest' AND status='running'"):
-                history_floor=_load(active['cursor_json']).get('history_floor_issue')
-                if not history_floor:
-                    floor=0  # A newly started replay has not yet selected its warm-up range.
-                    break
-                floor=min(floor,_issue(history_floor))
-            if remaining and floor:
-                cur=c.execute('''DELETE FROM lab_predictions WHERE rowid IN (SELECT rowid FROM lab_predictions WHERE observed_at<?
-                    AND issue_key<? AND issue_key NOT IN (SELECT issue_key FROM lab_decisions WHERE status='pending') LIMIT ?)''',
-                    (input_cutoff,floor,remaining))
-                removed['predictions']=cur.rowcount;remaining-=cur.rowcount
-                if remaining:
-                    cur=c.execute('''DELETE FROM lab_draws WHERE issue_key IN (SELECT issue_key FROM lab_draws WHERE observed_at<?
-                        AND issue_key<? AND issue_key NOT IN (SELECT issue_key FROM lab_decisions WHERE status='pending') LIMIT ?)''',
-                        (input_cutoff,floor,remaining))
-                    removed['draws']=cur.rowcount
-            return removed
+        """Legacy internal entrypoint uses the same bounded dependency policy."""
+        return self.retention_maintenance(now=now,limit=max(1,min(500,int(limit))))
 
     def continuation_preview(self,user_id,owner_kind,owner_id,*,now):
         from pc28touzhu.services.rule_lab_series import continuation_preview
@@ -1087,10 +1071,7 @@ class RuleLabStore:
         return create_archive_replay(self,user_id,batch_id,experiment_id,config,now=now)
 
     def maintain_archive(self,*,now,limit=200):
-        from pc28touzhu.services.rule_lab_archive import maintenance
-        from pc28touzhu.services.rule_lab_series import protected_floors
-        with self._connect() as c:floors=protected_floors(c)
-        return maintenance(self,now=now,protected_floors=floors,limit=limit)
+        return self.retention_maintenance(now=now,limit=max(1,min(500,int(limit))))
 
     def continuation_receipt(self,user_id,owner_kind,owner_id,payload,request_kind):
         from pc28touzhu.services.rule_lab_series import continuation_receipt
@@ -1139,6 +1120,14 @@ class RuleLabStore:
     def management_maintenance(self,*,now,limit=500,max_pages=256):
         from pc28touzhu.services.rule_lab_management import management_maintenance
         return management_maintenance(self,now=now,limit=limit,max_pages=max_pages)
+
+    def retention_maintenance(self,*,now,limit=500):
+        from pc28touzhu.services.rule_lab_retention import maintain
+        return maintain(self,now=now,limit=limit)
+
+    def replay_input_preview(self,user_id,batch_id,experiment_id,*,now):
+        from pc28touzhu.services.rule_lab_retention import replay_input_preview
+        return replay_input_preview(self,user_id,batch_id,experiment_id,now=now)
 
     def queue_eligibility(self,user_id,batch_id,configuration_hash):
         from pc28touzhu.services.rule_lab_management import queue_eligibility

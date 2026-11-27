@@ -38,7 +38,6 @@ class RuleLabWorker:
         self.store, self.source = store, source
         self.max_tick_seconds, self.page_size = float(max_tick_seconds), page_size
         self._last_live_poll = None
-        self._last_prune = None
         self._processed_total = 0
         self._last_backtest_id = 0
         self._last_capture_poll = None
@@ -304,16 +303,30 @@ class RuleLabWorker:
     def _start_backtest(self, work):
         batch = work['batch']
         study=batch.get('study')
+        strict=batch['cursor'].get('replay_require_coverage') is True
+        if strict:
+            available=self._source('replay_availability',batch['predictor_id'],batch['start_date'],batch['end_date'],observed_at=self._now)
+            if not available['available']:
+                raise RuleLabError('replay_input_unavailable',available['reason'] or '重测所需输入不完整，已保留原成绩',409)
         latest = {'issue_no':study['cutoff_issue']} if study else self._inputs(batch,'latest_draw', observed_at=self._now)
         first = self._inputs(batch,'find_start_issue', batch['start_date'], observed_at=self._now) if latest else None
         if first is None or int(first)>int(latest['issue_no']):
+            if strict:raise RuleLabError('replay_input_unavailable','重测所需开奖已清理，不能声明空区间完成',409)
             self._commit(work, progress={'status': 'completed', 'phase': 'idle', 'total_issues': 0,
                                         'skip_counts_delta': {'no_source_history': 1}})
             return False
+        if strict:
+            following=(datetime.fromisoformat(batch['end_date'])+timedelta(days=1)).date().isoformat()
+            after=self._source('find_start_issue',following,observed_at=self._now)
+            if after:latest={**latest,'issue_no':str(min(int(latest['issue_no']),int(after)-1))}
         warm = self._inputs(batch,'history_draws', before_issue=first, limit=100, observed_at=self._now)
         if study:warm={**warm,'items':[d for d in warm['items'] if _time(d['source_created_at'])<=_time(study['cutoff_at'])]}
         predictions = self._inputs(batch,'get_predictions', batch['predictor_id'], [d['issue_no'] for d in warm['items']], observed_at=self._now)
         predictions={**predictions,'items':self._asof_predictions(predictions['items'],study)}
+        if strict:
+            if [int(d['issue_no']) for d in warm['items']]!=list(range(int(first)-100,int(first))):
+                raise RuleLabError('replay_input_unavailable','重测所需暖机区间缺期，已停止本次重测',409)
+            self._source('validate_replay_page',batch['predictor_id'],warm['items'],predictions['items'],observed_at=self._now)
         before = str(int(first) - 1)
         cursor = dict(work['batch']['cursor'])
         cursor.update(version=1, replay_scheduler_version=2, replay_max_issue=latest['issue_no'], scan_after_issue=before if len(before) == len(first) else '',
@@ -355,6 +368,13 @@ class RuleLabWorker:
         cursor = dict(batch['cursor'])
         page = self._inputs(batch, 'draws_page', after_issue=cursor.get('scan_after_issue', ''),
                             before_issue=str(int(cursor['replay_max_issue']) + 1), limit=self.page_size, observed_at=self._now)
+        if cursor.get('replay_require_coverage'):
+            after=int(cursor.get('scan_after_issue') or 0)
+            issues=[int(draw['issue_no']) for draw in page['items']]
+            if (page['skip_counts'] or issues!=list(range(after+1,after+1+len(issues)))
+                or (not issues and after<int(cursor['replay_max_issue']))
+                or (not page['has_more'] and issues and issues[-1]<int(cursor['replay_max_issue']))):
+                raise RuleLabError('replay_input_unavailable','重测区间开奖缺失或无效，已停止；不能缩短区间后声明完成',409)
         previous = cursor.get('last_issue_no')
         if previous and int(previous) < int(cursor['replay_max_issue']):
             first_issue = page['items'][0]['issue_no'] if page['items'] else None
@@ -369,6 +389,8 @@ class RuleLabWorker:
             self._finish_backtest(batch_id)
             return
         predictions = self._inputs(batch, 'get_predictions', batch['predictor_id'], [d['issue_no'] for d in page['items']], observed_at=self._now)
+        if cursor.get('replay_require_coverage'):
+            self._source('validate_replay_page',batch['predictor_id'],page['items'],predictions['items'],observed_at=self._now)
         study=batch.get('study')
         predictions={**predictions,'items':self._asof_predictions(predictions['items'],study)}
         cache_draws=[d for d in page['items'] if not study or _time(d['source_created_at'])<=_time(study['cutoff_at'])]
@@ -484,6 +506,12 @@ class RuleLabWorker:
             maintenance=self.store.management_maintenance(now=self._now,limit=500,max_pages=256)
             self._result.update(maintenance_pending=maintenance['maintenance_pending'],
                                 maintenance_rows=maintenance['processed_rows'],freed_bytes=maintenance['freed_bytes'])
+            remaining=500-maintenance['processed_rows']
+            if remaining>0:
+                retained=self.store.retention_maintenance(now=self._now,limit=remaining)
+                self._result['maintenance_rows']+=retained['processed_rows']
+                self._result['maintenance_pending']|=retained['maintenance_pending']
+                self._result['retention_phase']=retained['phase']
         except RuleLabError as exc:
             # Deletion/reclaim has independent durable progress. A busy job must
             # not prevent unrelated simulations from making use of this tick.
@@ -533,8 +561,7 @@ class RuleLabWorker:
                 if batch['id'] in blocked or batch['mode'] != mode or batch['status'] != 'running' or (mode == 'live' and not poll_live):
                     continue
                 try:
-                    threshold=.8 if batch.get('continuation') else 15/16
-                    if self.store.storage_status()['used_bytes'] >= self.store.budget_bytes * threshold:
+                    if self.store.storage_status()['used_bytes'] >= self.store.budget_bytes * .8:
                         raise RuleLabError('storage_limit', '模拟存储接近预算上限，已暂停新模拟', 503)
                     if mode == 'live':
                         self._observe_live(batch['id'])
@@ -549,6 +576,8 @@ class RuleLabWorker:
                     self._result.update(state='resource_paused' if exc.code == 'storage_limit' else 'error', message=exc.message)
                     if exc.code == 'storage_limit':
                         self._mark_error(batch['id'], exc.message, resource=True)
+                    elif exc.code=='replay_input_unavailable':
+                        self._mark_error(batch['id'],exc.message)
                     elif batch.get('continuation') and exc.code in ('archive_conflict','archive_corrupt','archive_gap'):
                         self._mark_error(batch['id'], exc.message)
                 except (ValueError, TypeError, KeyError):
@@ -557,11 +586,6 @@ class RuleLabWorker:
         self.store.advance_studies(now=self._now,cutoff=cutoff)
         if self._remaining():
             self.store.prepare_due_appends(now=self._now,limit=10)
-        if self._remaining() and (self._last_prune is None or (self._reference - self._last_prune).total_seconds() >= 300):
-            self.store.prune(now=self._now, limit=500)
-            if self._remaining():
-                self.store.maintain_archive(now=self._now,limit=200)
-            self._last_prune = self._reference
         self._processed_total += self._result['processed_issues']
         self._result['elapsed_ms'] = round((time.monotonic() - started) * 1000, 3)
         self.store.set_worker_status(dict(state=self._result['state'], message=self._result['message'],
