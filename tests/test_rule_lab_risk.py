@@ -202,7 +202,7 @@ class RiskStoreTests(unittest.TestCase):
                 before[table]=c.execute('SELECT '+','.join(columns)+' FROM '+table+' ORDER BY rowid').fetchall()
         migrated=RuleLabStore(old_path);migrated.initialize();migrated.initialize()
         with sqlite3.connect(old_path) as c:
-            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],4)
+            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],5)
             for table,columns in old_columns.items():
                 self.assertEqual(c.execute('SELECT '+','.join(columns)+' FROM '+table+' ORDER BY rowid').fetchall(),before[table],table)
         self.assertEqual(migrated.get_batch(1,1)['risk_policy']['mode'],'legacy')

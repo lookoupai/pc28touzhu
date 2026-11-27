@@ -152,3 +152,18 @@
     .lab-result-toolbar select { width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { .lab-page * { transition: none !important; scroll-behavior: auto; } }
+
+.lab-management-actions { margin: 18px 0; }
+.lab-management-rename { margin: 20px 0; }
+.lab-management-rename > label,.lab-delete-confirm > label { display: block; font-weight: 600; margin-bottom: 8px; }
+.lab-management-rename input { flex: 1 1 240px; min-width: 0; }
+.lab-button-danger { color: #9d2936; border-color: #e4b7bf; background: #fff7f8; }
+.lab-button-danger:hover:not(:disabled) { background: #fbe7ea; border-color: #bf6575; }
+.lab-delete-confirm { margin-top: 20px; padding: 20px; border: 1px solid #e4b7bf; border-radius: 10px; background: #fffafb; }
+.lab-delete-confirm input { width: 100%; margin-bottom: 16px; }
+.lab-management-jobs { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-color,#dbe3ec); }
+.lab-management-job { border: 1px solid var(--border-color,#dbe3ec); border-radius: 8px; padding: 12px 16px; margin-top: 10px; }
+.lab-management-job p { margin: 5px 0; overflow-wrap: anywhere; }
+#labStorageSummary { margin-top: 16px; }
+#labManagementPanel input,#labManagementPanel select { max-width: 100%; box-sizing: border-box; }
+@media (max-width: 600px) { .lab-delete-confirm { padding: 14px; } .lab-management-rename .lab-actions { align-items: stretch; } .lab-management-actions .lab-button { flex: 1 1 140px; } }

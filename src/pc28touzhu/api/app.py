@@ -1421,6 +1421,10 @@ class PlatformApiApplication:
             path = str(environ.get("PATH_INFO") or "")
             method = str(environ.get("REQUEST_METHOD") or "GET").upper()
             suffix = path[len("/api/platform/rule-lab"):]
+            management_match=re.fullmatch(r"/(batches|studies)/([1-9][0-9]{0,17})/(management|rename|edit|fork|delete-preview|delete)",suffix)
+            if management_match and management_match.group(1)=='studies' and management_match.group(3) in ('edit','fork'):
+                management_match=None
+            job_match=re.fullmatch(r"/management-jobs/([1-9][0-9]{0,17})",suffix)
             continuation_match=re.fullmatch(r"/(batches|studies)/([1-9][0-9]{0,17})/(continuation-preview|continuation|append|segments|input-coverage)",suffix)
             pagination={}
             if environ.get("QUERY_STRING"):
@@ -1440,6 +1444,10 @@ class PlatformApiApplication:
             if suffix in ("", "/options"):
                 expected = "GET"
             elif suffix=='/performance':expected=method if method in ('GET','POST') else 'GET'
+            elif suffix=='/storage':expected='GET'
+            elif suffix=='/storage/reclaim':expected='POST'
+            elif job_match:expected='GET'
+            elif management_match:expected='GET' if management_match.group(3) in ('management','delete-preview') else 'POST'
             elif suffix == "/batches":
                 expected = "POST"
             elif suffix=="/studies":expected=method if method in ('GET','POST') else 'GET'
@@ -1468,6 +1476,24 @@ class PlatformApiApplication:
                 payload = service.options(user_id)
             elif suffix=='/performance':
                 payload=service.set_performance(_read_json_body(environ)) if method=='POST' else service.performance()
+            elif suffix=='/storage':payload=service.storage()
+            elif suffix=='/storage/reclaim':
+                payload=service.request_reclaim(user_id,_read_json_body(environ))
+                return _json_response(start_response,202 if payload['created'] else 200,payload,headers)
+            elif job_match:payload=service.management_job(user_id,int(job_match.group(1)))
+            elif management_match:
+                kind='batch' if management_match.group(1)=='batches' else 'study'
+                owner_id=int(management_match.group(2));action=management_match.group(3)
+                if action=='management':payload=service.management_preview(user_id,kind,owner_id)
+                elif action=='delete-preview':payload=service.delete_preview(user_id,kind,owner_id)
+                else:
+                    body=_read_json_body(environ)
+                    if action=='rename':payload=service.rename_owner(user_id,kind,owner_id,body)
+                    elif action=='edit':payload=service.edit_batch(user_id,owner_id,body)
+                    elif action=='fork':payload=service.fork_batch(user_id,owner_id,body)
+                    else:payload=service.request_delete(user_id,kind,owner_id,body)
+                    status=202 if action=='delete' and payload['created'] else 201 if action=='fork' and payload['created'] else 200
+                    return _json_response(start_response,status,payload,headers)
             elif suffix == "/batches":
                 payload = service.create_batch(user_id, _read_json_body(environ))
                 return _json_response(start_response, 201, payload, headers)

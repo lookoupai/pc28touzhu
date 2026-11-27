@@ -78,8 +78,11 @@ def archive_revision(c):
 
 
 def _new_revision(c, now):
+    from pc28touzhu.services.rule_lab_management import allocate_id
     _time(now)
-    return c.execute('INSERT INTO lab_archive_revisions(observed_at) VALUES(?)', (now,)).lastrowid
+    value=allocate_id(c,'lab_archive_revisions')
+    c.execute('INSERT INTO lab_archive_revisions(id,observed_at) VALUES(?,?)',(value,now))
+    return value
 
 
 def _payload(row):
@@ -198,9 +201,11 @@ def ensure_stream(c, predictor_id, last_issue, now, history_start_issue=None, so
         first_row = c.execute('SELECT MIN(issue_key) FROM lab_draws WHERE issue_key<=?',(last,)).fetchone()
         history_start_issue = first_row[0] if first_row and first_row[0] is not None else max(1,last-99)
     first = _issue(history_start_issue)
-    c.execute('''INSERT OR IGNORE INTO lab_capture_streams(source_key,predictor_id,after_issue,highest_seen_issue,
-        covered_through_issue,seed_after_issue,seed_until_issue,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)''',
-        (source_key,predictor_id,last,last,last,first-1,last,now,now))
+    from pc28touzhu.services.rule_lab_management import allocate_id
+    if not c.execute('SELECT 1 FROM lab_capture_streams WHERE source_key=? AND predictor_id=?',(source_key,predictor_id)).fetchone():
+        c.execute('''INSERT INTO lab_capture_streams(id,source_key,predictor_id,after_issue,highest_seen_issue,
+            covered_through_issue,seed_after_issue,seed_until_issue,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)''',
+            (allocate_id(c,'lab_capture_streams'),source_key,predictor_id,last,last,last,first-1,last,now,now))
     stream = dict(c.execute('SELECT * FROM lab_capture_streams WHERE source_key=? AND predictor_id=?',
         (source_key,predictor_id)).fetchone())
     # Warm input is available immediately; the rest of A is copied in later bounded pages.

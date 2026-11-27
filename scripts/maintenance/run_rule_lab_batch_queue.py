@@ -28,10 +28,15 @@ def queue_step(service, manifest, *, now):
     reports = []
     for item in manifest['batches']:
         batch_id = item['batch_id']
-        if item.get('configured'):
-            reports.append(dict(batch_id=batch_id, state='configured'))
+        if item.get('configured') or item.get('removed'):
+            reports.append(dict(batch_id=batch_id, state='removed' if item.get('removed') else 'configured'))
             continue
         try:
+            eligibility = service.store.queue_eligibility(user_id,batch_id,item['configuration_hash'])
+            if eligibility['removed']:
+                item['removed'] = True
+                reports.append(dict(batch_id=batch_id,state='removed',reason=eligibility['reason']))
+                continue
             batch = service.store.get_batch(user_id, batch_id)
             preview = service.continuation_preview(user_id, 'batch', batch_id, now=now)
             if preview['configuration_hash'] != item['configuration_hash']:
@@ -55,9 +60,14 @@ def queue_step(service, manifest, *, now):
                 reports.append(dict(batch_id=batch_id, state='configured'))
             elif batch['status'] == 'paused' and not batch['started_at'] and not item.get('started'):
                 if batch['experiment_count'] <= service.store.capacity()['remaining_running']:
-                    service.set_batch_state(user_id, batch_id, {'state': 'running'}, now=now)
-                    item['started'] = True
-                    reports.append(dict(batch_id=batch_id, state='running'))
+                    result=service.store.start_queued_batch(user_id,batch_id,item['configuration_hash'],now=now)
+                    if result['removed']:
+                        item['removed']=True
+                        reports.append(dict(batch_id=batch_id,state='removed',reason=result.get('reason','')))
+                    elif result['started']:
+                        item['started']=True
+                        reports.append(dict(batch_id=batch_id,state='running'))
+                    else:reports.append(dict(batch_id=batch_id,state='queued'))
                 else:
                     reports.append(dict(batch_id=batch_id, state='queued'))
             else:
@@ -68,7 +78,7 @@ def queue_step(service, manifest, *, now):
         except RuleLabError as error:
             reports.append(dict(batch_id=batch_id, state='waiting' if error.status == 503 else 'blocked',
                                 code=error.code, error=error.message))
-    return dict(complete=all(item.get('configured') for item in manifest['batches']), batches=reports)
+    return dict(complete=all(item.get('configured') or item.get('removed') for item in manifest['batches']), batches=reports)
 
 
 def save(path, value):

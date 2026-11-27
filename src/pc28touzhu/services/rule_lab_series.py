@@ -192,6 +192,7 @@ def _preview(store,c,user_id,kind,owner_id,now):
     experiments=[dict(e) for row in rows for e in c.execute('SELECT * FROM lab_experiments WHERE batch_id=? ORDER BY id',(row['id'],))]
     warm=_warm(c,rows[0]['predictor_id'],last) if rows and last else []
     if not rows:block('incomplete_group','缺少续算批次')
+    if any(row['status']=='deleting' for row in rows):block('deleting','实验正在删除，不能继续续算')
     if not series:
         if any(row['mode']!='backtest' for row in rows):block('not_backtest','只有历史实验支持增量续算')
         if any(row['status']!='completed' for row in rows):block('not_completed','当前回测完成后才能接入增量续算')
@@ -276,9 +277,10 @@ def _adopt(store,c,rows,user_id,kind,owner_id,preview,now):
     from pc28touzhu.services.rule_lab_archive import ensure_stream,archive_revision
     store._require_space()
     last=_last_processed(rows);stream=ensure_stream(c,rows[0]['predictor_id'],last,now)
-    cur=c.execute('''INSERT INTO lab_series(owner_kind,owner_id,user_id,predictor_id,stream_id,configuration_hash,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?)''',(kind,owner_id,user_id,rows[0]['predictor_id'],stream['id'],preview['configuration_hash'],now,now))
-    sid=cur.lastrowid
+    from pc28touzhu.services.rule_lab_management import allocate_id
+    sid=allocate_id(c,'lab_series')
+    c.execute('''INSERT INTO lab_series(id,owner_kind,owner_id,user_id,predictor_id,stream_id,configuration_hash,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?)''',(sid,kind,owner_id,user_id,rows[0]['predictor_id'],stream['id'],preview['configuration_hash'],now,now))
     cursor=_load(rows[0]['cursor_json']);opened=_opened(c,last) or cursor.get('simulation_time') or now
     end=max(r['end_date'] for r in rows)
     rev=archive_revision(c)
@@ -555,7 +557,7 @@ def prepare_due_appends(store,*,now,limit=10):
     with store._connect(write=True,reserve=True) as c:
         saved=c.execute("SELECT value_json FROM lab_runtime WHERE key='continuation_last_series'").fetchone()
         previous=int(_load(saved[0])) if saved else 0
-        rows=c.execute('SELECT * FROM lab_series ORDER BY CASE WHEN id>? THEN 0 ELSE 1 END,id LIMIT ?',(previous,limit)).fetchall()
+        rows=c.execute("SELECT * FROM lab_series WHERE state!='deleting' ORDER BY CASE WHEN id>? THEN 0 ELSE 1 END,id LIMIT ?",(previous,limit)).fetchall()
         if rows:c.execute("INSERT INTO lab_runtime(key,value_json) VALUES('continuation_last_series',?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",(_dump(rows[-1]['id']),))
         for old in rows:
             # Fair scheduling includes inactive and failed consumers; successful
@@ -762,6 +764,7 @@ def protected_floors(c):
 
 
 def set_active_state(store,c,series,state,now):
+    if series['state']=='deleting':raise RuleLabError('deleting','实验正在删除',409)
     segment=c.execute("SELECT * FROM lab_segments WHERE series_id=? AND status IN ('queued','running','paused')",(series['id'],)).fetchone()
     if not segment:raise RuleLabError('invalid_transition','当前没有可暂停或恢复的追加段',409)
     if state=='paused':
@@ -802,12 +805,14 @@ def _replay_chunk(c,stream,archive_revision,start_date,target_end,target_issue):
 
 def create_archive_replay(store,user_id,batch_id,experiment_id,config,*,now):
     from pc28touzhu.domain.rule_lab import empty_stats
+    from pc28touzhu.services.rule_lab_management import allocate_id
     from pc28touzhu.domain.rule_lab_risk import normalize_risk_policy
     from pc28touzhu.services.rule_lab_archive import archive_revision,read_input
     with store._connect(write=True,reserve=True) as c:
         source=store._owned(c,user_id,batch_id);series=series_for_batch(c,batch_id)
         original=c.execute('SELECT * FROM lab_experiments WHERE id=? AND batch_id=?',(experiment_id,batch_id)).fetchone()
         if not original:raise RuleLabError('not_found','实验版本不存在',404)
+        if source['status']=='deleting':raise RuleLabError('deleting','实验正在删除',409)
         if not series:raise RuleLabError('continuation_disabled','原实验尚未保存续算档案',409)
         if c.execute("SELECT 1 FROM lab_segments WHERE series_id=? AND status IN ('queued','running','paused')",(series['id'],)).fetchone():raise RuleLabError('segment_active','请等待当前追加完成后重测',409)
         stream=c.execute('SELECT * FROM lab_capture_streams WHERE id=?',(series['stream_id'],)).fetchone()
@@ -839,16 +844,18 @@ def create_archive_replay(store,user_id,batch_id,experiment_id,config,*,now):
             (stream['id'],first,last,revision)).fetchone()
         if coverage['n']!=last-first+1 or coverage['bad']:raise RuleLabError('archive_gap','原区间输入档案不完整，不能完整重测',409)
         chunk_end,chunk_issue=_replay_chunk(c,stream,revision,start_date,target_end,last)
-        bid=c.execute('''INSERT INTO lab_batches(user_id,name,mode,predictor_id,predictor_name,metric,template_pack,stake_cents,
-            start_date,end_date,status,created_at,updated_at,risk_policy_json) VALUES(?,?,'backtest',?,?,?,?,?,?,?,'paused',?,?,?)''',
-            (user_id,config['name'],source['predictor_id'],source['predictor_name'],source['metric'],source['template_pack'],config['stake_cents'],
-             start_date,chunk_end,now,now,_dump(normalize_risk_policy(config['risk_policy'])))).lastrowid
-        c.execute('''INSERT INTO lab_experiments(batch_id,condition_key,name,condition_json,settlement_rule_id,settlement_snapshot_json,stats_json)
-            VALUES(?,?,?,?,?,?,?)''',(bid,original['condition_key'],original['name'],original['condition_json'],original['settlement_rule_id'],original['settlement_snapshot_json'],_dump(empty_stats())))
+        bid=allocate_id(c,'lab_batches')
+        c.execute('''INSERT INTO lab_batches(id,user_id,name,mode,predictor_id,predictor_name,metric,template_pack,stake_cents,
+            start_date,end_date,status,created_at,updated_at,risk_policy_json) VALUES(?,?,?,'backtest',?,?,?,?,?,?,?,'paused',?,?,?)''',
+            (bid,user_id,config['name'],source['predictor_id'],source['predictor_name'],source['metric'],source['template_pack'],config['stake_cents'],
+             start_date,chunk_end,now,now,_dump(normalize_risk_policy(config['risk_policy']))))
+        c.execute('''INSERT INTO lab_experiments(id,batch_id,condition_key,name,condition_json,settlement_rule_id,settlement_snapshot_json,stats_json)
+            VALUES(?,?,?,?,?,?,?,?)''',(allocate_id(c,'lab_experiments'),bid,original['condition_key'],original['name'],original['condition_json'],original['settlement_rule_id'],original['settlement_snapshot_json'],_dump(empty_stats())))
         new=c.execute('SELECT * FROM lab_batches WHERE id=?',(bid,)).fetchone();config_hash=_configuration(c,[new])
-        sid=c.execute('''INSERT INTO lab_series(owner_kind,owner_id,user_id,predictor_id,stream_id,configuration_hash,state,created_at,updated_at,
-            replay_target_end,replay_target_issue,replay_archive_revision,replay_cutoff_at) VALUES('batch',?,?,?,?,?,'paused',?,?,?,?,?,?)''',
-            (bid,user_id,source['predictor_id'],stream['id'],config_hash,now,now,target_end,last,revision,now)).lastrowid
+        sid=allocate_id(c,'lab_series')
+        c.execute('''INSERT INTO lab_series(id,owner_kind,owner_id,user_id,predictor_id,stream_id,configuration_hash,state,created_at,updated_at,
+            replay_target_end,replay_target_issue,replay_archive_revision,replay_cutoff_at) VALUES(?,'batch',?,?,?,?,?,'paused',?,?,?,?,?,?)''',
+            (sid,bid,user_id,source['predictor_id'],stream['id'],config_hash,now,now,target_end,last,revision,now))
         cursor=dict(version=1,replay_scheduler_version=ENGINE_VERSION,replay_max_issue=str(chunk_issue),scan_after_issue=str(first-1),
             last_issue_no=str(first-1),history_floor_issue=str(max(1,first-100)),warm_before_issue=str(first),replay_complete=False)
         c.execute('UPDATE lab_batches SET cursor_json=?,total_issues=? WHERE id=?',(_dump(cursor),last-first+1,bid))

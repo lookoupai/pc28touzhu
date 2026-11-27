@@ -108,7 +108,14 @@ class RuleLabWorker:
         return result['committed']
 
     def _mark_error(self, batch_id, message, *, resource=False):
-        work = self.store.get_work_item(batch_id)
+        try:
+            work = self.store.get_work_item(batch_id)
+        except RuleLabError as exc:
+            if exc.code == 'not_found':
+                return
+            raise
+        if work['batch']['status'] == 'deleting':
+            return
         self._commit(work, progress={'status': 'resource_paused' if resource else 'error', 'error': message})
         self._result.update(state='resource_paused' if resource else 'error', message=message)
 
@@ -151,7 +158,7 @@ class RuleLabWorker:
                     settled_at=draw['open_at'], skip_reason='', **value)
 
     def _settle_pending(self, batch_id, *, available_at=None):
-        batch=self.store.get_work_item(batch_id)['batch']
+        batch=self.store.get_work_batch(batch_id)
         continuation=batch.get('continuation')
         if continuation:
             if self._source('get_predictor', batch['predictor_id']) is None:
@@ -460,6 +467,10 @@ class RuleLabWorker:
                 self._finish_backtest(batch_id)
 
     def tick(self, *, now=None):
+        with self.store.worker_session():
+            return self._tick(now=now)
+
+    def _tick(self, *, now=None):
         started = time.monotonic()
         self._deadline = started + self.max_tick_seconds
         self._reference = _time(now) if now is not None else datetime.now(UTC)
@@ -467,7 +478,16 @@ class RuleLabWorker:
         self._now = _stamp(self._reference)
         self._cache, self._features, self._archives = {}, {}, {}
         self._result = dict(processed_issues=0, inserted_decisions=0, settled=0, skipped=0,
-                            captured_periods=0, capture_pending=False, state='idle', message='', elapsed_ms=0.0)
+                            captured_periods=0, capture_pending=False, maintenance_pending=False,
+                            maintenance_rows=0, freed_bytes=0, state='idle', message='', elapsed_ms=0.0)
+        try:
+            maintenance=self.store.management_maintenance(now=self._now,limit=500,max_pages=256)
+            self._result.update(maintenance_pending=maintenance['maintenance_pending'],
+                                maintenance_rows=maintenance['processed_rows'],freed_bytes=maintenance['freed_bytes'])
+        except RuleLabError as exc:
+            # Deletion/reclaim has independent durable progress. A busy job must
+            # not prevent unrelated simulations from making use of this tick.
+            self._result.update(maintenance_pending=True,maintenance_error=exc.message)
         self._capture_inputs()
         if self._remaining():
             self.store.prepare_due_appends(now=self._now,limit=10)
@@ -498,6 +518,8 @@ class RuleLabWorker:
                     else:self._settle_pending(batch['id'])
             except RuleLabError as exc:
                 blocked.add(batch['id'])
+                if exc.code in ('not_found','deleting'):
+                    continue
                 self._result.update(state='resource_paused' if exc.code == 'storage_limit' else 'error', message=exc.message)
                 if exc.code == 'storage_limit':
                     self._mark_error(batch['id'], exc.message, resource=True)
@@ -522,6 +544,8 @@ class RuleLabWorker:
                     if self._result['state'] == 'idle':
                         self._result['state'] = 'running'
                 except RuleLabError as exc:
+                    if exc.code in ('not_found','deleting'):
+                        continue
                     self._result.update(state='resource_paused' if exc.code == 'storage_limit' else 'error', message=exc.message)
                     if exc.code == 'storage_limit':
                         self._mark_error(batch['id'], exc.message, resource=True)
@@ -574,7 +598,7 @@ def main():
                 failures = min(failures + 1, 5) if result['state'] == 'error' else 0
                 if args.once:
                     break
-                active_history = result.get('capture_pending') or any(b['mode'] == 'backtest' and b['status'] == 'running' for b in store.list_work_batches())
+                active_history = result.get('capture_pending') or result.get('maintenance_pending') or any(b['mode'] == 'backtest' and b['status'] == 'running' for b in store.list_work_batches())
                 delay = min(60.0, 2 ** failures) if failures else .25 if active_history else 15.0
             except (RuleLabError, OSError) as exc:
                 failures = min(failures + 1, 5)

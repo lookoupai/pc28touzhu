@@ -6,6 +6,7 @@ import os
 import hashlib
 import re
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -61,26 +62,62 @@ class RuleLabStore:
         self.db_path = Path(db_path) if db_path is not None else Path(os.environ.get('RULE_LAB_DATA_DIR', str(root/'data'/'rule_lab')))/'rule_lab.db'
         self.budget_bytes = max(1024, int(budget_bytes))
         self.detail_retention_days = max(1, int(detail_retention_days))
+        self._worker_local = threading.local()
+
+    @contextmanager
+    def worker_session(self):
+        """Reuse one connection for a bounded tick, never its transaction.
+
+        Every _connect operation still has its own visibility/commit boundary.
+        Thread-local ownership keeps concurrent API users independent, and nested
+        operations use a separate connection rather than borrowing an active one.
+        """
+        if getattr(self._worker_local, 'session', None) is not None:
+            yield
+            return
+        session = {'connection': None, 'busy': False}
+        self._worker_local.session = session
+        try:
+            yield
+        finally:
+            self._worker_local.session = None
+            if session['connection'] is not None:
+                session['connection'].close()
+
+    def _open_connection(self):
+        connection = sqlite3.connect(str(self.db_path), timeout=.25)
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute('PRAGMA foreign_keys=ON')
+            connection.execute('PRAGMA busy_timeout=250')
+            connection.execute('PRAGMA cache_size=-2048')
+            connection.execute('PRAGMA wal_autocheckpoint=64')
+            connection.execute('PRAGMA journal_size_limit=1048576')
+            return connection
+        except Exception:
+            connection.close()
+            raise
 
     @contextmanager
     def _connect(self, *, write=False, reserve=False):
         conn = None
+        session = getattr(self._worker_local, 'session', None)
+        pooled = session is not None and not session['busy']
         try:
-            conn = sqlite3.connect(str(self.db_path), timeout=.25)
-            conn.row_factory = sqlite3.Row
-            conn.execute('PRAGMA foreign_keys=ON')
-            conn.execute('PRAGMA busy_timeout=250')
-            conn.execute('PRAGMA cache_size=-2048')
+            if pooled:
+                if session['connection'] is None:
+                    session['connection'] = self._open_connection()
+                conn = session['connection']
+                session['busy'] = True
+            else:
+                conn = self._open_connection()
+            conn.execute('PRAGMA query_only=' + ('OFF' if write else 'ON'))
             if write:
                 current = conn.execute('PRAGMA page_count').fetchone()[0]
                 size = conn.execute('PRAGMA page_size').fetchone()[0]
                 max_pages = max(current, int(self.budget_bytes*(.9 if reserve else .8))//size, 1)
                 conn.execute('PRAGMA max_page_count=%s' % max_pages)
-                conn.execute('PRAGMA wal_autocheckpoint=64')
-                conn.execute('PRAGMA journal_size_limit=1048576')
                 conn.execute('BEGIN IMMEDIATE')
-            else:
-                conn.execute('PRAGMA query_only=ON')
             yield conn
             if write:
                 conn.commit()
@@ -99,16 +136,25 @@ class RuleLabStore:
             raise
         finally:
             if conn is not None:
-                conn.close()
+                if pooled:
+                    # Snapshot reads may explicitly BEGIN. End them here so the
+                    # next operation sees an external pause/edit and WAL can drain.
+                    if conn.in_transaction:
+                        conn.rollback()
+                    session['busy'] = False
+                else:
+                    conn.close()
 
     def initialize(self):
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         # journal mode cannot be changed inside the schema transaction.
         with sqlite3.connect(str(self.db_path), timeout=.25) as connection:
+            if not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1").fetchone():
+                connection.execute('PRAGMA auto_vacuum=INCREMENTAL')
             connection.execute('PRAGMA journal_mode=WAL')
         with self._connect(write=True) as c:
             version = c.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2, 3, 4):
+            if version not in (0, 1, 2, 3, 4, 5):
                 raise RuleLabError('store_unavailable', '模拟账本版本不兼容', 503)
             statements = [
                 '''CREATE TABLE IF NOT EXISTS lab_batches (
@@ -191,24 +237,17 @@ class RuleLabStore:
             from pc28touzhu.services.rule_lab_series import init_schema as series_schema
             archive_schema(c)
             series_schema(c)
-            c.execute('PRAGMA user_version=4')
+            from pc28touzhu.services.rule_lab_management import init_schema as management_schema
+            management_schema(c)
+            c.execute('PRAGMA user_version=5')
 
     def storage_status(self):
-        total = 0
-        if self.db_path.parent.exists():
-            for root,dirs,files in os.walk(self.db_path.parent,followlinks=False):
-                dirs[:]=[name for name in dirs if not (Path(root)/name).is_symlink()]
-                for name in files:
-                    path=Path(root)/name
-                    if path.is_file() and not path.is_symlink():
-                        try:
-                            total += path.stat().st_size
-                        except FileNotFoundError:
-                            pass
-        return dict(used_bytes=total, budget_bytes=self.budget_bytes, detail_retention_days=self.detail_retention_days)
+        from pc28touzhu.services.rule_lab_storage import storage_status
+        return storage_status(self)
 
     def _require_space(self):
-        if self.storage_status()['used_bytes'] >= int(self.budget_bytes*15/16):
+        from pc28touzhu.services.rule_lab_storage import directory_bytes
+        if directory_bytes(self.db_path.parent) >= int(self.budget_bytes*15/16):
             raise RuleLabError('storage_limit', '模拟存储接近预算上限，请清理已完成明细后恢复', 503)
 
     @staticmethod
@@ -333,16 +372,17 @@ class RuleLabStore:
                 raise RuleLabError('capacity_exceeded','每位用户最多保存50个实验批次',409)
             params = [user_id,config['name'],config['mode'],config['predictor_id'],str(predictor_name),config['metric'],
                       config['template_pack'],config['stake_cents'],config['start_date'],config['end_date'],now,now]
-            cur = c.execute('''INSERT INTO lab_batches (user_id,name,mode,predictor_id,predictor_name,metric,template_pack,
-                stake_cents,start_date,end_date,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',params)
-            bid = cur.lastrowid
+            from pc28touzhu.services.rule_lab_management import allocate_id
+            bid = allocate_id(c,'lab_batches')
+            c.execute('''INSERT INTO lab_batches (id,user_id,name,mode,predictor_id,predictor_name,metric,template_pack,
+                stake_cents,start_date,end_date,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',[bid]+params)
             c.execute('UPDATE lab_batches SET risk_policy_json=? WHERE id=?',(_dump(normalize_risk_policy(config.get('risk_policy'))),bid))
             for e in experiments:
                 if e['settlement_snapshot'].get('settlement_rule_id') != e['settlement_rule_id']:
                     raise ValueError('冻结规则与实验不一致')
-                c.execute('''INSERT INTO lab_experiments(batch_id,condition_key,name,condition_json,settlement_rule_id,
-                    settlement_snapshot_json,stats_json) VALUES(?,?,?,?,?,?,?)''',
-                    (bid,e['condition_key'],e['name'],_dump(e['condition']),e['settlement_rule_id'],_dump(e['settlement_snapshot']),_dump(empty_stats())))
+                c.execute('''INSERT INTO lab_experiments(id,batch_id,condition_key,name,condition_json,settlement_rule_id,
+                    settlement_snapshot_json,stats_json) VALUES(?,?,?,?,?,?,?,?)''',
+                    (allocate_id(c,'lab_experiments'),bid,e['condition_key'],e['name'],_dump(e['condition']),e['settlement_rule_id'],_dump(e['settlement_snapshot']),_dump(empty_stats())))
             return self._batch(c,self._owned(c,user_id,bid))
 
     def set_batch_state(self,user_id,batch_id,state,*,now):
@@ -350,6 +390,7 @@ class RuleLabStore:
             raise RuleLabError('invalid_input','状态只支持运行或暂停')
         with self._connect(write=True) as c:
             row = self._owned(c,user_id,batch_id)
+            if row['status']=='deleting':raise RuleLabError('deleting','实验正在删除',409)
             if c.execute('SELECT 1 FROM lab_study_batches WHERE batch_id=?',(batch_id,)).fetchone():
                 raise RuleLabError('study_managed','比较组子批次请从比较队列启动或暂停',409)
             from pc28touzhu.services.rule_lab_series import series_for_batch,set_active_state
@@ -391,6 +432,7 @@ class RuleLabStore:
 
     def _comparison_source(self,c,user_id,batch_id):
         batch=self._owned(c,user_id,batch_id)
+        if batch['status']=='deleting':raise RuleLabError('deleting','实验正在删除',409)
         if batch['mode']!='backtest' or _load(batch['risk_policy_json']).get('mode')!='round':
             raise RuleLabError('invalid_input','比较组只支持历史回放且已配置按轮风控的批次')
         if c.execute('SELECT 1 FROM lab_study_batches WHERE batch_id=?',(batch_id,)).fetchone():
@@ -472,16 +514,19 @@ class RuleLabStore:
                 raise RuleLabError('capacity_exceeded',f'整组创建超过{MAX_TOTAL_EXPERIMENTS}个保存版本上限，未创建任何子批次',409)
             if c.execute('SELECT COUNT(*) FROM lab_batches WHERE user_id=?',(user_id,)).fetchone()[0]+len(variants)>50:
                 raise RuleLabError('capacity_exceeded','整组创建超过当前账号50个批次上限',409)
-            sid=c.execute('''INSERT INTO lab_studies(user_id,request_id,name,source_batch_id,request_hash,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?)''',(user_id,request_id,name,source_batch_id,request_hash,now,now)).lastrowid
+            from pc28touzhu.services.rule_lab_management import allocate_id
+            sid=allocate_id(c,'lab_studies')
+            c.execute('''INSERT INTO lab_studies(id,user_id,request_id,name,source_batch_id,request_hash,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?)''',(sid,user_id,request_id,name,source_batch_id,request_hash,now,now))
             for position,variant in enumerate(variants):
-                bid=c.execute('''INSERT INTO lab_batches(user_id,name,mode,predictor_id,predictor_name,metric,template_pack,stake_cents,
-                    start_date,end_date,created_at,updated_at,risk_policy_json) VALUES(?,?,'backtest',?,?,?,?,?,?,?,?,?,?)''',
-                    (user_id,(name+' · '+variant['label'])[:80],batch['predictor_id'],batch['predictor_name'],batch['metric'],batch['template_pack'],
-                     batch['stake_cents'],batch['start_date'],batch['end_date'],now,now,_dump(variant['policy']))).lastrowid
+                bid=allocate_id(c,'lab_batches')
+                c.execute('''INSERT INTO lab_batches(id,user_id,name,mode,predictor_id,predictor_name,metric,template_pack,stake_cents,
+                    start_date,end_date,created_at,updated_at,risk_policy_json) VALUES(?,?,?,'backtest',?,?,?,?,?,?,?,?,?,?)''',
+                    (bid,user_id,(name+' · '+variant['label'])[:80],batch['predictor_id'],batch['predictor_name'],batch['metric'],batch['template_pack'],
+                     batch['stake_cents'],batch['start_date'],batch['end_date'],now,now,_dump(variant['policy'])))
                 for experiment in experiments:
-                    c.execute('''INSERT INTO lab_experiments(batch_id,condition_key,name,condition_json,settlement_rule_id,
-                        settlement_snapshot_json,stats_json) VALUES(?,?,?,?,?,?,?)''',(bid,experiment['condition_key'],experiment['name'],
+                    c.execute('''INSERT INTO lab_experiments(id,batch_id,condition_key,name,condition_json,settlement_rule_id,
+                        settlement_snapshot_json,stats_json) VALUES(?,?,?,?,?,?,?,?)''',(allocate_id(c,'lab_experiments'),bid,experiment['condition_key'],experiment['name'],
                         experiment['condition_json'],experiment['settlement_rule_id'],experiment['settlement_snapshot_json'],_dump(empty_stats())))
                 c.execute('INSERT INTO lab_study_batches(study_id,batch_id,variant_key,position,label,change_json) VALUES(?,?,?,?,?,?)',
                     (sid,bid,variant['key'],position,variant['label'],_dump(variant['changes'])))
@@ -531,6 +576,7 @@ class RuleLabStore:
         if state not in ('running','paused'):raise RuleLabError('invalid_input','比较组状态只支持启动或暂停')
         with self._connect(write=True) as c:
             study=self._owned_study(c,user_id,study_id)
+            if study['status']=='deleting':raise RuleLabError('deleting','比较组正在删除',409)
             from pc28touzhu.services.rule_lab_series import set_active_state
             series=c.execute("SELECT * FROM lab_series WHERE owner_kind='study' AND owner_id=?",(study_id,)).fetchone()
             if series:
@@ -707,9 +753,9 @@ class RuleLabStore:
 
     def list_work_batches(self):
         with self._connect() as c:
-            rows=c.execute('''SELECT b.* FROM lab_batches b WHERE status='running' OR EXISTS(
+            rows=c.execute('''SELECT b.* FROM lab_batches b WHERE status!='deleting' AND (status='running' OR EXISTS(
                 SELECT 1 FROM lab_experiments e JOIN lab_decisions d ON d.experiment_id=e.id
-                WHERE e.batch_id=b.id AND d.status='pending') ORDER BY CASE b.mode WHEN 'live' THEN 0 ELSE 1 END,b.id LIMIT 50''').fetchall()
+                WHERE e.batch_id=b.id AND d.status='pending')) ORDER BY CASE b.mode WHEN 'live' THEN 0 ELSE 1 END,b.id LIMIT 50''').fetchall()
             from pc28touzhu.services.rule_lab_series import work_context
             result=[]
             for row in rows:
@@ -717,6 +763,27 @@ class RuleLabStore:
                 if context:item['continuation']=context
                 result.append(item)
             return result
+
+    def _work_batch(self,c,batch):
+        internal=self._internal_batch(batch)
+        study=c.execute('''SELECT s.id,s.cutoff_issue,s.cutoff_at FROM lab_studies s JOIN lab_study_batches b
+            ON b.study_id=s.id WHERE b.batch_id=?''',(batch['id'],)).fetchone()
+        internal['study']=dict(study) if study else None
+        from pc28touzhu.services.rule_lab_series import work_context
+        context=work_context(c,batch)
+        if context:
+            internal['continuation']=context
+            internal['end_date']=context['effective_end_date']
+            if internal['study']:
+                internal['study'].update(cutoff_issue=context['cutoff_issue'],cutoff_at=context['cutoff_at'])
+        return internal
+
+    def get_work_batch(self,batch_id):
+        """Fresh control/clock metadata without decoding every experiment."""
+        with self._connect() as c:
+            batch=c.execute('SELECT * FROM lab_batches WHERE id=?',(batch_id,)).fetchone()
+            if batch is None:raise RuleLabError('not_found','实验批次不存在',404)
+            return self._work_batch(c,batch)
 
     def get_work_item(self,batch_id):
         with self._connect() as c:
@@ -728,18 +795,7 @@ class RuleLabStore:
                 experiments.append(dict(id=row['id'],batch_id=row['batch_id'],name=row['name'],condition=_load(row['condition_json']),
                     settlement_snapshot=_load(row['settlement_snapshot_json']),settlement_rule_id=row['settlement_rule_id'],stats=_load(row['stats_json']),
                     risk_runtime={**empty_risk_runtime(),**_load(row['risk_runtime_json'])}))
-            internal=self._internal_batch(batch)
-            study=c.execute('''SELECT s.id,s.cutoff_issue,s.cutoff_at FROM lab_studies s JOIN lab_study_batches b
-                ON b.study_id=s.id WHERE b.batch_id=?''',(batch_id,)).fetchone()
-            internal['study']=dict(study) if study else None
-            from pc28touzhu.services.rule_lab_series import work_context
-            context=work_context(c,batch)
-            if context:
-                internal['continuation']=context
-                internal['end_date']=context['effective_end_date']
-                if internal['study']:
-                    internal['study'].update(cutoff_issue=context['cutoff_issue'],cutoff_at=context['cutoff_at'])
-            return dict(batch=internal,experiments=experiments)
+            return dict(batch=self._work_batch(c,batch),experiments=experiments)
 
     def input_evidence(self,predictor_id,issue_no):
         """Minimal actual cached values used by replay; no observation timestamps."""
@@ -808,6 +864,8 @@ class RuleLabStore:
                 raise RuleLabError('not_found','实验批次不存在',404)
             if batch['revision']!=expected_revision:
                 return {**result,'reason':'stale_revision'}
+            if batch['status']=='deleting':
+                return {**result,'reason':'batch_deleting'}
             old_cursor=_load(batch['cursor_json'])
             old_watermark=_issue(old_cursor['last_issue_no']) if old_cursor.get('last_issue_no') else 0
             new_watermark=_issue(cursor['last_issue_no']) if cursor.get('last_issue_no') else old_watermark
@@ -1037,3 +1095,55 @@ class RuleLabStore:
     def continuation_receipt(self,user_id,owner_kind,owner_id,payload,request_kind):
         from pc28touzhu.services.rule_lab_series import continuation_receipt
         return continuation_receipt(self,user_id,owner_kind,owner_id,payload,request_kind)
+
+    def management_preview(self,user_id,owner_kind,owner_id,*,now):
+        from pc28touzhu.services.rule_lab_management import management_preview
+        return management_preview(self,user_id,owner_kind,owner_id,now=now)
+
+    def management_receipt(self,user_id,owner_kind,owner_id,payload,action):
+        from pc28touzhu.services.rule_lab_management import management_receipt
+        return management_receipt(self,user_id,owner_kind,owner_id,payload,action)
+
+    def rename_owner(self,user_id,owner_kind,owner_id,payload,*,now):
+        from pc28touzhu.services.rule_lab_management import rename_owner
+        return rename_owner(self,user_id,owner_kind,owner_id,payload,now=now)
+
+    def edit_batch(self,user_id,batch_id,payload,*,predictor_name,experiments,now,request_payload=None):
+        from pc28touzhu.services.rule_lab_management import edit_batch
+        return edit_batch(self,user_id,batch_id,payload,predictor_name=predictor_name,experiments=experiments,now=now,request_payload=request_payload)
+
+    def fork_batch(self,user_id,batch_id,payload,*,predictor_name,experiments,now,request_payload=None):
+        from pc28touzhu.services.rule_lab_management import fork_batch
+        return fork_batch(self,user_id,batch_id,payload,predictor_name=predictor_name,experiments=experiments,now=now,request_payload=request_payload)
+
+    def delete_preview(self,user_id,owner_kind,owner_id,*,now):
+        from pc28touzhu.services.rule_lab_management import delete_preview
+        return delete_preview(self,user_id,owner_kind,owner_id,now=now)
+
+    def request_delete(self,user_id,owner_kind,owner_id,payload,*,now):
+        from pc28touzhu.services.rule_lab_management import request_delete
+        return request_delete(self,user_id,owner_kind,owner_id,payload,now=now)
+
+    def management_job(self,user_id,job_id):
+        from pc28touzhu.services.rule_lab_management import management_job
+        return management_job(self,user_id,job_id)
+
+    def management_jobs(self,user_id,limit=20):
+        from pc28touzhu.services.rule_lab_management import management_jobs
+        return management_jobs(self,user_id,limit=limit)
+
+    def request_reclaim(self,user_id,payload,*,now):
+        from pc28touzhu.services.rule_lab_management import request_reclaim
+        return request_reclaim(self,user_id,payload,now=now)
+
+    def management_maintenance(self,*,now,limit=500,max_pages=256):
+        from pc28touzhu.services.rule_lab_management import management_maintenance
+        return management_maintenance(self,now=now,limit=limit,max_pages=max_pages)
+
+    def queue_eligibility(self,user_id,batch_id,configuration_hash):
+        from pc28touzhu.services.rule_lab_management import queue_eligibility
+        return queue_eligibility(self,user_id,batch_id,configuration_hash)
+
+    def start_queued_batch(self,user_id,batch_id,configuration_hash,*,now):
+        from pc28touzhu.services.rule_lab_management import start_queued_batch
+        return start_queued_batch(self,user_id,batch_id,configuration_hash,now=now)

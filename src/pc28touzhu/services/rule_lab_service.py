@@ -184,7 +184,7 @@ class RuleLabService:
 
     def overview(self, user_id, *, now=None):
         return dict(batches=self.store.list_batches(user_id), worker=self.store.worker_status(now=_now(now)),
-                    storage=self.store.storage_status())
+                    storage=self.store.storage_status(),management_jobs=self.store.management_jobs(user_id,limit=20))
 
     def comparison_preview(self,user_id,batch_id):
         return self.store.comparison_preview(user_id,batch_id)
@@ -255,6 +255,84 @@ class RuleLabService:
 
     def input_coverage(self,user_id,owner_kind,owner_id):
         return self.store.input_coverage(user_id,owner_kind,owner_id)
+
+    def management_preview(self,user_id,owner_kind,owner_id,*,now=None):
+        return self.store.management_preview(user_id,owner_kind,owner_id,now=_now(now))
+
+    @staticmethod
+    def _management_payload(payload,action):
+        fields={'request_id'} if action=='reclaim' else {'request_id','expected_revision'}|(
+            {'config'} if action in ('edit','fork') else {'confirm_name'} if action=='delete' else {'name'})
+        if not isinstance(payload,dict) or set(payload)!=fields:
+            raise RuleLabError('invalid_input','管理请求字段不完整或包含未知字段')
+        if not isinstance(payload['request_id'],str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,80}',payload['request_id']):
+            raise RuleLabError('invalid_input','请求标识必须为8至80位字母、数字、下划线或短横线')
+        if action!='reclaim' and (not isinstance(payload['expected_revision'],str) or not 1<=len(payload['expected_revision'])<=200):
+            raise RuleLabError('invalid_input','管理版本标识无效，请刷新后重试')
+        if action in ('rename','delete'):
+            name=payload['name' if action=='rename' else 'confirm_name']
+            if not isinstance(name,str) or not 1<=len(name.strip())<=80:
+                raise RuleLabError('invalid_input','名称必须为1到80个字符')
+        if action in ('edit','fork') and not isinstance(payload['config'],dict):
+            raise RuleLabError('invalid_input','请提供完整实验配置')
+
+    def _management_receipt(self,user_id,owner_kind,owner_id,payload,action,*,now):
+        try:self._management_payload(payload,action)
+        except RuleLabError:
+            # Preserve owned-resource errors even when an unauthorized caller
+            # submits malformed fields. Valid deletion retries may outlive owner rows.
+            self.store.management_preview(user_id,owner_kind,owner_id,now=now)
+            raise
+        return self.store.management_receipt(user_id,owner_kind,owner_id,payload,action)
+
+    def rename_owner(self,user_id,owner_kind,owner_id,payload,*,now=None):
+        timestamp=_now(now)
+        receipt=self._management_receipt(user_id,owner_kind,owner_id,payload,'rename',now=timestamp)
+        if receipt is not None:return receipt
+        return self.store.rename_owner(user_id,owner_kind,owner_id,payload,now=timestamp)
+
+    def _change_definition(self,user_id,batch_id,payload,action,*,now):
+        receipt=self._management_receipt(user_id,'batch',batch_id,payload,action,now=now)
+        if receipt is not None:return receipt
+        preview=self.store.management_preview(user_id,'batch',batch_id,now=now)
+        if not preview['editable'] and action=='edit':
+            raise RuleLabError('definition_locked','实验已启动或已有记录，请使用“修改并新建版本”',409)
+        if action=='fork' and not preview['can_fork']:
+            raise RuleLabError('definition_locked','当前实验不能创建修改版本',409)
+        try:config=normalize_batch_payload(payload['config'],now=now)
+        except ValueError as exc:raise RuleLabError('invalid_input',str(exc)) from exc
+        predictor=self._source_predictor(config['predictor_id'])
+        try:config['risk_policy']=self._risk_snapshot(user_id,config['risk_policy'],config['metric'])
+        except ValueError as exc:raise RuleLabError('invalid_input',str(exc)) from exc
+        definitions=build_experiments(config['metric'],template_pack=config['template_pack'])
+        method=self.store.edit_batch if action=='edit' else self.store.fork_batch
+        return method(user_id,batch_id,{**payload,'config':config},predictor_name=predictor['name'],
+                      experiments=definitions,request_payload=payload,now=now)
+
+    def edit_batch(self,user_id,batch_id,payload,*,now=None):
+        return self._change_definition(user_id,batch_id,payload,'edit',now=_now(now))
+
+    def fork_batch(self,user_id,batch_id,payload,*,now=None):
+        return self._change_definition(user_id,batch_id,payload,'fork',now=_now(now))
+
+    def delete_preview(self,user_id,owner_kind,owner_id,*,now=None):
+        return self.store.delete_preview(user_id,owner_kind,owner_id,now=_now(now))
+
+    def request_delete(self,user_id,owner_kind,owner_id,payload,*,now=None):
+        timestamp=_now(now)
+        receipt=self._management_receipt(user_id,owner_kind,owner_id,payload,'delete',now=timestamp)
+        if receipt is not None:return receipt
+        return self.store.request_delete(user_id,owner_kind,owner_id,payload,now=timestamp)
+
+    def management_job(self,user_id,job_id):
+        return dict(job=self.store.management_job(user_id,job_id))
+
+    def storage(self):
+        return self.store.storage_status()
+
+    def request_reclaim(self,user_id,payload,*,now=None):
+        self._management_payload(payload,'reclaim')
+        return self.store.request_reclaim(user_id,payload,now=_now(now))
 
     def create_study(self,user_id,payload,*,now=None):
         if not isinstance(payload,dict) or set(payload)!={'source_batch_id','name','request_id'}:

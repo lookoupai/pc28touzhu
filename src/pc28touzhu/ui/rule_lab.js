@@ -2,7 +2,7 @@
     "use strict";
     const $ = id => document.getElementById(id);
     const base = "/api/platform/rule-lab";
-    const statusNames = {paused:"已暂停", running:"运行中", completed:"回测完成", error:"处理异常", resource_paused:"资源限制暂停"};
+    const statusNames = {paused:"已暂停", running:"运行中", completed:"回测完成", error:"处理异常", resource_paused:"资源限制暂停",deleting:"删除中"};
     const phaseNames = {idle:"等待任务", warming:"准备历史窗口", observing:"等待条件或开奖", importing:"分批读取历史", replaying:"正在回放历史"};
     const workerNames = {starting:"等待后台启动", idle:"等待任务", running:"正在处理", stale:"后台暂未更新", resource_paused:"资源限制暂停", error:"处理异常"};
     const metricNames = {big_small:"大小", odd_even:"单双", combo:"组合"};
@@ -13,8 +13,8 @@
     const pageSize = 20;
     const state = {options:null, overview:null, batch:null, experiments:[], selectedId:null, detailId:null, detailTrigger:null, resultPage:0,
         loading:false, mutating:false, exporting:false, readRevision:0, detailRevision:0, readAt:null, accessDenied:false,riskEditingId:null,
-        studies:[],study:null,studyRows:[],studyId:null,studyPage:0,preview:null,studyRequest:null,monthly:null,reportExperiment:null,performance:null,continuation:null,continuationRevision:0};
-    const studyNames={paused:'已暂停',queued:'等待运行额度',running:'比较中',completed:'全部完成',error:'比较异常',resource_paused:'资源限制暂停'};
+        studies:[],study:null,studyRows:[],studyId:null,studyPage:0,preview:null,studyRequest:null,monthly:null,reportExperiment:null,performance:null,continuation:null,continuationRevision:0,management:null,managementJobs:new Map(),managementPoll:null,storage:null,storageRequest:null};
+    const studyNames={paused:'已暂停',queued:'等待运行额度',running:'比较中',completed:'全部完成',error:'比较异常',resource_paused:'资源限制暂停',deleting:'删除中'};
     const monthStatus={complete:'完整月份',no_samples:'完整月份 · 无交易',partial:'部分月份',not_replayed:'尚未回放',not_observed:'尚未观察',pending:'等待结算'};
     const continuationNames={disabled:'未启用',idle:'等待追加',catching_up:'正在保存后续数据',waiting_inputs:'等待输入齐备',running:'正在追加计算',paused:'本段计算已暂停',archive_gap:'输入档案有缺口',storage_paused:'存储预算暂停',source_unavailable:'来源暂不可用',error:'续算异常'};
     const coverageNames={present:'已有预测',no_prediction:'已确认无可用预测',invalid_prediction:'预测格式无效',waiting:'等待核对',archive_gap:'输入已缺失',complete:'覆盖完整',known_skips:'包含已知跳过',conflict:'输入存在冲突'};
@@ -86,7 +86,7 @@
     }
     function updateRiskEditor(prefix) {
         const editor=riskEditors[prefix];if(!editor)return;
-        const p=riskValue(prefix),f=editor.fields,legacy=p.mode==="legacy",busy=state.mutating||state.accessDenied;
+        const p=riskValue(prefix),f=editor.fields,legacy=p.mode==="legacy",busy=state.mutating||state.accessDenied||(prefix==='labDefinitionRisk'&&Boolean(state.management?.pending));
         Object.entries(f).forEach(([key,input])=>{input.disabled=busy||(legacy&&!['Mode'].includes(key));});
         if(!legacy){['RoundProfit','RoundLoss','RoundMax'].forEach(k=>f[k].disabled=busy||!f.RoundEnabled.checked);['DayProfit','DayLoss','DayMax','DayRounds','GateEnabled'].forEach(k=>f[k].disabled=busy||!f.DayEnabled.checked);['Threshold','Minimum'].forEach(k=>f[k].disabled=busy||!f.DayEnabled.checked||!f.GateEnabled.checked);}
         const source=editor.source;editor.provenance.textContent=source.rule_id?"复制自："+[source.rule_name,source.route_name,source.subscription_name].join(" · ")+(source.modified?"（已修改预设）":"")+"。仅复制风控，来源与每注金额不变。":"未选择现有规则预设，当前为手动配置。";
@@ -186,7 +186,7 @@
             state.studies.some(study => ['running', 'queued'].includes(study.status) || updating(study));
     }
     function isReadingOrEditing() {
-        return state.detailId !== null || state.continuation?.dirty || !$("labEditRiskForm").hidden || !$("labComparisonPreview").hidden ||
+        return state.detailId !== null || state.management !== null || state.continuation?.dirty || !$("labEditRiskForm").hidden || !$("labComparisonPreview").hidden ||
             Boolean(document.activeElement?.matches('input,textarea,[contenteditable="true"]'));
     }
     function updateRefreshStatus() {
@@ -214,7 +214,7 @@
         $("labBatchForm").setAttribute("aria-busy", String(state.mutating));
         $("labBatchForm").querySelectorAll("input,select").forEach(input => {input.disabled = state.mutating || state.accessDenied;});
         $("labPredictor").disabled = state.mutating || state.accessDenied || !hasSources();
-        $("labBatchStateButton").disabled = locked() || !state.batch || state.batch.status === "completed";
+        $("labBatchStateButton").disabled = locked() || !state.batch || ['completed','deleting'].includes(state.batch.status);
         $("labExportButton").disabled = locked() || state.exporting || !state.batch;
         $("labExportButton").textContent = state.exporting ? "导出中…" : "导出 CSV";
         $("labSort").disabled = locked() || !state.experiments.length;
@@ -223,7 +223,7 @@
         $("labBatchList").querySelectorAll("button").forEach(button => {button.disabled = locked();});
         $("labEditRiskButton").disabled=locked();$("labSaveRiskButton").disabled=locked();$("labCancelRiskButton").disabled=state.mutating;
         ['labCompareButton','labCreateStudyButton','labStudyExportButton','labStudyPrevious','labStudyNext'].forEach(id=>$(id).disabled=locked());
-        $("labStudyStateButton").disabled=locked()||!state.study||state.study.status==='completed';
+        $("labStudyStateButton").disabled=locked()||!state.study||['completed','deleting'].includes(state.study.status);
         ['labReplayStake','labReplayRiskMode','labReplayCreateButton'].forEach(id=>$(id).disabled=locked()||state.batch?.mode!=='backtest'||!state.monthly);
         $("labStudyList").querySelectorAll('button').forEach(button=>button.disabled=locked());
         ['labContinuationButton','labStudyContinuationButton','labContinuationRefresh','labContinuationMore','labContinuationPause'].forEach(id=>$(id).disabled=locked());
@@ -244,6 +244,17 @@
             $(id).setAttribute('aria-pressed',String(state.performance?.mode===mode));
         });
         if(state.preview)$("labCreateStudyButton").disabled=locked()||state.preview.new_experiments>state.preview.capacity.remaining_saved||state.preview.candidate_count<2;
+        const management=state.management,managementBlocked=locked()||!management?.preview||Boolean(management?.pending);
+        ['labManageBatchButton','labManageStudyButton','labStorageRefresh'].forEach(id=>$(id).disabled=locked());
+        ['labRenameSave','labManagementEdit','labManagementFork','labManagementDelete','labDefinitionSave'].forEach(id=>$(id).disabled=managementBlocked);
+        $("labManagementClose").disabled=state.mutating||Boolean(management?.pending);$("labManagementRetry").hidden=!management?.pending;$("labManagementRetry").disabled=locked();
+        $("labDeleteConfirm").disabled=managementBlocked||!management?.deletePreview?.eligible||$("labDeleteConfirmName").value!==management?.deletePreview?.name;
+        ['labDeleteCancel','labDefinitionCancel'].forEach(id=>$(id).disabled=state.mutating);
+        $("labManagementPanel").querySelectorAll('input,select').forEach(input=>input.disabled=state.mutating||Boolean(management?.pending));
+        $("labDeleteConfirmName").disabled=state.mutating||Boolean(management?.pending)||!management?.deletePreview?.eligible;
+        $("labManagementPanel").setAttribute('aria-busy',String(state.loading||state.mutating));
+        if(management?.pending){['labManageBatchButton','labManageStudyButton','labContinuationButton','labStudyContinuationButton'].forEach(id=>$(id).disabled=true);$("labBatchList").querySelectorAll('button').forEach(button=>button.disabled=true);$("labStudyList").querySelectorAll('button').forEach(button=>button.disabled=true);}
+        $("labStorageReclaim").disabled=locked()||!state.storage?.incremental_ready||[...state.managementJobs.values()].some(job=>job.kind==='reclaim'&&!['completed','error'].includes(job.status));
         Object.keys(riskEditors).forEach(updateRiskEditor);
         updateRefreshStatus();
     }
@@ -290,7 +301,7 @@
             if(batch.continuation?.enabled)select.append(element('span',continuationBrief(batch.continuation)));
             select.addEventListener("click", () => selectBatch(batch.id));
             row.append(select);
-            if (batch.status !== "completed" && !batch.study_id) {
+            if (!['completed','deleting'].includes(batch.status) && !batch.study_id) {
                 const actions = element("div", null, "lab-batch-actions");
                 actions.append(actionButton(batch.status === "running" ? "暂停" : batch.status === "paused" ? "启动" : "恢复", () => changeState(batch.id, batch.status)));
                 row.append(actions);
@@ -405,7 +416,9 @@
         });
     }
     function denyAccess() {
-        closeContinuation(false);
+        closeContinuation(false);closeManagement(false);state.managementJobs.clear();renderManagementJobs();
+        if(state.managementPoll){clearTimeout(state.managementPoll);state.managementPoll=null;}
+        state.storage=null;state.storageRequest=null;$("labStorageSummary").replaceChildren();$("labStorageExplanation").textContent='登录管理员账号后可查看存储状态。';feedback('labStorageFeedback','',false);
         state.accessDenied = true; state.selectedId = null; state.batch = null; state.experiments = []; state.overview = null;
         $("labBatchList").replaceChildren(element("p", "请使用有权限的管理员账号登录后刷新。", "lab-empty"));
         $("labWorkerSummary").replaceChildren(); $("labWorkerMessage").textContent = ""; $("labBatchCount").textContent = "—";
@@ -417,7 +430,7 @@
         state.riskEditingId=null;$("labEditRiskForm").hidden=true;
         $("labComparisonPreview").hidden=true;state.preview=null;state.studyRequest=null;
         if (state.mutating || state.loading || state.accessDenied) return;
-        if(state.continuation)closeContinuation(false);
+        if(state.continuation)closeContinuation(false);if(state.management)closeManagement(false);
         state.selectedId = id; state.resultPage = 0; closeDetail(false); $("labSort").value = "paired";
         await refresh(false);
     }
@@ -431,6 +444,8 @@
             if (revision !== state.readRevision) return;
             if (!Array.isArray(overview.batches)) throw responseError("批次数据不完整，请刷新后重试", 0, "invalid_response");
             if (options) {state.options = validateOptions(options); renderOptions();}
+            (overview.management_jobs||[]).forEach(trackManagementJob);
+            if(state.storage&&overview.storage){state.storage=overview.storage;renderStorage();}
             state.accessDenied = false; state.overview = overview; state.readAt = new Date().toISOString();
             state.performance=performance;renderPerformance();
             state.studies=studies.studies||[];renderStudies();
@@ -725,7 +740,7 @@
         state.studies.forEach(study=>{const row=element('div',null,'lab-batch');const button=actionButton(study.name+' · '+(studyNames[study.status]||study.status)+' · 已完成 '+study.completed_children+'/'+study.total_children,()=>openStudy(study.id));button.dataset.studyId=study.id;row.append(button);$("labStudyList").append(row);});
     }
     async function openStudy(id){
-        if(locked())return;if(state.continuation)closeContinuation(false);state.studyId=id;state.studyPage=0;state.loading=true;updateControls();
+        if(locked())return;if(state.continuation)closeContinuation(false);if(state.management)closeManagement(false);state.studyId=id;state.studyPage=0;state.loading=true;updateControls();
         const revision=++state.readRevision;
         try{const data=await request(base+'/studies/'+id);if(revision!==state.readRevision)return;state.study=data.study;state.studyRows=data.rows;renderStudyResults();}
         catch(error){if(revision!==state.readRevision)return;if(error.status===401||error.status===403)denyAccess();feedback('statusMessage',error.message,true);}
@@ -801,6 +816,7 @@
         if(restoreFocus&&trigger?.isConnected)trigger.focus();
     }
     async function openContinuation(kind,id,trigger) {
+        if(state.management)closeManagement(false);
         if(locked())return;
         closeContinuation(false);
         const view={kind,id,trigger,preview:null,coverage:null,segments:[],nextCursor:null,dirty:false,unconfirmed:null};
@@ -956,8 +972,161 @@
         catch(error){if(error.unknown){try{await refresh(false);}catch(_){}}feedback('labContinuationFeedback',error.message+(error.unknown?'。已尝试重新核对当前状态。':''),true);}
         finally{state.mutating=false;updateControls();}
     }
+    function managementPath(view) {return base+'/'+(view.kind==='study'?'studies':'batches')+'/'+view.id;}
+    function closeManagement(restoreFocus) {
+        const trigger=state.management?.trigger;state.management=null;$("labManagementPanel").hidden=true;
+        $("labDefinitionForm").hidden=true;$("labDeleteForm").hidden=true;
+        if(restoreFocus&&trigger?.isConnected)trigger.focus();updateControls();
+    }
+    async function openManagement(kind,id,trigger) {
+        if(locked())return;if(state.continuation)closeContinuation(false);
+        state.management={kind,id,trigger,preview:null,mode:null,dirty:false,pending:null,deletePreview:null};
+        $("labManagementPanel").hidden=false;$("labDefinitionForm").hidden=true;$("labDeleteForm").hidden=true;
+        feedback('labManagementFeedback','读取管理选项…',false);state.loading=true;updateControls();
+        try{await readManagement();feedback('labManagementFeedback','',false);$("labManagementTitle").focus();$("labManagementPanel").scrollIntoView({block:'start',behavior:'smooth'});}
+        catch(error){feedback('labManagementFeedback',error.message,true);if(error.status===401||error.status===403)denyAccess();}
+        finally{state.loading=false;updateControls();}
+    }
+    async function readManagement() {
+        const view=state.management;if(!view)return;
+        const preview=await request(managementPath(view)+'/management');if(state.management!==view)return;
+        view.preview=preview;$("labManagementTitle").textContent=(view.kind==='study'?'管理比较组 · ':'管理实验 · ')+preview.name;
+        $("labManagementName").value=preview.name;
+        $("labManagementNotice").textContent=view.kind==='study'?'改名保留所有子方案成绩；删除比较组将删除组内全部子方案，原始参考批次保留。':preview.editable?'尚未开始计算，可直接编辑配置。保存修改后退出自动排队并保持暂停，需要手动启动。':'已有运行记录，策略参数保持冻结；修改参数请新建独立版本，原成绩与续算保持。';
+        $("labManagementEdit").hidden=view.kind!=='batch'||!preview.editable;
+        $("labManagementFork").hidden=view.kind!=='batch'||!preview.can_fork;
+        $("labManagementDelete").textContent=view.kind==='study'?'删除整个比较组…':'删除这个批次…';
+        updateControls();
+    }
+    function definitionOptions() {
+        const metric=$("labDefinitionMetric").value,select=$("labDefinitionTemplate"),selected=select.value;
+        select.replaceChildren();(state.options?.template_packs||[]).filter(pack=>pack.selectable!==false&&pack.metrics.includes(metric)).forEach(pack=>{
+            const option=element('option',pack.name);option.value=pack.id;select.append(option);
+        });
+        if([...select.options].some(option=>option.value===selected))select.value=selected;
+        const pack=(state.options?.template_packs||[]).find(pack=>pack.id===select.value),count=pack?.condition_counts?.[metric];
+        $("labDefinitionCount").textContent=count?count+' 个条件 × 2 套当前OK赔率 = '+(count*2)+' 个版本。每注金额按真实逐笔结算计算。':'';
+        const history=$("labDefinitionMode").value==='backtest';$("labDefinitionStartField").hidden=!history;$("labDefinitionEndField").hidden=!history;
+        renderRiskPresets('labDefinitionRisk',metric);updateControls();
+    }
+    function editDefinition(mode) {
+        const view=state.management;if(locked()||!view?.preview?.config)return;
+        view.mode=mode;view.dirty=false;const config=view.preview.config;
+        $("labDeleteForm").hidden=true;$("labDefinitionForm").hidden=false;
+        $("labDefinitionTitle").textContent=mode==='fork'?'修改并新建版本':'编辑未启动实验';
+        $("labDefinitionNote").textContent=mode==='fork'?'新版本使用所选条件模板及当前赔率目录，保存后暂停且成绩从零开始。原实验及历史成绩保持。若仅调整单个版本金额并沿用原冻结赔率，可用原“按新金额重新回测”入口。':'保存后按新配置重新生成实验版本，仍保持暂停，并退出当前自动排队；请检查后手动启动。';
+        $("labDefinitionSave").textContent=mode==='fork'?'保存为新版本（暂停）':'保存修改（保持暂停）';
+        $("labDefinitionName").value=(mode==='fork'?config.name+' · 修改版':config.name).slice(0,80);
+        const select=$("labDefinitionPredictor");select.replaceChildren();(state.options?.predictors||[]).forEach(p=>{const option=element('option',p.name);option.value=p.id;select.append(option);});
+        if(![...select.options].some(option=>option.value===String(config.predictor_id))){const option=element('option','原来源目前不可用');option.value=config.predictor_id;option.disabled=true;select.append(option);}
+        select.value=String(config.predictor_id);$("labDefinitionMetric").value=config.metric;$("labDefinitionStake").value=config.stake_amount;
+        $("labDefinitionMode").value=config.mode;$("labDefinitionStart").value=config.start_date||'';$("labDefinitionEnd").value=config.end_date||'';
+        definitionOptions();if([...$("labDefinitionTemplate").options].some(option=>option.value===config.template_pack))$("labDefinitionTemplate").value=config.template_pack;
+        fillRisk('labDefinitionRisk',config.risk_policy);definitionOptions();$("labDefinitionName").focus();
+    }
+    function definitionValue() {
+        const mode=$("labDefinitionMode").value;
+        return {name:$("labDefinitionName").value.trim(),mode,predictor_id:Number($("labDefinitionPredictor").value),
+            metric:$("labDefinitionMetric").value,template_pack:$("labDefinitionTemplate").value,
+            stake_amount:Number($("labDefinitionStake").value),start_date:mode==='backtest'?$("labDefinitionStart").value:null,
+            end_date:mode==='backtest'?$("labDefinitionEnd").value:null,risk_policy:riskValue('labDefinitionRisk')};
+    }
+    async function showDeletePreview() {
+        const view=state.management;if(locked()||!view?.preview)return;state.loading=true;updateControls();
+        try{
+            const value=await request(managementPath(view)+'/delete-preview');if(state.management!==view)return;
+            view.deletePreview=value;$("labDefinitionForm").hidden=true;$("labDeleteForm").hidden=false;$("labDeleteConfirmName").value='';
+            $("labDeleteExplanation").textContent='将永久删除“'+value.name+'”及所属成绩、计算段和快照，同时停止该对象的计算、采集和自动续算。删除不能撤销。';
+            const labels={batches:'批次',experiments:'实验版本',decisions:'逐笔记录',pending:'待结算模拟记录',daily_rows:'日账记录',rounds:'轮次记录',segments:'计算段',checkpoints:'检查点'};
+            $("labDeleteCounts").replaceChildren();Object.entries(labels).forEach(([key,label])=>{if(value.counts?.[key]!==undefined){const cell=element('div');cell.append(element('dt',label),element('dd',value.counts[key]));$("labDeleteCounts").append(cell);}});
+            $("labDeleteShared").textContent=value.shared_inputs_retained?'其他实验仍需要共享预测与开奖，这些共享数据会保留。删除完成会释放版本额度；磁盘实际回收量以后台任务显示为准。':'不再被其他实验使用的输入会随后台清理；磁盘实际回收量以后台任务显示为准。';
+            $("labDeleteBlockers").replaceChildren();(value.blockers||[]).forEach(block=>{
+                $("labDeleteBlockers").append(element('p',block.message));
+                (block.studies||[]).forEach(study=>{const button=actionButton('管理比较组：'+study.name,()=>openManagement('study',study.id,button));$("labDeleteBlockers").append(button);});
+            });
+            $("labDeleteConfirmName").disabled=!value.eligible;$("labDeleteConfirmName").focus();
+        }catch(error){feedback('labManagementFeedback',error.message,true);}
+        finally{state.loading=false;updateControls();}
+    }
+    function trackManagementJob(job) {
+        if(!job||!Number.isInteger(job.id))return;
+        state.managementJobs.set(job.id,job);renderManagementJobs();scheduleManagementPoll();
+    }
+    function renderManagementJobs() {
+        const target=$("labManagementJobList");target.replaceChildren();$("labManagementJobs").hidden=!state.managementJobs.size;
+        const names={queued:'等待处理',running:'正在处理',waiting:'等待安全回收条件',completed:'已完成',error:'处理异常'};
+        [...state.managementJobs.values()].sort((a,b)=>b.id-a.id).slice(0,20).forEach(job=>{
+            const row=element('div',null,'lab-management-job');row.dataset.jobId=job.id;
+            row.append(element('strong',(job.kind==='delete'?'删除实验':'回收空间')+' · '+(names[job.status]||job.status)));
+            row.append(element('p','已处理 '+number(job.processed_rows,0)+' 条'+(typeof job.total_rows==='number'?' / 约 '+job.total_rows+' 条':'')+' · 实际释放 '+bytes(job.freed_bytes||0),'lab-muted'));
+            if(job.released_versions)row.append(element('p','已释放 '+job.released_versions+' 个实验版本额度。','lab-muted'));
+            if(job.error)row.append(element('p',job.error,'lab-feedback is-error'));target.append(row);
+        });
+    }
+    function scheduleManagementPoll() {
+        if(state.managementPoll||state.accessDenied||![...state.managementJobs.values()].some(job=>!['completed','error'].includes(job.status)))return;
+        state.managementPoll=setTimeout(pollManagementJobs,2000);
+    }
+    async function pollManagementJobs() {
+        state.managementPoll=null;if(state.accessDenied)return;
+        let completed=false;
+        for(const job of [...state.managementJobs.values()].filter(job=>!['completed','error'].includes(job.status)).slice(0,20)){
+            try{const value=await request(base+'/management-jobs/'+job.id);state.managementJobs.set(job.id,value.job);completed|=value.job.status==='completed';}
+            catch(error){if(error.status===401||error.status===403){denyAccess();return;}if(error.status===404)state.managementJobs.delete(job.id);}
+        }
+        renderManagementJobs();if(completed&&!locked())await refresh(false);
+        if(completed&&$("labStoragePanel").open)await readStorage();scheduleManagementPoll();
+    }
+    async function managementSucceeded(view,action,result) {
+        view.pending=null;view.dirty=false;
+        if(result.job){trackManagementJob(result.job);$("labDeleteForm").hidden=true;}
+        if(action==='fork'){state.selectedId=result.batch.id;closeManagement(false);await refresh(false);feedback('statusMessage','已创建新的暂停版本，原实验成绩保持。请检查后启动。',false);return;}
+        if(action==='delete'){
+            closeManagement(false);if(view.kind==='batch'&&state.selectedId===view.id){state.selectedId=null;state.batch=null;state.experiments=[];}
+            if(view.kind==='study'&&state.studyId===view.id){state.studyId=null;state.study=null;state.studyRows=[];}
+            await refresh(false);feedback('statusMessage','已停止该对象的后续计算，后台正在删除。可在上方查看处理与空间回收进度。',false);$("labManagementJobs").scrollIntoView({block:'center',behavior:'smooth'});return;
+        }
+        $("labDefinitionForm").hidden=true;await refresh(false);
+        if(state.management===view)await readManagement();feedback('labManagementFeedback',action==='edit'?'配置已保存，批次保持暂停并退出自动排队；请检查后手动启动。':'名称已保存，策略和成绩保持。',false);
+    }
+    async function mutateManagement(action,payload,retry) {
+        const view=state.management;if(locked()||!view?.preview)return;
+        const token=action==='delete'?view.deletePreview?.expected_revision:view.preview.expected_revision;
+        const body=retry?.body||{...payload,request_id:crypto.randomUUID(),expected_revision:token};
+        const pending={action,body,path:managementPath(view)+'/'+action};view.pending=pending;state.mutating=true;updateControls();
+        try{const result=await request(pending.path,'POST',body);await managementSucceeded(view,action,result);}
+        catch(error){
+            if(error.unknown){
+                try{await readManagement();const receipt=view.preview?.latest_request;if(receipt?.request_id===body.request_id&&receipt.result){await managementSucceeded(view,action,receipt.result);return;}}catch(_){}
+                feedback('labManagementFeedback','提交结果暂未确认。已尝试只读核对；请使用“核对后重试原请求”，不会创建重复任务。',true);
+            }else{view.pending=null;feedback('labManagementFeedback',error.message,true);if(error.status===409){try{await readManagement();}catch(_){}}}
+        }finally{state.mutating=false;updateControls();}
+    }
+    async function retryManagement() {
+        const view=state.management,pending=view?.pending;if(locked()||!pending)return;
+        // The original idempotency key and payload are retained; retry is an explicit user action.
+        try{await readManagement();const receipt=view.preview?.latest_request;if(receipt?.request_id===pending.body.request_id&&receipt.result){state.mutating=true;try{await managementSucceeded(view,pending.action,receipt.result);}finally{state.mutating=false;updateControls();}return;}}catch(_){}
+        await mutateManagement(pending.action,null,pending);
+    }
+    async function readStorage() {
+        if(state.accessDenied)return;
+        try{state.storage=await request(base+'/storage');renderStorage();if(state.storage.reclaim_job)trackManagementJob(state.storage.reclaim_job);}
+        catch(error){if(error.status===401||error.status===403)denyAccess();feedback('labStorageFeedback',error.message,true);}finally{updateControls();}
+    }
+    function renderStorage() {
+        const storage=state.storage;if(!storage)return;const target=$("labStorageSummary");target.replaceChildren();
+        [['目录实际占用','used_bytes'],['数据库文件','database_bytes'],['WAL 日志','wal_bytes'],['内部可复用空间','reusable_bytes'],['预计可回收整页','reclaimable_bytes']].forEach(([label,key])=>{const cell=element('div');cell.append(element('dt',label),element('dd',bytes(storage[key])));target.append(cell);});
+        $("labStorageExplanation").textContent=(storage.incremental_ready?'已启用分批空间回收。':'当前库尚未完成空间回收模式转换，需要维护操作后启用。')+' 内部可复用空间可被后续写入使用，文件不会因此立即缩小；预计可回收量不是已释放磁盘。后台任务以实际文件变化记录释放量，遇到读写占用会等待。';
+    }
+    async function reclaimStorage() {
+        if(locked()||!state.storage?.incremental_ready)return;
+        state.mutating=true;updateControls();const body=state.storageRequest||{request_id:crypto.randomUUID()};state.storageRequest=body;
+        try{const value=await request(base+'/storage/reclaim','POST',body);state.storageRequest=null;trackManagementJob(value.job);feedback('labStorageFeedback','空间回收已排队，后台分批处理。',false);await readStorage();}
+        catch(error){feedback('labStorageFeedback',error.message+(error.unknown?'。再次点击将使用原请求标识核对，避免重复任务。':''),true);if(!error.unknown)state.storageRequest=null;}
+        finally{state.mutating=false;updateControls();}
+    }
     $("labBatchForm").addEventListener("submit", createBatch);
-    createRiskEditor('labRisk',$("labRiskEditor"));createRiskEditor('labEditRisk',$("labEditRiskEditor"));
+    createRiskEditor('labRisk',$("labRiskEditor"));createRiskEditor('labEditRisk',$("labEditRiskEditor"));createRiskEditor('labDefinitionRisk',$("labDefinitionRiskEditor"));
     $("labEditRiskButton").addEventListener('click',()=>{
         if(!state.batch?.risk_editable)return;renderRiskPresets('labEditRisk',state.batch.metric);
         state.riskEditingId=state.batch.id;
@@ -1002,6 +1171,19 @@
     $("labStudyStateButton").addEventListener('click',changeStudyState);$("labStudyExportButton").addEventListener('click',exportStudy);
     ['labStudyVariant','labStudySettlement','labStudyCondition'].forEach(id=>$(id).addEventListener('change',()=>{state.studyPage=0;renderStudyResults();}));
     $("labStudyPrevious").addEventListener('click',()=>{state.studyPage=Math.max(0,state.studyPage-1);renderStudyResults();});$("labStudyNext").addEventListener('click',()=>{state.studyPage++;renderStudyResults();});
+    $("labManageBatchButton").addEventListener('click',()=>{const batch=state.batch;if(batch)openManagement(batch.study_id?'study':'batch',batch.study_id||batch.id,$("labManageBatchButton"));});
+    $("labManageStudyButton").addEventListener('click',()=>state.study&&openManagement('study',state.study.id,$("labManageStudyButton")));
+    $("labManagementClose").addEventListener('click',()=>{if(!state.mutating&&!state.management?.pending)closeManagement(true);});
+    $("labRenameForm").addEventListener('submit',event=>{event.preventDefault();const name=$("labManagementName").value.trim();if(!name||name.length>80){feedback('labManagementFeedback','请填写1～80个字符的名称。',true);return;}mutateManagement('rename',{name});});
+    $("labManagementEdit").addEventListener('click',()=>editDefinition('edit'));$("labManagementFork").addEventListener('click',()=>editDefinition('fork'));
+    $("labDefinitionForm").addEventListener('change',()=>{if(state.management)state.management.dirty=true;definitionOptions();});
+    $("labDefinitionForm").addEventListener('submit',event=>{event.preventDefault();const config=definitionValue();const issue=riskError(config.risk_policy);if(!config.name||!Number.isFinite(config.stake_amount)||config.stake_amount<.01||config.stake_amount>10000||issue){feedback('labManagementFeedback',issue||'请填写名称及有效的每注金额（0.01～10000）。',true);return;}mutateManagement(state.management?.mode,{config});});
+    $("labDefinitionCancel").addEventListener('click',()=>{$("labDefinitionForm").hidden=true;if(state.management)state.management.dirty=false;});
+    $("labManagementDelete").addEventListener('click',showDeletePreview);$("labDeleteCancel").addEventListener('click',()=>{$("labDeleteForm").hidden=true;});
+    $("labDeleteConfirmName").addEventListener('input',updateControls);$("labDeleteForm").addEventListener('submit',event=>{event.preventDefault();if($("labDeleteConfirmName").value!==state.management?.deletePreview?.name)return;mutateManagement('delete',{confirm_name:$("labDeleteConfirmName").value});});
+    $("labManagementRetry").addEventListener('click',retryManagement);
+    $("labStoragePanel").addEventListener('toggle',()=>{if($("labStoragePanel").open)readStorage();});
+    $("labStorageRefresh").addEventListener('click',readStorage);$("labStorageReclaim").addEventListener('click',reclaimStorage);
     document.addEventListener("platform-auth:changed", () => {state.readRevision++; state.detailRevision++; denyAccess(); state.options = null; refresh(true);});
     document.addEventListener('visibilitychange',autoRefresh);
     window.addEventListener('resize',()=>{if(state.monthly){renderMonthlyChart(state.monthly.rows);renderCapital();}});

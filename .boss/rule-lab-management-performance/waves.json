@@ -1,0 +1,432 @@
+{
+  "feature": "rule-lab-management-performance",
+  "defaultCwd": "/www/wwwroot/pc28touzhu-lab-management",
+  "owners": {
+    "Perf": [
+      "src/pc28touzhu/rule_lab_worker.py",
+      "tests/test_rule_lab_performance.py",
+      "tests/rule_lab_performance_benchmark.py",
+      ".boss/rule-lab-management-performance/performance.md"
+    ],
+    "Data": [
+      "src/pc28touzhu/services/rule_lab_management.py",
+      "src/pc28touzhu/services/rule_lab_storage.py",
+      "src/pc28touzhu/services/rule_lab_series.py",
+      "src/pc28touzhu/services/rule_lab_archive.py",
+      "scripts/maintenance/run_rule_lab_batch_queue.py",
+      "tests/test_rule_lab_management.py",
+      "tests/test_rule_lab_storage.py",
+      "scripts/maintenance/prepare_rule_lab_storage.py",
+      "tests/test_rule_lab_comparison.py",
+      "tests/test_rule_lab_continuous_qa.py",
+      "tests/test_rule_lab_risk.py",
+      "tests/test_rule_lab_series.py"
+    ],
+    "APIUI": [
+      "src/pc28touzhu/services/rule_lab_service.py",
+      "src/pc28touzhu/api/app.py",
+      "src/pc28touzhu/ui/rule_lab.js",
+      "src/pc28touzhu/ui/rule_lab.html",
+      "src/pc28touzhu/ui/rule_lab.css",
+      "tests/test_rule_lab_management_api.py",
+      "tests/rule_lab_management_ui_server.py",
+      "tests/test_rule_lab_management_ui.cjs",
+      "docs/RULE_LAB.md"
+    ],
+    "QA": [
+      "tests/test_rule_lab_management_qa.py",
+      ".boss/rule-lab-management-performance/qa-report.md"
+    ],
+    "DevOps": [
+      ".boss/rule-lab-management-performance/deploy-report.md"
+    ]
+  },
+  "orderedSharedOwnership": [
+    {
+      "path": "src/pc28touzhu/services/rule_lab_store.py",
+      "first": "Perf",
+      "then": "Data",
+      "handoff": "Perf测试绿门禁且通知根代理冻结后，由根代理明确交接；无并行写入",
+      "handoffCompleted": true
+    }
+  ],
+  "waves": [
+    {
+      "id": "wave-1-performance",
+      "title": "热点优化及等价性",
+      "scope": "profile and optimize bounded replay",
+      "writeSet": [
+        "src/pc28touzhu/rule_lab_worker.py",
+        "tests/test_rule_lab_performance.py",
+        "tests/rule_lab_performance_benchmark.py",
+        "src/pc28touzhu/services/rule_lab_store.py",
+        ".boss/rule-lab-management-performance/performance.md"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_performance",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_performance",
+          "tests.test_rule_lab_worker",
+          "tests.test_rule_lab_continuous_worker",
+          "tests.test_rule_lab_risk",
+          "-q"
+        ]
+      ],
+      "contractRows": [
+        "CM1"
+      ],
+      "stopCondition": "经济状态/事件时序变化、资源超限或基准无可核验改善时停止；中央store未交接前Data不得落盘",
+      "dependsOn": [],
+      "status": "passed",
+      "evidence": {
+        "performance_document": ".boss/rule-lab-management-performance/performance.md",
+        "throughput_ratios": [
+          1.78,
+          1.82,
+          1.46
+        ],
+        "economic_hashes_equal": true,
+        "worker_tests": {
+          "passed": 48,
+          "failed": 0,
+          "skipped": 0,
+          "seconds": 24.489,
+          "log": "/tmp/pc28-management-worker-integrated.log"
+        }
+      }
+    },
+    {
+      "id": "wave-2-management",
+      "title": "编辑删除与队列隔离",
+      "scope": "management transactions and bounded deletion",
+      "writeSet": [
+        "src/pc28touzhu/services/rule_lab_management.py",
+        "src/pc28touzhu/services/rule_lab_storage.py",
+        "src/pc28touzhu/services/rule_lab_series.py",
+        "src/pc28touzhu/services/rule_lab_archive.py",
+        "scripts/maintenance/run_rule_lab_batch_queue.py",
+        "tests/test_rule_lab_management.py",
+        "tests/test_rule_lab_storage.py",
+        "scripts/maintenance/prepare_rule_lab_storage.py",
+        "tests/test_rule_lab_comparison.py",
+        "tests/test_rule_lab_continuous_qa.py",
+        "tests/test_rule_lab_risk.py",
+        "tests/test_rule_lab_series.py",
+        "src/pc28touzhu/services/rule_lab_store.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_management",
+          "tests.test_rule_lab_storage",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_management",
+          "tests.test_rule_lab_storage",
+          "tests.test_rule_lab_batch_queue",
+          "tests.test_rule_lab_store",
+          "tests.test_rule_lab_series",
+          "tests.test_rule_lab_archive",
+          "-q"
+        ]
+      ],
+      "contractRows": [
+        "CM2",
+        "CM3",
+        "CM4",
+        "CM5",
+        "CM6",
+        "CM7"
+      ],
+      "stopCondition": "删错归属、共享输入丢失、worker复写、ID复用、记录删除与物理回收混淆任一出现即停止",
+      "dependsOn": [
+        "wave-1-performance"
+      ],
+      "status": "passed",
+      "evidence": {
+        "data_regression": {
+          "passed": 99,
+          "failed": 0,
+          "skipped": 0,
+          "seconds": 25.755,
+          "log": "/tmp/pc28-management-data-final.log"
+        },
+        "storage_cli": {
+          "passed": 5,
+          "failed": 0,
+          "skipped": 0,
+          "seconds": 0.624,
+          "log": "/tmp/pc28-management-data-cli-final.log"
+        }
+      }
+    },
+    {
+      "id": "wave-3-product",
+      "title": "API和真实界面闭环",
+      "scope": "strict management API and desktop/mobile UI",
+      "writeSet": [
+        "src/pc28touzhu/services/rule_lab_service.py",
+        "src/pc28touzhu/api/app.py",
+        "src/pc28touzhu/ui/rule_lab.js",
+        "src/pc28touzhu/ui/rule_lab.html",
+        "src/pc28touzhu/ui/rule_lab.css",
+        "tests/test_rule_lab_management_api.py",
+        "tests/rule_lab_management_ui_server.py",
+        "tests/test_rule_lab_management_ui.cjs",
+        "docs/RULE_LAB.md"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_management_api",
+          "-q"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_management_ui.cjs"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_management_api",
+          "tests.test_rule_lab_api",
+          "tests.test_rule_lab_continuous_api",
+          "-q"
+        ],
+        [
+          "node",
+          "--check",
+          "src/pc28touzhu/ui/rule_lab.js"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_management_ui.cjs"
+        ]
+      ],
+      "contractRows": [
+        "CM2",
+        "CM3",
+        "CM4",
+        "CM6",
+        "CM7",
+        "CM8"
+      ],
+      "stopCondition": "实际API/DOM编辑删除回收不可用、越权、未知字段或重试重复作用时停止",
+      "dependsOn": [
+        "wave-2-management"
+      ],
+      "status": "passed",
+      "evidence": {
+        "api": {
+          "passed": 9,
+          "failed": 0,
+          "skipped": 0,
+          "seconds": 10.9,
+          "log": "/tmp/pc28-management-api-integration.log"
+        },
+        "existing_browser_flows": [
+          {
+            "exit_code": 0,
+            "log": "/tmp/pc28-management-old-browser.log"
+          },
+          {
+            "exit_code": 0,
+            "log": "/tmp/pc28-management-amount-browser.log"
+          },
+          {
+            "exit_code": 0,
+            "log": "/tmp/pc28-management-continuation-browser.log"
+          }
+        ],
+        "management_browser": {
+          "command": [
+            "node",
+            "tests/test_rule_lab_management_ui.cjs"
+          ],
+          "exit_code": 0,
+          "log": "/tmp/pc28-management-ui-final.log",
+          "evidence_origin": "原工具执行session53611，终态chunk7951a0；本文件是原结果归档，不是重跑"
+        }
+      }
+    },
+    {
+      "id": "wave-4-qa",
+      "title": "独立副本与完整回归",
+      "scope": "independent race, preservation, resource and full regression",
+      "writeSet": [
+        "tests/test_rule_lab_management_qa.py",
+        ".boss/rule-lab-management-performance/qa-report.md"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_management_qa",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_management_qa",
+          "-q"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tests",
+          "-q"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_ui.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_amount_ui.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_continuation_ui.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_management_ui.cjs"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "CM1",
+        "CM2",
+        "CM3",
+        "CM4",
+        "CM5",
+        "CM6",
+        "CM7",
+        "CM8",
+        "CM9"
+      ],
+      "stopCondition": "R1-R8未关闭或生产副本转换改变原业务列不得发布",
+      "dependsOn": [
+        "wave-1-performance",
+        "wave-2-management",
+        "wave-3-product"
+      ],
+      "status": "passed",
+      "evidence": {
+        "independent_qa": {
+          "passed": 8,
+          "failed": 0,
+          "skipped": 0,
+          "seconds": 1.519,
+          "log": "/tmp/pc28-management-qa-final-targeted.log"
+        },
+        "full_regression": {
+          "status": "passed",
+          "exit_code": 0,
+          "passed": 1197,
+          "failed": 0,
+          "skipped": 0,
+          "seconds": 329.8,
+          "log": "/tmp/pc28-management-full-final-root.log",
+          "session_id": 21060
+        },
+        "first_full_regression": {
+          "passed": 1193,
+          "failed": 1,
+          "skipped": 0,
+          "log": "/tmp/pc28-management-full-root.log",
+          "failure": "服务状态未知时CLI转换前置保护；首轮进程在最后修复前已导入旧模块，后续新增反例执行失败。修复后独立8项及CLI5项新进程通过。"
+        }
+      }
+    },
+    {
+      "id": "wave-5-release",
+      "title": "保留进度上线",
+      "scope": "controlled lab-only conversion and GET verification",
+      "writeSet": [
+        ".boss/rule-lab-management-performance/deploy-report.md"
+      ],
+      "redTests": [],
+      "redEvidencePolicy": "复用前四wave红测证据，不在生产制造失败",
+      "greenGates": [
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "manualGates": [
+        "停止API/实验worker/批准队列前保存状态；独立实验库备份",
+        "v5和INCREMENTAL转换后原列hash/quick_check/FK/游标保持",
+        "原服务状态恢复、1核256MiB、已运行批次继续推进",
+        "线上GET管理/空间可用；未执行真实实验删除"
+      ],
+      "contractRows": [
+        "CM9"
+      ],
+      "stopCondition": "备份/空间/数据比对/健康任一失败停止恢复步骤并保留原库，不删除现有实验",
+      "dependsOn": [
+        "wave-4-qa"
+      ],
+      "status": "pending"
+    }
+  ],
+  "agents": {
+    "Perf": "/root/management_perf",
+    "Data": "/root/management_data",
+    "APIUI": "/root/management_product"
+  }
+}

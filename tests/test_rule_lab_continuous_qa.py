@@ -361,7 +361,7 @@ class ContinuationProductionSnapshotQaTests(unittest.TestCase):
             store.initialize()
             self.assertEqual(original_rows(copy_path, columns)[1], before)
             with sqlite3.connect(copy_path) as connection:
-                self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 4)
+                self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 5)
                 self.assertEqual(connection.execute('PRAGMA quick_check').fetchone()[0], 'ok')
                 self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
                 self.assertEqual(connection.execute('SELECT count(*) FROM lab_series').fetchone()[0], 0)
