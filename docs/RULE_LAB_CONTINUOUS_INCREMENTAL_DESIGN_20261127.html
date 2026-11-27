@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>规则实验室：长期数据保留与自动增量实验方案</title>
+<style>
+:root{color-scheme:light;--ink:#1d2c38;--muted:#5c6d77;--line:#dce4e8;--green:#166c60;--bg:#f3f6f7}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.85 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:1120px;margin:32px auto;padding:40px 48px;background:white;border:1px solid var(--line);border-radius:12px}h1{font-size:30px;line-height:1.4;margin:10px 0}h2{font-size:22px;margin:36px 0 14px;border-bottom:1px solid var(--line);padding-bottom:8px}h3{font-size:18px;margin:24px 0 8px}p{margin:10px 0}.meta{color:var(--muted);font-size:14px}.tag{display:inline-block;background:#eaf5f1;color:var(--green);padding:2px 9px;border-radius:4px;font-size:13px}.lead{border-left:4px solid var(--green);background:#eff7f4;padding:16px 20px;margin:24px 0}.note{border:1px solid var(--line);background:#f7f9fa;padding:14px 18px;border-radius:6px}nav{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:14px;margin:20px 0}a{color:var(--green)}code{font:13px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;background:#f0f3f5;padding:2px 4px;overflow-wrap:anywhere}pre{padding:16px;background:#f3f6f7;white-space:pre-wrap;font:13px/1.7 ui-monospace,monospace}li{margin:6px 0}table{width:100%;border-collapse:collapse;font-size:14px;margin:14px 0}th,td{border:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}th{background:#f2f6f7}.table{overflow:auto}.flow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:20px 0}.flow span{padding:8px 12px;border:1px solid var(--line);border-radius:5px}.flow b{color:var(--muted)}section{scroll-margin-top:16px}.example{padding:16px 20px;border:1px solid #c8ddd6;border-radius:6px;background:#f7fbf9}details{margin:18px 0;border:1px solid var(--line);padding:12px 16px;border-radius:6px}summary{cursor:pointer;font-weight:600}a:focus-visible,summary:focus-visible{outline:3px solid #4296bf;outline-offset:3px}.small{font-size:14px;color:var(--muted)}
+@media(max-width:720px){main{margin:0;padding:22px 18px;border:0;border-radius:0}h1{font-size:25px}h2{font-size:20px}table{min-width:650px}.flow span{font-size:14px;padding:6px 9px}}
+@media print{body{background:white}main{border:0;margin:0;padding:0;max-width:none}nav{display:none}h2,h3{break-after:avoid}tr,.note,.lead{break-inside:avoid}.table{overflow:visible}table{min-width:0}}
+</style>
+</head>
+<body><main>
+<header>
+<span class="tag">设计方案 · 尚未实施</span>
+<h1>规则实验室：长期数据保留与自动增量实验</h1>
+<p class="meta">2026-11-27 · 调研基线 <code>6744960</code> · 已核查实验室、上游清理代码及线上数据，只新增本文档。</p>
+<p class="lead"><strong>建议：把一个实验做成持续维护的固定策略版本。</strong>首次回放完成后，后台持续保存后续精简输入，每天只追加尚未计算的期数，月报从累计账本自动分月生成。旧月份成绩与续算断点长期保存，上游删除预测明细不再迫使同一实验重跑。</p>
+<p>推荐默认频率：<strong>每分钟采集，每日北京时间 00:10 追加至前一日，月度报告自动更新</strong>。具体频率是拟议产品默认值，本次没有创建定时任务、启用采集或启动实验。后续可增加小时级追加，底层仍使用同一段机制。</p>
+</header>
+<nav aria-label="方案目录"><a href="#facts">现状</a><a href="#behavior">使用方式</a><a href="#archive">保留数据</a><a href="#append">增量计算</a><a href="#boundary">时间与版本</a><a href="#storage">空间控制</a><a href="#migration">现有批次接管</a><a href="#contracts">数据/API</a><a href="#validation">实施验收</a></nav>
+
+<section id="facts"><h2>1. 当前能力与真实风险</h2>
+<div class="table"><table><thead><tr><th>检查项</th><th>当前事实</th><th>含义</th></tr></thead><tbody>
+<tr><td>上游预测保留</td><td><code>PC28_PREDICTION_RETENTION_DAYS</code> 默认 60，当前 .env 无覆盖；已结算、失败、过期的老预测按北京时间创建日汇总后删除，pending 保留。</td><td>长连错、入场时点、不同注额/风控路径无法从日汇总完整复原。</td></tr>
+<tr><td>上游开奖保留</td><td>代码默认 60，但当前 .env 明确 <code>PC28_DRAW_RETENTION_DAYS=365</code>。</td><td>本机并非两类数据都只留 60 天。即使开奖仍在，缺少原预测也无法完整回测。</td></tr>
+<tr><td>日期风险</td><td>按当前 60 天且 <code>date &lt; cutoff</code> 的预测清理规则，2026-12-01 的 cutoff 为 2026-10-02。</td><td>12 月初开始清除 10 月初预测；实际执行时点受维护轮询影响，不承诺零点整删除。</td></tr>
+<tr><td>实验结果保留</td><td>累计成绩、日汇总、风控日状态长期保留；逐笔已完成明细按入账时间保留 30 天；精简输入约 90 天。</td><td>成绩本身不会随源预测一起消失，但“日后重建逐期策略”仍缺输入保障。</td></tr>
+<tr><td>真正续跑</td><td><code>set_batch_state</code> 拒绝重启 completed；已有 <code>inspect_continuation_checkpoint</code> 仅服务比较组的内部只读检查，返回 <code>continuation_available=false</code>。</td><td>先前增量设计 W1 已实现，W2–W6 尚未实现；不能把当前“金额重测”当成续算。</td></tr>
+<tr><td>目前线上实验</td><td>批次 8「遗漏回补 V1 · 组合长连错 · 2026年10—11月 · 新赔率」，来源 9，26 个版本，区间 10-01 至 11-26，已完成 22,914 期；无比较组。</td><td>首批交付必须支持单批次，不能只做 study 续跑入口。</td></tr>
+<tr><td>当前可接管状态</td><td>实际处理期 <code>3511343</code>，扫描上限 <code>3511545</code>；最后 100 期缓存完整且无冲突；pending=0、active_round=0，回放调度版本 2。</td><td>具备接管候选条件，但还须做时间边界与历史快照审计。从 <strong>3511344</strong> 续算，不能从扫描上限或最后下注期接。</td></tr>
+<tr><td>已有数据质量</td><td>批次已记录 2 次 late_prediction、1 次 missing_prediction；缓存对应缺预测期为 3510000。</td><td>增量功能保留这些事实，不能把原成绩重新标成毫无缺口的完整数据。</td></tr>
+</tbody></table></div>
+<p class="small">读取时实验室数据库约 22.3 MiB，包含 23,192 条开奖、46,151 条预测（来源 7/9 共用缓存）、30,414 条逐笔记录。表行数与状态会随运行变化。上游预测保留配置按代码与当前 .env 核查，未修改源服务。</p>
+</section>
+
+<section id="behavior"><h2>2. 用户看到的行为</h2>
+<ol>
+<li>对现有已完成批次点击“开启自动更新”。预览展示已计算日期、下次起点、26 个原版本、冻结赔率/注额/风控、输入覆盖及空间估算。</li>
+<li>一次开启后，后台先保留新数据，再自动追加计算；无须每月新建实验或手动点“全量运行”。</li>
+<li>每次只计算新期数。10 月完成后固定保留；11 月继续累计；到 12 月自动多出 12 月行，累计曲线自然延长。</li>
+<li>支持“暂停计算，继续收集数据”和“停止自动更新及采集”两个明确操作。暂停计算不等于停止保留后续数据；共享来源仍被其他实验订阅时也不会因一个实验关闭就停止采集。</li>
+<li>改变注额、条件、赔率或风控时，创建新策略版本。已有“金额重测”继续使用独立新版本，但可从长期精简档案读取输入，不强依赖上游仍保留旧明细。</li>
+</ol>
+<div class="example"><strong>示例：同一个实验持续积累</strong><br>首次：计算 10-01 ～ 11-26，保留原 26 个版本。<br>首次追加：仅计算 11-27 ～ 新截止日。<br>12 月：每天增加上一日的新期数；10 月、11 月历史成绩继续可查。<br><strong>新增的是计算段和数据，不是每月复制 26 个实验。</strong></div>
+<p>区分三个日期：<strong>数据采集至</strong>、<strong>实验计算至</strong>、<strong>结果结算至</strong>。三者不同步时展示实际积压或待结算，不能只显示一个“已完成”。</p>
+</section>
+
+<section id="architecture"><h2>3. 三条独立流程</h2>
+<div class="flow" aria-label="增量实验数据流"><span>上游滚动明细</span><b>→</b><span>精简输入档案</span><b>→</b><span>新段增量回放</span><b>→</b><span>累计账本 / 月报</span></div>
+<p><strong>采集负责保存证据，计算负责推进策略，报告负责读取成绩。</strong>采集不能只在实验运行时发生；报告读取不触发计算；实验室继续与真实投注账本和发送任务隔离。</p>
+<p>沿用单个 <code>rule_lab_worker</code>、SQLite 和现有资源限额。worker 内按持久化的到期时间调度采集与追加，不引入外部 cron、消息队列或新增运行进程。每个 tick 先给采集一个小预算，再公平轮转计算；单组慢计算不阻塞其他来源保留数据。</p>
+<p>建议每分钟检查已订阅来源，每页最多 200 条，延续约 250ms 的源查询预算与 2 秒 worker 工作预算。历史首次补齐和大量重算均拆页；100 个同时运行/500 个保存版本的现有限额继续执行。自动更新等待下一天时不占用运行槽，只在实际计算段排队时占用。</p>
+</section>
+
+<section id="archive"><h2>4. 上游删明细前，保存足以计算的精简输入</h2>
+<h3>4.1 保存什么</h3>
+<div class="table"><table><thead><tr><th>资料</th><th>必要字段</th><th>共享方式</th></tr></thead><tbody>
+<tr><td>开奖</td><td>源实例标识、彩种、期号、三球、开奖时间、源记录创建/可见时间、首次观察时间、内容哈希与修订版本。</td><td>同一期存一份，多个来源与所有实验共用。</td></tr>
+<tr><td>预测</td><td>源实例、预测器身份/配置版本、期号、大小/单双/组合方向、创建/结算时间、状态、首次观察时间、内容哈希及观察版本。</td><td>同来源同一期存一份，不按 26、78 或 92 个实验重复存。</td></tr>
+<tr><td>覆盖记录</td><td>检查区间、最后成功读取、是否找到记录、无预测/晚预测/失败/源不可读/清理缺失、证据截止、重查状态。</td><td>覆盖状态按来源与期号索引；缺期本身也保留证据。</td></tr>
+<tr><td>不可变输入清单</td><td>每段实际使用的版本集合/内容摘要、期号范围、行数、质量统计、上段摘要。</td><td>所有比较子方案共用同一清单；不能各自读到不同源修订。</td></tr>
+</tbody></table></div>
+<p>不复制 API 密钥、提示词、模型大段回答、原始网页或整个上游数据库。当前实验算法依赖的方向、三球与可见时间要保留；只存输赢或日命中率不够。</p>
+<h3>4.2 采集不是“记住最大期号就完成”</h3>
+<ul>
+<li>分开保存 <code>highest_seen_issue</code> 与 <code>covered_through_issue</code>：见过后面的数据，不等于中间数据齐全。</li>
+<li>新期顺序抓取，同时维护 pending、缺失及修订重查队列；源网络/锁错误不能推进“已覆盖”游标。</li>
+<li>近期重查窗口建议 1 日，pending/已记录缺口不受该窗口限制。增加源保留窗口内的低频分区核查，防止晚补旧期只因期号低于高水位被忽略。</li>
+<li>源已有 <code>pc28_history_revisions</code>，但只是部分 settled 记录变更计数，不是逐行变更日志；不能据此认定完整 CDC，也不能仅靠它发现 pending 修改。</li>
+<li>第一次开启时先导入实验室已有缓存，再补当前源仍有的所选区间。按原数据删除期限优先保留最早即将过期的所需预测，同时留出预算保存最新数据。</li>
+</ul>
+<h3>4.3 处理数据缺失和修改</h3>
+<p><strong>三种情况分开：</strong>源正常可读且该期确实没有可用预测，按已有缺预测规则跳过并记录；采集失败但源仍可提供，自动重试；所需区间已被上游清理且本地没有证据，则标记 <code>archive_gap</code>，不能伪装成“当时无信号”或零收益。</p>
+<p>已被计算段引用的输入版本不可覆盖。后发现修订，增加新版本与冲突记录；原实验保持当时冻结口径，另行明确重算才使用新版本。增量结果保证与<strong>同一份冻结输入</strong>全量计算一致，不保证与未来上游改写后的数据一致。</p>
+<p>保留 <code>source_created_at / source_updated_at / observed_at</code> 的区别。启动前回填的历史输入只能标为回顾性数据；后来采集到的预测不能倒签首次观察时间，声称在开奖前真实观察到了它。</p>
+</section>
+
+<section id="append"><h2>5. 原实验 ID 不变，每次追加一个计算段</h2>
+<p>新增段记录：<code>segment_id</code>、前段、原实验配置哈希、起点检查点、新截止期/可见截止、输入清单、开始/结束状态、增量统计与结束检查点。原 <code>experiment_id</code>、累计成绩和日账不重置。</p>
+<p>原批次的首次 start_date/end_date 作为基线保留，持续区间由 series 的已计算边界与 segment 的目标区间表达。worker 获取当前 work item 时使用当前段的有效区间；报告展示长期累计范围及可选择的历史段。不能只修改原 end_date、清除 replay_complete，再沿用旧 cutoff。</p>
+<pre>启用自动更新 → 生成一次基线快照
+每天到期：
+  1. 固定本次已归档的输入版本和目标截止。
+  2. 确认上段执行所有权/输入覆盖，创建唯一新段。
+  3. 从上次实际已处理期号的下一期开始，读取本地归档。
+  4. 每页事务写：逐期决策/结算 + 累计/日账 + 风控状态 + 游标。
+  5. 完成后保存新检查点，等待下一次增量。
+重启/重复触发：继续原段，不重复创建、计数或结算。</pre>
+<ul>
+<li>唯一约束确保同一批次只能有一个活动段；<code>request_id + revision</code> 保证 API 与 worker 并发幂等。没有新期数时返回“已追平”，不建空段。</li>
+<li>检查点包含资金高点、最大回撤、当前/最大连亏、累计统计、全部实验的运行中轮次、日风控、冷却起点、last_decided/last_settled/last_processed、模拟时钟和未结算事件。</li>
+<li>同时保存本来源最后 100 期完整暖机窗口及哈希。暂停/完成的长期实验也必须保护此窗口，不能只保护当前 running 批次。</li>
+<li>累计区间可超过 90 天；现有一次回放 90 天上限改为<strong>单次追加/分片工作上限</strong>。金额重测新版本读取长档案时也分段执行，不能再用原单批区间校验拒绝整个长期区间。</li>
+<li>失败只回滚当前页。恢复必须同时核对数据库 revision、引擎兼容版本和检查点摘要，不能依赖内存或前端回传的资金。</li>
+<li>后台抓取输入和回放消费分离：长期实验的历史、暖机、目标预测及 pending 结算全部通过本地版本档案读取。只加采集表而仍在 <code>_settle_pending</code> 直接读取上游，不能解决清理后的续算问题。</li>
+</ul>
+<h3>比较组</h3>
+<p>单批次和 study 使用同一段机制。比较组一次固定共同的新截止和输入清单，子方案在现有运行槽限制下依次计算；组内禁止某个子批次独立延长。所有子方案完成同一段后，才发布“当前可比”的差值。运行中展示各自进度和上一共同完成段，不能把快方案的 12 月成绩与慢方案的 11 月成绩直接相减。</p>
+</section>
+
+<section id="boundary"><h2>6. 保证结果正确的时间与版本边界</h2>
+<h3>6.1 跨日/跨月延续真实状态</h3>
+<p>月初不重置累计回撤、连亏或未完轮次；日风险按真实北京时间开奖日切换，旧日迟到结果仍归旧日。单月收益可以从日账汇总，<strong>累计最大回撤不能把各月最大回撤相加</strong>，ROI 也不能平均各月百分比。</p>
+<p>当前 <code>_finish_backtest</code> 会用较晚参考时间清算最后 pending。直接将 completed 改 running 可能让更晚已知的结算影响新段更早的决策。新段模式必须保存<strong>可继续执行的事件时钟前沿</strong>：决策、开奖可见、预测结算按各自时间处理，不能在段末按现实现在强制清空 pending。</p>
+<p>段末允许保留 pending/活动轮。最多处理到“下一条尚未计算的决策之前”的结算事件；下一条决策时点无法确定时，保存当前模拟时钟和 pending，交给下段逐时推进。月报可以显示“已算完区间，部分结果待结算”，不能为了月末显示完成而把续算状态推进到未来。</p>
+<h3>6.2 固定策略身份</h3>
+<p>策略身份由来源身份/配置版本、玩法、条件完整 JSON、单注金额、冻结赔率、风控与算法语义版本共同确定。展示名称不参与关键身份；目录赔率、综合模板后来增加门槛，都不能悄悄改变原 26 个实验。</p>
+<p>修正赔率、修改金额或增加条件属于新版本，使用共享输入重测新版本即可，已有稳定版本继续增量。算法修复若改变历史决策口径，旧结果保留明确标记；经兼容验证才能沿用检查点，否则建立新版本。历史上已标记 <code>review_required</code> 的旧回放不能无条件接管并宣称可信。</p>
+<h3>6.3 月报完整性</h3>
+<p>分别返回 <code>time_complete</code>（时间区间处理完）、<code>pending_count</code>（待结算）、<code>coverage_quality</code>（完整/有已知跳过/丢失/冲突）和 <code>comparable</code>（同组同输入同段）。原有 missing_prediction 不随功能升级消失；已知相同缺样的两方案可说明“相同样本可比”，不能称为整月输入无缺失。</p>
+<p>已完成月份生成带版本号的报告快照，之后新增月份不覆盖它。确需修订旧月，生成新报告 revision 和变更原因，旧快照仍可查。</p>
+</section>
+
+<section id="storage"><h2>7. 控制空间：结果长期留，输入精简留，细节有界留</h2>
+<div class="table"><table><thead><tr><th>层级</th><th>建议保留</th><th>可清理条件</th></tr></thead><tbody>
+<tr><td>实验定义、日/月汇总、累计状态、段摘要、必要检查点</td><td>长期保留；检查点压缩并按月/关键边界保留完整版本。</td><td>明确删除整个实验时才按归属处理；不能被普通明细清理顺带删除。</td></tr>
+<tr><td>当前暖机窗口、pending、未消费输入</td><td>一直保护到不再依赖。</td><td>所有订阅消费者已处理，且不属于任何暖机、pending、正在提交的段或修订审计。</td></tr>
+<tr><td>所选来源精简逐期档案</td><td>默认建议至少 24 个月；近 90 天热数据，较早按月压缩归档。</td><td>超过明确保留窗口且无消费/检查点依赖才可回收。若希望更长时间新建策略重算，可在容量预览后延长。</td></tr>
+<tr><td>逐笔实验明细与已闭轮细节</td><td>优先保留最近 30 天，受独立明细配额限制；日期口径仍为实际 finalized_at。</td><td>已汇总、已归档必要证据、不是 pending/边界审计依赖时回收；空间不足可缩短“可查细节”，不得删累计成绩。</td></tr>
+</tbody></table></div>
+<p><strong>两种保证要分开：</strong>固定旧实验依靠检查点和新增输入可持续累计，不必永久保存它已经消费的所有逐期输入；以后新建不同策略要完整重测旧年月，则必须仍保留那些年月的精简输入。24 个月是拟议默认值，不等于永久支持任意历史重测。</p>
+<h3>7.1 现有数据给出的容量量级</h3>
+<p>本次用实验库 <code>dbstat</code> 计算表和索引占用：预测约 <strong>223.5 字节/条</strong>，开奖约 <strong>197.8 字节/条</strong>。按约 411 期/日估算单版本未压缩输入：</p>
+<div class="table"><table><thead><tr><th>保存来源数</th><th>一年共享输入估算</th><th>两年估算</th></tr></thead><tbody>
+<tr><td>1 个</td><td>约 60 MiB</td><td>约 121 MiB</td></tr>
+<tr><td>2 个</td><td>约 92 MiB</td><td>约 184 MiB</td></tr>
+<tr><td>10 个</td><td>约 348 MiB</td><td>约 696 MiB</td></tr>
+</tbody></table></div>
+<p class="small">这是当前结构的量级估算，未包含输入修订、段快照、逐笔实验明细、WAL、临时文件或备份；压缩率尚未实测，不据此承诺长期总空间。26 个实验共享同一来源输入，不把上表乘以 26。</p>
+<p>真正容易膨胀的是“实验数 × 每日期数”的逐笔结果：500 个版本若每期都触发，30 天明细可能超过现有 1 GiB 预算。因此保留 30 天只是目标，必须加明细配额与分层清理，不能同时承诺满容量 500 个版本和无限细节保留。</p>
+<h3>7.2 配额和删除顺序</h3>
+<ul>
+<li>继续以现有目录 <strong>1 GiB</strong> 为总预算，不默认扩大。启用时估算未来增长；预留约 20% 给输入采集、检查点、事务和归档临时文件。</li>
+<li>达到计算软阈值先清可回收明细、暂停新重算/增量计算，为采集留预算；接近总硬预算时明确显示“数据采集暂停”和源删除倒计时，不能静默删未消费输入。</li>
+<li>数据库大小与压缩文件必须合并计量。现有 <code>storage_status()</code> 只数目录第一层文件，新建 archives 子目录后须改成受控递归计量，否则会漏算。</li>
+<li>SQLite DELETE 后的空闲页可复用，但主文件通常不缩小。不能把删除行数当作已回收磁盘；不在业务高峰自动 VACUUM，也不改变上游清理策略。</li>
+<li>压缩归档先写临时文件、完整校验行数/哈希并 fsync、原子改名，再提交索引；验证成功后才回收热数据。崩溃后能识别孤立文件或未完成批次，不能推进一个尚未落盘的采集游标。</li>
+<li>归档是输入库的一部分，不是备份；模拟库和档案清单需要配套一致备份，保存于预算目录之外。</li>
+</ul>
+<h3>7.3 防止“刚好来不及保存”</h3>
+<p>监控最早未覆盖期与上游保留边界的距离。建议剩余 7 天提醒、1 天升级；正常应保持分钟级采集延迟。计算暂停可长期补算，采集进程离线超过上游保留窗口则不能保证恢复未曾保存的数据。若以后要求跨任意长期停机也绝不丢数据，需上游清理前生成持久档案/导出凭证或增加独立存储；那是跨项目增强，不应虚称单个只读采集器已提供此保证。</p>
+</section>
+
+<section id="migration"><h2>8. 当前批次 8 如何接入</h2>
+<ol>
+<li><strong>先保存现有输入和结果。</strong>把来源 9 的已有精简缓存、配置快照、26 个实验状态、日账、最后 100 期窗口及输入质量记录纳入新档案。无需重跑 10—11 月。</li>
+<li>迁移创建“基线段”，标明来自原批次 8；原成绩、实验 ID、赔率和金额不改。单批次目前没有比较组的滚动输入摘要，不能凭新算一个哈希冒充历史运行时已验证的证据；基线标为迁移审计快照。</li>
+<li>接管起点使用 <code>last_issue_no=3511343</code>，下一期为 <code>3511344</code>。不要使用 <code>replay_max_issue=3511545</code>，也不要用最高下注期 <code>3511172</code>，它们代表不同含义。</li>
+<li>当前 pending=0、活动轮=0、100 期窗口齐全且无冲突，适合作为首个试点；仍验证最后已结结果可见时间早于新增决策点，以及新旧引擎兼容。旧源修订/过期/需复核结果不能自动跳过审计。</li>
+<li>固定已有赔率版本和组合长连错条件。即使默认综合模板后来新增条件，也不能改变这 26 个原版本；需要综合模板时另建版本，共用同一档案。</li>
+<li>首次补齐 11-27 及后续尚未处理区间，之后按每日到期检查自动推进。启用追加前预览实际来源覆盖；已有那 1 次缺预测与 2 次晚预测继续作为历史质量说明。</li>
+</ol>
+<p class="note">当前本地缓存仍保留了本批次覆盖的 10 月输入。需要尽早把它转为有保护、有清单的正式实验档案；普通 90 天缓存及“paused/completed 不保护暖机”的清理规则不能承担长期保留职责。本次仅提出方案，没有改动清理或启用采集。</p>
+</section>
+
+<section id="contracts"><h2>9. 数据模型、接口与页面约定</h2>
+<h3>9.1 建议新增的逻辑对象</h3>
+<div class="table"><table><thead><tr><th>对象</th><th>关键内容</th><th>不变量</th></tr></thead><tbody>
+<tr><td>lab_capture_streams / lab_capture_consumers</td><td>稳定源实例、来源 ID、启用状态、最高见到期、完整覆盖水位、重查队列、消费者范围、下次采集及错误。</td><td>共享采集与按用户/实验授权分离；禁用来源或撤回共享时停止新采集，不用缓存绕过权限。</td></tr>
+<tr><td>lab_input_versions / lab_input_coverage</td><td>精简开奖/预测的不可变版本、可见时间、哈希、缺期分类、重查记录；热数据位置或冷文件引用。</td><td>源实例+类型+预测器+期号+版本唯一；已消费版本不原地覆盖。</td></tr>
+<tr><td>lab_input_archives</td><td>月分区、格式版本、文件名、范围、记录数、SHA256、提交状态、引用数。</td><td>文件持久化并验证先于引用发布；不跨批次复制输入。</td></tr>
+<tr><td>lab_series / lab_segments</td><td>batch 或 study 归属、自动更新策略、配置哈希、段序号、前段、截止、输入清单、状态、幂等键。</td><td>每个实体一个活动段；追加不占用新的实验版本数量。</td></tr>
+<tr><td>lab_checkpoints</td><td>每实验 stats/risk_runtime/pending、日风险、模拟时钟、各水位、暖机、引擎版本、状态摘要。</td><td>与段完成/当前游标同事务提交；续算检查点不能从月汇总反推。</td></tr>
+<tr><td>lab_segment_summaries / lab_monthly_snapshots</td><td>本段增量、累计截面、月报版本、输入质量、原配置与报告口径。</td><td>增量计数/净利可对账；非可加指标保留状态计算，旧报告快照不静默改写。</td></tr>
+</tbody></table></div>
+<p>这是逻辑拆分，实施时可以合并低频元数据表，避免为每个概念增加复杂框架。旧 <code>lab_daily / lab_experiments</code> 继续作为累计成绩，不全库重建。schema 升级默认关闭自动更新，只迁移结构和可验证基线。</p>
+<h3>9.2 接口草案</h3>
+<div class="table"><table><thead><tr><th>接口</th><th>用途</th></tr></thead><tbody>
+<tr><td>GET /api/platform/rule-lab/batches/{id}/continuation-preview</td><td>只读检查起点、历史资格、配置哈希、数据覆盖、运行容量与空间，返回 revision；study 提供对等入口。</td></tr>
+<tr><td>POST /api/platform/rule-lab/batches/{id}/continuation</td><td>一次性开启/调整持续采集和每日自动追加；request_id、expected_revision、capture_enabled、compute_enabled、daily_at、timezone。</td></tr>
+<tr><td>POST /api/platform/rule-lab/batches/{id}/append</td><td>可选“立即追平”或手动指定新截止；服务端固定输入清单与创建段，重复请求不重复累计。</td></tr>
+<tr><td>GET /api/platform/rule-lab/batches/{id}/segments</td><td>读取分段进度、增量和历史快照；分页有界。</td></tr>
+<tr><td>GET /api/platform/rule-lab/batches/{id}/input-coverage</td><td>显示采集/计算/结算水位、缺口、预计保留期限与各类存储用量。</td></tr>
+</tbody></table></div>
+<p>沿用当前管理员与 owner 限制、16KB 请求上限及 no-store。当前实验接口整体拒绝查询参数，新增分页仅为对应新 GET 路由开放 limit/cursor 白名单，不能为了分页放开所有接口。GET 无采集/计算写副作用；配置变化或检查点 revision 不一致返回 409，源权限问题 403，存储不足显示明确原因。</p>
+<h3>9.3 页面状态</h3>
+<p>批次卡片建议显示：“自动更新已开启 · 已计算至 11-26 · 数据已保存至 11-27 · 下次追加 11-28 00:10”。点击可查看“累计 / 本次新增 / 按月 / 历史段”。“暂停计算”按钮旁明确“仍保留后续数据”；停止保留数据前显示未来补算范围可能随上游清理缩短。</p>
+<p>异常按来源或段隔离：<code>catching_up</code>、<code>waiting_inputs</code>、<code>archive_gap</code>、<code>storage_paused</code>、<code>source_unavailable</code> 分开说明。某个来源丢档不能使其他来源的自动采集停止。</p>
+</section>
+
+<section id="validation"><h2>10. 实施顺序与验收</h2>
+<ol>
+<li><strong>先做数据保留。</strong>补版本化精简输入、独立采集游标、覆盖记录、共享消费保护、冷热归档和配额。证明上游删除已复制数据后，本地仍可读取。</li>
+<li><strong>再做真正续算。</strong>以单批次 8 为接管目标，新增段/检查点，改 completed 的长期生命周期与所有输入读取路径；不要只开放改 end_date 的按钮。</li>
+<li><strong>接自动调度和报告。</strong>在既有 worker 内持久化每日到期任务，支持停机补跑、比较组共同截止、月报封账与页面状态。</li>
+<li><strong>最后做一致副本演练并逐步启用。</strong>原实验/日账/赔率原列保持，迁移幂等；先一个批次验证新增日与月边界，再开放更多来源。结构上线不自动启用所有现有实验。</li>
+</ol>
+<div class="table"><table><thead><tr><th>必验场景</th><th>验收结果</th></tr></thead><tbody>
+<tr><td>同一冻结输入 A+B 一次计算，与 A→重启→追加B</td><td>26 个实验逐笔/累计净利、资金高点、最大回撤、连亏、轮次、日风险一致。</td></tr>
+<tr><td>A 源明细已被删除，B 已采集</td><td>仅凭检查点、100期暖机与本地B继续；不向上游索取已消费A。</td></tr>
+<tr><td>B 未采集即被删除</td><td>明确 archive_gap 范围；不静默跳过、不补成零收益、不声明连续。</td></tr>
+<tr><td>源原本无预测、过晚预测、采集失败三种情况</td><td>分别计数；读取失败不推进覆盖水位，已知无预测按既有规则跳过。</td></tr>
+<tr><td>日/月边界最后一注迟到，活动轮跨午夜</td><td>不提前结算、日风险不串日、月初不重置全局回撤；pending可跨段。</td></tr>
+<tr><td>修改模板、金额、赔率、来源内容</td><td>旧版本不变；新策略独立；输入修订留版本、同组输入清单一致。</td></tr>
+<tr><td>连续追加 12 个月</td><td>实验版本数仍26；新增计算段、日/月账，不重复占用保存版本额度。</td></tr>
+<tr><td>并发请求、worker重启、重复页、磁盘满、压缩中断</td><td>无重复决策/盈亏、无半个checkpoint、无游标越过未持久化输入。</td></tr>
+<tr><td>暂停计算超过90天后恢复</td><td>已订阅未消费档案与边界暖机未被清理；若容量不足早已明确提示，不能无声丢档。</td></tr>
+<tr><td>大批明细触发预算</td><td>采集预算受保护，计算可暂停，已产生成绩可读；目录总计量包含冷档、WAL、临时文件。</td></tr>
+<tr><td>月报增量与新金额重测</td><td>原月快照保持；当月自动增加；金额重测从同档案重算新版本，不能按金额倍数放大旧收益替代。</td></tr>
+<tr><td>现网副本迁移</td><td>原批次8与26个实验、日账、统计、冻结赔率保持；起点3511344正确，没有误用3511545。</td></tr>
+</tbody></table></div>
+<p>本次已运行现有 <code>tests.test_rule_lab_continuation</code> 与 <code>tests.test_rule_lab_monthly</code>，<strong>21 项通过，0.335 秒</strong>，仅证明现有只读预检/月报基础行为。本方案涉及的采集、归档和真正追加仍未开发，不将现有测试当作新功能验收。</p>
+</section>
+
+<section id="sources"><h2>11. 代码落点</h2>
+<details open><summary>实现时需要衔接的位置</summary><ul>
+<li><code>AITradingSimulator/database.py:1845、2095附近、2189附近</code>：上游按日汇总后删除预测/开奖；<code>config.py:35</code>：默认保留策略。首版保持上游清理不变。</li>
+<li><code>services/rule_lab_source.py</code>：当前只读分页、时间/方向校验；新增长期采集读取与缺期分类，不读取大字段/凭证。</li>
+<li><code>services/rule_lab_store.py</code>：schema v3、completed禁止重启、当前缓存冲突处理、commit_step原子记账、prune的90天/100期保护；新增长期段与引用保护。</li>
+<li><code>domain/rule_lab_continuation.py</code>：已有study只读资格检查；推广至单批次，补执行时钟、输入覆盖和引擎兼容门槛。</li>
+<li><code>rule_lab_worker.py</code>：_start_backtest、_replay_backtest、_finish_backtest、_settle_pending及tick调度；长期模式统一从档案读取。</li>
+<li><code>domain/rule_lab_monthly.py</code>：日账生成月报，保持日收盘回撤标签，补长期区间/缺口/报告revision。</li>
+<li><code>services/rule_lab_service.py</code>、<code>api/app.py</code>、<code>ui/rule_lab.js/html</code>：开启更新、追加、覆盖与分段报告入口；金额重测复用长期输入。</li>
+<li><code>.boss/rule-lab-incremental-replay/design.md / progress.md</code>：既有未完成设计。本方案承接其段/快照思路，明确补上单批次、自动调度、真实保留配置、空间分层及当前接管起点。</li>
+</ul></details>
+<p class="small">以上 pc28touzhu 源文件默认位于 src/pc28touzhu；行号是当前调研定位提示，正式实施按函数名核对。此次没有写入任何运行数据库，没有改变服务或自动任务。</p>
+</section>
+</main></body></html>
