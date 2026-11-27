@@ -1,0 +1,26 @@
+[Unit]
+Description=pc28touzhu Approved Rule Lab Batch Queue
+After=pc28touzhu-rule-lab.service
+
+[Service]
+Type=simple
+User=www
+Group=www
+UMask=0077
+WorkingDirectory=/www/wwwroot/pc28touzhu
+Environment="PYTHONPATH=/www/wwwroot/pc28touzhu/src" "PYTHONDONTWRITEBYTECODE=1" "RULE_LAB_DATA_DIR=/www/wwwroot/pc28touzhu/data/rule_lab" "RULE_LAB_SOURCE_DB=/www/wwwroot/AITradingSimulator/pc28_predictor.db"
+ExecStart=/usr/bin/python3 /www/wwwroot/pc28touzhu/scripts/maintenance/run_rule_lab_batch_queue.py --manifest /www/wwwroot/pc28touzhu/data/rule_lab/machine-trials-20261127.json
+Restart=on-failure
+RestartSec=15s
+MemoryMax=128M
+CPUQuota=5%
+Nice=15
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateNetwork=true
+ReadWritePaths=/www/wwwroot/pc28touzhu/data/rule_lab /www/wwwroot/AITradingSimulator
+ReadOnlyPaths=/www/wwwroot/AITradingSimulator/pc28_predictor.db
+
+[Install]
+WantedBy=multi-user.target

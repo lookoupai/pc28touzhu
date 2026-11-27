@@ -282,7 +282,7 @@ const root = path.resolve(__dirname, '..');
         // preview reports the complete total and disables atomic creation.
         await page.locator('#labCompareButton').click();
         await page.locator('#labComparisonCapacity').filter({hasText:'460'}).waitFor();
-        assert.match(await page.locator('#labComparisonCapacity').innerText(),/652 \/ 500/);
+        assert.match(await page.locator('#labComparisonCapacity').innerText(),/652 \/ 650/);
         assert.equal(await page.locator('#labCreateStudyButton').isDisabled(),true);
         // Create a two-way metric source (50 × 5 = 250, total 492), then test the real queue API/UI.
         const preset=await page.evaluate(async()=>{const data=await(await fetch('/api/platform/rule-lab/options')).json();return data.risk_presets.find(p=>p.metric==='big_small').policy;});

@@ -813,7 +813,7 @@ def create_archive_replay(store,user_id,batch_id,experiment_id,config,*,now):
         stream=c.execute('SELECT * FROM lab_capture_streams WHERE id=?',(series['stream_id'],)).fetchone()
         if stream['seed_after_issue']<stream['seed_until_issue']:raise RuleLabError('archive_catching_up','原区间输入尚在保存，请完成采集后重测',409)
         store._require_space()
-        if store._capacity(c)['saved']>=500 or c.execute('SELECT COUNT(*) FROM lab_batches WHERE user_id=?',(user_id,)).fetchone()[0]>=50:raise RuleLabError('capacity_exceeded','保存版本或批次数量已达上限',409)
+        if store._capacity(c)['remaining_saved']<1 or c.execute('SELECT COUNT(*) FROM lab_batches WHERE user_id=?',(user_id,)).fetchone()[0]>=50:raise RuleLabError('capacity_exceeded','保存版本或批次数量已达上限',409)
         last=_last_processed([source]);last_open=read_input(c,stream['source_key'],'draw',0,last)
         if not last_open:raise RuleLabError('archive_gap','原实验计算末期输入档案缺失',409)
         start_date=source['start_date'];target_end=_day(last_open['open_at']);revision=archive_revision(c)
