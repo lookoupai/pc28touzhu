@@ -37,21 +37,13 @@ async function waitFor(check,label,timeout=10000){const end=Date.now()+timeout;w
   assert.match(d.getElementById('labPerformanceSummary').textContent,/最长连续亏损笔数/);
   assert.match(d.getElementById('labDetailStats').textContent,/有效完成轮/);
   fill('labInitialCapital',1000);assert.match(d.getElementById('labCapitalSummary').textContent,new RegExp((1000+original.experiments[0].net_profit).toFixed(2).replace('.', '\\.')));
-  d.getElementById('labStakeReplay').open=true;fire('labStakeReplay','toggle');
-  await waitFor(()=>!d.getElementById('labReplayCreateButton').disabled,'verified replay input');
-  assert.match(d.getElementById('labReplayAvailability').textContent,/当前仍可读取/);
-  fill('labReplayStake',10);fill('labReplayRiskMode','keep');fire('labReplayRiskMode','change');submit('labReplayForm');
-  await waitFor(()=>d.getElementById('statusMessage').textContent.includes('已生成当前条件的新金额回测'),'new amount replay');
-  const afterReplay=await get('/api/platform/rule-lab');const child=afterReplay.batches.find(item=>item.id!==info.batch_id);
-  assert.equal(child.stake_amount,10);assert.equal(child.status,'paused');
-  d.getElementById('labBatchStateButton').click();await waitFor(()=>!d.getElementById('labRefreshButton').disabled&&!d.getElementById('labBatchStateButton').disabled,'child started');
-  await post('/__fixture/tick');await refresh();await openFirst();
-  const childResult=await get('/api/platform/rule-lab/batches/'+child.id);assert.equal(childResult.experiments[0].settled_count,6);assert.equal(childResult.experiments[0].net_profit,19.92);
+  const beforeEstimate=requests.length;fill('labDisplayStake',10);assert.match(d.getElementById('labAmountEstimateNote').textContent,/估算/);assert.match(d.getElementById('labPerformanceSummary').textContent,/\+20.00/);assert.equal(requests.length,beforeEstimate);
+  d.getElementById('labAmountReset').click();assert.equal(d.getElementById('labDisplayStake').value,'1');
   assert.deepEqual((await get('/api/platform/rule-lab/batches/'+info.batch_id)).experiments,original.experiments);
   d.getElementById('labManageBatchButton').click();await waitFor(()=>!d.getElementById('labRenameSave').disabled,'management loaded');fill('labManagementName','修改名称 <img onerror=alert(1)>');submit('labRenameForm');await waitFor(()=>d.getElementById('labResultTitle').textContent.includes('修改名称'),'renamed');assert.equal(d.querySelector('#labResultTitle img'),null);d.getElementById('labManagementClose').click();
-  const childContinuation=await get('/api/platform/rule-lab/batches/'+child.id+'/continuation-preview');assert.equal(childContinuation.eligible,true,JSON.stringify(childContinuation));d.getElementById('labContinuationButton').click();await waitFor(()=>!d.getElementById('labContinuationPanel').hidden&&d.getElementById('labContinuationSummary').textContent.length>0,'continuation preview');assert.equal(d.getElementById('labContinuationCapture').checked,false);assert.equal(d.getElementById('labContinuationCompute').checked,false);assert.match(d.getElementById('labContinuationCoverage').textContent,/仅含计算依赖范围/);d.getElementById('labContinuationClose').click();
-  await openFirst();await post('/__fixture/remove-source-history');d.getElementById('labStakeReplay').open=true;fire('labStakeReplay','toggle');await waitFor(()=>/已清理|不可用|缺少|缺失/.test(d.getElementById('labReplayAvailability').textContent),'missing replay range');assert.equal(d.getElementById('labReplayCreateButton').disabled,true);
-  const replayWrites=requests.filter(item=>item.path.endsWith('/replay')&&item.method==='POST').length;submit('labReplayForm');await new Promise(resolve=>setTimeout(resolve,50));assert.equal(requests.filter(item=>item.path.endsWith('/replay')&&item.method==='POST').length,replayWrites);
+  const childContinuation=await get('/api/platform/rule-lab/batches/'+info.batch_id+'/continuation-preview');assert.equal(childContinuation.eligible,true,JSON.stringify(childContinuation));d.getElementById('labContinuationButton').click();await waitFor(()=>!d.getElementById('labContinuationPanel').hidden&&d.getElementById('labContinuationSummary').textContent.length>0,'continuation preview');assert.equal(d.getElementById('labContinuationCapture').checked,false);assert.equal(d.getElementById('labContinuationCompute').checked,false);assert.match(d.getElementById('labContinuationCoverage').textContent,/仅含计算依赖范围/);d.getElementById('labContinuationClose').click();
+  await openFirst();await post('/__fixture/remove-source-history');const afterRemoval=requests.length;fill('labDisplayStake',5);assert.match(d.getElementById('labPerformanceSummary').textContent,/\+10.00/);assert.equal(requests.length,afterRemoval);
+  assert.equal(requests.filter(item=>item.path.includes('/replay')).length,0);
   d.getElementById('labCloseDetailButton').click();d.getElementById('labStoragePanel').open=true;fire('labStoragePanel','toggle');await waitFor(()=>d.getElementById('labStorageSummary').children.length>0,'storage');assert.match(d.getElementById('labStorageExplanation').textContent,/已结算逐笔及已结束轮次不保留/);assert.match(d.getElementById('labStorageSummary').textContent,/历史冗余整理/);
   const exported=await api('/api/platform/rule-lab/batches/'+info.batch_id+'/export.csv');assert.equal(exported.status,200);assert.match(await exported.text(),/net_profit/);
   // Use the actual generator and management deletion flow for a new independent batch.
@@ -62,6 +54,6 @@ async function waitFor(check,label,timeout=10000){const end=Date.now()+timeout;w
   assert.equal(d.getElementById('labDeleteConfirm').disabled,true);fill('labDeleteConfirmName',generated.name);assert.equal(d.getElementById('labDeleteConfirm').disabled,false);submit('labDeleteForm');await waitFor(()=>d.getElementById('statusMessage').textContent.includes('删除')||d.getElementById('labManagementFeedback').textContent.includes('删除'),'delete accepted');
   await post('/__fixture/tick');await refresh();assert.equal((await get('/api/platform/rule-lab')).batches.some(item=>item.id===generated.id),false);
   assert.deepEqual(errors,[]);
-  console.log('Results DOM flow passed: real WSGI/SQLite results, capital/daily/monthly reports, current-source replay/start/settlement, original parity, rename/XSS, continuation defaults, missing-input prevention, storage and CSV. No browser/profile opened; layout not measured.');
+  console.log('Results DOM flow passed: real WSGI/SQLite results, capital/daily/monthly reports, local amount estimation, original parity, rename/XSS, continuation defaults, source-independent amounts, storage and CSV. No browser/profile opened; layout not measured.');
  }catch(error){console.error(stderr);throw error;}finally{if(dom)dom.window.close();server.stdin.end();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

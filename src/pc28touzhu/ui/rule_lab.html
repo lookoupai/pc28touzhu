@@ -157,6 +157,13 @@ __APP_SHELL__
     <section id="labExperimentDetail" class="lab-panel" aria-labelledby="labDetailTitle" hidden>
         <div class="lab-section-heading"><div><p class="lab-kicker">实验详情</p><h2 id="labDetailTitle" tabindex="-1"></h2></div><button id="labCloseDetailButton" class="lab-button" type="button">关闭详情</button></div>
         <p id="labDetailMeta" class="lab-muted"></p><div id="labDetailFeedback" class="lab-feedback" role="status"></div>
+        <section id="labAmountProjection" class="lab-risk-box" aria-label="每注金额换算" hidden>
+            <div class="lab-section-heading"><div class="lab-field lab-initial-capital"><label for="labDisplayStake">展示每注金额</label><input id="labDisplayStake" type="number" min="0" max="10000" step="1" aria-describedby="labAmountEstimateNote labAmountEstimateFeedback" aria-invalid="false"></div><button id="labAmountReset" class="lab-button" type="button">恢复原金额</button></div>
+            <p id="labAmountEstimateNote" class="lab-note"></p>
+            <p id="labAmountRiskPreview" class="lab-muted"></p>
+            <p id="labAmountEstimateFeedback" class="lab-feedback" role="status"></p>
+        </section>
+        <div id="labAmountEstimateResults" hidden>
         <dl id="labDetailStats" class="lab-summary"></dl><p id="labResultRetention" class="lab-muted"></p>
         <section id="labMonthly" hidden aria-labelledby="labMonthlyTitle">
             <div class="lab-section-heading"><h3 id="labMonthlyTitle" tabindex="-1">回测报告</h3><button id="labMonthlyExport" class="lab-button" type="button" disabled>导出月度 CSV</button></div>
@@ -170,29 +177,14 @@ __APP_SHELL__
             <div class="lab-table-scroll" role="region" aria-label="月度成绩表，可横向滚动" tabindex="0"><table class="lab-table"><caption>北京时间自然月；部分月份与无交易月份不计入月度胜率。月内回撤按日结算统计，可能低于逐笔回撤。</caption><thead><tr><th scope="col">月份</th><th scope="col">统计状态</th><th scope="col">结算笔数</th><th scope="col">累计投注额</th><th scope="col">月度净利润</th><th scope="col">投注收益率</th><th scope="col">盈利 / 亏损 / 投注天数</th><th scope="col">最差单日盈亏</th><th scope="col">最大回撤金额（日结）</th></tr></thead><tbody id="labMonthlyBody"></tbody></table></div>
             <h3 class="lab-report-subtitle">资金表现</h3>
             <p id="labCapitalStake" class="lab-note"></p>
-            <div class="lab-field lab-initial-capital"><label for="labInitialCapital">初始资金</label><input id="labInitialCapital" type="number" min="0" max="1000000000" step="1" placeholder="例如：1000" aria-describedby="labCapitalBasis"><span id="labCapitalBasis" class="lab-muted">本金用于计算当前回测的资金曲线与收益率。要改变每注金额，请使用下方“按新金额重新回测”。</span></div>
+            <div class="lab-field lab-initial-capital"><label for="labInitialCapital">初始资金</label><input id="labInitialCapital" type="number" min="0" max="1000000000" step="1" placeholder="例如：1000" aria-describedby="labCapitalBasis"><span id="labCapitalBasis" class="lab-muted">本金用于计算资金曲线与收益率，不随展示每注金额自动改变。</span></div>
             <div id="labCapitalFeedback" class="lab-feedback" role="status"></div>
             <dl id="labCapitalSummary" class="lab-summary"></dl>
             <div id="labEquityChart" class="lab-monthly-chart"></div>
             <p class="lab-muted">资金曲线按每日结算统计；最大回撤率 = 各日相对此前最高资金的下降比例中的最大值。日内亏损可能更大。当前结果未单独建模费用或多策略同时占款，初始资金只是报表参数，不是最低本金建议。</p>
-            <details id="labStakeReplay" class="lab-risk-box lab-amount-replay">
-                <summary>按新金额重新回测</summary>
-                <p id="labReplayAvailability" class="lab-note" role="status">展开后核对可重测的输入范围。</p>
-                <button id="labReplayCheckButton" class="lab-button" type="button">重新核对输入</button>
-                <form id="labReplayForm" novalidate>
-                    <p class="lab-muted">为当前条件和冻结赔率生成1个新实验，在已核对的输入范围内按新金额重新模拟盈亏和风控。保存后点击“启动模拟”；原成绩保持。</p>
-                    <div class="lab-form-grid lab-replay-fields">
-                        <div class="lab-field"><label for="labReplayStake">新回测每注金额</label><input id="labReplayStake" type="number" min="0" max="10000" step="1" required aria-describedby="labReplayFeedback"></div>
-                        <div class="lab-field"><label for="labReplayRiskMode">止盈止损金额</label><select id="labReplayRiskMode"><option value="scale">随每注金额同比调整</option><option value="keep">保留原金额</option></select></div>
-                    </div>
-                    <p id="labReplayRiskPreview" class="lab-note"></p>
-                    <p class="lab-muted">同比调整包含单轮、每日及附加日保护的止盈止损，四舍五入到分；次数、冷却期和命中率门槛保持原值。仅修改每注金额时，停轮时点可能改变。历史数据已清理的区间可能无法完整重测。</p>
-                    <button id="labReplayCreateButton" class="lab-button lab-button-primary" type="submit">生成新金额回测（暂停）</button>
-                    <p id="labReplayFeedback" class="lab-feedback" role="status"></p>
-                </form>
-            </details>
         </section>
         <h3>最近每日成绩</h3><div class="lab-table-scroll" role="region" aria-label="每日成绩表，可横向滚动" tabindex="0"><table class="lab-table"><caption>最多显示最近 90 天；未显示的日期不等于没有记录。</caption><thead><tr><th scope="col">日期</th><th scope="col">结算数</th><th scope="col">实赔 / 退本 / 全亏</th><th scope="col">投注额</th><th scope="col">净收益</th></tr></thead><tbody id="labDailyBody"></tbody></table></div>
+        </div>
     </section>
 </main>
 __ACCOUNT_DIALOG__

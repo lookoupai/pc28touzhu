@@ -13,7 +13,7 @@
     const pageSize = 20;
     const state = {options:null, overview:null, batch:null, experiments:[], selectedId:null, detailId:null, detailTrigger:null, resultPage:0,
         loading:false, mutating:false, exporting:false, readRevision:0, detailRevision:0, readAt:null, accessDenied:false,riskEditingId:null,
-        studies:[],study:null,studyRows:[],studyId:null,studyPage:0,preview:null,studyRequest:null,monthly:null,reportExperiment:null,replayPreview:null,replayLoading:false,replayError:"",performance:null,continuation:null,continuationRevision:0,management:null,managementJobs:new Map(),managementPoll:null,storage:null,storageRequest:null};
+        studies:[],study:null,studyRows:[],studyId:null,studyPage:0,preview:null,studyRequest:null,monthly:null,reportExperiment:null,detailResult:null,amountView:null,performance:null,continuation:null,continuationRevision:0,management:null,managementJobs:new Map(),managementPoll:null,storage:null,storageRequest:null};
     const studyNames={paused:'已暂停',queued:'等待运行额度',running:'比较中',completed:'全部完成',error:'比较异常',resource_paused:'资源限制暂停',deleting:'删除中'};
     const monthStatus={complete:'完整月份',no_samples:'完整月份 · 无交易',partial:'部分月份',not_replayed:'尚未回放',not_observed:'尚未观察',pending:'等待结算'};
     const continuationNames={disabled:'未启用',idle:'等待追加',catching_up:'正在保存后续数据',waiting_inputs:'等待输入齐备',running:'正在追加计算',paused:'本段计算已暂停',archive_gap:'输入档案有缺口',storage_paused:'存储预算暂停',source_unavailable:'来源暂不可用',error:'续算异常'};
@@ -224,9 +224,7 @@
         $("labEditRiskButton").disabled=locked();$("labSaveRiskButton").disabled=locked();$("labCancelRiskButton").disabled=state.mutating;
         ['labCompareButton','labCreateStudyButton','labStudyExportButton','labStudyPrevious','labStudyNext'].forEach(id=>$(id).disabled=locked());
         $("labStudyStateButton").disabled=locked()||!state.study||['completed','deleting'].includes(state.study.status);
-        ['labReplayStake','labReplayRiskMode'].forEach(id=>$(id).disabled=locked()||state.batch?.mode!=='backtest'||!state.monthly);
-        $("labReplayCreateButton").disabled=locked()||state.batch?.mode!=='backtest'||!state.monthly||state.replayLoading||!state.replayPreview?.available;
-        $("labReplayCheckButton").disabled=locked()||state.replayLoading||state.batch?.mode!=='backtest';
+        ['labDisplayStake','labAmountReset'].forEach(id=>$(id).disabled=locked()||!state.detailResult);
         $("labStudyList").querySelectorAll('button').forEach(button=>button.disabled=locked());
         ['labContinuationButton','labStudyContinuationButton','labContinuationRefresh','labContinuationMore','labContinuationPause'].forEach(id=>$(id).disabled=locked());
         $("labContinuationClose").disabled=state.mutating;
@@ -363,7 +361,7 @@
     }
     function closeDetail(restoreFocus) {
         state.detailRevision++; state.detailId = null; $("labExperimentDetail").hidden = true;
-        state.monthly=null;state.reportExperiment=null;$("labMonthly").hidden=true;$("labMonthlyExport").disabled=true;
+        state.monthly=null;state.reportExperiment=null;state.detailResult=null;state.amountView=null;$("labAmountProjection").hidden=true;$("labAmountEstimateResults").hidden=true;$("labMonthly").hidden=true;$("labMonthlyExport").disabled=true;
         $("labResultsBody").querySelectorAll("button[aria-expanded]").forEach(button => button.setAttribute("aria-expanded", "false"));
         if (restoreFocus && state.detailTrigger && state.detailTrigger.isConnected) state.detailTrigger.focus();
         state.detailTrigger = null;
@@ -560,8 +558,8 @@
         button.setAttribute("aria-expanded", "true"); $("labExperimentDetail").hidden = false;
         $("labDetailTitle").textContent = conditionName(item.condition) + " · " + settlementName(item);
         const packName=(state.options?.template_packs||[]).find(pack=>pack.id===state.batch?.template_pack)?.name||state.batch?.template_pack||'基础条件 v1';
-        $("labDetailMeta").textContent = packName+" · 固定金额 · 北京时间 · "+riskSummary(state.batch?.risk_policy);
-        $("labDetailStats").replaceChildren(); $("labDailyBody").replaceChildren();$("labResultRetention").textContent="";state.replayPreview=null;state.replayError="";state.replayLoading=false;
+        $("labDetailMeta").textContent = packName+" · 原模拟配置 · 固定金额 · 北京时间 · "+riskSummary(state.batch?.risk_policy);
+        $("labDetailStats").replaceChildren(); $("labDailyBody").replaceChildren();$("labResultRetention").textContent="";
         feedback("labDetailFeedback", "读取模拟结果…", false); $("labDetailTitle").focus();
         try {
             const result = await request(base + "/batches/" + batchId + "/experiments/" + item.id);
@@ -571,27 +569,23 @@
             $("labDetailMeta").append(document.createTextNode(' · 本实验冻结赔率：'+frozenOddsText(exp)+(exp.legacy_odds?'。旧赔率成绩保留，未按当前赔率重算。':'')));
             state.reportExperiment=exp;
             state.monthly=result.monthly||null;
-            $("labReplayStake").value=String(state.monthly?.capital.stake_amount||state.batch?.stake_amount||1);
-            $("labReplayRiskMode").value='scale';$("labStakeReplay").open=false;feedback('labReplayFeedback','',false);
-            renderMonthly();
-            renderReplay();renderReplayAvailability();updateControls();
-            putSummary($("labDetailStats"), [["累计投注", money(exp.stake_total)], ["累计净收益", money(exp.net_profit, true)], ["已结算期数", exp.settled_count], ["触发 / 跳过", exp.trigger_count + " / " + exp.skipped_count]]);
-            const rs=exp.risk_state;
-            if(rs?.mode==='round')putSummary($("labDetailStats"),[["累计净收益",money(exp.net_profit,true)],["有效完成轮 / 无效轮",rs.completed_rounds+' / '+rs.invalid_rounds],['盈利 / 亏损 / 平轮',rs.profit_rounds+' / '+rs.loss_rounds+' / '+rs.flat_rounds],['统计日',rs.day_date||'—'],['该日净利 / 开轮',money(rs.day_net_profit,true)+' / '+rs.day_round_count],['当前轮',riskStates[rs.state]||rs.state]]);
+            state.detailResult=result;
+            $("labDisplayStake").value=String(state.monthly?.capital.stake_amount||state.batch?.stake_amount||1);
+            $("labAmountProjection").hidden=false;
+            renderAmountEstimate();updateControls();
             $("labResultRetention").textContent="长期保留累计成绩与日/月结果，当前待结算 "+number(result.pending_count,0)+" 笔。";
-            tableRows($("labDailyBody"), result.daily, [d=>d.date, d=>d.settled_count, resultCounts, d=>money(d.stake_total), d=>money(d.net_profit,true)], "暂无每日结算记录。");
             feedback("labDetailFeedback", "", false);
             if(monthlyFocus && state.monthly)$("labMonthlyTitle").focus();
         } catch (error) {if (revision === state.detailRevision) {if (error.status === 401 || error.status === 403) denyAccess(); feedback("labDetailFeedback", error.message + "。关闭后可重新查看。", true);}}
     }
     function renderMonthly() {
-        const report=state.monthly;$("labMonthly").hidden=!report;$("labMonthlyExport").disabled=!report;
+        const report=state.amountView?.monthly;$("labMonthly").hidden=!report;$("labMonthlyExport").disabled=!report;
         if(!report)return;
         const summary=report.summary;
-        const exp=state.reportExperiment,valid=exp.hit_count+exp.miss_count;
-        $("labCapitalStake").textContent='本次回测每注 '+money(report.capital.stake_amount)+' 元。本金与每注金额共同决定资金使用比例。';
+        const exp=state.amountView.experiment,original=state.reportExperiment,valid=exp.hit_count+exp.miss_count;
+        $("labCapitalStake").textContent=(state.amountView.estimated?'估算每注 ':'本次回测每注 ')+money(report.capital.stake_amount)+' 元。本金与每注金额共同决定资金使用比例。';
         $("labReportScope").textContent='每注 '+money(report.capital.stake_amount)+' · '+(report.capital.batch_status==='completed'?'回测已完成':'回测尚未完成，以下为阶段结果')+' · 每个条件、赔率和风控版本独立统计。';
-        putSummary($("labPerformanceSummary"),[['累计净利润',money(exp.net_profit,true)],['累计投注额',money(exp.stake_total)],['投注收益率',percent(exp.roi_percent)],['最大回撤金额（逐笔）',money(exp.max_drawdown)],['已结算笔数',exp.settled_count],['胜率（不含退款）',percent(valid?exp.hit_count/valid*100:null)],['最长连续亏损笔数',exp.max_loss_streak],['收益回撤比',exp.max_drawdown>0?money(exp.net_profit/exp.max_drawdown):'—']]);
+        putSummary($("labPerformanceSummary"),[['累计净利润',money(exp.net_profit,true)],['累计投注额',money(exp.stake_total)],['投注收益率',percent(exp.roi_percent)],['最大回撤金额（逐笔）',money(exp.max_drawdown)],['已结算笔数',exp.settled_count],['胜率（不含退款）',percent(valid?exp.hit_count/valid*100:null)],['最长连续亏损笔数',exp.max_loss_streak],['收益回撤比',original.max_drawdown>0?money(original.net_profit/original.max_drawdown):'—']]);
         const notes=['月度胜率 = 盈利月份 ÷ 完整且有交易的月份。部分月份及无交易月份不参与计算。'];
         if(summary.eligible_months<6)notes.push('目前仅 '+summary.eligible_months+' 个完整且有交易的月份，样本不足以判断长期稳定性。');
         if(report.window.truncated)notes.push('只展示最近120个自然月，月度摘要也仅计算此范围；累计逐笔回撤仍覆盖全部已处理区间。');
@@ -603,6 +597,7 @@
             $("labReportScope").textContent='每注 '+money(report.capital.stake_amount)+' · 累计统计至 '+(report.window?.end||state.batch.continuation.effective_end_date||state.batch.continuation.calculated_through_date||'—')+' · 待结算 '+number(report.pending_count,state.batch.continuation.pending_count||0)+' 笔 · '+(coverageNames[report.coverage_quality]||'输入质量待核对')+'。';
             if(report.time_complete===false)$("labReportScope").append(document.createTextNode('当前区间仍为部分时段。'));
         }
+        if(state.amountView.estimated)$("labReportScope").prepend(document.createTextNode('金额估算 · '));
         renderMonthlyChart(report.rows);
         renderCapital();
     }
@@ -626,14 +621,14 @@
     }
     function renderCapital() {
         $("labCapitalSummary").replaceChildren();$("labEquityChart").replaceChildren();feedback('labCapitalFeedback','',false);
-        const basis=state.monthly?.capital;if(!basis)return;
+        const basis=state.amountView?.monthly?.capital;if(!basis)return;
         const raw=$("labInitialCapital").value,initial=Number(raw),cents=Math.round(initial*100);
         if(raw===''){feedback('labCapitalFeedback','填写初始资金后显示期末资金、累计收益率和资金曲线。',false);return;}
         if(!Number.isFinite(initial)||initial<.01||initial>1e9||Math.abs(initial*100-cents)>.00001){
             feedback('labCapitalFeedback','初始资金须为0.01～10亿之间的金额，最多两位小数。',true);return;
         }
         if(!basis.settled_count){feedback('labCapitalFeedback','尚无已结算交易，暂不能展示资金表现。',false);return;}
-        const curve=state.monthly.equity;
+        const curve=state.amountView.monthly.equity;
         if(!curve?.complete_history){feedback('labCapitalFeedback','历史日记录未完整覆盖整个回测区间，暂不计算完整资金表现。累计盈亏和月度记录仍可查看。',false);return;}
         const points=[{date:curve.window_start,value:cents},...curve.points.map(p=>({date:p.date,value:cents+p.cumulative_net_cents}))];
         let peak=cents,maximum=0,minimum=cents;
@@ -644,70 +639,65 @@
         if(bankrupt)feedback('labCapitalFeedback','按此初始资金，日终余额曾小于等于0。本次回测未模拟资金不足停投，后续盈亏不能当作可实现收益，收益率与回撤率暂停展示。',true);
         renderEquityChart(points);
     }
-    function renderReplayAvailability() {
-        const target=$("labReplayAvailability"),preview=state.replayPreview;
-        if(state.replayLoading){target.textContent='正在核对可用输入范围…';return;}
-        if(state.replayError){target.textContent=state.replayError+'。可稍后重新核对，原成绩仍可查看。';return;}
-        if(!preview){target.textContent='展开后核对可重测的输入范围。';return;}
-        if(!preview.available){target.textContent=(preview.reason||'所选区间输入已不可用')+'。原成绩仍可查看；可新建当前可用日期范围内的实验。';return;}
-        const range=preview.verified_range;
-        target.textContent='可重测区间：'+range.start_date+' 至 '+range.end_date+'。'+(preview.input_basis==='local_frozen'?'使用仍保留的冻结输入重新模拟。':'使用来源当前仍可读取的数据重新模拟，预测修订可能与原回测不同。');
-    }
-    async function readReplayPreview() {
-        if(locked()||state.replayLoading||state.batch?.mode!=='backtest'||state.detailId===null)return;
-        const batchId=state.batch.id,experimentId=state.detailId,revision=state.detailRevision;
-        state.replayLoading=true;state.replayPreview=null;state.replayError='';renderReplayAvailability();updateControls();
-        try{
-            const value=await request(base+'/batches/'+batchId+'/experiments/'+experimentId+'/replay-preview');
-            if(revision!==state.detailRevision||batchId!==state.selectedId)return;
-            if(typeof value.available!=='boolean'||!['local_frozen','current_source','unavailable'].includes(value.input_basis)||value.available&&(!value.verified_range?.start_date||!value.verified_range?.end_date))throw responseError('输入范围核对结果无效',0,'invalid_response');
-            state.replayPreview=value;
-        }catch(error){if(revision===state.detailRevision){if(error.status===401||error.status===403)denyAccess();state.replayError=error.message;}}
-        finally{if(revision===state.detailRevision){state.replayLoading=false;renderReplayAvailability();updateControls();}}
-    }
-    function renderReplay() {
-        feedback('labReplayFeedback','',false);
-        const batch=state.batch;$("labStakeReplay").hidden=batch?.mode!=='backtest';
-        if(!batch)return;
-        const amount=Number($("labReplayStake").value),scale=$("labReplayRiskMode").value==='scale';
-        const policy=structuredClone(batch.risk_policy);
-        if(!Number.isFinite(amount)||amount<.01||amount>10000||Math.abs(amount*100-Math.round(amount*100))>1e-7){
-            $("labReplayRiskPreview").textContent='填写0.01～10000的金额（最多两位小数）后预览止盈止损。';return;
+    // Always derive from the fetched result. Repeated edits never scale an earlier estimate.
+    function amountView(amount) {
+        const original=state.monthly?.capital.stake_amount||state.batch?.stake_amount||1;
+        const numerator=BigInt(Math.round(amount*100)),denominator=BigInt(Math.round(original*100));
+        const scaleCents=value=>{
+            if(!Number.isSafeInteger(value))throw new Error('原始金额超出可精确换算范围。');
+            const absolute=BigInt(Math.abs(value));
+            const rounded=(absolute*numerator*2n+denominator)/(denominator*2n);
+            if(rounded>BigInt(Number.MAX_SAFE_INTEGER))throw new Error('换算金额过大，请降低展示每注金额。');
+            return Number(rounded)*(value<0?-1:1);
+        };
+        const scale=value=>value==null?value:scaleCents(Math.round(Math.abs(value)*100)*(value<0?-1:1))/100;
+        const fields=(target,keys)=>{if(target)keys.forEach(key=>{if(target[key]!=null)target[key]=scale(target[key]);});};
+        const view=structuredClone(state.detailResult);
+        view.stake=amount;view.originalStake=original;view.estimated=numerator!==denominator;
+        fields(view.experiment,['net_profit','stake_total','max_drawdown']);
+        fields(view.experiment.risk_state,['day_net_profit','round_net_profit']);
+        view.daily.forEach(row=>fields(row,['net_profit','stake_total']));
+        const report=view.monthly;
+        if(report){
+            fields(report.summary,['best_month_profit','worst_month_profit']);
+            report.rows.forEach(row=>fields(row,['stake_total','net_profit','worst_day_profit','daily_close_drawdown']));
+            fields(report.capital,['net_profit','stake_total','max_drawdown']);report.capital.stake_amount=amount;
+            if(report.equity)report.equity.points.forEach(point=>{point.cumulative_net_cents=scaleCents(point.cumulative_net_cents);});
         }
-        if(scale&&policy.mode==='round'){
-            const numerator=BigInt(Math.round(amount*100)),denominator=BigInt(Math.round(batch.stake_amount*100));
-            [policy.round,policy.day,...policy.additional_day_guards].forEach(control=>{
-                ['profit_target','loss_limit'].forEach(key=>{
-                    const original=BigInt(Math.round(control[key]*100));
-                    control[key]=Number((original*numerator*2n+denominator)/(denominator*2n))/100;
-                });
+        // Preview text may retain sub-cent thresholds; these are never submitted as a policy.
+        view.risk=structuredClone(state.batch?.risk_policy);
+        if(view.risk?.mode==='round'){
+            [view.risk.round,view.risk.day,...(view.risk.additional_day_guards||[])].forEach(control=>{
+                ['profit_target','loss_limit'].forEach(key=>{const value=control[key];control[key]=value>0?(scale(value)||'<0.01'):value;});
             });
         }
-        $("labReplayRiskPreview").textContent='新回测每注 '+money(amount)+' · '+riskSummary(policy);
-        if(policy.additional_day_guards?.length){const guard=policy.additional_day_guards[0];$("labReplayRiskPreview").append(document.createTextNode(' · 附加日止盈 '+guard.profit_target+' / 止损 '+guard.loss_limit));}
+        return view;
     }
-    async function createAmountReplay(event) {
-        event.preventDefault();
-        if(locked()||state.batch?.mode!=='backtest'||!state.monthly||state.replayLoading||!state.replayPreview?.available)return;
-        const raw=$("labReplayStake").value,amount=Number(raw);
-        if(!raw||!Number.isFinite(amount)||amount<.01||amount>10000||Math.abs(amount*100-Math.round(amount*100))>1e-7){
-            feedback('labReplayFeedback','请输入0.01～10000的每注金额，最多两位小数。',true);$("labReplayStake").focus();return;
-        }
-        const batchId=state.batch.id,experimentId=state.detailId;
-        state.mutating=true;updateControls();feedback('labReplayFeedback','正在生成新的金额回测…',false);
+    function renderAmountEstimate() {
+        if(!state.detailResult)return;
+        const raw=$("labDisplayStake").value,amount=Number(raw);
+        state.amountView=null;
+        $("labAmountEstimateResults").hidden=true;$("labMonthlyExport").disabled=true;
+        $("labAmountEstimateNote").textContent='';$("labAmountRiskPreview").textContent='';
+        feedback('labAmountEstimateFeedback','',false);
         try{
-            const result=await request(base+'/batches/'+batchId+'/experiments/'+experimentId+'/replay','POST',{
-                stake_amount:amount,risk_amount_mode:$("labReplayRiskMode").value});
-            if(!result.batch||!Number.isInteger(result.batch.id))throw responseError('创建结果暂时无法确认',0,'invalid_response',true);
-            state.selectedId=result.batch.id;state.resultPage=0;$("labSort").value='paired';
-            await refresh(false);$("labGenerator").open=false;
-            feedback('statusMessage','已生成当前条件的新金额回测，每注 '+money(amount)+' 元。点击“启动模拟”开始重算，完成后查看新实验的资金表现。',false);
-            $("labResultTitle").focus();
+            if(!raw||!Number.isFinite(amount)||amount<.01||amount>10000||Math.abs(amount*100-Math.round(amount*100))>1e-7)throw new Error('请输入0.01～10000的每注金额，最多两位小数。');
+            const view=amountView(amount);state.amountView=view;
+            $("labDisplayStake").setAttribute('aria-invalid','false');$("labAmountEstimateResults").hidden=false;
+            $("labAmountEstimateNote").textContent=view.estimated?
+                '金额估算：原每注 '+money(view.originalStake)+' → 展示每注 '+money(amount)+' 元；按原成绩同比换算收益、回撤和资金曲线，止盈止损金额同步同比调整。逐笔舍入及风控临界点可能使实际重测结果不同。':
+                '当前为原每注 '+money(view.originalStake)+' 元的实际模拟成绩。修改金额即可在本页同比估算，无需重新排队；修改条件或风控比例请在管理中复制新版本回测。';
+            $("labAmountRiskPreview").textContent=(view.estimated?'同比估算风控 · ':'原风控 · ')+riskSummary(view.risk);
+            (view.risk?.additional_day_guards||[]).forEach((guard,index)=>$("labAmountRiskPreview").append(document.createTextNode(' · 附加日保护 '+(index+1)+'：止盈 '+(guard.profit_target||'不限')+' / 止损 '+(guard.loss_limit||'不限'))));
+            const exp=view.experiment,rs=exp.risk_state;
+            putSummary($("labDetailStats"),[["累计投注",money(exp.stake_total)],["累计净收益",money(exp.net_profit,true)],["已结算期数",exp.settled_count],["触发 / 跳过",exp.trigger_count+' / '+exp.skipped_count]]);
+            if(rs?.mode==='round')putSummary($("labDetailStats"),[["累计净收益",money(exp.net_profit,true)],["有效完成轮 / 无效轮",rs.completed_rounds+' / '+rs.invalid_rounds],['盈利 / 亏损 / 平轮',rs.profit_rounds+' / '+rs.loss_rounds+' / '+rs.flat_rounds],['统计日',rs.day_date||'—'],['该日净利 / 开轮',money(rs.day_net_profit,true)+' / '+rs.day_round_count],['当前轮',riskStates[rs.state]||rs.state]]);
+            tableRows($("labDailyBody"),view.daily,[d=>d.date,d=>d.settled_count,resultCounts,d=>money(d.stake_total),d=>money(d.net_profit,true)],'暂无每日结算记录。');
+            renderMonthly();
         }catch(error){
-            if(error.status===401||error.status===403)denyAccess();
-            if(error.unknown){await refresh(false);feedback('statusMessage','生成结果暂时无法确认，已尝试刷新列表。请核对是否已有新金额回测，避免重复提交。',true);}
-            else feedback('labReplayFeedback',error.message,true);
-        }finally{state.mutating=false;updateControls();}
+            state.amountView=null;$("labAmountEstimateResults").hidden=true;$("labMonthlyExport").disabled=true;
+            $("labDisplayStake").setAttribute('aria-invalid','true');feedback('labAmountEstimateFeedback',error.message,true);
+        }
     }
     function renderEquityChart(points) {
         const target=$("labEquityChart"),width=Math.min(760,Math.max(280,target.clientWidth||620)),height=210;
@@ -722,12 +712,12 @@
         shape('text',{x:12,y:198},points[0].date);shape('text',{x:width-12,y:198,'text-anchor':'end'},points.at(-1).date);target.append(svg);
     }
     function exportMonthly() {
-        const report=state.monthly;if(!report||state.accessDenied)return;
-        const columns=['month','status','range_start','range_end','complete_month','eligible','settled_count','stake_total','net_profit','roi_percent','betting_days','profitable_days','losing_days','worst_day_profit','daily_close_drawdown'];
+        const view=state.amountView,report=view?.monthly;if(!report||state.accessDenied)return;
+        const columns=['month','status','range_start','range_end','complete_month','eligible','settled_count','stake_total','net_profit','roi_percent','betting_days','profitable_days','losing_days','worst_day_profit','daily_close_drawdown','amount_basis','original_stake_amount','display_stake_amount'];
         const cell=value=>'"'+String(value??'').replaceAll('"','""')+'"';
-        const text=columns.join(',')+'\r\n'+report.rows.map(row=>columns.map(key=>cell(row[key])).join(',')).join('\r\n');
+        const text=columns.join(',')+'\r\n'+report.rows.map(row=>columns.map(key=>cell(({amount_basis:view.estimated?'estimate':'original',original_stake_amount:view.originalStake,display_stake_amount:view.stake,...row})[key])).join(',')).join('\r\n');
         const url=URL.createObjectURL(new Blob(['\uFEFF',text],{type:'text/csv;charset=utf-8'})),link=element('a');
-        link.href=url;link.download='rule-lab-'+state.selectedId+'-experiment-'+state.detailId+'-monthly.csv';document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        link.href=url;link.download='rule-lab-'+state.selectedId+'-experiment-'+state.detailId+'-monthly'+(view.estimated?'-estimate':'')+'.csv';document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
     }
     async function exportCsv() {
         if (!state.batch || state.exporting || locked()) return;
@@ -1014,7 +1004,7 @@
         view.mode=mode;view.dirty=false;const config=view.preview.config;
         $("labDeleteForm").hidden=true;$("labDefinitionForm").hidden=false;
         $("labDefinitionTitle").textContent=mode==='fork'?'修改并新建版本':'编辑未启动实验';
-        $("labDefinitionNote").textContent=mode==='fork'?'新版本使用所选条件模板及当前赔率目录，保存后暂停且成绩从零开始。原实验及历史成绩保持。若仅调整单个版本金额并沿用原冻结赔率，可用原“按新金额重新回测”入口。':'保存后按新配置重新生成实验版本，仍保持暂停，并退出当前自动排队；请检查后手动启动。';
+        $("labDefinitionNote").textContent=mode==='fork'?'新版本使用所选条件模板及当前赔率目录，保存后暂停且成绩从零开始。原实验及历史成绩保持。仅按比例调整金额时，可直接在详情中修改“展示每注金额”查看估算。':'保存后按新配置重新生成实验版本，仍保持暂停，并退出当前自动排队；请检查后手动启动。';
         $("labDefinitionSave").textContent=mode==='fork'?'保存为新版本（暂停）':'保存修改（保持暂停）';
         $("labDefinitionName").value=(mode==='fork'?config.name+' · 修改版':config.name).slice(0,80);
         const select=$("labDefinitionPredictor");select.replaceChildren();(state.options?.predictors||[]).forEach(p=>{const option=element('option',p.name);option.value=p.id;select.append(option);});
@@ -1170,11 +1160,8 @@
     });
     $("labMonthlyExport").addEventListener('click',exportMonthly);
     $("labInitialCapital").addEventListener('input',renderCapital);
-    $("labReplayStake").addEventListener('input',renderReplay);
-    $("labReplayRiskMode").addEventListener('change',renderReplay);
-    $("labReplayForm").addEventListener('submit',createAmountReplay);
-    $("labStakeReplay").addEventListener('toggle',()=>{if($("labStakeReplay").open&&!state.replayPreview&&!state.replayLoading)readReplayPreview();});
-    $("labReplayCheckButton").addEventListener('click',readReplayPreview);
+    $("labDisplayStake").addEventListener('input',renderAmountEstimate);
+    $("labAmountReset").addEventListener('click',()=>{if(!state.detailResult)return;$("labDisplayStake").value=String(state.monthly?.capital.stake_amount||state.batch?.stake_amount||1);renderAmountEstimate();});
     $("labExportButton").addEventListener("click", exportCsv);
     $("labCompareButton").addEventListener('click',comparisonPreview);$("labCreateStudyButton").addEventListener('click',createStudy);
     $("labStudyStateButton").addEventListener('click',changeStudyState);$("labStudyExportButton").addEventListener('click',exportStudy);
@@ -1195,7 +1182,7 @@
     $("labStorageRefresh").addEventListener('click',readStorage);$("labStorageReclaim").addEventListener('click',reclaimStorage);
     document.addEventListener("platform-auth:changed", () => {state.readRevision++; state.detailRevision++; denyAccess(); state.options = null; refresh(true);});
     document.addEventListener('visibilitychange',autoRefresh);
-    window.addEventListener('resize',()=>{if(state.monthly){renderMonthlyChart(state.monthly.rows);renderCapital();}});
+    window.addEventListener('resize',()=>{if(state.amountView?.monthly){renderMonthlyChart(state.amountView.monthly.rows);renderCapital();}});
     setInterval(autoRefresh,15000);
     updatePreview(); updateControls(); refresh(true);
 }());

@@ -40,7 +40,8 @@ def main():
         fixture.execute('CREATE TABLE pc28_prediction_daily_summary(predictor_id INTEGER,summary_date TEXT)')
         store=RuleLabStore(root/'lab'/'rule_lab.db');source=RuleLabSource(fixture.path)
         service=RuleLabService(store,source,resources=FakeResources())
-        risk=policy(cooldown_issues=0);risk['round'].update(profit_target=0,loss_limit=0,max_bets=2);risk['day']['enabled']=False
+        risk=policy(cooldown_issues=0);risk['round']['max_bets']=2
+        risk['additional_day_guards']=[{**risk['day'],'profit_target':40,'loss_limit':40}]
         config=normalize_batch_payload(dict(name='结果观察 · 原方案',mode='backtest',predictor_id=1,metric='big_small',
             start_date=day.isoformat(),end_date=day.isoformat(),risk_policy=risk),now=stamp(now))
         batch=store.create_batch(1,config,'本地模拟来源',build_experiments('big_small')[:2],now=stamp(now))

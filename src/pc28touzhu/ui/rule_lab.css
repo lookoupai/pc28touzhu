@@ -107,8 +107,6 @@
 #labMonthly h3 { margin-top: 0; }
 #labMonthly h3.lab-report-subtitle { margin-top: var(--lab-xl); }
 .lab-initial-capital { max-width: 420px; margin-bottom: var(--lab-lg); }
-.lab-amount-replay > summary { font-weight: var(--lab-semibold); }
-.lab-replay-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .lab-performance { border-top: thin solid var(--line); padding-top: var(--lab-lg); margin: var(--lab-lg) 0; }
 .lab-performance h3 { margin-top: 0; }
 .lab-performance .lab-button[aria-pressed=true] { border-color: var(--primary); background: var(--lab-success-bg); color: var(--lab-success); opacity: 1; }
@@ -140,7 +138,7 @@
 }
 @media (max-width: 600px) {
     .lab-panel { padding: var(--lab-lg); }
-    .lab-form-grid, .lab-dates, .lab-replay-fields { grid-template-columns: minmax(0, 1fr); }
+    .lab-form-grid, .lab-dates { grid-template-columns: minmax(0, 1fr); }
     .lab-continuation-switches { grid-template-columns: minmax(0, 1fr); }
     .lab-continuation-append-form { align-items: stretch; flex-direction: column; }
     .lab-continuation-append-form .lab-field { flex-basis: auto; }
