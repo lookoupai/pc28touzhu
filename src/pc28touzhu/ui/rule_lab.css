@@ -319,3 +319,20 @@ body.lab-drawer-open { overflow: hidden; }
 }
 
 .lab-self-check > span { min-width: 0; }
+
+/* Research tools reuse the shared drawer while keeping group boundaries explicit. */
+.lab-research { width: min(980px,100vw); }
+.lab-research #labResearchTabs { border-bottom: 1px solid var(--line,#dbe3ec); padding-bottom: 12px; }
+.lab-research [role=tab][aria-selected=true] { background: var(--primary,#0f766e); color: #fff; }
+.lab-research h4 { margin: 0 0 8px; overflow-wrap: anywhere; }
+.lab-research-group { margin-block: 18px; border-top: 2px solid var(--line,#dbe3ec); }
+.lab-research-metrics { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; margin-block: 12px; }
+.lab-research-metrics dt { color: var(--muted); font-size: 12px; }
+.lab-research-metrics dd { margin: 5px 0 0; font-variant-numeric: tabular-nums; }
+.lab-research details { margin-block: 10px; overflow-wrap: anywhere; }
+.lab-research details summary { min-height: 32px; cursor: pointer; }
+.lab-research #labManageBulkApply { margin-block: 12px; }
+@media(max-width:760px) {
+ .lab-research-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
+ .lab-research #labResearchTabs .lab-button { flex: 1 1 40%; }
+}

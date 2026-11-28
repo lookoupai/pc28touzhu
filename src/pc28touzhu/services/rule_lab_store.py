@@ -157,7 +157,7 @@ class RuleLabStore:
             connection.execute('PRAGMA journal_mode=WAL')
         with self._connect(write=True) as c:
             version = c.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2, 3, 4, 5, 6, 7):
+            if version not in (0, 1, 2, 3, 4, 5, 6, 7, 8):
                 raise RuleLabError('store_unavailable', '模拟账本版本不兼容', 503)
             statements = [
                 '''CREATE TABLE IF NOT EXISTS lab_batches (
@@ -250,7 +250,9 @@ class RuleLabStore:
             template_schema(c)
             from pc28touzhu.services.rule_lab_queue import init_schema as queue_schema
             queue_schema(c)
-            c.execute('PRAGMA user_version=7')
+            from pc28touzhu.services.rule_lab_favorites import init_schema as favorite_schema
+            favorite_schema(c)
+            c.execute('PRAGMA user_version=8')
 
     def storage_status(self):
         from pc28touzhu.services.rule_lab_storage import storage_status

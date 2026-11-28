@@ -327,6 +327,7 @@ class PlatformApiApplication:
             "/assets/rule_lab.css": ("rule_lab.css", "text/css"),
             "/assets/rule_lab.js": ("rule_lab.js", "application/javascript"),
             "/assets/rule_lab_self_service.js": ("rule_lab_self_service.js", "application/javascript"),
+            "/assets/rule_lab_research.js": ("rule_lab_research.js", "application/javascript"),
         }
         if path in shared_assets:
             if method != "GET":
@@ -1429,11 +1430,12 @@ class PlatformApiApplication:
             continuation_match=re.fullmatch(r"/(batches|studies)/([1-9][0-9]{0,17})/(continuation-preview|continuation|append|segments|input-coverage)",suffix)
             queue_match=re.fullmatch(r"/queue/([1-9][0-9]{0,17})/state",suffix)
             template_match=re.fullmatch(r"/templates/([1-9][0-9]{0,17})(?:/(edit|delete))?",suffix)
+            favorite_match=re.fullmatch(r"/favorites/([1-9][0-9]{0,17})/(edit|delete|create)",suffix)
             pagination={};observation_options={};template_filters={};queue_filters={}
             if environ.get("QUERY_STRING"):
                 observation_route=bool(re.fullmatch(r"/(?:batches|studies)/[1-9][0-9]{0,17}",suffix))
                 segment_route=continuation_match and continuation_match.group(3)=='segments'
-                if method!='GET' or not (observation_route or segment_route or suffix in ('/templates','/queue')):
+                if method!='GET' or not (observation_route or segment_route or suffix in ('/templates','/queue','/favorites')):
                     raise RuleLabError('invalid_input','此接口不接受查询参数')
                 try:query=parse_qs(str(environ['QUERY_STRING']),keep_blank_values=True,strict_parsing=True,max_num_fields=2)
                 except ValueError as exc:raise RuleLabError('invalid_input','查询参数无效') from exc
@@ -1462,6 +1464,10 @@ class PlatformApiApplication:
             study_match=re.fullmatch(r"/studies/([1-9][0-9]{0,17})(?:/(state|export\.csv))?",suffix)
             if suffix in ("", "/options"):
                 expected = "GET"
+            elif suffix=='/research/options':expected='GET'
+            elif suffix in ('/research/rankings','/research/data-quality','/management/bulk-preview','/management/bulk'):expected='POST'
+            elif suffix=='/favorites':expected=method if method in ('GET','POST') else 'GET'
+            elif favorite_match:expected='POST'
             elif suffix=='/queue':expected='GET'
             elif suffix=='/queue/enqueue' or queue_match:expected='POST'
             elif suffix=='/templates':expected=method if method in ('GET','POST') else 'GET'
@@ -1488,7 +1494,7 @@ class PlatformApiApplication:
                     length = int(environ.get("CONTENT_LENGTH") or 0)
                 except (TypeError, ValueError):
                     raise RuleLabError("invalid_input", "请求长度无效")
-                limit=131072 if suffix.startswith("/templates") or suffix in ("/batches/preview","/batches/bulk","/studies/preview","/studies") else 16384
+                limit=131072 if suffix.startswith(("/templates","/research","/favorites","/management/bulk")) or suffix in ("/batches/preview","/batches/bulk","/studies/preview","/studies") else 16384
                 if not 0 <= length <= limit:
                     raise RuleLabError("invalid_input", "实验配置请求超过允许大小")
             if self.rule_lab_service is None:
@@ -1499,6 +1505,25 @@ class PlatformApiApplication:
                 payload = service.overview(user_id)
             elif suffix == "/options":
                 payload = service.options(user_id)
+            elif suffix=='/management/bulk-preview':payload=service.preview_bulk_management(user_id,_read_json_body(environ))
+            elif suffix=='/management/bulk':
+                payload=service.execute_bulk_management(user_id,_read_json_body(environ))
+                return _json_response(start_response,202 if payload['created'] and payload['action'] in ('delete','append') else 200,payload,headers)
+            elif suffix=='/research/options':payload=service.research_options(user_id)
+            elif suffix=='/research/rankings':payload=service.research_rankings(user_id,_read_json_body(environ))
+            elif suffix=='/research/data-quality':payload=service.research_data_quality(user_id,_read_json_body(environ))
+            elif suffix=='/favorites':
+                if method=='GET':payload=service.list_favorites(user_id,**pagination)
+                else:
+                    payload=service.save_favorite(user_id,_read_json_body(environ))
+                    return _json_response(start_response,201 if payload['created'] else 200,payload,headers)
+            elif favorite_match:
+                fid=int(favorite_match.group(1));action=favorite_match.group(2);body=_read_json_body(environ)
+                if action=='edit':payload=service.save_favorite(user_id,body,fid=fid)
+                elif action=='delete':payload=service.delete_favorite(user_id,fid,body)
+                else:
+                    payload=service.create_from_favorite(user_id,fid,body)
+                    return _json_response(start_response,201 if payload['created'] else 200,payload,headers)
             elif suffix=='/queue':payload=service.list_queue(user_id,**queue_filters)
             elif suffix=='/queue/enqueue':payload=service.enqueue(user_id,_read_json_body(environ))
             elif queue_match:payload=service.set_queue_state(user_id,int(queue_match.group(1)),_read_json_body(environ))

@@ -84,7 +84,7 @@ def migrate(database_path,*,apply=False,backup_path=None,drain=False,max_steps=1
         database_bytes=path.stat().st_size,directory_bytes=before,backup_required=True,
         available_bytes=shutil.disk_usage(path.parent).free)
     if not apply:return result
-    if version not in (5,6,7):raise RuleLabError('store_unavailable','只支持schema5/6/7的实验库',409)
+    if version not in (5,6,7,8):raise RuleLabError('store_unavailable','只支持schema5/6/7/8的实验库',409)
     if mode!=2:raise RuleLabError('storage_not_ready','实验库尚未启用分批空间回收，请先完成原空间模式升级',409)
     if backup_path is None:raise RuleLabError('backup_required','迁移必须指定实验目录外的备份',409)
     backup=Path(backup_path).resolve()

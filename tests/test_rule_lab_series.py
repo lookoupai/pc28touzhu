@@ -60,7 +60,7 @@ class SeriesTests(unittest.TestCase):
         return self.store.set_continuation(1,'batch',self.batch['id'],payload,now=NOW),payload
 
     def test_schema_migration_is_additive_idempotent_and_default_off(self):
-        with sqlite3.connect(self.path) as c:self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],7)
+        with sqlite3.connect(self.path) as c:self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],8)
         before=self.snapshot();self.store.initialize();self.assertEqual(self.snapshot(),before)
         preview=self.preview();self.assertTrue(preview['eligible']);self.assertFalse(preview['continuation']['enabled'])
         self.assertEqual(preview['next_issue'],'1101');self.assertEqual(preview['saved_experiments'],26)

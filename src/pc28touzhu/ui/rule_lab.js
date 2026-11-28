@@ -10,7 +10,7 @@
     Object.assign(reasonNames,{round_profit_target:"单轮止盈",round_loss_limit:"单轮止损",round_max_bets:"单轮下注上限",day_profit_target:"日止盈",day_loss_limit:"日止损",day_max_bets:"日下注上限",day_max_rounds:"当日开轮次数已达上限",daily_hit_rate_low:"日命中率熔断",cooldown:"等待开轮间隔",no_valid_bets:"无有效投注"});
     const riskStates={legacy:"逐期对照",active:"轮内跟随",unfinished:"区间结束·轮未完结",waiting:"等待条件 / 冷却",day_stopped:"统计日已停止"};
     const riskEditors={};
-    const extensions={};let templateCatalog=[];
+    const extensions={};const drawerExtensions=new Map();let templateCatalog=[];
     const pageSize = 20;
     const observationDefaults=Object.freeze({version:1,months:2,includePartial:true,minimumRoi:3,minimumCount:200,minimumDays:10,
         maximumSpread:null,maximumMonthlyDrawdownUnits:null,maximumUnderwaterDays:null,highlight:'red',matchesOnly:false,showRuntime:false});
@@ -385,7 +385,7 @@
             body.append(row);
         }
     }
-    function drawerElements() {return ['labExperimentDetail','labObservationPanel','labGenerator','labSystemPanel','labManagementPanel','labContinuationPanel','labSelfServicePanel'].map($);}
+    function drawerElements() {return ['labExperimentDetail','labObservationPanel','labGenerator','labSystemPanel','labManagementPanel','labContinuationPanel','labSelfServicePanel','labResearchPanel'].map($);}
     function drawerFocusable(node) {
         return [...node.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[href],[tabindex="0"]')].filter(item=>{
             if(item.closest('[hidden]'))return false;
@@ -415,7 +415,7 @@
     }
     function closeActiveDrawer(restoreFocus=true,force=false) {
         const drawer=state.layout.drawer;if(!drawer)return true;if(state.mutating&&!force)return false;
-        if(drawer.id==='labSelfServicePanel'&&extensions.close&&!extensions.close(restoreFocus))return false;
+        const hooks=drawerExtensions.get(drawer.id);if(hooks?.close&&!hooks.close(restoreFocus))return false;
         if(drawer.id==='labExperimentDetail')closeDetail(restoreFocus);
         else if(drawer.id==='labManagementPanel')closeManagement(restoreFocus);
         else if(drawer.id==='labContinuationPanel')closeContinuation(restoreFocus);
@@ -558,7 +558,7 @@
         $("labResultNext").disabled = locked() || (state.resultPage + 1) * pageSize >= state.resultFilteredCount;
         $("labBatchSelect").disabled=locked();$("labStudySelect").disabled=locked();
         $("labEditRiskButton").disabled=locked();$("labSaveRiskButton").disabled=locked();$("labCancelRiskButton").disabled=state.mutating;
-        ['labCompareButton','labCreateStudyButton','labStudyExportButton','labTemplatesButton','labQueueButton','labNewExperiment'].forEach(id=>$(id).disabled=locked());
+        ['labCompareButton','labCreateStudyButton','labStudyExportButton','labTemplatesButton','labQueueButton','labNewExperiment','labResearchButton','labFavoriteDetailButton'].forEach(id=>$(id).disabled=locked());
         $("labStudyPrevious").disabled=locked()||state.studyPage<=0;
         $("labStudyNext").disabled=locked()||(state.studyPage+1)*pageSize>=state.studyFilteredCount;
         $("labStudySort").disabled=locked()||!state.studyRows.length;
@@ -721,7 +721,7 @@
         renderLayout();
     }
     function denyAccess() {
-        if(extensions.reset)extensions.reset();
+        for(const handlers of drawerExtensions.values())if(handlers.reset)handlers.reset();
         closeActiveDrawer(false,true);
         state.observation.revision++;state.observation.loading=false;state.observation.dirty=false;state.loading=false;fillObservationForm(state.observation.settings);
         closeContinuation(false);closeManagement(false);state.managementJobs.clear();renderManagementJobs();
@@ -1516,8 +1516,8 @@
     $("labObservationReset").addEventListener('click',()=>{fillObservationForm(observationDefaults);state.observation.dirty=true;applyObservation();});
     document.querySelectorAll('[data-observation-months]').forEach(button=>button.addEventListener('click',()=>{$("labObservationMonths").value=button.dataset.observationMonths;state.observation.dirty=true;}));
     window.RuleLabUI={request,refresh,openDrawer,dismissDrawer,closeActiveDrawer,denyAccess,feedback,createRiskEditor,fillRisk,riskValue,riskError,riskSummary,renderRiskPresets,
-        getContext:()=>({options:state.options,batch:state.batch,selectedId:state.selectedId,selectedCondition:state.detailContext?.item?.condition,accessDenied:state.accessDenied,loading:state.loading,mutating:state.mutating}),
-        setBusy:value=>{state.mutating=Boolean(value);updateControls();},register:handlers=>Object.assign(extensions,handlers),selectBatch,openStudy};
+        getContext:()=>({options:state.options,batch:state.batch,selectedId:state.selectedId,selectedCondition:state.detailContext?.item?.condition,detailBatch:state.detailContext?.batch,detailExperiment:state.detailResult?.experiment,accessDenied:state.accessDenied,loading:state.loading,mutating:state.mutating}),
+        setBusy:value=>{state.mutating=Boolean(value);updateControls();},register:handlers=>{const {drawerId,close,reset,...actions}=handlers;if(drawerId)drawerExtensions.set(drawerId,{close,reset});Object.assign(extensions,actions);},selectBatch,openStudy};
     initializeLayout();initializeObservation();updatePreview(); updateControls(); refresh(true);
     document.dispatchEvent(new CustomEvent('rulelab:ready'));
 }());

@@ -1,0 +1,207 @@
+{
+  "feature": "rule-lab-research-workspace",
+  "base_commit": "79376e7",
+  "working_directory": "/www/wwwroot/pc28touzhu-lab-research-workspace",
+  "concurrency_limit": 2,
+  "writeSetSource": "tasks.md §2",
+  "roles_serial": [
+    "Backend",
+    "Frontend"
+  ],
+  "root_role": "review/independent QA/release",
+  "waves": [
+    {
+      "id": "W1",
+      "title": "收藏/schema8与统一排名",
+      "status": "passed",
+      "dependencies": [],
+      "contractRows": [
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "R10",
+        "R11"
+      ],
+      "stopCondition": "任何旧数据变更、半组写入、伪排名/伪完整性、越权、隐式日程或主流程不可用时停止修复",
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_research",
+          "tests.test_rule_lab_research_api",
+          "tests.test_rule_lab_research_migration",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_research",
+          "tests.test_rule_lab_research_api",
+          "tests.test_rule_lab_research_migration",
+          "tests.test_rule_lab_observation",
+          "tests.test_rule_lab_observation_api",
+          "tests.test_rule_lab_management",
+          "-q"
+        ]
+      ],
+      "evidence": "backend-evidence.md"
+    },
+    {
+      "id": "W2",
+      "title": "原子批量管理",
+      "status": "passed",
+      "dependencies": [
+        "W1"
+      ],
+      "contractRows": [
+        "R05",
+        "R06",
+        "R07",
+        "R10"
+      ],
+      "stopCondition": "任何旧数据变更、半组写入、伪排名/伪完整性、越权、隐式日程或主流程不可用时停止修复",
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_bulk_management",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_bulk_management",
+          "tests.test_rule_lab_management",
+          "tests.test_rule_lab_management_qa",
+          "tests.test_rule_lab_series",
+          "tests.test_rule_lab_queue",
+          "tests.test_rule_lab_continuous_worker",
+          "-q"
+        ]
+      ],
+      "evidence": "backend-evidence.md"
+    },
+    {
+      "id": "W3",
+      "title": "来源质量预检",
+      "status": "passed",
+      "dependencies": [
+        "W2"
+      ],
+      "contractRows": [
+        "R08",
+        "R09",
+        "R10"
+      ],
+      "stopCondition": "任何旧数据变更、半组写入、伪排名/伪完整性、越权、隐式日程或主流程不可用时停止修复",
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_quality",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_quality",
+          "tests.test_rule_lab_source",
+          "tests.test_rule_lab_worker",
+          "-q"
+        ]
+      ],
+      "evidence": "backend-evidence.md"
+    },
+    {
+      "id": "W4",
+      "title": "四闭环页面和发布",
+      "status": "passed",
+      "dependencies": [
+        "W3"
+      ],
+      "contractRows": [
+        "R01",
+        "R03",
+        "R05",
+        "R08",
+        "R10",
+        "R11"
+      ],
+      "stopCondition": "任何旧数据变更、半组写入、伪排名/伪完整性、越权、隐式日程或主流程不可用时停止修复",
+      "redTests": [
+        [
+          "node",
+          "tests/test_rule_lab_research_ui.cjs"
+        ]
+      ],
+      "greenGates": [
+        [
+          "node",
+          "tests/test_rule_lab_research_ui.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_research_browser.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_self_service_browser.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_layout_ui.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_results_ui.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_continuation_ui.cjs"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tests",
+          "-q"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "evidence": "frontend-evidence.md"
+    }
+  ]
+}

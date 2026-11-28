@@ -198,7 +198,7 @@ class ResultsOnlyStoreTests(unittest.TestCase):
         self.assertEqual(self.count('lab_decisions'),1)
         self.assertEqual(self.store.get_experiment_detail(1,bid,eid),before)
         with sqlite3.connect(self.path) as c:
-            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],7)
+            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],8)
 
     def test_pending_settlement_can_use_reserved_pages_at_growth_limit(self):
         bid, eid = self.create()
@@ -296,7 +296,7 @@ class ResultsIndexInitializationTests(unittest.TestCase):
         self.assertEqual(self.indexes(),indexes)
         with sqlite3.connect(self.path) as c:
             self.assertEqual(c.execute('SELECT COUNT(*),SUM(net_cents) FROM lab_decisions').fetchone(),before)
-            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],7)
+            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],8)
 
     def test_schema5_with_missing_indexes_does_not_trigger_history_index_builds(self):
         self.store.initialize()

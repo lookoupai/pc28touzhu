@@ -26,7 +26,7 @@ class TemplateCatalogTests(unittest.TestCase):
     def test_schema_is_seven_and_reinitialization_keeps_existing_rows(self):
         self.assertEqual(self.request(PREFIX+'/templates')['status_code'],200)
         with sqlite3.connect(self.store.db_path) as c:
-            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],7)
+            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],8)
             before={t:c.execute('SELECT * FROM '+t+' ORDER BY rowid').fetchall() for t, in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.store.initialize()
         with sqlite3.connect(self.store.db_path) as c:

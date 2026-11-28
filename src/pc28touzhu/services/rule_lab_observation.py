@@ -11,7 +11,7 @@ from pc28touzhu.domain.rule_lab_observation import build_observation, observatio
 
 
 def load_observations(store, connection, batches, experiments, *, months, include_partial, now,
-                      study_comparable=True, continuations=None):
+                      study_comparable=True, continuations=None, window=None):
     """Read daily totals twice (bounded rows + grouped audit), never once per row."""
     if not connection.in_transaction:
         raise ValueError('观察统计必须在同一只读事务中读取')
@@ -36,7 +36,7 @@ def load_observations(store, connection, batches, experiments, *, months, includ
                 issue_keys.add(int(issue))
         contexts[batch['id']] = dict(internal=internal, legacy_engine=store._replay_review_required(batch))
     owner_end = max(report_window(item['internal'], now=now)[1] for item in contexts.values())
-    window = observation_window(owner_end.isoformat(), months=months, include_partial=include_partial, now=now)
+    window = copy.deepcopy(window) if window is not None else observation_window(owner_end.isoformat(), months=months, include_partial=include_partial, now=now)
     end = date.fromisoformat(window['end_date'])
     first = min(date.fromisoformat(window['start_date']), end-timedelta(days=27))
     ids = [experiment['id'] for experiment in experiments]

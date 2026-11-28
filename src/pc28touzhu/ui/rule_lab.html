@@ -11,7 +11,7 @@ __APP_SHELL__
 <main class="app-page lab-page" id="mainContent" tabindex="-1">
     <header class="app-page-heading lab-layout-heading">
         <div><p>策略研究</p><h1>规则实验室</h1></div>
-        <div class="lab-actions"><button id="labRefreshButton" class="lab-button" type="button">刷新</button><button id="labNewExperiment" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labSelfServicePanel">新建实验</button><button id="labTemplatesButton" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labSelfServicePanel">模板库</button><button id="labQueueButton" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labSelfServicePanel">运行队列</button><button id="labSystemToggle" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labSystemPanel">系统</button></div>
+        <div class="lab-actions"><button id="labRefreshButton" class="lab-button" type="button">刷新</button><button id="labNewExperiment" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labSelfServicePanel">新建实验</button><button id="labTemplatesButton" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labSelfServicePanel">模板库</button><button id="labQueueButton" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labSelfServicePanel">运行队列</button><button id="labResearchButton" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labResearchPanel">研究工作区</button><button id="labSystemToggle" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labSystemPanel">系统</button></div>
     </header>
     <div id="labSelectionBar" class="lab-selection-bar">
         <div id="labBatchSelection" class="lab-field"><label for="labBatchSelect">实验批次</label><select id="labBatchSelect"><option value="">读取批次…</option></select></div>
@@ -191,7 +191,7 @@ __APP_SHELL__
     </section>
 
     <section id="labExperimentDetail" class="lab-panel lab-drawer" aria-labelledby="labDetailTitle" hidden role="dialog" aria-modal="true" tabindex="-1">
-        <div class="lab-section-heading lab-drawer-heading"><div><p class="lab-kicker">实验详情</p><h2 id="labDetailTitle" tabindex="-1"></h2></div><button id="labCloseDetailButton" class="lab-button" type="button">关闭详情</button></div>
+        <div class="lab-section-heading lab-drawer-heading"><div><p class="lab-kicker">实验详情</p><h2 id="labDetailTitle" tabindex="-1"></h2></div><button id="labFavoriteDetailButton" class="lab-button" type="button">收藏候选</button><button id="labCloseDetailButton" class="lab-button" type="button">关闭详情</button></div>
         <p id="labDetailObservation" class="lab-note"></p><p id="labDetailMeta" class="lab-muted"></p><dl id="labDetailComparison" class="lab-summary" hidden></dl><div id="labDetailRuntime"></div><div id="labDetailFeedback" class="lab-feedback" role="status"></div>
         <section id="labAmountProjection" class="lab-risk-box" aria-label="每注金额换算" hidden>
             <div class="lab-section-heading"><div class="lab-field lab-initial-capital"><label for="labDisplayStake">展示每注金额</label><input id="labDisplayStake" type="number" min="0" max="10000" step="1" aria-describedby="labAmountEstimateNote labAmountEstimateFeedback" aria-invalid="false"></div><button id="labAmountReset" class="lab-button" type="button">恢复原金额</button></div>
@@ -227,9 +227,14 @@ __APP_SHELL__
 <div id="labSelfLeave" class="lab-note" hidden role="alert"><p>有尚未保存的修改。可以保留页面草稿，稍后继续。</p><div class="lab-actions"><button id="labSelfKeep" class="lab-button" type="button">保留页面草稿并关闭</button><button id="labSelfDiscard" class="lab-button" type="button">放弃修改并关闭</button><button id="labSelfStay" class="lab-button" type="button">继续编辑</button></div></div>
 <p id="labSelfFeedback" class="lab-feedback" role="status" tabindex="-1"></p><div id="labSelfBody"></div>
 </section>
+<section id="labResearchPanel" class="lab-panel lab-drawer lab-self-service lab-research" hidden role="dialog" aria-modal="true" aria-labelledby="labResearchTitle" tabindex="-1">
+<div class="lab-drawer-heading"><div><p class="lab-kicker">策略研究</p><h2 id="labResearchTitle">研究工作区</h2></div><button id="labResearchClose" class="lab-button" type="button">关闭</button></div>
+<div id="labResearchTabs" class="lab-actions" role="tablist" aria-label="研究工具"><button class="lab-button" role="tab" data-research-tab="rankings">来源排名</button><button class="lab-button" role="tab" data-research-tab="favorites">候选收藏</button><button class="lab-button" role="tab" data-research-tab="bulk">批量管理</button><button class="lab-button" role="tab" data-research-tab="quality">数据质量</button></div>
+<p id="labResearchFeedback" class="lab-feedback" role="status" tabindex="-1"></p><div id="labResearchBody"></div>
+</section>
 </main>
 <div id="labDrawerBackdrop" class="lab-drawer-backdrop" hidden></div>
 __ACCOUNT_DIALOG__
-<script src="/assets/ui-text.js"></script><script src="/assets/auth-panel.js"></script><script src="/assets/account-menu.js"></script><script src="/assets/auth-guard.js"></script><script src="/assets/rule_lab.js"></script><script src="/assets/rule_lab_self_service.js"></script>
+<script src="/assets/ui-text.js"></script><script src="/assets/auth-panel.js"></script><script src="/assets/account-menu.js"></script><script src="/assets/auth-guard.js"></script><script src="/assets/rule_lab.js"></script><script src="/assets/rule_lab_self_service.js"></script><script src="/assets/rule_lab_research.js"></script>
 </body>
 </html>

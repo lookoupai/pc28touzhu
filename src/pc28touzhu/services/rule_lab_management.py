@@ -164,19 +164,23 @@ def _validate_revision(c,kind,row,payload):
     if row['status']=='deleting':raise RuleLabError('deleting','实验正在删除，不能继续修改',409)
 
 
-def rename_owner(store,user_id,kind,owner_id,payload,*,now):
+def rename_owner_tx(store,c,user_id,kind,owner_id,payload,*,now):
     _request(payload,('expected_revision','name'));name=_name(payload['name'])
+    previous=_receipt(c,user_id,kind,owner_id,payload,'rename')
+    if previous:return previous
+    row=_owned(store,c,user_id,kind,owner_id);_validate_revision(c,kind,row,payload)
+    table='lab_batches' if kind=='batch' else 'lab_studies'
+    c.execute('UPDATE '+table+' SET name=?,updated_at=? WHERE id=?',(name,now,owner_id))
+    _control(c,kind,owner_id,user_id,now)
+    fresh=_owned(store,c,user_id,kind,owner_id)
+    owner=store._batch(c,fresh) if kind=='batch' else store._study(c,fresh)
+    result=dict(created=True,owner=owner);_save_receipt(c,user_id,kind,owner_id,payload,'rename',result,now)
+    return result
+
+
+def rename_owner(store,user_id,kind,owner_id,payload,*,now):
     with store._connect(write=True,reserve=True) as c:
-        previous=_receipt(c,user_id,kind,owner_id,payload,'rename')
-        if previous:return previous
-        row=_owned(store,c,user_id,kind,owner_id);_validate_revision(c,kind,row,payload)
-        table='lab_batches' if kind=='batch' else 'lab_studies'
-        c.execute('UPDATE '+table+' SET name=?,updated_at=? WHERE id=?',(name,now,owner_id))
-        _control(c,kind,owner_id,user_id,now)
-        fresh=_owned(store,c,user_id,kind,owner_id)
-        owner=store._batch(c,fresh) if kind=='batch' else store._study(c,fresh)
-        result=dict(created=True,owner=owner);_save_receipt(c,user_id,kind,owner_id,payload,'rename',result,now)
-        return result
+        return rename_owner_tx(store,c,user_id,kind,owner_id,payload,now=now)
 
 
 def _definitions(experiments):
@@ -255,12 +259,12 @@ def _counts(c,bids,sids):
     return result
 
 
-def _delete_preview(store,c,user_id,kind,owner_id):
+def _delete_preview(store,c,user_id,kind,owner_id,*,allowed_study_ids=()):
     row=_owned(store,c,user_id,kind,owner_id);bids=_members(c,kind,row);blockers=[]
     if kind=='batch':
         child=c.execute('SELECT study_id FROM lab_study_batches WHERE batch_id=?',(owner_id,)).fetchone()
         if child:blockers.append(dict(code='group_action_required',message='比较组子方案需从比较组整体删除',study_id=child[0]))
-    dependencies=_dependencies(c,kind,row)
+    dependencies=[item for item in _dependencies(c,kind,row) if item['id'] not in allowed_study_ids]
     if dependencies:blockers.append(dict(code='dependent_studies',message='此批次仍被比较组引用，请先处理这些比较组',studies=dependencies))
     if row['status']=='deleting':blockers.append(dict(code='deleting',message='删除已在后台处理'))
     sids=[r[0] for r in c.execute('SELECT id FROM lab_series WHERE owner_kind=? AND owner_id=?',(kind,owner_id))]
@@ -274,36 +278,40 @@ def delete_preview(store,user_id,kind,owner_id,*,now):
     with store._connect() as c:return _delete_preview(store,c,user_id,kind,owner_id)[0]
 
 
-def request_delete(store,user_id,kind,owner_id,payload,*,now):
+def request_delete_tx(store,c,user_id,kind,owner_id,payload,*,now,allowed_study_ids=()):
     _request(payload,('expected_revision','confirm_name'))
     if not isinstance(payload['confirm_name'],str):raise RuleLabError('invalid_input','确认名称必须为文本')
+    previous=_receipt(c,user_id,kind,owner_id,payload,'delete')
+    if previous:return previous
+    preview,row,bids,sids,pids=_delete_preview(store,c,user_id,kind,owner_id,allowed_study_ids=allowed_study_ids)
+    _validate_revision(c,kind,row,payload)
+    if payload['confirm_name']!=row['name']:raise RuleLabError('confirmation_mismatch','确认名称与实验名称不一致',409)
+    if not preview['eligible']:raise RuleLabError(preview['blockers'][0]['code'],preview['blockers'][0]['message'],409)
+    marks=','.join('?' for _ in bids)
+    c.execute("UPDATE lab_batches SET status='deleting',revision=revision+1,error='',updated_at=? WHERE id IN ("+marks+')',[now]+bids)
+    for bid in bids:_control(c,'batch',bid,user_id,now,optout=True,deleted=True)
+    if kind=='study':
+        c.execute("UPDATE lab_studies SET status='deleting',updated_at=? WHERE id=?",(now,owner_id));_control(c,kind,owner_id,user_id,now,deleted=True)
+    for sid in sids:
+        c.execute("UPDATE lab_series SET capture_enabled=0,compute_enabled=0,state='deleting',revision=revision+1,next_run_at=NULL,updated_at=? WHERE id=?",(now,sid))
+        c.execute("UPDATE lab_segments SET status='cancelled' WHERE series_id=? AND status IN ('queued','running','paused')",(sid,))
+        c.execute("UPDATE lab_continuation_requests SET status='cancelled',updated_at=? WHERE series_id=? AND status IN ('waiting_inputs','running')",(now,sid))
+    # Invalidate any capture page selected before the last consumer was
+    # disabled. It must not recreate orphaned input after deletion drains it.
+    for pid in pids:
+        c.execute('''UPDATE lab_capture_streams SET revision=revision+1,updated_at=? WHERE predictor_id=?
+            AND NOT EXISTS(SELECT 1 FROM lab_series s WHERE s.stream_id=lab_capture_streams.id AND s.capture_enabled=1)''',(now,pid))
+    data=dict(batch_ids=bids,series_ids=sids,predictor_ids=pids,released_versions=0,experiment_count=preview['counts']['experiments'],initial_bytes=store.storage_status()['used_bytes'])
+    total=sum(value for key,value in preview['counts'].items() if key!='pending')
+    jid=c.execute('''INSERT INTO lab_management_jobs(user_id,kind,owner_kind,owner_id,phase,payload_json,total_rows,created_at,updated_at)
+        VALUES(?,'delete',?,?,'owned_records',?,?,?,?)''',(user_id,kind,owner_id,_dump(data),total,now,now)).lastrowid
+    result=dict(created=True,job=_job(c.execute('SELECT * FROM lab_management_jobs WHERE id=?',(jid,)).fetchone()))
+    _save_receipt(c,user_id,kind,owner_id,payload,'delete',result,now);return result
+
+
+def request_delete(store,user_id,kind,owner_id,payload,*,now):
     with store._connect(write=True,reserve=True) as c:
-        previous=_receipt(c,user_id,kind,owner_id,payload,'delete')
-        if previous:return previous
-        preview,row,bids,sids,pids=_delete_preview(store,c,user_id,kind,owner_id)
-        _validate_revision(c,kind,row,payload)
-        if payload['confirm_name']!=row['name']:raise RuleLabError('confirmation_mismatch','确认名称与实验名称不一致',409)
-        if not preview['eligible']:raise RuleLabError(preview['blockers'][0]['code'],preview['blockers'][0]['message'],409)
-        marks=','.join('?' for _ in bids)
-        c.execute("UPDATE lab_batches SET status='deleting',revision=revision+1,error='',updated_at=? WHERE id IN ("+marks+')',[now]+bids)
-        for bid in bids:_control(c,'batch',bid,user_id,now,optout=True,deleted=True)
-        if kind=='study':
-            c.execute("UPDATE lab_studies SET status='deleting',updated_at=? WHERE id=?",(now,owner_id));_control(c,kind,owner_id,user_id,now,deleted=True)
-        for sid in sids:
-            c.execute("UPDATE lab_series SET capture_enabled=0,compute_enabled=0,state='deleting',revision=revision+1,next_run_at=NULL,updated_at=? WHERE id=?",(now,sid))
-            c.execute("UPDATE lab_segments SET status='cancelled' WHERE series_id=? AND status IN ('queued','running','paused')",(sid,))
-            c.execute("UPDATE lab_continuation_requests SET status='cancelled',updated_at=? WHERE series_id=? AND status IN ('waiting_inputs','running')",(now,sid))
-        # Invalidate any capture page selected before the last consumer was
-        # disabled. It must not recreate orphaned input after deletion drains it.
-        for pid in pids:
-            c.execute('''UPDATE lab_capture_streams SET revision=revision+1,updated_at=? WHERE predictor_id=?
-                AND NOT EXISTS(SELECT 1 FROM lab_series s WHERE s.stream_id=lab_capture_streams.id AND s.capture_enabled=1)''',(now,pid))
-        data=dict(batch_ids=bids,series_ids=sids,predictor_ids=pids,released_versions=0,experiment_count=preview['counts']['experiments'],initial_bytes=store.storage_status()['used_bytes'])
-        total=sum(value for key,value in preview['counts'].items() if key!='pending')
-        jid=c.execute('''INSERT INTO lab_management_jobs(user_id,kind,owner_kind,owner_id,phase,payload_json,total_rows,created_at,updated_at)
-            VALUES(?,'delete',?,?,'owned_records',?,?,?,?)''',(user_id,kind,owner_id,_dump(data),total,now,now)).lastrowid
-        result=dict(created=True,job=_job(c.execute('SELECT * FROM lab_management_jobs WHERE id=?',(jid,)).fetchone()))
-        _save_receipt(c,user_id,kind,owner_id,payload,'delete',result,now);return result
+        return request_delete_tx(store,c,user_id,kind,owner_id,payload,now=now)
 
 
 def management_job(store,user_id,job_id):

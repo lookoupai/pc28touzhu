@@ -90,8 +90,8 @@ def import_queue(database_path,manifest,*,apply=False,legacy_unit=DEFAULT_LEGACY
         if not apply:c.execute('PRAGMA query_only=ON')
         c.execute('BEGIN IMMEDIATE' if apply else 'BEGIN')
         version=c.execute('PRAGMA user_version').fetchone()[0]
-        if version not in (6,7) or apply and version!=7:
-            raise RuleLabError('schema_required','预览需要schema6/7；正式导入前必须先完成schema7迁移',409)
+        if version not in (6,7,8) or apply and version not in (7,8):
+            raise RuleLabError('schema_required','预览需要schema6/7/8；正式导入前必须先完成schema7及以上迁移',409)
         has_queue=bool(c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lab_queue_items'").fetchone())
         if apply and not has_queue:raise RuleLabError('schema_required','实验队列表尚未初始化',409)
         user_id=manifest['user_id'];items=[];inserted=0

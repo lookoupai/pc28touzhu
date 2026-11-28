@@ -46,7 +46,7 @@
         $('labSelfStay').addEventListener('click',()=>{$('labSelfLeave').hidden=true;leaveAction=null;});
         window.addEventListener('beforeunload',event=>{if(view?.dirty||drafts.size){event.preventDefault();event.returnValue='';}});
         function reset(){drafts.clear();receipts.clear();templates=[];leaveAction=null;view=null;body.replaceChildren();dismiss(false);}
-        ui.register({close:guard,reset,bulk:()=>enter('bulk','新建实验',$('labNewExperiment'),buildBulk),compare:()=>enter('compare','选择风控对照',$('labCompareButton'),buildComparison)});
+        ui.register({drawerId:'labSelfServicePanel',close:guard,reset,bulk:()=>enter('bulk','新建实验',$('labNewExperiment'),buildBulk),compare:()=>enter('compare','选择风控对照',$('labCompareButton'),buildComparison)});
         $('labTemplatesButton').addEventListener('click',()=>enter('templates','模板库',$('labTemplatesButton'),v=>run(async()=>{await readTemplates();library(v);})));
         $('labQueueButton').addEventListener('click',()=>enter('queue','运行队列',$('labQueueButton'),buildQueue));
 
@@ -116,7 +116,7 @@
                 const sourceSearch=input('labBulkSourceSearch','search'),sourceList=node('div',undefined,'lab-choice-list');sourceSearch.placeholder='搜索来源';
                 (options.predictors||[]).forEach(p=>sourceList.append(checkbox(p.name,{sourceId:String(p.id)},p.id===context.batch?.predictor_id)));
                 sourceSearch.addEventListener('input',()=>{[...sourceList.children].forEach(l=>l.hidden=!l.textContent.toLowerCase().includes(sourceSearch.value.toLowerCase()));});
-                const mode=select('labBulkMode',[['backtest','历史回测'],['live','前向模拟']],'backtest'),start=input('labBulkStart','date',context.batch?.start_date||''),end=input('labBulkEnd','date',context.batch?.end_date||''),stake=input('labBulkStake','number',options.default_stake_amount||1),grid=node('div',undefined,'lab-form-grid');stake.min='0.01';stake.max='10000';stake.step='0.01';grid.append(field('观察方式',mode),field('每注模拟金额',stake),field('开始日期（北京时间）',start),field('结束日期（北京时间）',end));
+                const mode=select('labBulkMode',[['backtest','历史回测'],['live','前向模拟']],'backtest'),start=input('labBulkStart','date',context.batch?.start_date||''),end=input('labBulkEnd','date',context.batch?.end_date||''),stake=input('labBulkStake','number',options.default_stake_amount||1),grid=node('div',undefined,'lab-form-grid');stake.min='0.01';stake.max='10000';stake.step='1';grid.append(field('观察方式',mode),field('每注模拟金额',stake),field('开始日期（北京时间）',start),field('结束日期（北京时间）',end));
                 const metrics=node('div',undefined,'lab-actions'),configs=node('div'),configViews=new Map(),names=new Map();
                 Object.entries(metricNames).forEach(([metric,label])=>metrics.append(checkbox(label,{metricCheck:metric},metric===(context.batch?.metric||'odd_even'))));
                 form.append(node('h3','1. 来源与回测区间'),field('搜索来源（最多20个）',sourceSearch),sourceList,grid,node('h3','2. 各玩法条件与风控'),metrics,configs,note('普通实验固定使用两套当前 OK 赔率，保存时冻结。条件之间互相独立；跨玩法使用风控时请逐项核对参数。前向模拟只保存草稿，需在结果页单独启动。'));

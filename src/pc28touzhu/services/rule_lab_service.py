@@ -42,6 +42,41 @@ class RuleLabService:
         self.resources=resources
         self.store.initialize()
 
+    def research_options(self,user_id):
+        from pc28touzhu.services.rule_lab_research import options
+        return options(self.store,user_id)
+
+    def research_rankings(self,user_id,payload,*,now=None):
+        from pc28touzhu.services.rule_lab_research import rankings
+        return rankings(self.store,user_id,payload,now=_now(now))
+
+    def list_favorites(self,user_id,**pagination):
+        from pc28touzhu.services.rule_lab_favorites import list_favorites
+        return list_favorites(self.store,user_id,**pagination)
+
+    def save_favorite(self,user_id,payload,*,fid=None,now=None):
+        from pc28touzhu.services.rule_lab_favorites import save_favorite
+        return save_favorite(self.store,user_id,payload,fid=fid,now=_now(now))
+
+    def delete_favorite(self,user_id,fid,payload,*,now=None):
+        from pc28touzhu.services.rule_lab_favorites import delete_favorite
+        return delete_favorite(self.store,user_id,fid,payload,now=_now(now))
+
+    def create_from_favorite(self,user_id,fid,payload,*,now=None):
+        from pc28touzhu.services.rule_lab_favorites import create_from_favorite
+        return create_from_favorite(self,user_id,fid,payload,now=_now(now))
+
+    def preview_bulk_management(self,user_id,payload,*,now=None):
+        from pc28touzhu.services.rule_lab_bulk_management import preview
+        return preview(self,user_id,payload,now=_now(now))
+
+    def execute_bulk_management(self,user_id,payload,*,now=None):
+        from pc28touzhu.services.rule_lab_bulk_management import execute
+        return execute(self,user_id,payload,now=_now(now))
+
+    def research_data_quality(self,user_id,payload,*,now=None):
+        return self.source.quality_page(payload,now=_now(now))
+
     def performance(self):
         if self.resources is None:
             from pc28touzhu.services.rule_lab_resources import RuleLabResources

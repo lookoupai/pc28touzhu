@@ -349,29 +349,33 @@ def _append_response(c,series,receipt,*,created=False):
         request_id=receipt['request_id'],continuation=_summary(c,series),segment=_segment_json(segment))
 
 
-def request_append(store,user_id,kind,owner_id,payload,*,now):
+def request_append_tx(store,c,user_id,kind,owner_id,payload,*,now):
     _validate_payload(payload,'append',now)
+    preview,rows,series=_preview(store,c,user_id,kind,owner_id,now)
+    receipt=_receipt(c,series,payload,'append') if series else None
+    if receipt:return _append_response(c,series,receipt)
+    if preview['expected_revision']!=payload['expected_revision']:raise RuleLabError('stale_revision','续算状态已变化，请刷新后重试',409)
+    if not preview['eligible']:raise RuleLabError(preview['blockers'][0]['code'],preview['blockers'][0]['message'],409)
+    last_date=preview['continuation']['calculated_through_date'] or rows[0]['end_date']
+    delta=(date.fromisoformat(payload['end_date'])-date.fromisoformat(last_date)).days
+    if delta<0 or delta>90:raise RuleLabError('invalid_input','每次追加范围不能倒退或超过90天')
+    if series is None:
+        series=_adopt(store,c,rows,user_id,kind,owner_id,preview,now)
+        c.execute('UPDATE lab_series SET capture_enabled=1 WHERE id=?',(series['id'],))
+    elif not series['capture_enabled']:raise RuleLabError('capture_disabled','请先开启保留后续数据',409)
+    if c.execute("SELECT 1 FROM lab_segments WHERE series_id=? AND status IN ('queued','running','paused')",(series['id'],)).fetchone():raise RuleLabError('segment_active','当前追加尚未结束，请先完成或恢复当前段',409)
+    if c.execute("SELECT 1 FROM lab_continuation_requests WHERE series_id=? AND kind='append' AND status='waiting_inputs'",(series['id'],)).fetchone():raise RuleLabError('append_waiting','已有追加请求等待输入，请勿重复提交',409)
+    rid=c.execute('''INSERT INTO lab_continuation_requests(series_id,request_id,kind,payload_hash,status,target_end_date,created_at,updated_at)
+        VALUES(?,?,'append',?,'waiting_inputs',?,?,?)''',(series['id'],payload['request_id'],fingerprint(payload),payload['end_date'],now,now)).lastrowid
+    c.execute("UPDATE lab_series SET revision=revision+1,state='waiting_inputs',error='',updated_at=? WHERE id=?",(now,series['id']))
+    series=c.execute('SELECT * FROM lab_series WHERE id=?',(series['id'],)).fetchone()
+    receipt=c.execute('SELECT * FROM lab_continuation_requests WHERE id=?',(rid,)).fetchone()
+    return _append_response(c,series,receipt,created=True)
+
+
+def request_append(store,user_id,kind,owner_id,payload,*,now):
     with store._connect(write=True) as c:
-        preview,rows,series=_preview(store,c,user_id,kind,owner_id,now)
-        receipt=_receipt(c,series,payload,'append') if series else None
-        if receipt:return _append_response(c,series,receipt)
-        if preview['expected_revision']!=payload['expected_revision']:raise RuleLabError('stale_revision','续算状态已变化，请刷新后重试',409)
-        if not preview['eligible']:raise RuleLabError(preview['blockers'][0]['code'],preview['blockers'][0]['message'],409)
-        last_date=preview['continuation']['calculated_through_date'] or rows[0]['end_date']
-        delta=(date.fromisoformat(payload['end_date'])-date.fromisoformat(last_date)).days
-        if delta<0 or delta>90:raise RuleLabError('invalid_input','每次追加范围不能倒退或超过90天')
-        if series is None:
-            series=_adopt(store,c,rows,user_id,kind,owner_id,preview,now)
-            c.execute('UPDATE lab_series SET capture_enabled=1 WHERE id=?',(series['id'],))
-        elif not series['capture_enabled']:raise RuleLabError('capture_disabled','请先开启保留后续数据',409)
-        if c.execute("SELECT 1 FROM lab_segments WHERE series_id=? AND status IN ('queued','running','paused')",(series['id'],)).fetchone():raise RuleLabError('segment_active','当前追加尚未结束，请先完成或恢复当前段',409)
-        if c.execute("SELECT 1 FROM lab_continuation_requests WHERE series_id=? AND kind='append' AND status='waiting_inputs'",(series['id'],)).fetchone():raise RuleLabError('append_waiting','已有追加请求等待输入，请勿重复提交',409)
-        rid=c.execute('''INSERT INTO lab_continuation_requests(series_id,request_id,kind,payload_hash,status,target_end_date,created_at,updated_at)
-            VALUES(?,?,'append',?,'waiting_inputs',?,?,?)''',(series['id'],payload['request_id'],fingerprint(payload),payload['end_date'],now,now)).lastrowid
-        c.execute("UPDATE lab_series SET revision=revision+1,state='waiting_inputs',error='',updated_at=? WHERE id=?",(now,series['id']))
-        series=c.execute('SELECT * FROM lab_series WHERE id=?',(series['id'],)).fetchone()
-        receipt=c.execute('SELECT * FROM lab_continuation_requests WHERE id=?',(rid,)).fetchone()
-        return _append_response(c,series,receipt,created=True)
+        return request_append_tx(store,c,user_id,kind,owner_id,payload,now=now)
 
 
 def list_segments(store,user_id,kind,owner_id,*,limit=20,before_id=None):

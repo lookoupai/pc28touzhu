@@ -89,6 +89,10 @@ class RuleLabSource:
             raise RuleLabError('source_unavailable', '预测数据读取超时，稍后将重试', 503)
         return conn.execute(sql, params).fetchall()
 
+    def quality_page(self,payload,*,now):
+        from pc28touzhu.services.rule_lab_quality import page
+        return page(self,payload,now=now)
+
     def list_predictors(self):
         with self._read() as (c, deadline):
             rows = self._query(c, deadline, 'SELECT id,name FROM predictors WHERE ' + _PUBLIC + ' ORDER BY id LIMIT 501')

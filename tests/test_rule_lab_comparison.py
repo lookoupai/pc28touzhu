@@ -220,7 +220,7 @@ class ComparisonStoreTests(unittest.TestCase):
             before={table:c.execute('SELECT '+','.join(cols)+' FROM '+table+' ORDER BY rowid').fetchall() for table,cols in columns.items()}
         new=RuleLabStore(path);new.initialize();new.initialize()
         with sqlite3.connect(path) as c:
-            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],7)
+            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0],8)
             for table,cols in columns.items():
                 condition=" WHERE key!='result_retention'" if table=='lab_runtime' else ''
                 self.assertEqual(c.execute('SELECT '+','.join(cols)+' FROM '+table+condition+' ORDER BY rowid').fetchall(),before[table])
