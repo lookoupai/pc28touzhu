@@ -1,0 +1,123 @@
+{
+  "version": 1,
+  "feature": "rule-lab-layout-refinement",
+  "environment": {
+    "PYTHONPATH": "src",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "waves": [
+    {
+      "id": "W1",
+      "title": "结果优先布局与抽屉",
+      "scope": "UI only; existing observation and detail semantics",
+      "writeSet": [
+        "src/pc28touzhu/ui/rule_lab.html",
+        "src/pc28touzhu/ui/rule_lab.js",
+        "src/pc28touzhu/ui/rule_lab.css",
+        "tests/test_rule_lab_layout_ui.cjs",
+        "tests/test_rule_lab_observation_ui.cjs",
+        "tests/test_rule_lab_amount_ui.cjs",
+        "tests/test_rule_lab_results_ui.cjs",
+        "docs/RULE_LAB.md"
+      ],
+      "redTests": [
+        [
+          "node",
+          "tests/test_rule_lab_layout_ui.cjs"
+        ]
+      ],
+      "greenGates": [
+        [
+          "node",
+          "--check",
+          "src/pc28touzhu/ui/rule_lab.js"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_layout_ui.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_observation_ui.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_amount_ui.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_results_ui.cjs"
+        ]
+      ],
+      "contractRows": [
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5",
+        "L6",
+        "L7"
+      ],
+      "stopCondition": "窗口/累计混称、抽屉生命周期、旧功能回归任何失败先修复",
+      "status": "passed",
+      "evidence": [
+        "/tmp/pc28-layout-root-ui.log",
+        "/tmp/pc28-layout-root-observation.log",
+        "/tmp/pc28-layout-root-amount.log",
+        "/tmp/pc28-layout-root-results.log"
+      ]
+    },
+    {
+      "id": "W2",
+      "title": "独立QA与线上保护",
+      "scope": "independent DOM QA, existing API smoke, approved static deployment",
+      "writeSet": [
+        "tests/test_rule_lab_layout_qa.cjs",
+        ".boss/rule-lab-layout-refinement/qa-report.md",
+        ".boss/rule-lab-layout-refinement/deploy-report.md"
+      ],
+      "redTests": [
+        [
+          "node",
+          "tests/test_rule_lab_layout_qa.cjs"
+        ]
+      ],
+      "greenGates": [
+        [
+          "node",
+          "tests/test_rule_lab_layout_qa.cjs"
+        ],
+        [
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_observation_api"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5",
+        "L6",
+        "L7",
+        "L8"
+      ],
+      "stopCondition": "QA未过或出现Python/API/账本/调度变更不得发布；准确提交GO后仅重载API",
+      "status": "qa_passed_release_pending",
+      "qaPassed": true,
+      "releaseStatus": "awaiting_exact_commit",
+      "evidence": [
+        "/tmp/pc28-layout-root-qa.log",
+        "/tmp/pc28-layout-root-api.log"
+      ],
+      "notes": "All 5 real WSGI/jsdom flows passed. API 6 tests passed in 0.623s. Review findings resolved. No Python/runtime data changes; not deployed yet."
+    }
+  ]
+}

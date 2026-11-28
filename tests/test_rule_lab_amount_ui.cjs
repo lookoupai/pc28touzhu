@@ -26,7 +26,7 @@ async function waitFor(check,label){const end=Date.now()+12000;while(Date.now()<
   const fill=(id,value)=>{el(id).value=String(value);el(id).dispatchEvent(new w.Event('input',{bubbles:true}));};
   const summaries=id=>Object.fromEntries([...el(id).querySelectorAll('dt')].map(x=>[x.textContent,x.nextElementSibling.textContent]));
   const entry=(id,label)=>{const values=summaries(id);const key=Object.keys(values).find(x=>x.startsWith(label));assert.ok(key,'Missing '+label);return values[key];};
-  const open=async()=>{[...d.querySelectorAll('#labResultsBody tr:first-child button')].find(x=>x.textContent==='详情').click();await waitFor(()=>el('labDetailFeedback').textContent===''&&el('labMonthlyBody').children.length,'detail');};
+  const open=async()=>{d.querySelector('#labResultsBody tr:first-child button[data-experiment-id]').click();await waitFor(()=>el('labDetailFeedback').textContent===''&&el('labMonthlyBody').children.length,'detail');};
   await waitFor(()=>!el('labRefreshButton').disabled,'initial');await open();
   assert.equal(d.getElementById('labReplayCreateButton'),null,'Amount changes must not create another experiment');
   assert.equal(el('labDisplayStake').getAttribute('step'),'1');
@@ -95,7 +95,7 @@ async function waitFor(check,label){const end=Date.now()+12000;while(Date.now()<
   fill('labInitialCapital',1000);el('labAmountReset').click();assert.equal(entry('labPerformanceSummary','累计净利润'),'-1.01');
   assert.equal(requests.length,negativeRequests);
   projectionFixture=null;el('labCloseDetailButton').click();
-  const secondButton=[...d.querySelectorAll('#labResultsBody tr:nth-child(2) button')].find(x=>x.textContent==='详情');secondButton.click();
+  const secondButton=d.querySelector('#labResultsBody tr:nth-child(2) button[data-experiment-id]');secondButton.click();
   await waitFor(()=>el('labDetailFeedback').textContent===''&&el('labAmountEstimateResults').hidden===false,'different experiment');
   assert.equal(el('labDisplayStake').value,'1');assert.match(el('labDetailTitle').textContent,/高赔常规/);
   assert.equal(entry('labPerformanceSummary','累计净利润'),'+5.40');

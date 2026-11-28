@@ -9,13 +9,26 @@
 <body>
 __APP_SHELL__
 <main class="app-page lab-page" id="mainContent" tabindex="-1">
-    <header class="app-page-heading">
-        <div><p>策略研究</p><h1>规则实验室</h1><p>批量比较触发条件，使用固定金额模拟记账。</p></div>
-        <button id="labRefreshButton" class="lab-button" type="button">刷新</button>
+    <header class="app-page-heading lab-layout-heading">
+        <div><p>策略研究</p><h1>规则实验室</h1></div>
+        <div class="lab-actions"><button id="labRefreshButton" class="lab-button" type="button">刷新</button><button id="labNewExperiment" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labGenerator">新建实验</button><button id="labSystemToggle" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labSystemPanel">系统</button></div>
     </header>
+    <div id="labSelectionBar" class="lab-selection-bar">
+        <div id="labBatchSelection" class="lab-field"><label for="labBatchSelect">实验批次</label><select id="labBatchSelect"><option value="">读取批次…</option></select></div>
+        <div id="labStudySelection" class="lab-field" hidden><label for="labStudySelect">风控比较组</label><select id="labStudySelect"><option value="">读取比较组…</option></select></div>
+    </div>
+    <div id="labResultTabs" class="lab-result-tabs" role="tablist" aria-label="结果类型"><button id="labTabExperiments" type="button" role="tab" aria-selected="true" aria-controls="labResults">实验结果</button><button id="labTabStudies" type="button" role="tab" aria-selected="false" aria-controls="labStudyResults" tabindex="-1">风控对比</button></div>
+    <div class="lab-results-toolbar">
+        <div class="lab-view-switch" role="group" aria-label="结果视图"><button id="labViewOverview" type="button" data-result-view="overview" aria-pressed="true">概览</button><button id="labViewMonthly" type="button" data-result-view="monthly" aria-pressed="false">月度</button><button id="labViewRisk" type="button" data-result-view="risk" aria-pressed="false">风险</button></div>
+        <label id="labMonthlyMetricField" class="lab-monthly-metric" hidden>月度指标<select id="labMonthlyMetricSelect"><option value="roi">投注收益率</option><option value="drawdown">日结回撤</option></select></label>
+        <div class="lab-quick-observation"><span id="labQuickObservationSummary"></span><label><input id="labQuickMatchesOnly" type="checkbox">仅看符合</label><button id="labAdjustObservation" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labObservationPanel">调整条件</button></div>
+    </div>
+    <p id="labResultMeta" class="lab-result-meta"></p>
+    <p id="labNoResults" class="lab-empty" hidden>暂无结果。可选择其他批次或新建实验。</p>
     <div id="statusMessage" class="lab-feedback" role="status" tabindex="-1"></div>
     <p id="labAutoRefreshStatus" class="lab-muted"></p>
-    <section class="lab-panel" aria-label="后台与资源状态">
+    <section id="labSystemPanel" class="lab-panel lab-drawer" role="dialog" aria-modal="true" aria-labelledby="labSystemTitle" tabindex="-1" hidden>
+        <div class="lab-drawer-heading"><h2 id="labSystemTitle">系统与资源</h2><button id="labSystemClose" class="lab-button" type="button">关闭</button></div>
         <dl id="labWorkerSummary" class="lab-summary"><div><dt>后台状态</dt><dd>读取中…</dd></div></dl>
         <p id="labWorkerMessage" class="lab-muted"></p>
         <div class="lab-performance" aria-labelledby="labPerformanceHeading">
@@ -33,8 +46,8 @@ __APP_SHELL__
         <details class="lab-budget"><summary>资源预算与数据保留</summary><p id="labBudgetDescription">读取中…</p><p>模拟在后台继续运行，无需保持页面打开。旧明细清理后，累计成绩仍会保留。</p></details>
     </section>
 
-    <details id="labGenerator" class="lab-panel lab-generator" open>
-        <summary>生成实验批次</summary>
+    <details id="labGenerator" class="lab-panel lab-generator lab-drawer" role="dialog" aria-modal="true" aria-labelledby="labGeneratorTitle" tabindex="-1" hidden>
+        <summary class="lab-hidden-summary">生成实验批次</summary><div class="lab-drawer-heading"><h2 id="labGeneratorTitle">新建实验</h2><button id="labGeneratorClose" class="lab-button" type="button">关闭</button></div>
         <form id="labBatchForm" novalidate>
             <div class="lab-form-grid">
                 <div class="lab-field lab-name-field">
@@ -67,13 +80,8 @@ __APP_SHELL__
         </form>
     </details>
 
-    <section class="lab-panel" aria-labelledby="labBatchesHeading">
-        <div class="lab-section-heading"><h2 id="labBatchesHeading">我的实验批次</h2><span id="labBatchCount" class="lab-muted">—</span></div>
-        <div id="labBatchList"><p class="lab-empty">读取中…</p></div>
-    </section>
-
-    <details id="labObservationPanel" class="lab-panel lab-observation-panel">
-        <summary><strong>列表观察规则</strong><span id="labObservationActiveSummary" class="lab-muted"></span></summary>
+    <details id="labObservationPanel" class="lab-panel lab-observation-panel lab-drawer" role="dialog" aria-modal="true" aria-labelledby="labObservationTitle" tabindex="-1" hidden>
+        <summary class="lab-hidden-summary">列表观察规则</summary><div class="lab-drawer-heading"><h2 id="labObservationTitle">调整观察条件</h2><button id="labObservationClose" class="lab-button" type="button">关闭</button></div><p id="labObservationActiveSummary" class="lab-muted"></p>
         <form id="labObservationForm" novalidate>
             <p class="lab-muted">同时作用于实验与风控比较列表；仅保存本浏览器的展示偏好。达标表示符合所设条件，历史表现仍需后续数据验证。</p>
             <div class="lab-form-grid">
@@ -89,40 +97,43 @@ __APP_SHELL__
                 <div class="lab-field"><label for="labObservationMaximumMonthlyDrawdownUnits">月日结回撤上限（相当于多少注）</label><input id="labObservationMaximumMonthlyDrawdownUnits" type="number" min="0" step="1" placeholder="不限制"></div>
                 <div class="lab-field"><label for="labObservationMaximumUnderwaterDays">窗口内回撤持续上限（天）</label><input id="labObservationMaximumUnderwaterDays" type="number" min="0" step="1" placeholder="不限制"></div>
             </div><p class="lab-muted">空白表示不限制；0表示上限为0。回撤与持续时间按日结统计，可能低于日内风险。完整月不够时显示历史不足，不会自动缩短观察窗口。</p></details>
-            <div class="lab-observation-switches"><label class="lab-toggle"><input id="labObservationMatchesOnly" type="checkbox"><span>仅看符合规则<small>包括明确标注的阶段达标</small></span></label><label class="lab-toggle"><input id="labObservationShowRuntime" type="checkbox"><span>展开运行信息<small>轮状态、统计日和停止原因</small></span></label></div>
+            <div class="lab-observation-switches"><label class="lab-toggle"><input id="labObservationMatchesOnly" type="checkbox"><span>仅看符合规则<small>包括明确标注的阶段达标</small></span></label><label class="lab-toggle"><input id="labObservationShowRuntime" type="checkbox"><span>详情展开运行信息<small>轮状态、统计日和停止原因</small></span></label></div>
             <div class="lab-actions"><button id="labObservationApply" class="lab-button lab-button-primary" type="submit">应用规则</button><button id="labObservationReset" class="lab-button" type="button">恢复默认</button></div>
         </form>
         <p id="labObservationFeedback" class="lab-feedback" role="status"></p>
     </details>
 
-    <section id="labResults" class="lab-panel" aria-labelledby="labResultTitle" hidden>
+    <section id="labResults" class="lab-results-panel" role="tabpanel" aria-labelledby="labTabExperiments" hidden>
+        <details id="labBatchTools" class="lab-owner-tools"><summary>实验操作与说明</summary>
         <div class="lab-section-heading"><div><p class="lab-kicker">批次结果</p><h2 id="labResultTitle" tabindex="-1"></h2></div><div class="lab-actions"><button id="labManageBatchButton" class="lab-button" type="button" aria-controls="labManagementPanel">管理实验</button><button id="labContinuationButton" class="lab-button" type="button" aria-controls="labContinuationPanel" aria-expanded="false" hidden>增量续算</button><button id="labBatchStateButton" class="lab-button" type="button">启动模拟</button><button id="labExportButton" class="lab-button" type="button" title="导出当前批次结果">导出 CSV</button></div></div>
         <p id="labBatchMeta" class="lab-muted"></p><p id="labBatchNotice" class="lab-note" hidden></p><p id="labBatchError" class="lab-feedback is-error" hidden></p><p id="labSkipCounts" class="lab-muted" hidden></p>
         <p id="labBatchRiskSummary" class="lab-note"></p><button id="labEditRiskButton" class="lab-button" type="button" hidden>配置风控</button>
         <button id="labCompareButton" class="lab-button" type="button" hidden>比较风控方案</button>
         <section id="labComparisonPreview" class="lab-risk-box" hidden aria-label="风控比较预览"><h3>生成全新风控比较组</h3><p id="labComparisonCapacity" class="lab-note"></p><div id="labComparisonVariants"></div><label for="labStudyName">比较组名称</label><input id="labStudyName" maxlength="80" class="text-input"><p class="lab-muted">原批次保持独立。五方案共用首次调度冻结的历史截止点，每次只运行一个子方案；全部完成且输入一致才比较差异。新组保存后暂停。</p><button id="labCreateStudyButton" class="lab-button lab-button-primary" type="button">生成比较组（暂停）</button><p id="labComparisonFeedback" class="lab-feedback" role="status"></p></section>
         <form id="labEditRiskForm" class="lab-risk-box" hidden novalidate><h3>修改未启动批次的风控</h3><p class="lab-muted">只修改风控，预测来源、触发条件、每注金额和两套OK结算保持不变。启动后不可修改此口径。</p><div id="labEditRiskEditor"></div><div class="lab-actions"><button id="labSaveRiskButton" class="lab-button lab-button-primary" type="submit">保存风控</button><button id="labCancelRiskButton" class="lab-button" type="button">取消</button></div><p id="labEditRiskFeedback" class="lab-feedback" role="status"></p></form>
-        <div class="lab-result-toolbar"><p>金额单位：模拟资金单位。收益率 = 净收益 ÷ 累计投注额。日期及时间均为北京时间。</p><label for="labSort">结果排序<select id="labSort"><option value="paired">按条件配对</option><option value="profit">净收益从高到低</option><option value="sample">已结算期数从多到少</option><option value="drawdown">累计回撤从低到高</option><option value="observation">观察达标优先</option><option value="minimum_roi">最低月收益率从高到低</option><option value="monthly_spread">月收益率差距从小到大</option><option value="monthly_drawdown">月回撤注数从低到高</option></select></label></div>
+        </details>
+        <div class="lab-result-toolbar"><p>金额单位：模拟资金单位。收益率 = 净收益 ÷ 累计投注额。日期及时间均为北京时间。</p><label for="labSort">结果排序<select id="labSort"><option value="paired">按条件配对</option><option value="profit">窗口净利从高到低</option><option value="sample">已结算期数从多到少</option><option value="drawdown">累计回撤从低到高</option><option value="observation">观察达标优先</option><option value="minimum_roi">最低月收益率从高到低</option><option value="monthly_spread">月收益率差距从小到大</option><option value="monthly_drawdown">月回撤注数从低到高</option></select></label></div>
         <p id="labObservationBatchSummary" class="lab-muted"></p>
         <p id="labResultEmpty" class="lab-note" hidden></p>
         <div class="lab-table-scroll" role="region" aria-label="实验结果表，可横向滚动" tabindex="0">
-            <table class="lab-table lab-results-table"><caption>同一条件的两套结算版本；样本表现仍需验证。统计日为最近处理日，回测中不代表真实今天。</caption><thead><tr><th scope="col">触发条件 / 结算</th><th scope="col">观察状态</th><th scope="col">近月投注收益率</th><th scope="col">回撤与恢复</th><th scope="col">月度样本</th><th scope="col">窗口近期表现</th><th scope="col">累计成绩</th><th scope="col">操作</th></tr></thead><tbody id="labResultsBody"></tbody></table>
+            <table id="labResultsTable" class="lab-table lab-results-table"><caption>同一条件的两套结算版本；样本表现仍需验证。统计日为最近处理日，回测中不代表真实今天。</caption><thead><tr><th scope="col">触发条件 / 结算</th><th scope="col">观察状态</th><th scope="col">近月投注收益率</th><th scope="col">回撤与恢复</th><th scope="col">月度样本</th><th scope="col">窗口近期表现</th><th scope="col">累计成绩</th><th scope="col">操作</th></tr></thead><tbody id="labResultsBody"></tbody></table>
         </div>
         <div class="lab-pagination" aria-label="结果分页"><span id="labResultPageInfo" class="lab-muted"></span><div class="lab-actions"><button id="labResultPrevious" class="lab-button" type="button">上一页</button><button id="labResultNext" class="lab-button" type="button">下一页</button></div></div>
     </section>
 
-    <section class="lab-panel" aria-labelledby="labStudiesHeading"><div class="lab-section-heading"><h2 id="labStudiesHeading">风控比较队列</h2></div><p class="lab-muted">每次运行一个风控方案，其余方案依次等待。运行中的成绩会自动更新；全部方案完成后才显示相对基准差异。</p><div id="labStudyList"><p class="lab-empty">读取中…</p></div></section>
-    <section id="labStudyResults" class="lab-panel" hidden aria-labelledby="labStudyTitle">
+    <section id="labStudyResults" class="lab-results-panel" role="tabpanel" hidden aria-labelledby="labTabStudies">
+        <details id="labStudyTools" class="lab-owner-tools"><summary>比较操作与方案筛选</summary>
         <div class="lab-section-heading"><h2 id="labStudyTitle"></h2><div class="lab-actions"><button id="labManageStudyButton" class="lab-button" type="button" aria-controls="labManagementPanel">管理比较组</button><button id="labStudyContinuationButton" class="lab-button" type="button" aria-controls="labContinuationPanel" aria-expanded="false">增量续算</button><button id="labStudyStateButton" class="lab-button" type="button">启动比较队列</button><button id="labStudyExportButton" class="lab-button" type="button">导出比较 CSV</button></div></div>
         <p id="labStudyMeta" class="lab-muted"></p><p id="labStudyNotice" class="lab-note"></p><div id="labStudyProgress"></div>
         <div class="lab-form-grid"><div class="lab-field"><label for="labStudyVariant">风控方案筛选</label><select id="labStudyVariant"><option value="">全部风控方案</option></select></div><div class="lab-field"><label for="labStudySettlement">结算筛选</label><select id="labStudySettlement"><option value="">两套OK结算</option><option value="pc28_netdisk_regular">OK游戏网盘</option><option value="pc28_high_regular">OK游戏高赔常规</option></select></div><div class="lab-field"><label for="labStudyCondition">触发条件筛选</label><select id="labStudyCondition"><option value="">全部条件</option></select></div></div>
         <p class="lab-muted">各行是互斥模拟，不合计为实际利润。ROI差为百分点，回撤差为方案减基准（负值代表更小）；没有足够样本不代表稳定优势。</p>
+        </details>
         <div class="lab-result-toolbar"><p id="labObservationStudySummary" class="lab-muted"></p><label for="labStudySort">比较排序<select id="labStudySort"><option value="paired">按条件及风控配对</option><option value="observation">观察达标优先</option><option value="minimum_roi">最低月收益率从高到低</option><option value="monthly_spread">月收益率差距从小到大</option><option value="monthly_drawdown">月回撤注数从低到高</option></select></label></div>
-        <div class="lab-table-scroll" role="region" aria-label="风控比较表，可横向滚动" tabindex="0"><table class="lab-table"><caption>同条件、同OK结算下比较风控；未完成或输入不一致时不展示相对差异。* 表示未完整月；— 为无可用收益率。</caption><thead><tr><th scope="col">条件 / 结算</th><th scope="col">风控方案</th><th scope="col">观察状态</th><th scope="col">近月投注收益率</th><th scope="col">回撤与恢复</th><th scope="col">月度样本</th><th scope="col">窗口近期表现</th><th scope="col">累计成绩 / 基准差</th><th scope="col">操作</th></tr></thead><tbody id="labStudyRows"></tbody></table></div>
+        <div class="lab-table-scroll" role="region" aria-label="风控比较表，可横向滚动" tabindex="0"><table id="labStudyTable" class="lab-table lab-results-table"><caption>同条件、同OK结算下比较风控；未完成或输入不一致时不展示相对差异。* 表示未完整月；— 为无可用收益率。</caption><thead><tr><th scope="col">条件 / 结算</th><th scope="col">风控方案</th><th scope="col">观察状态</th><th scope="col">近月投注收益率</th><th scope="col">回撤与恢复</th><th scope="col">月度样本</th><th scope="col">窗口近期表现</th><th scope="col">累计成绩 / 基准差</th><th scope="col">操作</th></tr></thead><tbody id="labStudyRows"></tbody></table></div>
         <div class="lab-pagination"><span id="labStudyPageInfo" class="lab-muted"></span><div class="lab-actions"><button id="labStudyPrevious" class="lab-button" type="button">上一页比较</button><button id="labStudyNext" class="lab-button" type="button">下一页比较</button></div></div>
     </section>
 
-    <section id="labManagementPanel" class="lab-panel lab-management" aria-labelledby="labManagementTitle" hidden>
+    <section id="labManagementPanel" class="lab-panel lab-drawer lab-management" aria-labelledby="labManagementTitle" hidden role="dialog" aria-modal="true" tabindex="-1">
         <div class="lab-section-heading"><div><p class="lab-kicker">实验管理</p><h2 id="labManagementTitle" tabindex="-1">管理实验</h2></div><button id="labManagementClose" class="lab-button" type="button">关闭管理</button></div>
         <p id="labManagementNotice" class="lab-note"></p>
         <form id="labRenameForm" class="lab-management-rename" novalidate><label for="labManagementName">实验显示名称</label><div class="lab-actions"><input id="labManagementName" maxlength="80" class="text-input" required><button id="labRenameSave" class="lab-button" type="submit">保存名称</button></div><p class="lab-muted">改名不改变策略、历史成绩或续算计划。</p></form>
@@ -146,7 +157,7 @@ __APP_SHELL__
         <p id="labManagementFeedback" class="lab-feedback" role="status" tabindex="-1"></p><button id="labManagementRetry" class="lab-button" type="button" hidden>核对后重试原请求</button>
     </section>
 
-    <section id="labContinuationPanel" class="lab-panel lab-continuation" aria-labelledby="labContinuationTitle" hidden>
+    <section id="labContinuationPanel" class="lab-panel lab-drawer lab-continuation" aria-labelledby="labContinuationTitle" hidden role="dialog" aria-modal="true" tabindex="-1">
         <div class="lab-section-heading"><div><p class="lab-kicker">继续积累原实验成绩</p><h2 id="labContinuationTitle" tabindex="-1">增量续算</h2></div><div class="lab-actions"><button id="labContinuationRefresh" class="lab-button" type="button">刷新续算状态</button><button id="labContinuationClose" class="lab-button" type="button">关闭面板</button></div></div>
         <p id="labContinuationOwner" class="lab-muted"></p>
         <p id="labContinuationBasis" class="lab-note"></p>
@@ -179,9 +190,9 @@ __APP_SHELL__
         <div id="labContinuationSegments"><p class="lab-empty">尚未接入增量续算。</p></div>
     </section>
 
-    <section id="labExperimentDetail" class="lab-panel" aria-labelledby="labDetailTitle" hidden>
-        <div class="lab-section-heading"><div><p class="lab-kicker">实验详情</p><h2 id="labDetailTitle" tabindex="-1"></h2></div><button id="labCloseDetailButton" class="lab-button" type="button">关闭详情</button></div>
-        <p id="labDetailMeta" class="lab-muted"></p><div id="labDetailFeedback" class="lab-feedback" role="status"></div>
+    <section id="labExperimentDetail" class="lab-panel lab-drawer" aria-labelledby="labDetailTitle" hidden role="dialog" aria-modal="true" tabindex="-1">
+        <div class="lab-section-heading lab-drawer-heading"><div><p class="lab-kicker">实验详情</p><h2 id="labDetailTitle" tabindex="-1"></h2></div><button id="labCloseDetailButton" class="lab-button" type="button">关闭详情</button></div>
+        <p id="labDetailObservation" class="lab-note"></p><p id="labDetailMeta" class="lab-muted"></p><dl id="labDetailComparison" class="lab-summary" hidden></dl><div id="labDetailRuntime"></div><div id="labDetailFeedback" class="lab-feedback" role="status"></div>
         <section id="labAmountProjection" class="lab-risk-box" aria-label="每注金额换算" hidden>
             <div class="lab-section-heading"><div class="lab-field lab-initial-capital"><label for="labDisplayStake">展示每注金额</label><input id="labDisplayStake" type="number" min="0" max="10000" step="1" aria-describedby="labAmountEstimateNote labAmountEstimateFeedback" aria-invalid="false"></div><button id="labAmountReset" class="lab-button" type="button">恢复原金额</button></div>
             <p id="labAmountEstimateNote" class="lab-note"></p>
@@ -212,6 +223,7 @@ __APP_SHELL__
         </div>
     </section>
 </main>
+<div id="labDrawerBackdrop" class="lab-drawer-backdrop" hidden></div>
 __ACCOUNT_DIALOG__
 <script src="/assets/ui-text.js"></script><script src="/assets/auth-panel.js"></script><script src="/assets/account-menu.js"></script><script src="/assets/auth-guard.js"></script><script src="/assets/rule_lab.js"></script>
 </body>
