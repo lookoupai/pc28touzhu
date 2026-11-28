@@ -103,6 +103,29 @@ class CycleRecoveryApiTests(RecoveryFixture):
         other=self.repo.create_user('alert-other')
         self.assertFalse(any(a['alert_type']=='cycle_history_unresolved' for a in list_platform_alerts(self.repo,user_id=other)['items']))
 
+    def test_admin_alerts_accept_blank_user_filter_and_respect_selected_user(self):
+        admin = self.repo.create_user_record(username='alert-admin', role='admin', status='active')
+        self.incident()
+        path = '/api/platform/admin/alerts?limit=100'
+        for query, expected_user_ids in (
+            ('', [self.user_id]),
+            ('&user_id=', [self.user_id]),
+            ('&user_id=%20', [self.user_id]),
+            (f'&user_id={self.user_id}', [self.user_id]),
+            (f'&user_id={admin["id"]}', []),
+        ):
+            with self.subTest(query=query):
+                status, payload = self.request(path + query, user_id=admin['id'])
+                self.assertEqual(status, 200, payload)
+                user_ids = [
+                    item['metadata']['user_id'] for item in payload['items']
+                    if item['alert_type'] == 'cycle_history_unresolved'
+                ]
+                self.assertEqual(user_ids, expected_user_ids)
+
+        status, payload = self.request(path + '&user_id=invalid', user_id=admin['id'])
+        self.assertEqual(status, 400, payload)
+
     def test_reconciliation_pull_is_not_a_send_claim(self):
         rule,claim=self.incident();item=self.pull()
         self.assertNotIn('attempt_token',item)

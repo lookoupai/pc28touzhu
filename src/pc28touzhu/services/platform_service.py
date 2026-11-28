@@ -2712,6 +2712,11 @@ def list_platform_alerts(
     failure_streak_threshold: int = 3,
     include_platform_health: bool = False,
 ) -> Dict[str, Any]:
+    normalized_user_id = (
+        _to_positive_int(user_id, "user_id")
+        if user_id is not None and str(user_id).strip()
+        else None
+    )
     alerts = []
     bounded_limit = max(1, min(int(limit or 50), 200))
 
@@ -2767,7 +2772,7 @@ def list_platform_alerts(
 
     failure_items = list_recent_execution_failures(
         repository,
-        user_id=user_id,
+        user_id=normalized_user_id,
         limit=bounded_limit,
         auto_retry_max_attempts=auto_retry_max_attempts,
         auto_retry_base_delay_seconds=auto_retry_base_delay_seconds,
@@ -2792,8 +2797,11 @@ def list_platform_alerts(
                 )
             )
 
-    if hasattr(repository,'list_unresolved_cycle_alerts'):
-        for item in repository.list_unresolved_cycle_alerts(user_id=int(user_id) if user_id is not None else None,limit=bounded_limit):
+    if hasattr(repository, "list_unresolved_cycle_alerts"):
+        for item in repository.list_unresolved_cycle_alerts(
+            user_id=normalized_user_id,
+            limit=bounded_limit,
+        ):
             alerts.append(_alert_item(severity='warning',alert_type='cycle_history_unresolved',
                 title='历史轮次已中断，旧账后台核对中',
                 message='轮次 #%s 已保留未决本金 %.2f；后续按原计划启动，旧投注不会补发。' %
