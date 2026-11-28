@@ -73,7 +73,7 @@ class RuleLabStoreTests(unittest.TestCase):
         with self.assertRaises(RuleLabError) as cm:
             self.store.set_batch_state(2,third['id'],'running',now=NOW)
         self.assertEqual(cm.exception.code,'capacity_exceeded')
-        for _ in range(10):
+        for _ in range(17):
             self.create()
         with self.assertRaises(RuleLabError):
             self.create()

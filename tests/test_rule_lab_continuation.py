@@ -90,7 +90,7 @@ class CheckpointStoreTests(unittest.TestCase):
             before=contents()
             result=store.inspect_continuation_checkpoint(1,study['id'])
             self.assertFalse(result['checkpoint_ready']);self.assertFalse(result['continuation_available'])
-            self.assertEqual(result['saved_experiments'],312)
+            self.assertEqual(result['saved_experiments'],546)
             self.assertEqual(contents(),before)
             for uid,sid in ((2,study['id']),(1,999)):
                 with self.assertRaises(RuleLabError) as cm:store.inspect_continuation_checkpoint(uid,sid)

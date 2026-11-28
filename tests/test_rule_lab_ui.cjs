@@ -280,22 +280,21 @@ const root = path.resolve(__dirname, '..');
         assert.equal(await page.locator('#labBatchNotice').isVisible(),true);
         assert.match(await page.locator('#labResultsBody tr').first().innerText(),/—/);
 
-        // A 460-version combo study exceeds capacity with two earlier 50-version batches:
-        // preview reports the complete total and disables atomic creation.
+        // Expanded combo grid fits within the 1000-version saved capacity.
         await page.locator('#labCompareButton').click();
-        await page.locator('#labComparisonCapacity').filter({hasText:'460'}).waitFor();
-        assert.match(await page.locator('#labComparisonCapacity').innerText(),/652 \/ 650/);
-        assert.equal(await page.locator('#labCreateStudyButton').isDisabled(),true);
-        // Create a two-way metric source (50 × 5 = 250, total 492), then test the real queue API/UI.
+        await page.locator('#labComparisonCapacity').filter({hasText:'644'}).waitFor();
+        assert.match(await page.locator('#labComparisonCapacity').innerText(),/836 \/ 1000/);
+        assert.equal(await page.locator('#labCreateStudyButton').isDisabled(),false);
+        // Create a two-way metric source with eight variants.
         const preset=await page.evaluate(async()=>{const data=await(await fetch('/api/platform/rule-lab/options')).json();return data.risk_presets.find(p=>p.metric==='big_small').policy;});
         const studySource=await page.evaluate(async({preset,date})=>(await(await fetch('/api/platform/rule-lab/batches',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'风控比较源',mode:'backtest',predictor_id:1,metric:'big_small',start_date:date,end_date:date,risk_policy:preset})})).json()).batch,{preset,date});
         await page.locator('#labRefreshButton').click();await page.waitForFunction(()=>!document.getElementById('labRefreshButton').disabled);
         await page.locator('#labBatchList button[data-batch-id="'+studySource.id+'"]').click();
         await page.locator('#labResultTitle').filter({hasText:'风控比较源'}).waitFor();
-        await page.locator('#labCompareButton').click();await page.locator('#labComparisonCapacity').filter({hasText:'250'}).waitFor();
+        await page.locator('#labCompareButton').click();await page.locator('#labComparisonCapacity').filter({hasText:'400'}).waitFor();
         await page.locator('#labStudyName').fill('五风控统一比较 · 组合连挂观察的五组风控对比');
         const group=await saved('/api/platform/rule-lab/studies',()=>page.locator('#labCreateStudyButton').click());
-        assert.equal(group.study.status,'paused');assert.equal(group.study.children.length,5);
+        assert.equal(group.study.status,'paused');assert.equal(group.study.children.length,8);
         await page.locator('#labStudyTitle').filter({hasText:'五风控统一比较'}).waitFor();
         assert.equal(await page.locator('#labStudyRows tr').count(),20);
         await page.locator('#labStudyRows tr').first().getByRole('button',{name:'月度成绩',exact:true}).click();

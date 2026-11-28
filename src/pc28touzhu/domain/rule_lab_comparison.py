@@ -1,4 +1,4 @@
-"""One-factor risk candidates and deterministic replay-input fingerprints."""
+"""Risk candidates, hit-rate parameter grids and replay-input fingerprints."""
 from __future__ import annotations
 
 import copy
@@ -9,7 +9,9 @@ from decimal import Decimal
 from pc28touzhu.domain.rule_lab_risk import normalize_risk_policy
 
 
-def risk_variants(policy):
+def risk_variants(policy, *, metric):
+    if metric not in ('big_small','odd_even','combo'):
+        raise ValueError('不支持的实验玩法')
     original=normalize_risk_policy(policy)
     if original['mode']!='round':raise ValueError('只有按轮风控批次可以生成比较组')
     result=[dict(key='baseline',label='原风控基准',available=True,reason='',policy=copy.deepcopy(original),changes=['完整复制原风控'])]
@@ -31,10 +33,21 @@ def risk_variants(policy):
     result.append(dict(key='gate_off',label='关闭日命中率熔断',available=available,
         reason='' if available else '所有生效日层的命中率熔断原本已关闭',policy=variant if available else None,
         changes=['关闭所有日层命中率熔断；阈值/样本量及其他风控保持'] if available else []))
+    settings=((20,20),(25,20),(30,20)) if metric=='combo' else ((25,20),(25,50),(50,20),(50,50))
+    for threshold,minimum in settings:
+        variant=copy.deepcopy(original)
+        controls=[variant['day']]+variant.get('additional_day_guards',[])
+        enabled_controls=[control for control in controls if control['enabled']]
+        for control in enabled_controls:
+            control['hit_rate_gate'].update(enabled=True,threshold=threshold,min_settled_count=minimum)
+        available=bool(enabled_controls)
+        result.append(dict(key=f'gate_{threshold}_{minimum}',label=f'熔断 {threshold}% / {minimum} 单',
+            available=available,reason='' if available else '所有日风控层均未启用',policy=variant if available else None,
+            changes=[f'所有启用日层：实赔命中率低于 {threshold}%，至少 {minimum} 单实赔＋全亏；回本不计样本，其他风控保持'] if available else []))
     seen=set()
     for item in result:
         if not item['available']:continue
-        current=item['policy']
+        current=normalize_risk_policy(item['policy'])
         fingerprint=json.dumps({k:v for k,v in current.items() if k!='source'},sort_keys=True,separators=(',',':'))
         if fingerprint in seen:
             item.update(available=False,reason='与已有候选无有效差异',policy=None);continue

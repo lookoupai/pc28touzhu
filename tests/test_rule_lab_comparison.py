@@ -20,12 +20,12 @@ from pc28touzhu.rule_lab_worker import RuleLabWorker
 class ComparisonDomainTests(unittest.TestCase):
     def test_five_variants_change_only_named_factor_and_do_not_mutate_original(self):
         original=policy();original['source']={'rule_id':6,'rule_name':'旧快照'};before=copy.deepcopy(original)
-        variants=risk_variants(original)
-        self.assertEqual([v['key'] for v in variants],['baseline','round_tp_half','round_sl_half','day_sl_half','gate_off'])
-        self.assertFalse(variants[-1]['available'])
+        variants=risk_variants(original,metric='combo')
+        self.assertEqual([v['key'] for v in variants[:5]],['baseline','round_tp_half','round_sl_half','day_sl_half','gate_off'])
+        self.assertFalse(variants[4]['available'])
         original['day']['hit_rate_gate']['enabled']=True;original['day']['hit_rate_gate']['threshold']=25
-        variants=risk_variants(original)
-        self.assertEqual(sum(v['available'] for v in variants),5)
+        variants=risk_variants(original,metric='combo')
+        self.assertEqual(sum(v['available'] for v in variants),7)
         self.assertEqual(variants[1]['policy']['round']['profit_target'],5)
         self.assertEqual(variants[1]['policy']['round']['loss_limit'],10)
         self.assertEqual(variants[3]['policy']['day']['loss_limit'],10)
@@ -34,9 +34,40 @@ class ComparisonDomainTests(unittest.TestCase):
 
     def test_half_below_cent_and_disabled_are_unavailable_without_duplicates(self):
         p=policy();p['round']['profit_target']=.01;p['round']['enabled']=False;p['day']['loss_limit']=.01
-        result=risk_variants(p)
+        result=risk_variants(p,metric='combo')
         self.assertFalse(result[1]['available']);self.assertFalse(result[2]['available']);self.assertFalse(result[3]['available'])
         self.assertTrue(all(v['reason'] for v in result if not v['available']))
+
+    def test_binary_grid_freezes_other_controls_and_deduplicates_baseline(self):
+        p=policy();p['day']['hit_rate_gate'].update(enabled=True,threshold=25)
+        p['source']={'rule_id':6,'rule_name':'风控来源'}
+        before=copy.deepcopy(p)
+        for metric in ('big_small','odd_even'):
+            variants={v['key']:v for v in risk_variants(p,metric=metric)}
+            self.assertEqual(sum(v['available'] for v in variants.values()),8)
+            self.assertFalse(variants['gate_25_20']['available'])
+            for threshold,minimum in ((25,50),(50,20),(50,50)):
+                actual=variants[f'gate_{threshold}_{minimum}']['policy']
+                expected=copy.deepcopy(p)
+                expected['day']['hit_rate_gate'].update(threshold=threshold,min_settled_count=minimum)
+                expected['source']['modified']=True
+                self.assertEqual(actual,expected)
+        self.assertEqual(p,before)
+
+    def test_combo_grid_and_additional_guards_have_no_hidden_gate(self):
+        p=policy();p['day']['hit_rate_gate'].update(enabled=True,threshold=25)
+        extra=copy.deepcopy(p['day']);extra['hit_rate_gate'].update(threshold=50,min_settled_count=50)
+        p['additional_day_guards']=[extra]
+        variants={v['key']:v for v in risk_variants(p,metric='combo')}
+        self.assertNotIn('gate_50_50',variants)
+        for threshold in (20,25,30):
+            candidate=variants[f'gate_{threshold}_20']['policy']
+            for control in [candidate['day']]+candidate['additional_day_guards']:
+                self.assertEqual(control['hit_rate_gate'],dict(enabled=True,threshold=threshold,min_settled_count=20))
+        p['day']['enabled']=False;p['additional_day_guards'][0]['enabled']=False
+        disabled=risk_variants(p,metric='combo')
+        self.assertTrue(all(not v['available'] for v in disabled if v['key'].startswith('gate_')))
+        with self.assertRaises(ValueError):risk_variants(p,metric='number')
 
     def test_fingerprint_excludes_observation_time_but_keeps_inputs(self):
         first=evidence_step(None,{'issue_no':'1001','triplet':[3,6,8],'observed_at':'a','prediction':None})
@@ -57,11 +88,11 @@ class ComparisonStoreTests(unittest.TestCase):
     def create(self,token='study-request-0001',name='五组比较'):
         return self.store.create_study(1,self.original['id'],name,token,now=NOW)
 
-    def test_fresh_390_atomic_copy_keeps_original_and_frozen_snapshots(self):
+    def test_fresh_grid_atomic_copy_keeps_original_and_frozen_snapshots(self):
         before=self.store.get_work_item(self.original['id'])
         created=self.create();study=created['study']
-        self.assertEqual(study['status'],'paused');self.assertEqual(len(study['children']),5)
-        self.assertEqual(self.store.capacity()['saved'],468)
+        self.assertEqual(study['status'],'paused');self.assertEqual(len(study['children']),7)
+        self.assertEqual(self.store.capacity()['saved'],624)
         self.assertEqual(self.store.get_work_item(self.original['id']),before)
         for child in study['children']:
             work=self.store.get_work_item(child['batch_id'])
@@ -77,7 +108,7 @@ class ComparisonStoreTests(unittest.TestCase):
         with self.assertRaises(RuleLabError):self.create(name='different')
         with self.assertRaises(RuleLabError) as cm:self.create(token='study-request-0002')
         self.assertEqual(cm.exception.code,'capacity_exceeded')
-        self.assertEqual(self.store.capacity()['saved'],468)
+        self.assertEqual(self.store.capacity()['saved'],624)
         self.assertEqual(len(self.store.list_studies(1)),1)
 
     def test_parent_queue_owns_children_and_waits_for_existing_batch_capacity(self):
@@ -175,7 +206,7 @@ class ComparisonStoreTests(unittest.TestCase):
             results=list(pool.map(lambda _:self.create(),range(2)))
         self.assertEqual(len({r['study']['id'] for r in results}),1)
         self.assertEqual(sum(r['created'] for r in results),1)
-        self.assertEqual(self.store.capacity()['saved'],468)
+        self.assertEqual(self.store.capacity()['saved'],624)
 
     def test_v2_schema_migration_preserves_rows_and_all_old_columns(self):
         path=Path(self.tmp.name)/'v2.db'
@@ -219,7 +250,7 @@ class ComparisonWorkerTests(unittest.TestCase):
             if state['status'] in ('completed','error','resource_paused'):return state
         self.fail('study did not complete')
 
-    def test_all_five_complete_with_frozen_cutoff_and_matching_input_evidence(self):
+    def test_all_grid_variants_complete_with_frozen_cutoff_and_matching_input_evidence(self):
         RuleLabWorker(self.store,self.source,page_size=200).tick(now=self.now)
         frozen=self.store.get_study(1,self.study['id'])['cutoff_issue']
         later=self.opened+timedelta(hours=3)
@@ -231,7 +262,7 @@ class ComparisonWorkerTests(unittest.TestCase):
         self.assertTrue(state['comparable'],state)
         self.assertEqual(len({c['digest'] for c in state['actual_coverage']}),1)
         rows=self.store.study_comparison(1,state['id'])['rows']
-        self.assertEqual(len(rows),250)
+        self.assertEqual(len(rows),450)
         base=next(r for r in rows if r['variant_key']=='baseline' and r['condition']['type']=='always')
         self.assertEqual(base['delta_net_profit'],0)
         self.assertGreater(base['betting_days'],0)

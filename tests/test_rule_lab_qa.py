@@ -169,7 +169,7 @@ class RuleLabIndependentQaTests(unittest.TestCase):
 
     def test_total_limit_is_atomic_for_last_two_creations(self):
         store = self.ledger()
-        for _ in range(12):
+        for _ in range(19):
             self.batch(store, mode='live', start=False)
         barrier = threading.Barrier(2)
         def create(uid):
@@ -183,7 +183,7 @@ class RuleLabIndependentQaTests(unittest.TestCase):
             results = list(executor.map(create, (2, 3)))
         self.assertEqual(sorted(results), ['capacity_exceeded', 'created'])
         with sqlite3.connect(store.db_path) as connection:
-            self.assertEqual(connection.execute('SELECT count(*) FROM lab_experiments').fetchone()[0], 650)
+            self.assertEqual(connection.execute('SELECT count(*) FROM lab_experiments').fetchone()[0], 1000)
 
     def test_malformed_json_value_types_are_client_errors_without_partial_batches(self):
         fixture = SourceFixture(self.root / 'source.db')

@@ -18,7 +18,7 @@ from pc28touzhu.domain.rule_lab_risk import (
 from pc28touzhu.domain.rule_lab_comparison import risk_variants
 
 SHANGHAI = timezone(timedelta(hours=8))
-MAX_TOTAL_EXPERIMENTS = 650
+MAX_TOTAL_EXPERIMENTS = 1000
 MAX_RUNNING_EXPERIMENTS = 100
 LEGACY_REPLAY_NOTICE = '此成绩由旧版按轮回放生成：时间预算耗尽时可能漏过入场机会，需复核后再用于方案比较。原成绩已保留。'
 LEGACY_ODDS_NOTICE = '本批次OK游戏网盘使用旧赔率1.98 / 3.60 / 4.20；当前已更正为1.998 / 3.71 / 4.32。历史成绩未重算，不能当作当前赔率的结果。'
@@ -464,7 +464,7 @@ class RuleLabStore:
     def comparison_preview(self,user_id,batch_id):
         with self._connect() as c:
             batch,experiments=self._comparison_source(c,user_id,batch_id)
-            variants=risk_variants(_load(batch['risk_policy_json']))
+            variants=risk_variants(_load(batch['risk_policy_json']),metric=batch['metric'])
             count=sum(v['available'] for v in variants)
             return dict(source_batch_id=batch_id,variants=variants,candidate_count=count,new_experiments=count*len(experiments),
                         capacity=self._capacity(c),source_name=batch['name'])
@@ -523,7 +523,7 @@ class RuleLabStore:
                 if existing['request_hash']!=request_hash:raise RuleLabError('request_conflict','同一请求标识不能用于不同的比较组',409)
                 return dict(study=self._study(c,existing),created=False)
             batch,experiments=self._comparison_source(c,user_id,source_batch_id)
-            variants=[v for v in risk_variants(_load(batch['risk_policy_json'])) if v['available']]
+            variants=[v for v in risk_variants(_load(batch['risk_policy_json']),metric=batch['metric']) if v['available']]
             if len(variants)<2:raise RuleLabError('invalid_input','至少需要两种不同且有效的风控候选')
             self._require_space()
             if self._capacity(c)['saved']+len(variants)*len(experiments)>MAX_TOTAL_EXPERIMENTS:

@@ -375,7 +375,7 @@
         }
         const gate = payload.hit_rate_gate || {};
         if (gate.enabled) {
-            parts.push("命中率 ≥" + String(gate.threshold) + "%（满" + String(gate.min_settled_count) + "单）");
+            parts.push("实赔命中率 < " + String(gate.threshold) + "% 时熔断（实赔＋全亏满 " + String(gate.min_settled_count) + " 单）");
         }
         return parts.length ? ("每日风控：" + parts.join(" / ")) : "";
     }
@@ -407,8 +407,17 @@
         if (!stat) {
             return "";
         }
-        return "已结算 " + String(stat.settled_event_count || 0) + " 单，命中 " + String(stat.hit_count || 0) +
+        let text = "已结算 " + String(stat.settled_event_count || 0) + " 单，命中 " + String(stat.hit_count || 0) +
             " / 未中 " + String(stat.miss_count || 0) + " / 回本 " + String(stat.refund_count || 0);
+        const control = rule.daily_risk_control || {}, gate = control.hit_rate_gate || {};
+        if (control.enabled && gate.enabled) {
+            const hits = Number(stat.hit_count || 0), sample = hits + Number(stat.miss_count || 0);
+            const minimum = Number(gate.min_settled_count || 1);
+            text += "；熔断有效样本 " + sample + " / " + minimum + " 单，实赔命中率 " +
+                (sample ? (100 * hits / sample).toFixed(2) + "%" : "—") +
+                "（回本不计入；" + (sample < minimum ? "样本未满" : "样本已满") + "）";
+        }
+        return text;
     }
 
     function dailyStatusText(rule) {
@@ -980,7 +989,7 @@
                         '<label class="field"><span>路由止盈</span><input class="text-input route-profit-target" type="number" min="0" step="0.01" value="' + escapeHtml(routeRiskControl.profit_target || 0) + '"></label>' +
                         '<label class="field"><span>路由止损</span><input class="text-input route-loss-limit" type="number" min="0" step="0.01" value="' + escapeHtml(routeRiskControl.loss_limit || 0) + '"></label>' +
                         '<label class="field"><span>命中率熔断阈值(%)</span><input class="text-input route-hit-rate-threshold" type="number" min="1" max="99" step="0.1" value="' + escapeHtml((routeRiskControl.hit_rate_gate || {}).threshold || 50) + '"></label>' +
-                        '<label class="field"><span>熔断最小结算单数</span><input class="text-input route-hit-rate-min-settled" type="number" min="1" step="1" value="' + escapeHtml((routeRiskControl.hit_rate_gate || {}).min_settled_count || 20) + '"></label>' +
+                        '<label class="field"><span>熔断最少实赔＋全亏单数（不含回本）</span><input class="text-input route-hit-rate-min-settled" type="number" min="1" step="1" value="' + escapeHtml((routeRiskControl.hit_rate_gate || {}).min_settled_count || 20) + '"></label>' +
                         '<label class="check-row"><input class="route-hit-rate-gate-enabled" type="checkbox"' + ((routeRiskControl.hit_rate_gate || {}).enabled ? " checked" : "") + '><span>当日命中率低于阈值时熔断该路由</span></label>' +
                     '</div>' +
                     '<label class="field"><span>方案风控</span><select class="text-input route-subscription-risk-mode">' + options([["inherit_rule", "继承规则默认"], ["inherit_subscription", "继承跟单方案"], ["override", "单独设置"], ["disabled", "关闭"]], subscriptionRiskMode) + '</select></label>' +

@@ -90,7 +90,7 @@ class ObservationApiTests(unittest.TestCase):
         path=PREFIX+'/studies/'+str(study['id']);before=self.request(path)['json']
         result=self.request(path,query=QUERY)
         self.assertEqual(result['status_code'],200,result)
-        self.assertEqual(len(result['json']['rows']),10)
+        self.assertEqual(len(result['json']['rows']),16)
         windows={(r['observation']['window']['start_date'],r['observation']['window']['end_date']) for r in result['json']['rows']}
         self.assertEqual(windows,{('2026-10-01','2026-11-27')})
         for row in result['json']['rows']:

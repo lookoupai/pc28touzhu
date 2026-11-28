@@ -190,7 +190,7 @@ class RuleLabApiTests(unittest.TestCase):
             start_date='2026-11-01',end_date='2026-11-26',risk_policy=p))
         self.assertEqual(result['status_code'],201,result);bid=result['json']['batch']['id']
         preview=self.request(PREFIX+'/batches/'+str(bid)+'/comparison-preview')
-        self.assertEqual(preview['json']['new_experiments'],250)
+        self.assertEqual(preview['json']['new_experiments'],400)
         payload={'source_batch_id':bid,'name':'=危险名字只作文本','request_id':'api-study-request-001'}
         created=self.request(PREFIX+'/studies',payload);self.assertEqual(created['status_code'],201,created)
         sid=created['json']['study']['id'];self.assertEqual(self.request(PREFIX+'/studies',payload)['status_code'],200)
@@ -201,7 +201,7 @@ class RuleLabApiTests(unittest.TestCase):
             self.assertEqual(self.request(endpoint,body,uid=self.other['id'])['status_code'],404)
         self.assertEqual(self.request(path+'/state',{'state':'running'})['json']['study']['status'],'queued')
         self.assertEqual(self.request(path+'/state',{'state':'paused'})['json']['study']['status'],'paused')
-        detail=self.request(path)['json'];self.assertEqual(len(detail['rows']),250);self.assertFalse(detail['study']['comparable'])
+        detail=self.request(path)['json'];self.assertEqual(len(detail['rows']),400);self.assertFalse(detail['study']['comparable'])
         child=detail['study']['children'][0]['batch_id']
         self.assertEqual(self.request(PREFIX+'/batches/'+str(child)+'/state',{'state':'running'})['json']['code'],'study_managed')
         exported=self.request(path+'/export.csv');self.assertEqual(exported['status_code'],200)
@@ -369,7 +369,7 @@ class RuleLabApiTests(unittest.TestCase):
         self.create(metric='combo')
         self.assertEqual(self.service.batch_detail(1,old['id']),before)
 
-    def test_long_combo_pack_freezes_26_versions_and_five_risk_variants(self):
+    def test_long_combo_pack_freezes_26_versions_and_seven_risk_variants(self):
         options=self.request(PREFIX+'/options')['json']
         pack=next(p for p in options['template_packs'] if p['id']=='combo_long_miss_v1')
         self.assertEqual(pack['condition_counts']['combo'],13)
@@ -381,7 +381,7 @@ class RuleLabApiTests(unittest.TestCase):
         before=self.service.batch_detail(1,batch['id'])
         study=self.request(PREFIX+'/studies',dict(source_batch_id=batch['id'],name='long variants',request_id='long-variants-01'))
         self.assertEqual(study['status_code'],201,study)
-        self.assertEqual(self.store.capacity()['saved'],156)
+        self.assertEqual(self.store.capacity()['saved'],208)
         for child in study['json']['study']['children']:
             detail=self.service.batch_detail(1,child['batch_id'])
             self.assertEqual(detail['batch']['template_pack'],pack['id'])
