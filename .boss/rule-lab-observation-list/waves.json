@@ -1,0 +1,185 @@
+{
+  "version": 1,
+  "feature": "rule-lab-observation-list",
+  "environment": {
+    "PYTHONPATH": "src",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "waves": [
+    {
+      "id": "W1",
+      "title": "统计与同快照只读API",
+      "scope": "observation domain, batched ledger reads, opt-in GET contract",
+      "writeSet": [
+        "src/pc28touzhu/domain/rule_lab_observation.py",
+        "src/pc28touzhu/services/rule_lab_observation.py",
+        "src/pc28touzhu/domain/rule_lab_monthly.py",
+        "src/pc28touzhu/services/rule_lab_store.py",
+        "src/pc28touzhu/services/rule_lab_service.py",
+        "src/pc28touzhu/api/app.py",
+        "tests/test_rule_lab_observation.py",
+        "tests/test_rule_lab_observation_api.py",
+        "src/pc28touzhu/services/rule_lab_series.py"
+      ],
+      "redTests": [
+        [
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_observation"
+        ],
+        [
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_observation_api"
+        ]
+      ],
+      "greenGates": [
+        [
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_observation",
+          "tests.test_rule_lab_observation_api",
+          "tests.test_rule_lab_monthly",
+          "tests.test_rule_lab_api"
+        ]
+      ],
+      "contractRows": [
+        "CM1",
+        "CM2",
+        "CM3",
+        "CM4",
+        "CM5",
+        "CM6",
+        "CM9"
+      ],
+      "stopCondition": "任何日期、原始金额、同快照只读或权限反例失败时修复，不放行集成",
+      "status": "passed",
+      "evidence": [
+        "/tmp/pc28-observation-root-targeted.log",
+        "/tmp/pc28-observation-full-python.log"
+      ]
+    },
+    {
+      "id": "W2",
+      "title": "观察设置与两个列表",
+      "scope": "persistent display settings, signals, filters, paging, safe response lifecycle",
+      "writeSet": [
+        "src/pc28touzhu/ui/rule_lab.html",
+        "src/pc28touzhu/ui/rule_lab.js",
+        "src/pc28touzhu/ui/rule_lab.css",
+        "tests/rule_lab_observation_ui_server.py",
+        "tests/test_rule_lab_observation_ui.cjs",
+        "docs/RULE_LAB.md",
+        ".boss/rule-lab-observation-list/ui-spec.md"
+      ],
+      "redTests": [
+        [
+          "node",
+          "tests/test_rule_lab_observation_ui.cjs"
+        ]
+      ],
+      "greenGates": [
+        [
+          "node",
+          "--check",
+          "src/pc28touzhu/ui/rule_lab.js"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_observation_ui.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_results_ui.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_amount_ui.cjs"
+        ]
+      ],
+      "contractRows": [
+        "CM1",
+        "CM2",
+        "CM4",
+        "CM5",
+        "CM7",
+        "CM8",
+        "CM9"
+      ],
+      "stopCondition": "旧数据套新口径、纯展示操作写API、持久化或旧交互失败时修复，不上线",
+      "status": "passed",
+      "evidence": [
+        "/tmp/pc28-observation-root-ui.log",
+        "/tmp/pc28-observation-root-results.log",
+        "/tmp/pc28-observation-root-amount.log"
+      ]
+    },
+    {
+      "id": "W3",
+      "title": "独立QA、性能与发布保护",
+      "scope": "independent adversarial tests, bounded read benchmark, existing lab regression and deploy review",
+      "writeSet": [
+        "tests/test_rule_lab_observation_qa.py",
+        "tests/rule_lab_observation_benchmark.py",
+        ".boss/rule-lab-observation-list/qa-report.md",
+        ".boss/rule-lab-observation-list/deploy-report.md"
+      ],
+      "redTests": [
+        [
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_observation_qa"
+        ]
+      ],
+      "greenGates": [
+        [
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_observation_qa"
+        ],
+        [
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tests",
+          "-p",
+          "test_rule_lab_*.py"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "CM1",
+        "CM2",
+        "CM3",
+        "CM4",
+        "CM5",
+        "CM6",
+        "CM7",
+        "CM8",
+        "CM9",
+        "CM10"
+      ],
+      "stopCondition": "独立QA或真实副本资源证据未通过不得发布；发布只在根代理准确提交GO后执行",
+      "status": "qa_passed_release_pending",
+      "qaPassed": true,
+      "releaseStatus": "awaiting_root_exact_commit",
+      "evidence": [
+        "/tmp/pc28-observation-full-python.log",
+        "/tmp/pc28-observation-root-targeted.log",
+        ".boss/rule-lab-observation-list/qa-report.md"
+      ],
+      "notes": "1284 tests, 2 optional skips; two final date cases added after full run covered by final 27 targeted tests. Not deployed yet."
+    }
+  ]
+}

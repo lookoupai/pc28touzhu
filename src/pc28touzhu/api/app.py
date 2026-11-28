@@ -1426,19 +1426,29 @@ class PlatformApiApplication:
                 management_match=None
             job_match=re.fullmatch(r"/management-jobs/([1-9][0-9]{0,17})",suffix)
             continuation_match=re.fullmatch(r"/(batches|studies)/([1-9][0-9]{0,17})/(continuation-preview|continuation|append|segments|input-coverage)",suffix)
-            pagination={}
+            pagination={};observation_options={}
             if environ.get("QUERY_STRING"):
-                if not continuation_match or continuation_match.group(3)!='segments' or method!='GET':
+                observation_route=bool(re.fullmatch(r"/(?:batches|studies)/[1-9][0-9]{0,17}",suffix))
+                segment_route=continuation_match and continuation_match.group(3)=='segments'
+                if method!='GET' or not (observation_route or segment_route):
                     raise RuleLabError('invalid_input','此接口不接受查询参数')
                 try:query=parse_qs(str(environ['QUERY_STRING']),keep_blank_values=True,strict_parsing=True,max_num_fields=2)
-                except ValueError as exc:raise RuleLabError('invalid_input','分段分页参数无效') from exc
-                if not query or set(query)-{'limit','before_id'}:
-                    raise RuleLabError('invalid_input','分段列表只接受limit和before_id')
-                for key,values in query.items():
-                    if len(values)!=1 or not re.fullmatch(r'[1-9][0-9]{0,17}',values[0]):
-                        raise RuleLabError('invalid_input','分段分页参数无效')
-                    pagination[key]=int(values[0])
-                if pagination.get('limit',20)>50:raise RuleLabError('invalid_input','每页最多读取50个计算段')
+                except ValueError as exc:raise RuleLabError('invalid_input','查询参数无效') from exc
+                if observation_route:
+                    if set(query)!={'observation_months','observation_partial'} or any(len(values)!=1 for values in query.values()):
+                        raise RuleLabError('invalid_input','观察参数须成对提供月份和月份口径')
+                    months=query['observation_months'][0];partial=query['observation_partial'][0]
+                    if not re.fullmatch(r'(?:[1-9]|1[0-2])',months) or partial not in ('true','false'):
+                        raise RuleLabError('invalid_input','观察月份须为1～12，月份口径须为true或false')
+                    observation_options=dict(observation_months=int(months),observation_partial=partial=='true')
+                else:
+                    if not query or set(query)-{'limit','before_id'}:
+                        raise RuleLabError('invalid_input','分段列表只接受limit和before_id')
+                    for key,values in query.items():
+                        if len(values)!=1 or not re.fullmatch(r'[1-9][0-9]{0,17}',values[0]):
+                            raise RuleLabError('invalid_input','分段分页参数无效')
+                        pagination[key]=int(values[0])
+                    if pagination.get('limit',20)>50:raise RuleLabError('invalid_input','每页最多读取50个计算段')
             batch_match = re.fullmatch(r"/batches/([1-9][0-9]{0,17})(?:/(state|risk-policy|comparison-preview|export\.csv|experiments/([1-9][0-9]{0,17})(/replay(?:-preview)?)?))?", suffix)
             study_match=re.fullmatch(r"/studies/([1-9][0-9]{0,17})(?:/(state|export\.csv))?",suffix)
             if suffix in ("", "/options"):
@@ -1523,7 +1533,7 @@ class PlatformApiApplication:
                     start_response('200 OK',[('Content-Type','text/csv; charset=utf-8'),('Content-Length',str(len(body))),
                         ('Content-Disposition','attachment; filename="rule-study-%s.csv"'%study_id),('X-Content-Type-Options','nosniff')]+headers)
                     return [body]
-                else:payload=service.study_detail(user_id,study_id)
+                else:payload=service.study_detail(user_id,study_id,**observation_options)
             else:
                 batch_id = int(batch_match.group(1))
                 action = batch_match.group(2)
@@ -1546,7 +1556,7 @@ class PlatformApiApplication:
                         return _json_response(start_response,201,payload,headers)
                     else:payload = service.experiment_detail(user_id, batch_id, int(batch_match.group(3)))
                 else:
-                    payload = service.batch_detail(user_id, batch_id)
+                    payload = service.batch_detail(user_id, batch_id, **observation_options)
             return _json_response(start_response, 200, payload, headers)
         except PermissionError as exc:
             status = int(getattr(exc, "status_code", 401) or 401)

@@ -155,7 +155,7 @@ def _summary(c,series,rows=None):
         from pc28touzhu.services.rule_lab_archive import read_input
         value=read_input(c,stream['source_key'],'draw',0,captured)
         if value:captured_open=value.get('open_at')
-    effective=max([row['end_date'] or '' for row in rows]+([active['requested_end_date']] if active else [])) or None
+    effective=max([row['end_date'] or '' for row in rows]+([active['requested_end_date']] if active else []),default='') or None
     if series:
         latest=c.execute("SELECT requested_end_date FROM lab_segments WHERE series_id=? AND status='completed' ORDER BY sequence DESC LIMIT 1",(series['id'],)).fetchone()
         if latest:effective=max(effective or '',latest[0])

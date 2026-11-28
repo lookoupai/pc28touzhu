@@ -11,8 +11,17 @@
     const riskStates={legacy:"逐期对照",active:"轮内跟随",unfinished:"区间结束·轮未完结",waiting:"等待条件 / 冷却",day_stopped:"统计日已停止"};
     const riskEditors={};
     const pageSize = 20;
+    const observationDefaults=Object.freeze({version:1,months:2,includePartial:true,minimumRoi:3,minimumCount:200,minimumDays:10,
+        maximumSpread:null,maximumMonthlyDrawdownUnits:null,maximumUnderwaterDays:null,highlight:'red',matchesOnly:false,showRuntime:false});
+    const observationPreferenceKey='ruleLabObservation:v1';
+    const observationFields={months:'labObservationMonths',includePartial:'labObservationPartial',minimumRoi:'labObservationMinimumRoi',
+        minimumCount:'labObservationMinimumCount',minimumDays:'labObservationMinimumDays',maximumSpread:'labObservationMaximumSpread',
+        maximumMonthlyDrawdownUnits:'labObservationMaximumMonthlyDrawdownUnits',maximumUnderwaterDays:'labObservationMaximumUnderwaterDays',
+        highlight:'labObservationHighlight',matchesOnly:'labObservationMatchesOnly',showRuntime:'labObservationShowRuntime'};
+    const observationBlockerNames={legacy_engine:'旧回放算法需复核',input_conflict:'输入有冲突',archive_gap:'输入缺档',
+        window_pending:'窗口内尚有待结算',history_mismatch:'日汇总与累计成绩不一致',study_not_comparable:'比较组输入尚不可比'};
     const state = {options:null, overview:null, batch:null, experiments:[], selectedId:null, detailId:null, detailTrigger:null, resultPage:0,
-        loading:false, mutating:false, exporting:false, readRevision:0, detailRevision:0, readAt:null, accessDenied:false,riskEditingId:null,
+        loading:false, mutating:false, exporting:false, resultFilteredCount:0,studyFilteredCount:0,observation:{settings:{...observationDefaults},dirty:false,revision:0,loading:false}, readRevision:0, detailRevision:0, readAt:null, accessDenied:false,riskEditingId:null,
         studies:[],study:null,studyRows:[],studyId:null,studyPage:0,preview:null,studyRequest:null,monthly:null,reportExperiment:null,detailResult:null,amountView:null,performance:null,continuation:null,continuationRevision:0,management:null,managementJobs:new Map(),managementPoll:null,storage:null,storageRequest:null};
     const studyNames={paused:'已暂停',queued:'等待运行额度',running:'比较中',completed:'全部完成',error:'比较异常',resource_paused:'资源限制暂停',deleting:'删除中'};
     const monthStatus={complete:'完整月份',no_samples:'完整月份 · 无交易',partial:'部分月份',not_replayed:'尚未回放',not_observed:'尚未观察',pending:'等待结算'};
@@ -112,6 +121,233 @@
         return n === null ? "—" : (signed && n > 0 ? "+" : "") + n.toFixed(2);
     }
     function percent(value) { return value === null || value === undefined ? "—" : money(value, false) + "%"; }
+    function normalizeObservationSettings(value) {
+        const invalid=(key,message)=>{const error=new Error(message);error.field=observationFields[key];throw error;};
+        if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==Object.keys(observationDefaults).length||value.version!==1)throw new Error('观察设置格式无效，已恢复默认。');
+        for(const key of Object.keys(value))if(!(key in observationDefaults))throw new Error('观察设置包含未知字段。');
+        const numeric=(key,label,min,max,integer=false,optional=false)=>{
+            const n=value[key];if(optional&&n===null)return;
+            if(typeof n!=='number'||!Number.isFinite(n)||n<min||n>max||(integer?!Number.isInteger(n):Math.abs(n*100-Math.round(n*100))>1e-7))invalid(key,label+'无效，请填写'+min+'～'+max+(integer?'之间的整数。':'之间、最多两位小数的数值。'));
+        };
+        numeric('months','观察月数',1,12,true);numeric('minimumRoi','每月最低收益率',-100,1000);
+        numeric('minimumCount','每月结算笔数',1,1000000000,true);numeric('minimumDays','每月投注日数',1,31,true);
+        numeric('maximumSpread','月收益率差距',0,1000000000,false,true);numeric('maximumMonthlyDrawdownUnits','月回撤注数',0,1000000000,false,true);numeric('maximumUnderwaterDays','回撤持续天数',0,1000000000,true,true);
+        for(const key of ['includePartial','matchesOnly','showRuntime'])if(typeof value[key]!=='boolean')invalid(key,'观察开关无效。');
+        if(!['red','blue','purple'].includes(value.highlight))invalid('highlight','请选择有效的高亮颜色。');
+        return {...value};
+    }
+    function observationFormValue() {
+        const value={version:1};
+        for(const [key,id] of Object.entries(observationFields)){
+            const input=$(id);input.setAttribute('aria-invalid','false');
+            if(key==='includePartial')value[key]=input.value==='true'?true:input.value==='false'?false:null;
+            else if(['matchesOnly','showRuntime'].includes(key))value[key]=input.checked;
+            else if(key==='highlight')value[key]=input.value;
+            else value[key]=input.value===''?(key.startsWith('maximum')?null:NaN):Number(input.value);
+        }
+        return normalizeObservationSettings(value);
+    }
+    function fillObservationForm(settings) {
+        for(const [key,id] of Object.entries(observationFields)){
+            const input=$(id);input.setAttribute('aria-invalid','false');
+            if(['matchesOnly','showRuntime'].includes(key))input.checked=settings[key];
+            else input.value=settings[key]===null?'':String(settings[key]);
+        }
+    }
+    function observationRuleText(settings) {
+        const parts=['近'+settings.months+'个月',settings.includePartial?'包含未完整月':'仅完整月','每月ROI ≥ '+money(settings.minimumRoi)+'%','每月 ≥ '+settings.minimumCount+'笔 / '+settings.minimumDays+'日'];
+        if(settings.maximumSpread!==null)parts.push('月间差距 ≤ '+money(settings.maximumSpread)+' 个百分点');
+        if(settings.maximumMonthlyDrawdownUnits!==null)parts.push('月回撤 ≤ '+money(settings.maximumMonthlyDrawdownUnits)+' 注');
+        if(settings.maximumUnderwaterDays!==null)parts.push('回撤持续 ≤ '+settings.maximumUnderwaterDays+' 天');
+        if(settings.matchesOnly)parts.push('仅看符合规则');
+        return parts.join(' · ');
+    }
+    function renderObservationSettings() {
+        $('labObservationActiveSummary').textContent='当前显示：'+observationRuleText(state.observation.settings);
+    }
+    function initializeObservation() {
+        let notice='';
+        try{const saved=localStorage.getItem(observationPreferenceKey);if(saved)state.observation.settings=normalizeObservationSettings(JSON.parse(saved));}
+        catch(error){state.observation.settings={...observationDefaults};notice='已使用默认观察规则；之前的设置无法读取或格式无效，本页仍可调整。';}
+        fillObservationForm(state.observation.settings);renderObservationSettings();if(notice)feedback('labObservationFeedback',notice,false);
+    }
+    function persistObservationSettings(settings) {
+        try{localStorage.setItem(observationPreferenceKey,JSON.stringify(settings));return '观察规则已应用并保存到本浏览器。';}
+        catch(_){return '观察规则已在本页生效；当前浏览器不能保存设置，重新打开后将使用默认值。';}
+    }
+    function observationUrl(kind,id,settings=state.observation.settings) {
+        return base+'/'+(kind==='study'?'studies':'batches')+'/'+id+'?observation_months='+settings.months+'&observation_partial='+String(settings.includePartial);
+    }
+    function validateObservationRows(rows,settings) {
+        const fail=()=>{throw responseError('观察数据不完整或口径不一致，请重新读取',0,'invalid_observation');};
+        if(!Array.isArray(rows))fail();
+        const integer=n=>Number.isSafeInteger(n),nullable=n=>n===null||integer(n),date=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s);
+        const monthIndex=s=>Number(s.slice(0,4))*12+Number(s.slice(5,7))-1;
+        const status=['complete','partial','pending','no_samples','not_replayed','not_observed','missing'];
+        for(const row of rows){
+            const o=row.observation,w=o?.window;
+            if(o?.version!==1||!integer(o.original_stake_cents)||o.original_stake_cents<=0||!w||w.requested_months!==settings.months||w.include_partial!==settings.includePartial||!date(w.start_date)||!date(w.end_date)||w.actual_through_date!==null&&!date(w.actual_through_date)||typeof w.period_reached!=='boolean'||typeof w.has_partial!=='boolean'||!integer(w.available_months)||!integer(w.complete_months)||!Array.isArray(o.months)||o.months.length!==settings.months)fail();
+            let previous=null;
+            for(const m of o.months){
+                if(!m||typeof m.month!=='string'||!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(m.month)||!status.includes(m.status)||typeof m.complete_month!=='boolean'||!integer(m.stake_cents)||m.stake_cents<0||!integer(m.net_cents)||!integer(m.settled_count)||m.settled_count<0||!integer(m.betting_days)||m.betting_days<0||!integer(m.pending_count)||m.pending_count<0||!nullable(m.daily_close_drawdown_cents)||!nullable(m.worst_day_cents))fail();
+                const index=monthIndex(m.month);if(previous!==null&&index!==previous+1)fail();previous=index;
+            }
+            if(o.months[0].month!==w.start_month||o.months.at(-1).month!==w.end_month)fail();
+            const summary=o.summary;
+            if(!summary||!integer(summary.net_cents)||!integer(summary.stake_cents)||!integer(summary.settled_count)||!integer(summary.min_month_count)||!integer(summary.min_month_days)||!nullable(summary.min_month_drawdown_cents)||!nullable(summary.max_month_drawdown_cents)||!nullable(summary.net_without_best_three_days_cents)||!nullable(summary.best_three_days_cents)||!nullable(summary.longest_underwater_days)||!nullable(summary.current_underwater_days)||typeof summary.recovery_left_censored!=='boolean')fail();
+            if(!o.quality||!Array.isArray(o.quality.blockers)||!Array.isArray(o.quality.warnings)||o.quality.blockers.some(x=>typeof x!=='string')||o.quality.warnings.some(x=>typeof x!=='string'))fail();
+            for(const period of [o.recent,o.previous])if(!period||typeof period.available!=='boolean'||!date(period.start_date)||!date(period.end_date)||!nullable(period.stake_cents)||!nullable(period.net_cents)||!nullable(period.settled_count))fail();
+        }
+    }
+    async function applyObservation() {
+        if(state.mutating||state.accessDenied||(state.loading&&!state.observation.loading))return;
+        let next;
+        try{next=observationFormValue();}
+        catch(error){if(error.field){$(error.field).setAttribute('aria-invalid','true');$(error.field).focus();}feedback('labObservationFeedback',error.message,true);return;}
+        const current=state.observation.settings,windowChanged=next.months!==current.months||next.includePartial!==current.includePartial;
+        const observationRevision=++state.observation.revision;
+        if(!windowChanged){
+            if(state.observation.loading){state.readRevision++;state.observation.loading=false;state.loading=false;}
+            state.observation.settings=next;state.observation.dirty=false;state.resultPage=0;state.studyPage=0;
+            renderObservationSettings();renderResults();renderStudyResults();feedback('labObservationFeedback',persistObservationSettings(next),false);updateControls();return;
+        }
+        const revision=++state.readRevision,batchId=state.selectedId,studyId=state.studyId;
+        state.observation.loading=true;state.loading=true;updateControls();
+        feedback('labObservationFeedback','正在读取新窗口；下方仍显示 '+observationRuleText(current)+'。',false);
+        try{
+            const [batch,study]=await Promise.all([batchId===null?null:request(observationUrl('batch',batchId,next)),studyId===null?null:request(observationUrl('study',studyId,next))]);
+            if(revision!==state.readRevision||observationRevision!==state.observation.revision||batchId!==state.selectedId||studyId!==state.studyId)return;
+            if(batch)validateObservationRows(batch.experiments,next);if(study)validateObservationRows(study.rows,next);
+            closeDetail(false);state.observation.settings=next;state.observation.dirty=false;state.resultPage=0;state.studyPage=0;
+            if(batch){state.batch=batch.batch;state.experiments=batch.experiments;}
+            if(study){state.study=study.study;state.studyRows=study.rows;}
+            renderObservationSettings();renderResults();renderStudyResults();feedback('labObservationFeedback',persistObservationSettings(next),false);
+        }catch(error){
+            if(revision!==state.readRevision||observationRevision!==state.observation.revision)return;
+            if(error.status===401||error.status===403)denyAccess();
+            state.observation.dirty=true;feedback('labObservationFeedback',error.message+'。新窗口未应用，当前仍显示 '+observationRuleText(state.observation.settings)+'。',true);
+        }finally{
+            if(revision===state.readRevision&&observationRevision===state.observation.revision){state.observation.loading=false;state.loading=false;updateControls();}
+        }
+    }
+    function observationRatioOrder(a,b) {
+        const difference=BigInt(a.net_cents)*BigInt(b.stake_cents)-BigInt(b.net_cents)*BigInt(a.stake_cents);
+        return difference<0n?-1:difference>0n?1:0;
+    }
+    function observationRoiBounds(o) {
+        const months=o.months.filter(m=>m.stake_cents>0);if(!months.length)return null;
+        let low=months[0],high=months[0];for(const m of months){if(observationRatioOrder(m,low)<0)low=m;if(observationRatioOrder(m,high)>0)high=m;}
+        return {low,high,count:months.length};
+    }
+    function assessObservation(item) {
+        const settings=state.observation.settings,o=item.observation;
+        const result=(kind,label,reason,matches=false)=>({kind,label,reason,matches});
+        if(!o)return result('unready','待读取观察数据','');
+        if(o.quality.blockers.length)return result('blocked','数据待核对',o.quality.blockers.map(key=>observationBlockerNames[key]||'数据状态需核对').join('；'));
+        const missing=o.months.some(m=>['missing','not_replayed','not_observed'].includes(m.status));
+        if(missing||!settings.includePartial&&o.months.some(m=>!m.complete_month))return result('history','历史不足','已有 '+(settings.includePartial?o.window.available_months:o.window.complete_months)+' / '+settings.months+' 个月');
+        if(!o.window.period_reached)return result('unready','数据未就绪','尚未计算至窗口末日');
+        if(o.months.some(m=>m.settled_count<settings.minimumCount||m.betting_days<settings.minimumDays||m.stake_cents<=0))return result('sample','样本不足','每月最少 '+o.summary.min_month_count+' 笔 / '+o.summary.min_month_days+' 日');
+        const threshold=BigInt(Math.round(settings.minimumRoi*100));
+        if(o.months.some(m=>BigInt(m.net_cents)*10000n<threshold*BigInt(m.stake_cents)))return result('unmet','未达标','有月份收益率低于 '+money(settings.minimumRoi)+'%');
+        const bounds=observationRoiBounds(o),failures=[];
+        if(settings.maximumSpread!==null){
+            if(!bounds||bounds.count<2)failures.push('月间差距样本不足');
+            else{
+                const difference=BigInt(bounds.high.net_cents)*BigInt(bounds.low.stake_cents)-BigInt(bounds.low.net_cents)*BigInt(bounds.high.stake_cents);
+                if(difference*10000n>BigInt(Math.round(settings.maximumSpread*100))*BigInt(bounds.low.stake_cents)*BigInt(bounds.high.stake_cents))failures.push('月间波动超限');
+            }
+        }
+        if(settings.maximumMonthlyDrawdownUnits!==null){
+            if(o.summary.max_month_drawdown_cents===null)failures.push('月回撤尚不可计算');
+            else if(BigInt(o.summary.max_month_drawdown_cents)*100n>BigInt(Math.round(settings.maximumMonthlyDrawdownUnits*100))*BigInt(o.original_stake_cents))failures.push('月回撤超限');
+        }
+        if(settings.maximumUnderwaterDays!==null){
+            if(o.summary.longest_underwater_days===null)failures.push('回撤持续尚不可计算');
+            else if(o.summary.longest_underwater_days>settings.maximumUnderwaterDays)failures.push('回撤持续超限');
+        }
+        if(failures.length)return result('risk','收益达标 · 需关注',failures.join('；'));
+        return o.window.has_partial?result('stage','阶段达标','含未完整月',true):result('match','完整月达标','符合当前观察规则',true);
+    }
+    function observationMetric(item,kind) {
+        const o=item.observation;if(!o)return null;
+        const bounds=observationRoiBounds(o);
+        if(kind==='minimum_roi')return bounds?bounds.low.net_cents/bounds.low.stake_cents*100:null;
+        if(kind==='monthly_spread')return bounds?.count>=2?(bounds.high.net_cents/bounds.high.stake_cents-bounds.low.net_cents/bounds.low.stake_cents)*100:null;
+        if(kind==='monthly_drawdown')return o.summary.max_month_drawdown_cents===null?null:o.summary.max_month_drawdown_cents/o.original_stake_cents;
+        return null;
+    }
+    function sortObservationRows(rows,kind) {
+        if(kind==='profit')rows.sort((a,b)=>b.net_profit-a.net_profit||a.id-b.id);
+        else if(kind==='sample')rows.sort((a,b)=>b.settled_count-a.settled_count||a.id-b.id);
+        else if(kind==='drawdown')rows.sort((a,b)=>a.max_drawdown-b.max_drawdown||a.id-b.id);
+        else if(kind==='observation'){
+            const ranks={match:0,stage:1,risk:2,unmet:3,sample:4,history:5,unready:6,blocked:7};rows.sort((a,b)=>ranks[assessObservation(a).kind]-ranks[assessObservation(b).kind]||a.id-b.id);
+        }else if(['minimum_roi','monthly_spread','monthly_drawdown'].includes(kind))rows.sort((a,b)=>{
+            const av=observationMetric(a,kind),bv=observationMetric(b,kind);if(av===null||bv===null)return av===bv?a.id-b.id:av===null?1:-1;return (kind==='minimum_roi'?bv-av:av-bv)||a.id-b.id;
+        });
+    }
+    function observationLine(target,text,className='lab-muted') {const line=element('span',text,className);target.append(line);return line;}
+    function observationIdentityCell(item) {
+        const cell=element('td',null,'lab-condition lab-observation-stack');cell.append(element('strong',conditionName(item.condition)));observationLine(cell,settlementName(item));return cell;
+    }
+    function observationEmptyRow(target,columns,message) {const row=element('tr'),cell=element('td',message,'lab-empty');cell.colSpan=columns;row.append(cell);target.append(row);}
+    function renderObservationCount(id,rows) {
+        const full=rows.filter(r=>r.assessment.kind==='match').length,stage=rows.filter(r=>r.assessment.kind==='stage').length;
+        $(id).textContent='当前候选 '+rows.length+' 个 · 完整月达标 '+full+' · 阶段达标 '+stage+(state.observation.settings.matchesOnly?' · 仅显示符合规则':'')+'。规则用于观察筛选，不代表未来收益。';
+    }
+    function appendObservationCells(row,item) {
+        const o=item.observation,assessment=assessObservation(item);
+        const status=element('td',null,'lab-observation-stack lab-observation-status');
+        row.dataset.observationState=assessment.kind;row.dataset.matches=String(assessment.matches);
+        const tag=element('strong',assessment.label,'lab-observation-tag lab-observation-'+assessment.kind);
+        if(assessment.kind==='match')tag.dataset.highlight=state.observation.settings.highlight;
+        status.append(tag);observationLine(status,assessment.reason);
+        if(!o){row.append(status);for(let i=0;i<4;i++)row.append(element('td','—'));return;}
+        observationLine(status,'实际至 '+(o.window.actual_through_date||'尚未处理'));
+        observationLine(status,'窗口 '+o.window.start_date+'～'+o.window.end_date);
+        if(o.quality.warnings.includes('known_skips'))observationLine(status,'含已知跳过','lab-observation-warning');
+        const monthly=element('td',null,'lab-observation-stack');
+        o.months.forEach(m=>observationLine(monthly,m.month+' '+(m.stake_cents>0?percent(m.net_cents/m.stake_cents*100):'—')+(m.complete_month?'':' *'),'lab-observation-month'));
+        const bounds=observationRoiBounds(o),spread=bounds?.count>=2?(bounds.high.net_cents/bounds.high.stake_cents-bounds.low.net_cents/bounds.low.stake_cents)*100:null;
+        observationLine(monthly,'最低 '+(bounds?percent(bounds.low.net_cents/bounds.low.stake_cents*100):'—')+' · 差 '+(spread===null?'—':money(spread)+'pp'));
+        const risk=element('td',null,'lab-observation-stack');
+        const lower=o.summary.min_month_drawdown_cents,upper=o.summary.max_month_drawdown_cents;
+        observationLine(risk,'月日结 '+(lower===null?'—':money(lower/100)+'～'+money(upper/100)),'lab-observation-month');
+        observationLine(risk,'相当于 '+(lower===null?'—':money(lower/o.original_stake_cents)+'～'+money(upper/o.original_stake_cents))+' 注');
+        observationLine(risk,'累计逐笔 '+money(item.max_drawdown));
+        const more=element('details',null,'lab-observation-more');more.append(element('summary','更多指标'));
+        const extras=element('dl',null,'lab-observation-extra');
+        const entries=[['窗口净利（去掉最佳3天）',o.summary.net_without_best_three_days_cents===null?'—':money(o.summary.net_without_best_three_days_cents/100,true)],
+            ['窗口内最长回撤持续',o.summary.longest_underwater_days===null?'—':o.summary.longest_underwater_days+' 天'],['当前未恢复',o.summary.current_underwater_days===null?'—':o.summary.current_underwater_days+' 天'],
+            ['窗口最差日',o.summary.worst_day_cents===null?'—':money(o.summary.worst_day_cents/100,true)],['累计最长连亏',item.max_loss_streak+' 笔']];
+        for(const [label,value] of entries){extras.append(element('dt',label),element('dd',value));}more.append(extras);
+        more.append(element('p','按窗口内日结记录计算；去掉最佳3天仅作敏感性观察。'+(o.summary.recovery_left_censored?'窗口前高点未纳入回撤持续。':''),'lab-muted'));risk.append(more);
+        const sample=element('td',null,'lab-observation-stack');
+        observationLine(sample,'最少 '+o.summary.min_month_count+' 笔 / 月','lab-observation-month');observationLine(sample,'最少 '+o.summary.min_month_days+' 个投注日 / 月');
+        observationLine(sample,'有样本 '+o.window.available_months+' / '+o.window.requested_months+' 月');
+        const recent=element('td',null,'lab-observation-stack');
+        const periodText=(period,label)=>label+' '+(!period.available?'覆盖不足':period.stake_cents>0?percent(period.net_cents/period.stake_cents*100):'无交易');
+        observationLine(recent,periodText(o.recent,'末14天'),'lab-observation-month'+(o.recent.available&&o.recent.net_cents<0?' lab-observation-warning':''));
+        observationLine(recent,o.recent.available?o.recent.settled_count+' 笔':'尚不能计算完整14天');
+        observationLine(recent,periodText(o.previous,'前14天'));observationLine(recent,'窗口截至 '+o.window.end_date);
+        row.append(status,monthly,risk,sample,recent);
+    }
+    function observationResultCell(item,study=false) {
+        const cell=element('td',null,'lab-observation-stack');cell.append(element('strong',money(item.net_profit,true),profitClass(item.net_profit)));
+        observationLine(cell,'ROI '+percent(item.roi_percent));observationLine(cell,'共 '+item.settled_count+' 笔 · 投注 '+money(item.stake_total));
+        if(study){observationLine(cell,'Δ净利 '+money(item.delta_net_profit,true));observationLine(cell,'ΔROI '+(item.delta_roi_pp===null?'—':money(item.delta_roi_pp,true)+'pp')+' · Δ回撤 '+money(item.delta_drawdown,true));}
+        return cell;
+    }
+    function observationRuntime(item,batch) {
+        const details=element('details',null,'lab-observation-runtime');details.open=state.observation.settings.showRuntime;details.append(element('summary','运行信息'));
+        const risk=item.risk_state||{mode:'legacy',state:'legacy'};
+        const lines=[sampleLabel(item,batch),'实赔 / 退本 / 全亏：'+resultCounts(item),'轮状态：'+(riskStates[risk.state]||risk.state),'统计日：'+(risk.day_date||'—'),
+            '该日净利 / 开轮：'+(risk.mode==='round'?money(risk.day_net_profit,true)+' / '+risk.day_round_count:'—'),'本轮净利：'+money(risk.round_net_profit,true),
+            '停止原因：'+(reasonNames[risk.stop_reason]||risk.stop_reason||'—')];
+        if(item.completed_rounds!==undefined)lines.push('完成轮：'+item.completed_rounds,'盈利日 / 投注日：'+item.profitable_days+' / '+item.betting_days);
+        lines.forEach(line=>details.append(element('p',line,'lab-muted')));return details;
+    }
     function bytes(value) {
         const n = number(value, null);
         if (n === null) return "—";
@@ -186,7 +422,7 @@
             state.studies.some(study => ['running', 'queued'].includes(study.status) || updating(study));
     }
     function isReadingOrEditing() {
-        return state.detailId !== null || state.management !== null || state.continuation?.dirty || !$("labEditRiskForm").hidden || !$("labComparisonPreview").hidden ||
+        return state.detailId !== null || state.management !== null || state.continuation?.dirty || state.observation.dirty || $("labObservationPanel").open || Boolean(document.querySelector('.lab-observation-more[open],.lab-observation-runtime[open]')) || !$("labEditRiskForm").hidden || !$("labComparisonPreview").hidden ||
             Boolean(document.activeElement?.matches('input,textarea,[contenteditable="true"]'));
     }
     function updateRefreshStatus() {
@@ -219,10 +455,17 @@
         $("labExportButton").textContent = state.exporting ? "导出中…" : "导出 CSV";
         $("labSort").disabled = locked() || !state.experiments.length;
         $("labResultPrevious").disabled = locked() || state.resultPage <= 0;
-        $("labResultNext").disabled = locked() || (state.resultPage + 1) * pageSize >= state.experiments.length;
+        $("labResultNext").disabled = locked() || (state.resultPage + 1) * pageSize >= state.resultFilteredCount;
         $("labBatchList").querySelectorAll("button").forEach(button => {button.disabled = locked();});
         $("labEditRiskButton").disabled=locked();$("labSaveRiskButton").disabled=locked();$("labCancelRiskButton").disabled=state.mutating;
-        ['labCompareButton','labCreateStudyButton','labStudyExportButton','labStudyPrevious','labStudyNext'].forEach(id=>$(id).disabled=locked());
+        ['labCompareButton','labCreateStudyButton','labStudyExportButton'].forEach(id=>$(id).disabled=locked());
+        $("labStudyPrevious").disabled=locked()||state.studyPage<=0;
+        $("labStudyNext").disabled=locked()||(state.studyPage+1)*pageSize>=state.studyFilteredCount;
+        $("labStudySort").disabled=locked()||!state.studyRows.length;
+        $("labObservationApply").disabled=state.mutating||state.accessDenied||(state.loading&&!state.observation.loading);
+        $("labObservationReset").disabled=state.mutating||state.accessDenied;
+        $("labObservationApply").textContent=state.observation.loading?'读取中，可应用其他规则':'应用规则';
+        $("labObservationForm").setAttribute('aria-busy',String(state.observation.loading));
         $("labStudyStateButton").disabled=locked()||!state.study||['completed','deleting'].includes(state.study.status);
         ['labDisplayStake','labAmountReset'].forEach(id=>$(id).disabled=locked()||!state.detailResult);
         $("labStudyList").querySelectorAll('button').forEach(button=>button.disabled=locked());
@@ -380,7 +623,7 @@
         $("labContinuationButton").hidden=batch.mode!=='backtest';
         $("labContinuationButton").textContent=batch.study_id?'比较组增量续算':'增量续算';
         $("labCompareButton").hidden=Boolean(batch.study_id)||batch.mode!=='backtest'||batch.risk_policy?.mode!=='round'||batch.experiment_count<2;
-        $("labResultsBody").closest('table').querySelector('caption').textContent=(batch.experiment_count===1?'当前条件与赔率的独立实验版本；':'同一条件的两套结算版本；')+'样本表现仍需验证。统计日为最近处理日，回测中不代表真实今天。';
+        $("labResultsBody").closest('table').querySelector('caption').textContent=(batch.experiment_count===1?'当前条件与赔率的独立实验版本；':'同一条件的两套结算版本；')+'样本表现仍需验证。* 表示未完整月；— 为无可用收益率。统计日为最近处理日，回测中不代表真实今天。';
         if(!batch.risk_editable)$("labEditRiskForm").hidden=true;
         const skipCounts = Object.entries(batch.skip_counts || {}).filter(([, count]) => count > 0).map(([reason, count]) => (reasonNames[reason] || reason) + " " + count);
         $("labSkipCounts").textContent = "未执行记录：" + skipCounts.join("；"); $("labSkipCounts").hidden = !skipCounts.length;
@@ -391,31 +634,30 @@
         const settled = state.experiments.reduce((sum, item) => sum + item.settled_count, 0);
         $("labResultEmpty").hidden = settled > 0;
         $("labResultEmpty").textContent = "尚无已结算模拟结果。" + (batch.study_id && batch.status === "paused" ? "此方案由比较队列统一调度，请在比较组查看当前进度。" : batch.status === "paused" ? "启动批次后开始观察。" : (phaseNames[batch.phase] || "等待可用数据") + "，条件不足时不会按零命中率处理。");
-        const list = state.experiments.slice();
-        const sort = $("labSort").value;
-        if (sort === "profit") list.sort((a,b) => b.net_profit - a.net_profit || a.id - b.id);
-        if (sort === "sample") list.sort((a,b) => b.settled_count - a.settled_count || a.id - b.id);
-        if (sort === "drawdown") list.sort((a,b) => a.max_drawdown - b.max_drawdown || a.id - b.id);
-        $("labResultsBody").replaceChildren();
-        state.resultPage = Math.min(state.resultPage, Math.max(0, Math.ceil(list.length / pageSize) - 1));
-        const start = state.resultPage * pageSize;
-        $("labResultPageInfo").textContent = list.length ? "显示 " + (start + 1) + "–" + Math.min(start + pageSize, list.length) + "，共 " + list.length + " 个实验版本" : "没有实验版本";
-        list.slice(start, start + pageSize).forEach((item, index) => {
-            const row = element("tr"); if (sort === "paired" && index > 0 && index % 2 === 0) row.className = "lab-pair-start";
-            row.append(element("td", conditionName(item.condition), "lab-condition"), element("td", settlementName(item)),
-                element("td", item.settled_count, "lab-number"), element("td", money(item.net_profit, true), "lab-number " + profitClass(item.net_profit)),
-                element("td", percent(item.roi_percent), "lab-number"), element("td", money(item.max_drawdown), "lab-number"),
-                element("td", item.max_loss_streak, "lab-number"), element("td", resultCounts(item), "lab-number"));
-            const risk=item.risk_state||{mode:'legacy',state:'legacy'};
-            row.append(element('td',riskStates[risk.state]||risk.state),element('td',risk.day_date||'—'),
-                element('td',risk.mode==='round'?money(risk.day_net_profit,true)+' / '+risk.day_round_count:'—','lab-number'),
-                element('td',money(risk.round_net_profit,true),'lab-number'),element('td',reasonNames[risk.stop_reason]||risk.stop_reason||'—'),element("td", sampleLabel(item, batch), "lab-sample"));
-            const cell = element("td"); const button = actionButton("详情", () => openDetail(item, button));
-            button.setAttribute("aria-expanded", "false"); button.setAttribute("aria-controls", "labExperimentDetail"); button.dataset.experimentId = String(item.id); cell.append(button); row.append(cell); $("labResultsBody").append(row);
-            const monthly=actionButton('月度成绩',()=>openDetail(item,monthly,true));cell.append(monthly);
+        const all=state.experiments.map(item=>({item,assessment:assessObservation(item)}));
+        const list=all.filter(row=>!state.observation.settings.matchesOnly||row.assessment.matches).map(row=>row.item);
+        const sort=$("labSort").value;
+        sortObservationRows(list,sort);
+        renderObservationCount('labObservationBatchSummary',all);
+        $("labResultsBody").replaceChildren();state.resultFilteredCount=list.length;
+        state.resultPage=Math.min(state.resultPage,Math.max(0,Math.ceil(list.length/pageSize)-1));
+        const start=state.resultPage*pageSize;
+        $("labResultPageInfo").textContent=list.length?'显示 '+(start+1)+'–'+Math.min(start+pageSize,list.length)+'，共 '+list.length+' 个实验版本':'没有符合当前观察规则的实验版本';
+        list.slice(start,start+pageSize).forEach((item,index)=>{
+            const row=element('tr');row.dataset.experimentId=String(item.id);
+            if(sort==='paired'&&index>0&&list[start+index-1].condition?.condition_key!==item.condition?.condition_key)row.className='lab-pair-start';
+            row.append(observationIdentityCell(item));appendObservationCells(row,item);
+            row.append(observationResultCell(item));
+            const cell=element('td',null,'lab-observation-actions');
+            const button=actionButton('详情',()=>openDetail(item,button));
+            button.setAttribute('aria-expanded','false');button.setAttribute('aria-controls','labExperimentDetail');button.dataset.experimentId=String(item.id);cell.append(button);
+            const monthly=actionButton('月度成绩',()=>openDetail(item,monthly,true));cell.append(monthly,observationRuntime(item,batch));
+            row.append(cell);$("labResultsBody").append(row);
         });
+        if(!list.length)observationEmptyRow($("labResultsBody"),8,'没有符合当前观察规则的实验版本。可调整门槛或关闭“仅看符合规则”。');
     }
     function denyAccess() {
+        state.observation.revision++;state.observation.loading=false;state.observation.dirty=false;state.loading=false;fillObservationForm(state.observation.settings);
         closeContinuation(false);closeManagement(false);state.managementJobs.clear();renderManagementJobs();
         if(state.managementPoll){clearTimeout(state.managementPoll);state.managementPoll=null;}
         state.storage=null;state.storageRequest=null;$("labStorageSummary").replaceChildren();$("labStorageExplanation").textContent='登录管理员账号后可查看存储状态。';feedback('labStorageFeedback','',false);
@@ -435,7 +677,7 @@
         await refresh(false);
     }
     async function refresh(includeOptions) {
-        const revision = ++state.readRevision;
+        const revision = ++state.readRevision,observationSettings={...state.observation.settings};
         state.loading = true; updateControls();
         try {
             const calls = [request(base),request(base+'/studies'),readPerformance()];
@@ -457,13 +699,14 @@
             if (!overview.batches.some(batch => batch.id === state.selectedId)) state.selectedId = (overview.batches.find(batch => batch.status === 'running') || overview.batches[0])?.id ?? null;
             renderOverview();
             if (state.selectedId !== null) {
-                const detail = await request(base + "/batches/" + state.selectedId);
+                const detail = await request(observationUrl("batch",state.selectedId,observationSettings));
                 if (revision !== state.readRevision) return;
                 if (!detail.batch || !Array.isArray(detail.experiments)) throw responseError("实验结果不完整，请刷新后重试", 0, "invalid_response");
+                validateObservationRows(detail.experiments,observationSettings);
                 closeDetail(false); state.batch = detail.batch; state.experiments = detail.experiments;
             } else {state.batch = null; state.experiments = [];}
             renderResults(); feedback("statusMessage", "", false);
-            if(state.studyId!==null){const study=await request(base+'/studies/'+state.studyId);if(revision!==state.readRevision)return;state.study=study.study;state.studyRows=study.rows;renderStudyResults();}
+            if(state.studyId!==null){const study=await request(observationUrl('study',state.studyId,observationSettings));if(revision!==state.readRevision)return;validateObservationRows(study.rows,observationSettings);state.study=study.study;state.studyRows=study.rows;renderStudyResults();}
             if(state.continuation)await readContinuation({preserveDraft:true});
         } catch (error) {
             if (revision !== state.readRevision) return;
@@ -738,7 +981,7 @@
     async function openStudy(id){
         if(locked())return;if(state.continuation)closeContinuation(false);if(state.management)closeManagement(false);state.studyId=id;state.studyPage=0;state.loading=true;updateControls();
         const revision=++state.readRevision;
-        try{const data=await request(base+'/studies/'+id);if(revision!==state.readRevision)return;state.study=data.study;state.studyRows=data.rows;renderStudyResults();}
+        try{const settings={...state.observation.settings},data=await request(observationUrl('study',id,settings));if(revision!==state.readRevision)return;validateObservationRows(data.rows,settings);state.study=data.study;state.studyRows=data.rows;renderStudyResults();}
         catch(error){if(revision!==state.readRevision)return;if(error.status===401||error.status===403)denyAccess();feedback('statusMessage',error.message,true);}
         finally{if(revision===state.readRevision){state.loading=false;updateControls();}}
     }
@@ -756,15 +999,22 @@
         const conditionMap=new Map();state.studyRows.forEach(r=>conditionMap.set(r.condition_key,conditionName(r.condition)));
         fillSelect('labStudyCondition',[['','全部条件'],...conditionMap.entries()]);
         const variantOrder=new Map(study.children.map((c,i)=>[c.variant_key,i]));
-        const rows=state.studyRows.filter(r=>(!$("labStudyVariant").value||r.variant_key===$("labStudyVariant").value)&&(!$("labStudySettlement").value||r.settlement_rule_id===$("labStudySettlement").value)&&(!$("labStudyCondition").value||r.condition_key===$("labStudyCondition").value));
+        const candidates=state.studyRows.filter(r=>(!$("labStudyVariant").value||r.variant_key===$("labStudyVariant").value)&&(!$("labStudySettlement").value||r.settlement_rule_id===$("labStudySettlement").value)&&(!$("labStudyCondition").value||r.condition_key===$("labStudyCondition").value));
+        const all=candidates.map(item=>({item,assessment:assessObservation(item)}));
+        const rows=all.filter(row=>!state.observation.settings.matchesOnly||row.assessment.matches).map(row=>row.item);
         const conditionOrder=new Map([...conditionMap.keys()].map((k,i)=>[k,i]));
         rows.sort((a,b)=>conditionOrder.get(a.condition_key)-conditionOrder.get(b.condition_key)||a.settlement_rule_id.localeCompare(b.settlement_rule_id)||variantOrder.get(a.variant_key)-variantOrder.get(b.variant_key));
-        state.studyPage=Math.min(state.studyPage,Math.max(0,Math.ceil(rows.length/pageSize)-1));const start=state.studyPage*pageSize;
-        $("labStudyRows").replaceChildren();rows.slice(start,start+pageSize).forEach(r=>{const tr=element('tr');
+        sortObservationRows(rows,$("labStudySort").value);renderObservationCount('labObservationStudySummary',all);
+        state.studyFilteredCount=rows.length;state.studyPage=Math.min(state.studyPage,Math.max(0,Math.ceil(rows.length/pageSize)-1));const start=state.studyPage*pageSize;
+        $("labStudyRows").replaceChildren();rows.slice(start,start+pageSize).forEach(r=>{
+            const tr=element('tr');tr.dataset.experimentId=String(r.experiment_id);
             const child=study.children.find(child=>child.batch_id===r.batch_id);
-            [conditionName(r.condition),settlementName(r),r.variant_label,r.settled_count,money(r.stake_total),money(r.net_profit,true),percent(r.roi_percent),money(r.max_drawdown),money(r.worst_day_profit,true),r.profitable_days+' / '+r.betting_days,r.completed_rounds,money(r.delta_net_profit,true),r.delta_roi_pp===null?'—':money(r.delta_roi_pp,true),money(r.delta_drawdown,true),sampleLabel(r,{...child,study_id:study.id})].forEach(v=>tr.append(element('td',v,'lab-number')));
-            const td=element('td');td.append(actionButton('子批次',()=>selectBatch(r.batch_id)));
-            const monthly=actionButton('月度成绩',async()=>{if(locked())return;await selectBatch(r.batch_id);const item=state.experiments.find(item=>item.id===r.experiment_id);if(state.selectedId===r.batch_id&&item)await openDetail(item,monthly,true);});td.append(monthly);tr.append(td);$("labStudyRows").append(tr);});
+            tr.append(observationIdentityCell(r),element('td',r.variant_label,'lab-observation-variant'));appendObservationCells(tr,r);tr.append(observationResultCell(r,true));
+            const td=element('td',null,'lab-observation-actions');td.append(actionButton('子批次',()=>selectBatch(r.batch_id)));
+            const monthly=actionButton('月度成绩',async()=>{if(locked())return;await selectBatch(r.batch_id);const item=state.experiments.find(item=>item.id===r.experiment_id);if(state.selectedId===r.batch_id&&item)await openDetail(item,monthly,true);});
+            td.append(monthly,observationRuntime(r,{...child,study_id:study.id}));tr.append(td);$("labStudyRows").append(tr);
+        });
+        if(!rows.length)observationEmptyRow($("labStudyRows"),9,'没有符合当前条件与观察规则的比较行。');
         $("labStudyPageInfo").textContent=rows.length?'显示 '+(start+1)+'–'+Math.min(start+pageSize,rows.length)+'，共 '+rows.length+' 行':'当前筛选无结果';
     }
     async function comparisonPreview(){
@@ -1139,7 +1389,7 @@
     $("labBatchStateButton").addEventListener("click", () => state.batch && changeState(state.batch.id, state.batch.status));
     $("labSort").addEventListener("change", () => {state.resultPage = 0; closeDetail(false); renderResults(); updateControls();});
     $("labResultPrevious").addEventListener("click", () => {if (state.resultPage > 0) {state.resultPage--; closeDetail(false); renderResults(); updateControls();}});
-    $("labResultNext").addEventListener("click", () => {if ((state.resultPage + 1) * pageSize < state.experiments.length) {state.resultPage++; closeDetail(false); renderResults(); updateControls();}});
+    $("labResultNext").addEventListener("click", () => {if ((state.resultPage + 1) * pageSize < state.resultFilteredCount) {state.resultPage++; closeDetail(false); renderResults(); updateControls();}});
     $("labCloseDetailButton").addEventListener("click", () => closeDetail(true));
     $("labContinuationButton").addEventListener('click',()=>{
         const batch=state.batch;if(!batch)return;
@@ -1165,8 +1415,8 @@
     $("labExportButton").addEventListener("click", exportCsv);
     $("labCompareButton").addEventListener('click',comparisonPreview);$("labCreateStudyButton").addEventListener('click',createStudy);
     $("labStudyStateButton").addEventListener('click',changeStudyState);$("labStudyExportButton").addEventListener('click',exportStudy);
-    ['labStudyVariant','labStudySettlement','labStudyCondition'].forEach(id=>$(id).addEventListener('change',()=>{state.studyPage=0;renderStudyResults();}));
-    $("labStudyPrevious").addEventListener('click',()=>{state.studyPage=Math.max(0,state.studyPage-1);renderStudyResults();});$("labStudyNext").addEventListener('click',()=>{state.studyPage++;renderStudyResults();});
+    ['labStudyVariant','labStudySettlement','labStudyCondition','labStudySort'].forEach(id=>$(id).addEventListener('change',()=>{state.studyPage=0;renderStudyResults();updateControls();}));
+    $("labStudyPrevious").addEventListener('click',()=>{state.studyPage=Math.max(0,state.studyPage-1);renderStudyResults();updateControls();});$("labStudyNext").addEventListener('click',()=>{if((state.studyPage+1)*pageSize<state.studyFilteredCount)state.studyPage++;renderStudyResults();updateControls();});
     $("labManageBatchButton").addEventListener('click',()=>{const batch=state.batch;if(batch)openManagement(batch.study_id?'study':'batch',batch.study_id||batch.id,$("labManageBatchButton"));});
     $("labManageStudyButton").addEventListener('click',()=>state.study&&openManagement('study',state.study.id,$("labManageStudyButton")));
     $("labManagementClose").addEventListener('click',()=>{if(!state.mutating&&!state.management?.pending)closeManagement(true);});
@@ -1184,5 +1434,10 @@
     document.addEventListener('visibilitychange',autoRefresh);
     window.addEventListener('resize',()=>{if(state.amountView?.monthly){renderMonthlyChart(state.amountView.monthly.rows);renderCapital();}});
     setInterval(autoRefresh,15000);
-    updatePreview(); updateControls(); refresh(true);
+    $("labObservationForm").addEventListener('input',()=>{state.observation.dirty=true;});
+    $("labObservationForm").addEventListener('change',()=>{state.observation.dirty=true;});
+    $("labObservationForm").addEventListener('submit',event=>{event.preventDefault();applyObservation();});
+    $("labObservationReset").addEventListener('click',()=>{fillObservationForm(observationDefaults);state.observation.dirty=true;applyObservation();});
+    document.querySelectorAll('[data-observation-months]').forEach(button=>button.addEventListener('click',()=>{$("labObservationMonths").value=button.dataset.observationMonths;state.observation.dirty=true;}));
+    initializeObservation();updatePreview(); updateControls(); refresh(true);
 }());

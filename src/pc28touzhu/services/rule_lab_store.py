@@ -639,8 +639,10 @@ class RuleLabStore:
                 c.execute("UPDATE lab_batches SET status='running',revision=revision+1,started_at=COALESCE(started_at,?),updated_at=?,error='' WHERE id=?",(now,now,child['id']))
                 c.execute("UPDATE lab_studies SET status='running',updated_at=?,error='' WHERE id=?",(now,study['id']))
 
-    def study_comparison(self,user_id,study_id):
+    def study_comparison(self,user_id,study_id,*,observation_months=None,observation_partial=None,now=None):
         with self._connect() as c:
+            observing=observation_months is not None or observation_partial is not None
+            if observing:c.execute('BEGIN')
             study=self._study(c,self._owned_study(c,user_id,study_id));rows=[];baseline={}
             for child in study['children']:
                 batch=c.execute('SELECT risk_policy_json FROM lab_batches WHERE id=?',(child['batch_id'],)).fetchone()
@@ -662,6 +664,16 @@ class RuleLabStore:
                     row.update(delta_net_profit=round(row['net_profit']-base['net_profit'],2),
                         delta_roi_pp=round(row['roi_percent']-base['roi_percent'],2) if row['roi_percent'] is not None and base['roi_percent'] is not None else None,
                         delta_drawdown=round(row['max_drawdown']-base['max_drawdown'],2))
+            if observing:
+                from pc28touzhu.services.rule_lab_observation import load_observations
+                child_ids=[child['batch_id'] for child in study['children']]
+                marks=','.join('?' for _ in child_ids)
+                batches=c.execute('SELECT * FROM lab_batches WHERE id IN ('+marks+') ORDER BY id',child_ids).fetchall()
+                experiments=c.execute('SELECT * FROM lab_experiments WHERE batch_id IN ('+marks+') ORDER BY id',child_ids).fetchall()
+                observations=load_observations(self,c,batches,experiments,months=observation_months,
+                    include_partial=observation_partial,now=now or datetime.now(timezone.utc).isoformat(),
+                    study_comparable=study['comparable'])
+                for row in rows:row['observation']=observations[row['experiment_id']]
             return dict(study=study,rows=rows)
 
     def get_batch(self,user_id,batch_id):
@@ -672,6 +684,19 @@ class RuleLabStore:
         with self._connect() as c:
             self._owned(c,user_id,batch_id)
             return [self._experiment(c,r) for r in c.execute('SELECT * FROM lab_experiments WHERE batch_id=? ORDER BY id LIMIT 100',(batch_id,))]
+
+    def batch_observation_detail(self,user_id,batch_id,*,months,include_partial,now=None):
+        from pc28touzhu.services.rule_lab_observation import load_observations
+        with self._connect() as c:
+            c.execute('BEGIN')
+            batch=self._owned(c,user_id,batch_id)
+            public=self._batch(c,batch)
+            experiments=c.execute('SELECT * FROM lab_experiments WHERE batch_id=? ORDER BY id LIMIT 100',(batch_id,)).fetchall()
+            rows=[self._experiment(c,row) for row in experiments]
+            observations=load_observations(self,c,[batch],experiments,months=months,include_partial=include_partial,
+                now=now or datetime.now(timezone.utc).isoformat(),continuations={batch_id:public['continuation']})
+            for row in rows:row['observation']=observations[row['id']]
+            return dict(batch=public,experiments=rows)
 
     def replay_definition(self,user_id,batch_id,experiment_id):
         """Copy the owned experiment's frozen inputs, never its result or runtime."""

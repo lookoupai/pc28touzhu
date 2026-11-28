@@ -40,7 +40,7 @@ def report_window(batch, *, now):
 
 
 def monthly_report(batch, stats, daily, *, now, observed_at=None, cutoff_at=None,
-                   first_observed_at=None, pending_since=None):
+                   first_observed_at=None, pending_since=None, pending_counts=None):
     start, end, first = report_window(batch, now=now)
     observed = local_time(observed_at)
     cutoff = local_time(cutoff_at)
@@ -51,7 +51,8 @@ def monthly_report(batch, stats, daily, *, now, observed_at=None, cutoff_at=None
     continuous = bool(continuation.get('enabled'))
     completed_through = (date.fromisoformat(continuation['completed_through_date'])
                          if continuous and continuation.get('completed_through_date') else None)
-    pending_counts = continuation.get('pending_counts') if continuous else None
+    if pending_counts is None:
+        pending_counts = continuation.get('pending_counts') if continuous else None
     skips = dict(batch.get('skip_counts', {}))
     if (batch.get('cursor',{}).get('evidence') or {}).get('conflict'):
         skips['input_conflict']=max(1,skips.get('input_conflict',0))

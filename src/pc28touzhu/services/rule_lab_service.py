@@ -341,7 +341,9 @@ class RuleLabService:
 
     def list_studies(self,user_id):return dict(studies=self.store.list_studies(user_id))
 
-    def study_detail(self,user_id,study_id):return self.store.study_comparison(user_id,study_id)
+    def study_detail(self,user_id,study_id,*,observation_months=None,observation_partial=None,now=None):
+        return self.store.study_comparison(user_id,study_id,observation_months=observation_months,
+            observation_partial=observation_partial,now=now)
 
     def set_study_state(self,user_id,study_id,payload,*,now=None):
         if not isinstance(payload,dict) or set(payload)!={'state'} or payload['state'] not in ('running','paused'):
@@ -471,7 +473,10 @@ class RuleLabService:
                     raise RuleLabError('replay_input_unavailable',available.get('reason') or '重测输入已不可用，尚未启动',409)
         return dict(batch=self.store.set_batch_state(user_id, batch_id, payload['state'], now=_now(now)))
 
-    def batch_detail(self, user_id, batch_id):
+    def batch_detail(self, user_id, batch_id, *, observation_months=None, observation_partial=None, now=None):
+        if observation_months is not None or observation_partial is not None:
+            return self.store.batch_observation_detail(user_id,batch_id,months=observation_months,
+                include_partial=observation_partial,now=now)
         return dict(batch=self.store.get_batch(user_id, batch_id), experiments=self.store.list_experiments(user_id, batch_id))
 
     def experiment_detail(self, user_id, batch_id, experiment_id):
