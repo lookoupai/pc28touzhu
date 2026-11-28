@@ -8,7 +8,7 @@ dependencies: [approved-user-request, existing-code]
 
 ## 摘要
 
-- **评审结论**：通过；实现、独立复核和最终回归已完成，未解决问题为0。发布等待根代理准确提交放行。
+- **评审结论**：通过；实现、独立复核和最终回归已完成，未解决问题为0。提交fa287ed已部署并完成线上核验。
 - **主要风险**：月份缺口被压缩导致误标、显示舍入越过收益门槛、不同快照拼接、逐实验月报查询放大、UI旧请求覆盖新设置。
 - **必须解决**：同一只读事务批量聚合、准确连续月份、原始分值阈值、质量阻断和未完整区间提示、原交互回归。
 - **建议优化**：两张结果列表复用渲染与筛选函数；复杂运行字段按需展开，颜色只辅助文字。
@@ -90,4 +90,7 @@ dependencies: [approved-user-request, existing-code]
 - 完整Python回归：运行1284项，293.726秒，2项可选跳过，退出0；日志 `/tmp/pc28-observation-full-python.log`。该全量启动早于最后新增的2项日期边界测试，后者由最终27项针对测试覆盖。
 - 新观察DOM、既有金额估算DOM、既有结果管理DOM均退出0；日志 `/tmp/pc28-observation-root-ui.log`、`/tmp/pc28-observation-root-amount.log`、`/tmp/pc28-observation-root-results.log`。后两份旧测试未改动。
 - 独立性能与数据一致性证据归档于qa-report：638版本月度口径对齐；真实92版本读取约75～80ms；500版本×12个月约18.1万日行在1CPU／256MiB限制下约1.92～2秒、响应约3.32MB、RSS约139.5MiB。
-- **结论：允许根代理选择准确提交进入发布。当前仅发布前放行，不代表已部署。**
+- **结论：审核与发布均已完成。提交fa287ed已上线，原实验保护、只读页面验证及服务健康通过。**
+
+
+发布后证据：`/tmp/pc28-observation-release-rollout-20261128T045328Z.json` 与 `/tmp/pc28-observation-release-online.json`。线上37次GET、8次观察响应、0写请求、0错误，638版本保护校验通过；公网JS/CSS字节一致，模拟worker保持原PID，执行器在线。

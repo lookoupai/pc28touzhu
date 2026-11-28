@@ -145,6 +145,11 @@ dependencies: [approved-user-request, tech-review, plan]
 | T1～T3 / W1 | 已通过 | 后端domain/API及既有月报/API回归；根代理最终27项2.196s通过，含延迟首日与空组删除边界 |
 | T4～T5 / W2 | 已通过 | 新DOM与未改动的金额／结果DOM全通过；原始分值边界、存储、失败、乱序、403认证取消和展开阅读覆盖 |
 | T6～T7 / W3 QA | 已通过 | 全量Python1284项、2可选跳过，293.726s；638版本月度对齐与500版本压力通过 |
-| T8 / W3 发布 | 待准确提交放行 | DevOps完成准备；根代理提交后执行线上发布和保护核对，本文件不宣称已上线 |
+| T8 / W3 发布 | 已部署并核验 | fa287ed 已上线；API PID 1629337，worker PID 1408564保持；37次GET、8次观察响应、0写请求、0错误，638版本原保护校验通过 |
 
 最终根代理日志：`/tmp/pc28-observation-full-python.log`、`/tmp/pc28-observation-root-targeted.log`、`/tmp/pc28-observation-root-ui.log`、`/tmp/pc28-observation-root-amount.log`、`/tmp/pc28-observation-root-results.log`。全量开始后新增2项domain边界用最终27项覆盖。旧 `tests/test_rule_lab_amount_ui.cjs` 与 `tests/test_rule_lab_results_ui.cjs` 为回归输入，不在最终写集。
+
+
+## 7. 发布完成
+
+2026-11-28已部署提交 `fa287ed`。发布记录 `/tmp/pc28-observation-release-rollout-20261128T045328Z.json`；线上验证 `/tmp/pc28-observation-release-online.json` 及同名log。37次只读GET包含8次观察响应，0写请求、0页面错误；执行器在线1个。公网JS/CSS均200且字节与生产文件一致。API PID为1629337，模拟worker PID1408564保持，638个原实验版本的受保护数据校验通过。W1、W2、W3全部完成；最终部署细节以deploy-report.md为准。

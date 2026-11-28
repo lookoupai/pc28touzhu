@@ -171,15 +171,18 @@
         "CM10"
       ],
       "stopCondition": "独立QA或真实副本资源证据未通过不得发布；发布只在根代理准确提交GO后执行",
-      "status": "qa_passed_release_pending",
+      "status": "passed",
       "qaPassed": true,
-      "releaseStatus": "awaiting_root_exact_commit",
+      "releaseStatus": "deployed_verified",
       "evidence": [
         "/tmp/pc28-observation-full-python.log",
         "/tmp/pc28-observation-root-targeted.log",
-        ".boss/rule-lab-observation-list/qa-report.md"
+        ".boss/rule-lab-observation-list/qa-report.md",
+        "/tmp/pc28-observation-release-rollout-20261128T045328Z.json",
+        "/tmp/pc28-observation-release-online.json"
       ],
-      "notes": "1284 tests, 2 optional skips; two final date cases added after full run covered by final 27 targeted tests. Not deployed yet."
+      "notes": "1284 tests, 2 optional skips; two final date cases added after full run covered by final 27 targeted tests. fa287ed deployed and read-only online verification passed: 37 GETs, 8 observation responses, 0 writes, 0 errors, 638 original versions protected.",
+      "deployedCommit": "fa287ed"
     }
   ]
 }
