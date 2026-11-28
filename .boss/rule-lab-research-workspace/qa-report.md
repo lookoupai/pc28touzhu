@@ -2,7 +2,7 @@
 
 ## 摘要
 
-测试已通过：Backend/Frontend验证和root完整Python、生产副本、性能核对均完成。最终提交与生产部署由root执行，发布结果待记录。
+测试及线上验收已通过：Backend/Frontend验证、root完整Python、生产副本、性能核对和正式发布均完成。运行提交0cd596c911a16effdaa014c44718a07eabde4169，schema8。
 
 | 范围 | 已知结果 | 证据 |
 | --- | --- | --- |
@@ -21,7 +21,7 @@
 
 限制如实保留：两个可选旧环境测试按原skip；旧早期generic test_rule_lab_ui.cjs在一期前基线已因旧结构过期，不作本轮通过证据。质量分页是现状读取而非跨页数据库冻结，不用来证明旧实验完整回放；源码和UI均明确这一含义。没有长期内存/Lighthouse分数声明。
 
-待root完成：精确提交clean-tree核对、正式迁移/服务恢复、线上只读四tab与原实验/队列/续算指纹进度核对、GitHub上传最终提交。正式结果记录deploy-report.md。
+root已完成精确提交clean-tree核对、正式迁移/服务恢复、线上只读四tab及原实验/队列/续算指纹进度核对。54批次1806版本和9个续算控制保持，原批次72继续推进；线上1440/390四tab及402期质量读取通过，0变更/外部请求/JS异常。实际收据见deploy-report.md；功能提交已上传GitHub main且远端同步；最终文档提交由root收尾。
 
-STATUS: DONE_WITH_CONCERNS
-REASON: 已实现功能与测试通过，尚待root最终提交和正式发布验收，不存在已知未修复功能阻断。
+STATUS: DONE
+REASON: 已实现的四项功能、最终回归、生产迁移与线上只读验收均完成，无已知未修复功能阻断。
