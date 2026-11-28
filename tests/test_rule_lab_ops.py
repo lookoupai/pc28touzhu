@@ -73,7 +73,7 @@ class RuleLabOpsTests(unittest.TestCase):
         self.assertNotIn('EnvironmentFile', service)
         self.assertNotIn('ExecStartPre', service)
         environment = dict(item.split('=', 1) for item in shlex.split(service['Environment']))
-        self.assertEqual(set(environment), {'RULE_LAB_DATA_DIR', 'RULE_LAB_SOURCE_DB', 'PYTHONDONTWRITEBYTECODE'})
+        self.assertEqual(set(environment), {'RULE_LAB_DATA_DIR', 'RULE_LAB_SOURCE_DB', 'SQLITE_TMPDIR', 'PYTHONDONTWRITEBYTECODE'})
         self.assertEqual(environment['RULE_LAB_DATA_DIR'], PRODUCTION + '/data/rule_lab')
         self.assertEqual(environment['RULE_LAB_SOURCE_DB'], '/www/wwwroot/AITradingSimulator/pc28_predictor.db')
 
@@ -90,6 +90,13 @@ class RuleLabOpsTests(unittest.TestCase):
                 heartbeat = json.loads(connection.execute("SELECT value_json FROM lab_runtime WHERE key='worker'").fetchone()[0])
                 self.assertEqual(heartbeat['state'], 'idle')
             self.assertIn('idle', result.stdout)
+
+    def test_sqlite_can_spill_statement_journals_inside_worker_write_boundary(self):
+        service=self.unit()['Service']
+        environment=dict(item.split('=',1) for item in shlex.split(service['Environment']))
+        self.assertEqual(environment.get('SQLITE_TMPDIR'),environment['RULE_LAB_DATA_DIR'],
+                         'Large deletes need SQLite temporary journals in the bounded writable lab directory')
+        self.assertIn(environment['SQLITE_TMPDIR'],shlex.split(service['ReadWritePaths']))
 
     def test_second_worker_exits_without_advancing_the_ledger(self):
         with tempfile.TemporaryDirectory(prefix='rule-lab-ops-lock-') as folder:

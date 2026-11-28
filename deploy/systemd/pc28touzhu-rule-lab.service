@@ -10,7 +10,9 @@ User=www
 Group=www
 UMask=0077
 WorkingDirectory=/www/wwwroot/pc28touzhu
-Environment="RULE_LAB_DATA_DIR=/www/wwwroot/pc28touzhu/data/rule_lab" "RULE_LAB_SOURCE_DB=/www/wwwroot/AITradingSimulator/pc28_predictor.db" "PYTHONDONTWRITEBYTECODE=1"
+# SQLite statement journals may spill during deletes; /tmp is read-only under
+# ProtectSystem=strict. Keep temporary files within the measured lab directory.
+Environment="RULE_LAB_DATA_DIR=/www/wwwroot/pc28touzhu/data/rule_lab" "RULE_LAB_SOURCE_DB=/www/wwwroot/AITradingSimulator/pc28_predictor.db" "SQLITE_TMPDIR=/www/wwwroot/pc28touzhu/data/rule_lab" "PYTHONDONTWRITEBYTECODE=1"
 ExecStart=/usr/bin/env /www/wwwroot/pc28touzhu/deploy/systemd/pc28-python.sh -B -u -m pc28touzhu.rule_lab_worker
 Restart=on-failure
 RestartSec=30s

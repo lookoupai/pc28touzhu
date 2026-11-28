@@ -4,6 +4,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from pc28touzhu.domain.rule_lab import build_experiments, normalize_batch_payload
@@ -43,6 +44,23 @@ class ManagementTests(unittest.TestCase):
             job=self.store.management_job(1,job_id)
             if job['status']=='completed':return job
         self.fail('Bounded job did not finish: '+str(job))
+
+    def test_failed_delete_page_preserves_progress_reports_error_and_recovers(self):
+        result,_=self.delete();jid=result['job']['id']
+        self.store.management_maintenance(now=NOW,limit=10)
+        before=self.store.management_job(1,jid)
+        with patch('pc28touzhu.services.rule_lab_management._cleanup',side_effect=sqlite3.OperationalError('disk I/O error')):
+            with self.assertRaises(RuleLabError) as caught:
+                self.store.management_maintenance(now='2026-11-28T16:25:00Z',limit=10)
+        self.assertEqual(caught.exception.code,'store_io_error','I/O permissions must not be reported as disk full')
+        failed=self.store.management_job(1,jid)
+        self.assertEqual(failed['status'],'waiting')
+        self.assertEqual(failed['processed_rows'],before['processed_rows'])
+        self.assertIn('临时目录',failed['error'])
+        self.assertEqual(failed['updated_at'],'2026-11-28T16:25:00Z')
+        finished=self.finish(jid)
+        self.assertEqual(finished['error'],'')
+        with self.assertRaises(RuleLabError):self.store.get_batch(1,self.batch['id'])
 
     def test_edit_regenerates_only_pristine_batch_and_opts_out_of_queue(self):
         before=[x['id'] for x in self.store.list_experiments(1,self.batch['id'])]

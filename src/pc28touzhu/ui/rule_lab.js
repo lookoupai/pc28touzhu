@@ -313,10 +313,11 @@
         lines.forEach(line=>details.append(element('p',line,'lab-muted')));return details;
     }
     function fillOwnerSelect(id,items,selected,empty) {
-        const select=$(id);select.replaceChildren();
-        if(!items.length){const option=element('option',empty);option.value='';select.append(option);return;}
-        for(const item of items){const option=element('option',item.name);option.value=String(item.id);select.append(option);}
-        if(items.some(item=>item.id===selected))select.value=String(selected);
+        const select=$(id),values=items.length?items.map(item=>({value:String(item.id),label:item.name})):[{value:'',label:empty}];
+        if(select.options.length!==values.length||values.some((item,i)=>select.options[i]?.value!==item.value||select.options[i]?.textContent!==item.label)){
+            select.replaceChildren(...values.map(item=>{const option=element('option',item.label);option.value=item.value;return option;}));
+        }
+        if(items.some(item=>item.id===selected)&&select.value!==String(selected))select.value=String(selected);
     }
     function renderLayout() {
         const studies=state.layout.tab==='studies';
@@ -521,16 +522,16 @@
     }
     function isReadingOrEditing() {
         return state.detailId !== null || state.management !== null || state.continuation?.dirty || state.observation.dirty || state.layout.drawer !== null || !$("labEditRiskForm").hidden || !$("labComparisonPreview").hidden ||
-            Boolean(document.activeElement?.matches('input,textarea,[contenteditable="true"]'));
+            Boolean(document.activeElement?.matches('input,select,textarea,[contenteditable="true"]'));
     }
     function updateRefreshStatus() {
         $("labAutoRefreshStatus").textContent = !state.overview ? '' :
-            (hasRunningWork() ? (isReadingOrEditing() ? '查看结果或编辑期间暂停页面自动更新，后台继续计算。' : '运行中每15秒自动更新；离开此页面后后台仍会继续计算。') : '当前没有运行中的模拟，可手动刷新。') +
+            (hasRunningWork() ? (isReadingOrEditing() ? '选择批次、查看结果或编辑期间暂停页面自动更新，后台继续计算。' : '运行中每30秒自动更新；操作下拉框时暂停更新，后台仍继续计算。') : '当前没有运行中的模拟，可手动刷新。') +
             ' 最近读取：' + time(state.readAt);
     }
     function autoRefresh() {
         updateRefreshStatus();
-        if (!document.hidden && !locked() && !state.exporting && hasRunningWork() && !isReadingOrEditing()) refresh(false);
+        if (!document.hidden && !locked() && !state.backgroundRevision && !state.exporting && (hasRunningWork()||state.refreshPending) && !isReadingOrEditing()) return refresh(false,{background:true});
     }
     function sampleLabel(item, batch) {
         if (item.settled_count > 0) return item.sample_label;
@@ -629,7 +630,7 @@
         const overview = state.overview, worker = overview.worker || {}, storage = overview.storage || {};
         putSummary($("labWorkerSummary"), [["后台状态", workerNames[worker.state] || "—"], ["后台更新于（北京时间）", time(worker.heartbeat_at)], ["我的实验版本", overview.batches.reduce((sum, batch) => sum + batch.experiment_count, 0)], ["模拟存储 / 预算", bytes(storage.used_bytes) + " / " + bytes(storage.budget_bytes)]]);
         $("labWorkerMessage").textContent = worker.message || "";
-        fillOwnerSelect('labBatchSelect',overview.batches,state.selectedId,'暂无实验批次');
+        fillOwnerSelect('labBatchSelect',overview.batches.filter(batch=>batch.status!=='deleting'),state.selectedId,'暂无实验批次');
     }
     function updatePreview() {
         const metric=$("labMetric").value,selected=$("labTemplatePack").value;
@@ -742,45 +743,53 @@
         state.layout.tab='experiments';state.selectedId = id;closeDetail(false);
         await refresh(false);
     }
-    async function refresh(includeOptions) {
+    async function refresh(includeOptions,{background=false}={}) {
         const revision = ++state.readRevision,observationSettings={...state.observation.settings};
-        state.loading = true; updateControls();
+        if(background)state.backgroundRevision=revision;else state.loading = true;
+        const superseded=()=>revision!==state.readRevision||(background&&isReadingOrEditing());
+        updateControls();
         try {
             const calls = [request(base),request(base+'/studies'),readPerformance()];
             if (includeOptions !== false || !state.options) calls.push(request(base + "/options"));
             const [overview, studies, performance, options] = await Promise.all(calls);
-            if (revision !== state.readRevision) return;
+            if (superseded()) return;
             if (!Array.isArray(overview.batches)) throw responseError("批次数据不完整，请刷新后重试", 0, "invalid_response");
             if (options) {state.options = validateOptions(options); renderOptions();}
             (overview.management_jobs||[]).forEach(trackManagementJob);
             if(state.storage&&overview.storage){state.storage=overview.storage;renderStorage();}
             state.accessDenied = false; state.overview = overview; state.readAt = new Date().toISOString();
             state.performance=performance;renderPerformance();
-            state.studies=studies.studies||[];renderStudies();
+            state.studies=(studies.studies||[]).filter(study=>study.status!=='deleting');renderStudies();
             if (!state.studies.some(study => study.id === state.studyId)) {
                 state.studyId = (state.studies.find(study => ['running','queued'].includes(study.status)) ||
                     state.studies[0])?.id ?? null;
                 state.study=null;state.studyRows=[];renderStudyResults();renderStudies();
             }
-            if (!overview.batches.some(batch => batch.id === state.selectedId)) state.selectedId = (overview.batches.find(batch => batch.status === 'running') || overview.batches[0])?.id ?? null;
+            const availableBatches=overview.batches.filter(batch=>batch.status!=='deleting');
+            if (!availableBatches.some(batch => batch.id === state.selectedId)) state.selectedId = (availableBatches.find(batch => batch.status === 'running') || availableBatches[0])?.id ?? null;
             renderOverview();
             if (state.selectedId !== null) {
                 const detail = await request(observationUrl("batch",state.selectedId,observationSettings));
-                if (revision !== state.readRevision) return;
+                if (superseded()) return;
                 if (!detail.batch || !Array.isArray(detail.experiments)) throw responseError("实验结果不完整，请刷新后重试", 0, "invalid_response");
                 validateObservationRows(detail.experiments,observationSettings);
                 if(state.batch?.id!==detail.batch.id){state.resultPage=0;$("labSort").value='paired';}
                 closeDetail(false); state.batch = detail.batch; state.experiments = detail.experiments;
             } else {state.batch = null; state.experiments = [];}
             renderResults(); feedback("statusMessage", "", false);
-            if(state.studyId!==null){const study=await request(observationUrl('study',state.studyId,observationSettings));if(revision!==state.readRevision)return;validateObservationRows(study.rows,observationSettings);state.study=study.study;state.studyRows=study.rows;renderStudyResults();}
+            if(state.studyId!==null){const study=await request(observationUrl('study',state.studyId,observationSettings));if(superseded())return;validateObservationRows(study.rows,observationSettings);state.study=study.study;state.studyRows=study.rows;renderStudyResults();}
             if(state.continuation)await readContinuation({preserveDraft:true});
+            state.refreshPending=false;
         } catch (error) {
             if (revision !== state.readRevision) return;
             if (error.status === 401 || error.status === 403) denyAccess();
+            else if(background&&isReadingOrEditing()){state.refreshPending=true;return;}
             else {state.selectedId=state.batch?.id??null;state.studyId=state.study?.id??null;renderOverview();renderStudies();renderLayout();}
             feedback("statusMessage", error.message + (state.overview ? "。所选结果读取失败，已保留之前显示的列表（" + time(state.readAt) + "）。" : "。可点击刷新重试。"), true);
-        } finally {if (revision === state.readRevision) {state.loading = false; updateControls();}}
+        } finally {
+            if(state.backgroundRevision===revision)state.backgroundRevision=null;
+            if (revision === state.readRevision) {if(!background)state.loading = false;updateControls();}
+        }
     }
     async function readPerformance() {
         try{return (await request(base+'/performance')).performance;}
@@ -850,7 +859,7 @@
         try {
             const pause=["running","queued"].includes(status);
             const result=await request(base + "/batches/" + id + "/state", "POST", {state:pause ? "paused" : "running"});
-            await refresh(false); feedback("statusMessage", pause ? "已暂停调度，实验成绩与处理进度保留。" : result.batch?.display_status==="queued" ? "已加入队列，等待运行名额。" : "已启动模拟，运行进度与结果每15秒自动更新。", false);
+            await refresh(false); feedback("statusMessage", pause ? "已暂停调度，实验成绩与处理进度保留。" : result.batch?.display_status==="queued" ? "已加入队列，等待运行名额。" : "已启动模拟，运行进度与结果每30秒自动更新，操作期间暂停更新。", false);
         } catch (error) {
             if (error.status === 401 || error.status === 403) denyAccess();
             if (error.unknown) await refresh(false);
@@ -1368,7 +1377,7 @@
     }
     function renderManagementJobs() {
         const target=$("labManagementJobList");target.replaceChildren();$("labManagementJobs").hidden=!state.managementJobs.size;
-        const names={queued:'等待处理',running:'正在处理',waiting:'等待安全回收条件',completed:'已完成',error:'处理异常'};
+        const names={queued:'等待处理',running:'正在处理',waiting:'等待重试',completed:'已完成',error:'处理异常'};
         [...state.managementJobs.values()].sort((a,b)=>b.id-a.id).slice(0,20).forEach(job=>{
             const row=element('div',null,'lab-management-job');row.dataset.jobId=job.id;
             row.append(element('strong',(job.kind==='delete'?'删除实验':'回收空间')+' · '+(names[job.status]||job.status)));
@@ -1379,16 +1388,17 @@
     }
     function scheduleManagementPoll() {
         if(state.managementPoll||state.accessDenied||![...state.managementJobs.values()].some(job=>!['completed','error'].includes(job.status)))return;
-        state.managementPoll=setTimeout(pollManagementJobs,2000);
+        state.managementPoll=setTimeout(pollManagementJobs,5000);
     }
     async function pollManagementJobs() {
         state.managementPoll=null;if(state.accessDenied)return;
+        if(document.hidden){scheduleManagementPoll();return;}
         let completed=false;
         for(const job of [...state.managementJobs.values()].filter(job=>!['completed','error'].includes(job.status)).slice(0,20)){
             try{const value=await request(base+'/management-jobs/'+job.id);state.managementJobs.set(job.id,value.job);completed|=value.job.status==='completed';}
             catch(error){if(error.status===401||error.status===403){denyAccess();return;}if(error.status===404)state.managementJobs.delete(job.id);}
         }
-        renderManagementJobs();if(completed&&!locked())await refresh(false);
+        renderManagementJobs();if(completed){state.refreshPending=true;if(!locked()&&!state.backgroundRevision&&!isReadingOrEditing())await refresh(false,{background:true});}
         if(completed&&$("labStoragePanel").open)await readStorage();scheduleManagementPoll();
     }
     async function managementSucceeded(view,action,result) {
@@ -1509,7 +1519,7 @@
     document.addEventListener("platform-auth:changed", () => {state.readRevision++; state.detailRevision++; denyAccess(); state.options = null; refresh(true);});
     document.addEventListener('visibilitychange',autoRefresh);
     window.addEventListener('resize',()=>{if(state.amountView?.monthly){renderMonthlyChart(state.amountView.monthly.rows);renderCapital();}});
-    setInterval(autoRefresh,15000);
+    setInterval(autoRefresh,30000);
     $("labObservationForm").addEventListener('input',()=>{state.observation.dirty=true;});
     $("labObservationForm").addEventListener('change',()=>{state.observation.dirty=true;});
     $("labObservationForm").addEventListener('submit',event=>{event.preventDefault();applyObservation();});

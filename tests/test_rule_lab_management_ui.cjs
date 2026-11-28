@@ -67,7 +67,7 @@ const root=path.resolve(__dirname,'..'),prefix='/api/platform/rule-lab';
   await page.locator('#labManagementDelete').click();await visible('labDeleteForm');await idle();await page.locator('#labDeleteConfirmName').fill('独立的新版本');
   const deleted=await submit('labDeleteConfirm','/delete');assert.equal(deleted.status,202);await page.locator('#labSystemToggle').click();assert.equal(await page.locator('#labManagementJobs').isVisible(),true);await page.locator('#labSystemClose').click();
   const deleting=await api(prefix+'/batches/'+forkId);assert.equal(deleting.batch.status,'deleting');
-  await page.locator('#labBatchSelect').selectOption(String(forkId));await idle();assert.equal(await page.locator('#labBatchStateButton').isDisabled(),true,'Deleting batch cannot be restored');
+  assert.equal(await page.locator('#labBatchSelect option[value="'+forkId+'"]').count(),0,'Accepted deletion immediately leaves normal batch selection');
   await api('/__fixture/maintenance',{});await page.waitForFunction(id=>![...document.getElementById('labBatchSelect').options].some(option=>option.value===String(id)),forkId,{timeout:15000});
   assert.equal((await api(prefix+'/management-jobs/'+deleted.body.job.id)).job.status,'completed');
   assert.deepEqual((await api('/__fixture/state')).original,afterFork.before);

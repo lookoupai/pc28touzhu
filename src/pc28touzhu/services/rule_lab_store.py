@@ -130,8 +130,10 @@ class RuleLabStore:
             message = str(exc).lower()
             if 'locked' in message or 'busy' in message:
                 raise RuleLabError('store_busy', '模拟账本正忙，请稍后重试', 503) from exc
-            if 'full' in message or 'disk' in message:
+            if 'full' in message:
                 raise RuleLabError('storage_limit', '模拟存储空间不足，已保留现有成绩', 503) from exc
+            if 'disk i/o' in message:
+                raise RuleLabError('store_io_error', '模拟账本读写失败，请检查数据库及临时目录的权限和磁盘状态', 503) from exc
             raise RuleLabError('store_unavailable', '模拟账本暂不可用，请检查服务状态', 503) from exc
         except Exception:
             if conn is not None:

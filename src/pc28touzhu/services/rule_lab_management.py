@@ -381,7 +381,7 @@ def _cleanup(store,c,job,limit,now):
     # last row happened to finish cleanup; this avoids unbounded existence scans.
     done=not own_left and processed<limit
     c.execute('''UPDATE lab_management_jobs SET status=?,phase=?,payload_json=?,processed_rows=processed_rows+?,
-        total_rows=MAX(total_rows,processed_rows+?),updated_at=? WHERE id=?''',
+        total_rows=MAX(total_rows,processed_rows+?),error='',updated_at=? WHERE id=?''',
         ('completed' if done else 'running','completed' if done else 'owned_records',_dump(data),processed,processed,now,job['id']))
     if done:
         _queue_reclaim(c,job['user_id'],{'request_id':'delete-reclaim-'+str(job['id'])},now)
@@ -390,10 +390,23 @@ def _cleanup(store,c,job,limit,now):
 
 def management_maintenance(store,*,now,limit=500,max_pages=256):
     if type(limit) is not int or not 1<=limit<=500 or type(max_pages) is not int or not 1<=max_pages<=256:raise ValueError('维护批量无效')
-    processed=0;delete_completed=False
-    with store._connect(write=True,reserve=True) as c:
-        job=c.execute("SELECT * FROM lab_management_jobs WHERE kind='delete' AND status IN ('queued','running','waiting') ORDER BY id LIMIT 1").fetchone()
-        if job:processed,delete_completed=_cleanup(store,c,job,limit,now)
+    processed=0;job=None
+    try:
+        with store._connect(write=True,reserve=True) as c:
+            job=c.execute("SELECT * FROM lab_management_jobs WHERE kind='delete' AND status IN ('queued','running','waiting') ORDER BY id LIMIT 1").fetchone()
+            if job:processed,_=_cleanup(store,c,job,limit,now)
+    except RuleLabError as exc:
+        # The failed page was rolled back. Persist its reason separately so a
+        # running simulation cannot hide a stuck deletion behind its heartbeat.
+        if job is not None:
+            try:
+                with store._connect(write=True,reserve=True) as c:
+                    c.execute("""UPDATE lab_management_jobs SET status='waiting',error=?,updated_at=?
+                        WHERE id=? AND kind='delete' AND status IN ('queued','running','waiting')""",
+                        ('删除尚未完成，将自动重试：'+exc.message,now,job['id']))
+            except RuleLabError:
+                pass  # A fully unavailable database may also reject the status write.
+        raise
     from pc28touzhu.services.rule_lab_storage import process_reclaim
     reclaimed=process_reclaim(store,now=now,max_pages=max_pages)
     with store._connect() as c:pending=bool(c.execute("SELECT 1 FROM lab_management_jobs WHERE status IN ('queued','running','waiting') LIMIT 1").fetchone())
