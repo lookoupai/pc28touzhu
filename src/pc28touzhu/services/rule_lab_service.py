@@ -10,7 +10,7 @@ import copy
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
-from pc28touzhu.domain.rule_lab import ALLOWED_SETTLEMENT_RULE_IDS, COMBO_LONG_MISS_THRESHOLDS, build_conditions, build_experiments, normalize_batch_payload
+from pc28touzhu.domain.rule_lab import ALLOWED_SETTLEMENT_RULE_IDS, COMBO_LONG_MISS_THRESHOLDS, build_conditions, build_experiments, build_experiments_from_conditions, normalize_batch_payload
 from pc28touzhu.domain.settlement_rules import build_settlement_snapshot
 from pc28touzhu.domain.rule_lab_risk import normalize_risk_policy
 from pc28touzhu.domain.subscription_strategy import upgrade_subscription_strategy
@@ -299,12 +299,7 @@ class RuleLabService:
             raise RuleLabError('definition_locked','实验已启动或已有记录，请使用“修改并新建版本”',409)
         if action=='fork' and not preview['can_fork']:
             raise RuleLabError('definition_locked','当前实验不能创建修改版本',409)
-        try:config=normalize_batch_payload(payload['config'],now=now)
-        except ValueError as exc:raise RuleLabError('invalid_input',str(exc)) from exc
-        predictor=self._source_predictor(config['predictor_id'])
-        try:config['risk_policy']=self._risk_snapshot(user_id,config['risk_policy'],config['metric'])
-        except ValueError as exc:raise RuleLabError('invalid_input',str(exc)) from exc
-        definitions=build_experiments(config['metric'],template_pack=config['template_pack'])
+        config,predictor,definitions=self._resolve_definition(user_id,payload['config'],now=now,original_batch_id=batch_id)
         method=self.store.edit_batch if action=='edit' else self.store.fork_batch
         return method(user_id,batch_id,{**payload,'config':config},predictor_name=predictor['name'],
                       experiments=definitions,request_payload=payload,now=now)
@@ -334,10 +329,37 @@ class RuleLabService:
         self._management_payload(payload,'reclaim')
         return self.store.request_reclaim(user_id,payload,now=_now(now))
 
+    def preview_bulk(self,user_id,payload,*,now=None):
+        from pc28touzhu.services.rule_lab_bulk import preview_bulk
+        return preview_bulk(self,user_id,payload,now=_now(now))
+
+    def create_bulk(self,user_id,payload,*,now=None):
+        from pc28touzhu.services.rule_lab_bulk import create_bulk
+        return create_bulk(self,user_id,payload,now=_now(now))
+
+    def preview_study(self,user_id,payload):
+        from pc28touzhu.services.rule_lab_bulk import preview_study
+        return preview_study(self,user_id,payload)
+
     def create_study(self,user_id,payload,*,now=None):
+        if isinstance(payload,dict) and 'condition_keys' in payload:
+            from pc28touzhu.services.rule_lab_bulk import create_selected_study
+            return create_selected_study(self,user_id,payload,now=_now(now))
         if not isinstance(payload,dict) or set(payload)!={'source_batch_id','name','request_id'}:
             raise RuleLabError('invalid_input','比较组需提供source_batch_id、name和request_id')
         return self.store.create_study(user_id,payload['source_batch_id'],payload['name'],payload['request_id'],now=_now(now))
+
+    def list_queue(self,user_id,*,state='active',now=None):
+        from pc28touzhu.services.rule_lab_queue import list_queue
+        return list_queue(self.store,user_id,state=state,now=_now(now))
+
+    def enqueue(self,user_id,payload,*,now=None):
+        from pc28touzhu.services.rule_lab_queue import enqueue
+        return enqueue(self.store,user_id,payload,now=_now(now))
+
+    def set_queue_state(self,user_id,qid,payload,*,now=None):
+        from pc28touzhu.services.rule_lab_queue import set_state
+        return set_state(self.store,user_id,qid,payload,now=_now(now))
 
     def list_studies(self,user_id):return dict(studies=self.store.list_studies(user_id))
 
@@ -369,15 +391,88 @@ class RuleLabService:
 
     def create_batch(self, user_id, payload, *, now=None):
         timestamp = _now(now)
-        try:
-            config = normalize_batch_payload(payload, now=timestamp)
-        except ValueError as exc:
-            raise RuleLabError('invalid_input', str(exc)) from exc
-        predictor = self._source_predictor(config['predictor_id'])
-        config['risk_policy']=self._risk_snapshot(user_id,config['risk_policy'],config['metric'])
-        definitions = build_experiments(config['metric'],template_pack=config['template_pack'])
+        config,predictor,definitions=self._resolve_definition(user_id,payload,now=timestamp)
         batch = self.store.create_batch(user_id, config, predictor['name'], definitions, now=timestamp)
         return dict(batch=batch, generated_count=len(definitions))
+
+    def list_templates(self,user_id,**filters):
+        from pc28touzhu.services.rule_lab_templates import list_templates
+        return list_templates(self.store,user_id,**filters)
+
+    def get_template(self,user_id,tid):
+        from pc28touzhu.services.rule_lab_templates import get_template
+        return get_template(self.store,user_id,tid)
+
+    def _template_policy(self,user_id,payload):
+        if not isinstance(payload,dict):raise RuleLabError('invalid_input','模板请求须为对象')
+        result=copy.deepcopy(payload);definition=result.get('definition')
+        if isinstance(definition,dict) and 'policy' in definition:
+            if not isinstance(definition.get('metrics'),list):raise RuleLabError('invalid_input','风控模板玩法须为列表')
+            for metric in definition['metrics']:
+                self._risk_snapshot(user_id,definition['policy'],metric)
+            # The independent template keeps values, never a mutable real-rule link.
+            if isinstance(definition['policy'],dict) and definition['policy'].get('mode')=='round':definition['policy']['source']={}
+        return result
+
+    def preview_template(self,user_id,payload):
+        from pc28touzhu.services.rule_lab_templates import preview_template
+        return preview_template(self._template_policy(user_id,payload))
+
+    def save_template(self,user_id,payload,*,tid=None,now=None):
+        from pc28touzhu.services.rule_lab_templates import save_template,receipt
+        # Retry before resolving now-deleted real-rule provenance.
+        action='template.create' if tid is None else 'template.edit:'+str(tid)
+        if isinstance(payload,dict) and isinstance(payload.get('request_id'),str):
+            with self.store._connect() as c:
+                previous=receipt(c,user_id,action,payload)
+                if previous:return previous
+        prepared=self._template_policy(user_id,payload)
+        return save_template(self.store,user_id,prepared,now=_now(now),tid=tid,request_payload=payload)
+
+    def delete_template(self,user_id,tid,payload,*,now=None):
+        from pc28touzhu.services.rule_lab_templates import delete_template
+        return delete_template(self.store,user_id,tid,payload,now=_now(now))
+
+    def _resolve_definition(self,user_id,payload,*,now,original_batch_id=None):
+        from pc28touzhu.services.rule_lab_templates import resolve_conditions,resolve_risk
+        from pc28touzhu.services.rule_lab_store import _load
+        if not isinstance(payload,dict):raise RuleLabError('invalid_input','实验参数无效')
+        raw=copy.deepcopy(payload);selection=raw.pop('condition_selection',None);risk_selection=raw.pop('risk_selection',None)
+        original=None;frozen=None
+        with self.store._connect() as c:
+            if original_batch_id is not None:
+                original=self.store._owned(c,user_id,original_batch_id)
+                preserve=selection is None and raw.get('metric')==original['metric'] and raw.get('template_pack',original['template_pack'])==original['template_pack']
+                if raw.get('metric')!=original['metric'] and selection is None and raw.get('template_pack') not in ('basic_v1','basic_v2','combo_long_miss_v1'):
+                    raise RuleLabError('invalid_input','更换玩法时必须重新选择条件模板')
+                if preserve:
+                    frozen=[dict(condition_key=r['condition_key'],name=r['name'],condition=_load(r['condition_json']),
+                        settlement_rule_id=r['settlement_rule_id'],settlement_snapshot=_load(r['settlement_snapshot_json']))
+                        for r in c.execute('SELECT * FROM lab_experiments WHERE batch_id=? ORDER BY id',(original_batch_id,))]
+            pack=raw.get('template_pack','basic_v2')
+            if selection is not None or frozen is not None:raw['template_pack']='basic_v2'
+            if risk_selection is not None:
+                if 'risk_policy' in raw:raise RuleLabError('invalid_input','风控模板与手动风控只能选择一种')
+                policy,risk_snapshot=resolve_risk(c,user_id,risk_selection,raw.get('metric'));raw['risk_policy']=policy
+            else:risk_snapshot={}
+            try:config=normalize_batch_payload(raw,now=now)
+            except ValueError as exc:raise RuleLabError('invalid_input',str(exc)) from exc
+            if selection is not None:
+                conditions,snapshot=resolve_conditions(c,user_id,selection,config['metric'])
+                definitions=build_experiments_from_conditions(config['metric'],conditions)
+                config.update(template_pack='custom_v1',template_snapshot=snapshot,_condition_selection=selection)
+            elif frozen is not None:
+                definitions=frozen;config.update(template_pack=original['template_pack'],template_snapshot=_load(original['template_snapshot_json']))
+                if risk_selection is None and config['risk_policy']==_load(original['risk_policy_json']):risk_snapshot=_load(original['risk_template_snapshot_json'])
+            else:definitions=build_experiments(config['metric'],template_pack=pack)
+            config.update(risk_template_snapshot=risk_snapshot)
+            if risk_selection is not None:config['_risk_selection']=risk_selection
+        predictor=self._source_predictor(config['predictor_id'])
+        try:
+            if original is None or config['risk_policy']!=_load(original['risk_policy_json']):
+                config['risk_policy']=self._risk_snapshot(user_id,config['risk_policy'],config['metric'])
+        except ValueError as exc:raise RuleLabError('invalid_input',str(exc)) from exc
+        return config,predictor,definitions
 
     def set_risk_policy(self,user_id,batch_id,payload,*,now=None):
         if not isinstance(payload,dict) or set(payload)!={'risk_policy'}:

@@ -2,7 +2,7 @@
     "use strict";
     const $ = id => document.getElementById(id);
     const base = "/api/platform/rule-lab";
-    const statusNames = {paused:"已暂停", running:"运行中", completed:"回测完成", error:"处理异常", resource_paused:"资源限制暂停",deleting:"删除中"};
+    const statusNames = {draft:"草稿",queued:"等待运行",removed:"已移出队列",paused:"已暂停", running:"运行中", completed:"回测完成", error:"处理异常", resource_paused:"资源限制暂停",deleting:"删除中"};
     const phaseNames = {idle:"等待任务", warming:"准备历史窗口", observing:"等待条件或开奖", importing:"分批读取历史", replaying:"正在回放历史"};
     const workerNames = {starting:"等待后台启动", idle:"等待任务", running:"正在处理", stale:"后台暂未更新", resource_paused:"资源限制暂停", error:"处理异常"};
     const metricNames = {big_small:"大小", odd_even:"单双", combo:"组合"};
@@ -10,6 +10,7 @@
     Object.assign(reasonNames,{round_profit_target:"单轮止盈",round_loss_limit:"单轮止损",round_max_bets:"单轮下注上限",day_profit_target:"日止盈",day_loss_limit:"日止损",day_max_bets:"日下注上限",day_max_rounds:"当日开轮次数已达上限",daily_hit_rate_low:"日命中率熔断",cooldown:"等待开轮间隔",no_valid_bets:"无有效投注"});
     const riskStates={legacy:"逐期对照",active:"轮内跟随",unfinished:"区间结束·轮未完结",waiting:"等待条件 / 冷却",day_stopped:"统计日已停止"};
     const riskEditors={};
+    const extensions={};let templateCatalog=[];
     const pageSize = 20;
     const observationDefaults=Object.freeze({version:1,months:2,includePartial:true,minimumRoi:3,minimumCount:200,minimumDays:10,
         maximumSpread:null,maximumMonthlyDrawdownUnits:null,maximumUnderwaterDays:null,highlight:'red',matchesOnly:false,showRuntime:false});
@@ -37,7 +38,7 @@
     }
     function blankRisk() {return {version:1,mode:"round",round:{enabled:true,profit_target:0,loss_limit:0,max_bets:0},day:{enabled:false,profit_target:0,loss_limit:0,max_bets:0,max_rounds:0,hit_rate_gate:{enabled:false,threshold:0,min_settled_count:20}},additional_day_guards:[],cooldown_issues:0,source:{}};}
     function createRiskEditor(prefix, target) {
-        const editor={prefix,source:{},guards:[],selectedPreset:"",fields:{}};riskEditors[prefix]=editor;
+        const editor={prefix,root:target,source:{},guards:[],selectedPreset:"",fields:{}};riskEditors[prefix]=editor;
         const grid=element("div",null,"lab-form-grid");
         function field(key,label,type,choices) {
             const wrap=element("div",null,"lab-field"),id=prefix+key,input=element(type==="select"?"select":"input");input.id=id;
@@ -51,13 +52,15 @@
         field("RoundEnabled","启用单轮退出","checkbox");field("RoundProfit","单轮止盈（0不限）","number");field("RoundLoss","单轮止损（0不限）","number");field("RoundMax","单轮最多下注（0不限）","number");
         field("DayEnabled","启用日风控","checkbox");field("DayProfit","日止盈（0不限）","number");field("DayLoss","日止损（0不限）","number");field("DayMax","每日最多下注（0不限）","number");field("DayRounds","每日最多开轮（0不限）","number");
         field("GateEnabled","启用日命中率熔断","checkbox");field("Threshold","熔断命中率阈值（%）","number");field("Minimum","最少实赔＋全亏单数","number");field("Cooldown","距上次开轮至少间隔（期）","number");
+        field("ExtraPresent","附加一套独立日保护","checkbox");field("ExtraEnabled","启用附加日保护","checkbox");field("ExtraProfit","附加日止盈（0不限）","number");field("ExtraLoss","附加日止损（0不限）","number");field("ExtraMax","附加日最多下注（0不限）","number");field("ExtraRounds","附加日最多开轮（0不限）","number");field("ExtraGate","附加实赔命中率熔断","checkbox");field("ExtraThreshold","附加熔断阈值（%）","number");field("ExtraMinimum","附加最少实赔＋全亏单数","number");
+        ['RoundProfit','RoundLoss','DayProfit','DayLoss','Threshold','ExtraProfit','ExtraLoss','ExtraThreshold'].forEach(key=>editor.fields[key].step='0.01');
         editor.notice=element("p",null,"lab-note");editor.provenance=element("p",null,"lab-muted");editor.extra=element("p",null,"lab-note");
         target.append(grid,element("p","命中率 = 实赔 ÷（实赔＋全亏），退本不计分母；达到最少单数且低于阈值才停止。冷却从上次开轮期号算起，不是收工后等待。日次数按目标开奖日预占、最终盈亏按实际开奖日结算。","lab-muted"),editor.provenance,editor.extra,editor.notice);
         grid.addEventListener("change",event=>{
             if(event.target===editor.fields.Preset){
                 const found=(state.options?.risk_presets||[]).find(p=>p.id===event.target.value);
                 if(found){editor.selectedPreset=found.id;fillRisk(prefix,found.policy);editor.fields.Preset.value=found.id;}
-                else {editor.source={};editor.guards=[];editor.selectedPreset="";}
+                else {editor.source={};editor.guards=[];editor.fields.ExtraPresent.checked=false;editor.selectedPreset="";}
             } else if(event.target!==editor.fields.Mode && Object.keys(editor.source).length)editor.source.modified=true;
             updateRiskEditor(prefix);
         });
@@ -69,7 +72,11 @@
         f.RoundEnabled.checked=p.round.enabled;f.RoundProfit.value=p.round.profit_target;f.RoundLoss.value=p.round.loss_limit;f.RoundMax.value=p.round.max_bets;
         f.DayEnabled.checked=p.day.enabled;f.DayProfit.value=p.day.profit_target;f.DayLoss.value=p.day.loss_limit;f.DayMax.value=p.day.max_bets;f.DayRounds.value=p.day.max_rounds;
         f.GateEnabled.checked=p.day.hit_rate_gate.enabled;f.Threshold.value=p.day.hit_rate_gate.threshold;f.Minimum.value=p.day.hit_rate_gate.min_settled_count;f.Cooldown.value=p.cooldown_issues;
-        editor.source=structuredClone(p.source||{});editor.guards=structuredClone(p.additional_day_guards||[]);updateRiskEditor(prefix);
+        editor.source=structuredClone(p.source||{});editor.guards=structuredClone(p.additional_day_guards||[]);
+        const extra=editor.guards[0]||blankRisk().day;f.ExtraPresent.checked=editor.guards.length>0;f.ExtraEnabled.checked=extra.enabled;
+        f.ExtraProfit.value=extra.profit_target;f.ExtraLoss.value=extra.loss_limit;f.ExtraMax.value=extra.max_bets;f.ExtraRounds.value=extra.max_rounds;
+        f.ExtraGate.checked=extra.hit_rate_gate.enabled;f.ExtraThreshold.value=extra.hit_rate_gate.threshold;f.ExtraMinimum.value=extra.hit_rate_gate.min_settled_count;
+        updateRiskEditor(prefix);
     }
     function riskValue(prefix) {
         const editor=riskEditors[prefix],f=editor.fields;
@@ -77,7 +84,7 @@
         return {version:1,mode:"round",round:{enabled:f.RoundEnabled.checked,profit_target:Number(f.RoundProfit.value),loss_limit:Number(f.RoundLoss.value),max_bets:Number(f.RoundMax.value)},
             day:{enabled:f.DayEnabled.checked,profit_target:Number(f.DayProfit.value),loss_limit:Number(f.DayLoss.value),max_bets:Number(f.DayMax.value),max_rounds:Number(f.DayRounds.value),
                 hit_rate_gate:{enabled:f.GateEnabled.checked,threshold:Number(f.Threshold.value),min_settled_count:Number(f.Minimum.value)}},
-            cooldown_issues:Number(f.Cooldown.value),additional_day_guards:structuredClone(editor.guards),source:structuredClone(editor.source)};
+            cooldown_issues:Number(f.Cooldown.value),additional_day_guards:f.ExtraPresent.checked?[{enabled:f.ExtraEnabled.checked,profit_target:Number(f.ExtraProfit.value),loss_limit:Number(f.ExtraLoss.value),max_bets:Number(f.ExtraMax.value),max_rounds:Number(f.ExtraRounds.value),hit_rate_gate:{enabled:f.ExtraGate.checked,threshold:Number(f.ExtraThreshold.value),min_settled_count:Number(f.ExtraMinimum.value)}}]:[],source:structuredClone(editor.source)};
     }
     function riskError(p) {
         if(p.mode==="legacy")return "";
@@ -85,7 +92,7 @@
         if(!controls.some(c=>c.enabled && (c.profit_target>0||c.loss_limit>0||c.max_bets>0)))return "尚未设置退出条件：请启用至少一项单轮或日止盈、止损、最多下注，或明确选择逐期对照。";
         if(controls.some(c=>[c.profit_target,c.loss_limit,c.max_bets,c.max_rounds??0].some(v=>!Number.isFinite(v)||v<0)))return "风控金额和次数必须是有效非负数字。";
         if(controls.some(c=>!Number.isInteger(c.max_bets)||!Number.isInteger(c.max_rounds??0))||!Number.isInteger(p.cooldown_issues)||p.cooldown_issues<0)return "次数与开轮间隔必须是非负整数。";
-        if(p.day.hit_rate_gate.enabled && (!(p.day.hit_rate_gate.threshold>0&&p.day.hit_rate_gate.threshold<100)||!Number.isInteger(p.day.hit_rate_gate.min_settled_count)||p.day.hit_rate_gate.min_settled_count<1))return "启用命中率熔断时，请填写0～100之间的阈值及正整数最少单数。";
+        if([p.day,...p.additional_day_guards].some(c=>c.hit_rate_gate.enabled && (!(c.hit_rate_gate.threshold>0&&c.hit_rate_gate.threshold<100)||!Number.isInteger(c.hit_rate_gate.min_settled_count)||c.hit_rate_gate.min_settled_count<1)))return "启用命中率熔断时，请填写0～100之间的阈值及正整数最少单数。";
         return "";
     }
     function riskSummary(p) {
@@ -95,11 +102,13 @@
     }
     function updateRiskEditor(prefix) {
         const editor=riskEditors[prefix];if(!editor)return;
-        const p=riskValue(prefix),f=editor.fields,legacy=p.mode==="legacy",busy=state.mutating||state.accessDenied||(prefix==='labDefinitionRisk'&&Boolean(state.management?.pending));
+        const p=riskValue(prefix),f=editor.fields,legacy=p.mode==="legacy",busy=state.mutating||state.accessDenied||Boolean(editor.root.closest('[data-readonly=true]'))||(prefix==='labDefinitionRisk'&&Boolean(state.management?.pending));
         Object.entries(f).forEach(([key,input])=>{input.disabled=busy||(legacy&&!['Mode'].includes(key));});
         if(!legacy){['RoundProfit','RoundLoss','RoundMax'].forEach(k=>f[k].disabled=busy||!f.RoundEnabled.checked);['DayProfit','DayLoss','DayMax','DayRounds','GateEnabled'].forEach(k=>f[k].disabled=busy||!f.DayEnabled.checked);['Threshold','Minimum'].forEach(k=>f[k].disabled=busy||!f.DayEnabled.checked||!f.GateEnabled.checked);}
+        if(!legacy){['ExtraEnabled','ExtraProfit','ExtraLoss','ExtraMax','ExtraRounds','ExtraGate','ExtraThreshold','ExtraMinimum'].forEach(k=>{f[k].closest('.lab-field').hidden=!f.ExtraPresent.checked;f[k].disabled=busy||!f.ExtraPresent.checked||(k!=='ExtraEnabled'&&!f.ExtraEnabled.checked)||(['ExtraThreshold','ExtraMinimum'].includes(k)&&!f.ExtraGate.checked);});}
+        editor.guards=p.additional_day_guards||[];
         const source=editor.source;editor.provenance.textContent=source.rule_id?"复制自："+[source.rule_name,source.route_name,source.subscription_name].join(" · ")+(source.modified?"（已修改预设）":"")+"。仅复制风控，来源与每注金额不变。":"未选择现有规则预设，当前为手动配置。";
-        editor.extra.hidden=!editor.guards.length;editor.extra.textContent=editor.guards.length?"附加独立日保护："+riskSummary({mode:'round',round:{enabled:false},day:editor.guards[0],cooldown_issues:0,additional_day_guards:[]})+"。选择手动配置可移除此附加层。":"";
+        editor.extra.hidden=!editor.guards.length;editor.extra.textContent=editor.guards.length?"附加独立日保护："+riskSummary({mode:'round',round:{enabled:false},day:editor.guards[0],cooldown_issues:0,additional_day_guards:[]})+"。可在上方编辑或关闭此附加层。":"";
         editor.notice.textContent=riskError(p)||riskSummary(p);editor.notice.classList.toggle('is-error',Boolean(riskError(p)));
     }
     function renderRiskPresets(prefix,metric) {
@@ -376,7 +385,7 @@
             body.append(row);
         }
     }
-    function drawerElements() {return ['labExperimentDetail','labObservationPanel','labGenerator','labSystemPanel','labManagementPanel','labContinuationPanel'].map($);}
+    function drawerElements() {return ['labExperimentDetail','labObservationPanel','labGenerator','labSystemPanel','labManagementPanel','labContinuationPanel','labSelfServicePanel'].map($);}
     function drawerFocusable(node) {
         return [...node.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[href],[tabindex="0"]')].filter(item=>{
             if(item.closest('[hidden]'))return false;
@@ -388,14 +397,14 @@
         });
     }
     function openDrawer(id,trigger) {
-        if(state.layout.drawer?.id===id)return;
-        closeActiveDrawer(false,true);
+        if(state.layout.drawer?.id===id)return true;
+        if(closeActiveDrawer(false,true)===false)return false;
         const node=$(id),background=[...document.body.children].filter(child=>!drawerElements().includes(child)&&child.id!=='labDrawerBackdrop'&&!['SCRIPT','STYLE'].includes(child.tagName));
         state.layout.drawer={id,trigger:trigger||document.activeElement,background:background.map(child=>({node:child,inert:child.inert,aria:child.getAttribute('aria-hidden')}))};
         node.hidden=false;if(node.tagName==='DETAILS')node.open=true;
         $('labDrawerBackdrop').hidden=false;document.body.classList.add('lab-drawer-open');
         for(const child of background){child.inert=true;child.setAttribute('aria-hidden','true');}
-        const focus=drawerFocusable(node)[0]||node;focus.focus({preventScroll:true});
+        const focus=drawerFocusable(node)[0]||node;focus.focus({preventScroll:true});return true;
     }
     function dismissDrawer(id,restoreFocus=true) {
         const drawer=state.layout.drawer;if(!drawer||drawer.id!==id)return;
@@ -405,7 +414,8 @@
         if(restoreFocus&&drawer.trigger?.isConnected)drawer.trigger.focus({preventScroll:true});
     }
     function closeActiveDrawer(restoreFocus=true,force=false) {
-        const drawer=state.layout.drawer;if(!drawer||state.mutating&&!force)return;
+        const drawer=state.layout.drawer;if(!drawer)return true;if(state.mutating&&!force)return false;
+        if(drawer.id==='labSelfServicePanel'&&extensions.close&&!extensions.close(restoreFocus))return false;
         if(drawer.id==='labExperimentDetail')closeDetail(restoreFocus);
         else if(drawer.id==='labManagementPanel')closeManagement(restoreFocus);
         else if(drawer.id==='labContinuationPanel')closeContinuation(restoreFocus);
@@ -422,7 +432,7 @@
         $('labMonthlyMetricSelect').addEventListener('change',()=>{state.layout.monthlyMetric=$('labMonthlyMetricSelect').value;renderResults();renderStudyResults();});
         $('labQuickMatchesOnly').addEventListener('change',()=>{const checked=$('labQuickMatchesOnly').checked;fillObservationForm(state.observation.settings);$('labObservationMatchesOnly').checked=checked;applyObservation();});
         $('labAdjustObservation').addEventListener('click',()=>{fillObservationForm(state.observation.settings);openDrawer('labObservationPanel',$('labAdjustObservation'));});
-        $('labNewExperiment').addEventListener('click',()=>openDrawer('labGenerator',$('labNewExperiment')));$('labSystemToggle').addEventListener('click',()=>openDrawer('labSystemPanel',$('labSystemToggle')));
+        $('labNewExperiment').addEventListener('click',()=>extensions.bulk?extensions.bulk():openDrawer('labGenerator',$('labNewExperiment')));$('labSystemToggle').addEventListener('click',()=>openDrawer('labSystemPanel',$('labSystemToggle')));
         for(const id of ['labObservationClose','labGeneratorClose','labSystemClose'])$(id).addEventListener('click',()=>closeActiveDrawer(true));
         $('labDrawerBackdrop').addEventListener('click',()=>closeActiveDrawer(true));
         document.addEventListener('keydown',event=>{
@@ -506,7 +516,7 @@
     function locked() { return state.loading || state.mutating || state.accessDenied; }
     function hasRunningWork() {
         const updating = item => item.continuation?.capture_enabled || item.continuation?.active_segment_id;
-        return state.overview?.batches.some(batch => batch.status === 'running' || updating(batch)) ||
+        return state.overview?.batches.some(batch => ['running','queued'].includes(batch.display_status||batch.status) || updating(batch)) ||
             state.studies.some(study => ['running', 'queued'].includes(study.status) || updating(study));
     }
     function isReadingOrEditing() {
@@ -524,6 +534,8 @@
     }
     function sampleLabel(item, batch) {
         if (item.settled_count > 0) return item.sample_label;
+        if(batch?.display_status==='queued')return '等待队列运行';
+        if(batch?.display_status==='draft')return '草稿尚未入队';
         if (batch?.status === 'completed') return '无已结算样本';
         if (batch?.status === 'running') return '尚无结算，处理中';
         if (batch?.status === 'paused' && !batch.processed_issues) return batch.study_id ? '等待队列运行' : '尚未启动';
@@ -546,7 +558,7 @@
         $("labResultNext").disabled = locked() || (state.resultPage + 1) * pageSize >= state.resultFilteredCount;
         $("labBatchSelect").disabled=locked();$("labStudySelect").disabled=locked();
         $("labEditRiskButton").disabled=locked();$("labSaveRiskButton").disabled=locked();$("labCancelRiskButton").disabled=state.mutating;
-        ['labCompareButton','labCreateStudyButton','labStudyExportButton'].forEach(id=>$(id).disabled=locked());
+        ['labCompareButton','labCreateStudyButton','labStudyExportButton','labTemplatesButton','labQueueButton','labNewExperiment'].forEach(id=>$(id).disabled=locked());
         $("labStudyPrevious").disabled=locked()||state.studyPage<=0;
         $("labStudyNext").disabled=locked()||(state.studyPage+1)*pageSize>=state.studyFilteredCount;
         $("labStudySort").disabled=locked()||!state.studyRows.length;
@@ -675,7 +687,7 @@
         $("labResults").hidden = !batch||state.layout.tab!=="experiments";
         if (!batch) return;
         $("labResultTitle").textContent = batch.name;
-        $("labBatchMeta").textContent = [modeName(batch.mode), statusNames[batch.status] || batch.status, phaseNames[batch.phase] || batch.phase,
+        $("labBatchMeta").textContent = [modeName(batch.mode), statusNames[batch.display_status||batch.status] || batch.status, phaseNames[batch.phase] || batch.phase,
             batch.predictor_name, metricNames[batch.metric], "每期 " + money(batch.stake_amount), "已处理 " + batch.processed_issues + (batch.total_issues === null ? " 期" : " / " + batch.total_issues + " 期"), "批次更新于 " + time(batch.updated_at)].filter(Boolean).join(" · ");
         $("labBatchNotice").textContent = batch.history_notice || ""; $("labBatchNotice").hidden = !batch.history_notice;
         $("labBatchError").textContent = batch.error || ""; $("labBatchError").hidden = !batch.error;
@@ -690,7 +702,7 @@
         $("labSkipCounts").textContent = "未执行记录：" + skipCounts.join("；"); $("labSkipCounts").hidden = !skipCounts.length;
         $("labBatchStateButton").hidden = batch.status === "completed"||Boolean(batch.study_id);
         if(batch.study_id)$("labBatchRiskSummary").append(document.createTextNode(' · 此子批次由比较组 #'+batch.study_id+' 统一管理'));
-        $("labBatchStateButton").textContent = batch.continuation?.active_segment_id ? (batch.status==='running'?'暂停本段计算':'恢复本段计算') : batch.status === "running" ? "暂停模拟" : batch.status === "paused" ? "启动模拟" : "恢复模拟";
+        $("labBatchStateButton").textContent = batch.continuation?.active_segment_id ? (batch.status==='running'?'暂停本段计算':'恢复本段计算') : batch.display_status === "queued" ? "暂停排队" : batch.status === "running" ? "暂停模拟" : batch.mode === "backtest" ? "加入运行队列" : batch.status === "paused" ? "启动模拟" : "恢复模拟";
         if(batch.continuation?.enabled)$("labBatchMeta").append(document.createTextNode(' · '+continuationBrief(batch.continuation)));
         const settled = state.experiments.reduce((sum, item) => sum + item.settled_count, 0);
         $("labResultEmpty").hidden = settled > 0;
@@ -709,6 +721,7 @@
         renderLayout();
     }
     function denyAccess() {
+        if(extensions.reset)extensions.reset();
         closeActiveDrawer(false,true);
         state.observation.revision++;state.observation.loading=false;state.observation.dirty=false;state.loading=false;fillObservationForm(state.observation.settings);
         closeContinuation(false);closeManagement(false);state.managementJobs.clear();renderManagementJobs();
@@ -835,8 +848,9 @@
         if (locked()) return;
         state.mutating = true; updateControls();
         try {
-            await request(base + "/batches/" + id + "/state", "POST", {state:status === "running" ? "paused" : "running"});
-            await refresh(false); feedback("statusMessage", status === "running" ? "已暂停新模拟，已有待结算记录仍会完成结算。" : "已启动模拟，运行进度与结果每15秒自动更新。", false);
+            const pause=["running","queued"].includes(status);
+            const result=await request(base + "/batches/" + id + "/state", "POST", {state:pause ? "paused" : "running"});
+            await refresh(false); feedback("statusMessage", pause ? "已暂停调度，实验成绩与处理进度保留。" : result.batch?.display_status==="queued" ? "已加入队列，等待运行名额。" : "已启动模拟，运行进度与结果每15秒自动更新。", false);
         } catch (error) {
             if (error.status === 401 || error.status === 403) denyAccess();
             if (error.unknown) await refresh(false);
@@ -871,7 +885,7 @@
             const batch=known||batchResponse?.batch;
             if(!batch||batch.id!==batchId)throw responseError('实验配置不完整，请关闭后重试',0,'invalid_response');
             state.detailContext.batch=batch;
-            const exp=result.experiment,packName=(state.options?.template_packs||[]).find(pack=>pack.id===batch.template_pack)?.name||batch.template_pack||'基础条件 v1';
+            const exp=result.experiment,packName=batch.template_snapshot?.name||(state.options?.template_packs||[]).find(pack=>pack.id===batch.template_pack)?.name||'已冻结条件';
             $("labDetailMeta").textContent=packName+' · 原模拟配置 · 固定金额 · 北京时间 · '+riskSummary(batch.risk_policy)+' · 本实验冻结赔率：'+frozenOddsText(exp)+(exp.legacy_odds?'。旧赔率成绩保留，未按当前赔率重算。':'');
             state.reportExperiment=exp;state.monthly=result.monthly||null;state.detailResult=result;
             $("labDisplayStake").value=String(state.monthly?.capital.stake_amount||batch.stake_amount||1);$("labAmountProjection").hidden=false;
@@ -1287,12 +1301,18 @@
     }
     function definitionOptions() {
         const metric=$("labDefinitionMetric").value,select=$("labDefinitionTemplate"),selected=select.value;
-        select.replaceChildren();(state.options?.template_packs||[]).filter(pack=>pack.selectable!==false&&pack.metrics.includes(metric)).forEach(pack=>{
-            const option=element('option',pack.name);option.value=pack.id;select.append(option);
-        });
+        select.replaceChildren();
+        if(metric===state.management?.preview?.config?.metric){const original=element('option','保留原实验条件与赔率（冻结快照）');original.value='__snapshot__';select.append(original);}
+        const candidates=templateCatalog.filter(t=>t.kind==='condition'&&t.metrics.includes(metric));
+        if(candidates.length)candidates.forEach(t=>{const option=element('option',t.name+' · v'+t.revision);option.value=t.builtin?t.ref.key:'custom:'+t.id;select.append(option);});
+        else (state.options?.template_packs||[]).filter(pack=>pack.selectable!==false&&pack.metrics.includes(metric)).forEach(pack=>{const option=element('option',pack.name);option.value=pack.id;select.append(option);});
         if([...select.options].some(option=>option.value===selected))select.value=selected;
-        const pack=(state.options?.template_packs||[]).find(pack=>pack.id===select.value),count=pack?.condition_counts?.[metric];
-        $("labDefinitionCount").textContent=count?count+' 个条件 × 2 套当前OK赔率 = '+(count*2)+' 个版本。每注金额按真实逐笔结算计算。':'';
+        const current=candidates.find(t=>(t.builtin?t.ref.key:'custom:'+t.id)===select.value),pack=(state.options?.template_packs||[]).find(pack=>pack.id===select.value),count=current?.condition_count||pack?.condition_counts?.[metric];
+        $("labDefinitionCount").textContent=select.value==='__snapshot__'?'保留原实验实际选择的条件及冻结赔率；源模板改名、删除不影响复制。':count?count+' 个条件 × 2 套当前OK赔率 = '+(count*2)+' 个版本。':'';
+        const riskSelect=$("labDefinitionRiskTemplate"),riskSelected=riskSelect.value;
+        riskSelect.replaceChildren();const manual=element('option','原实验风控 / 手动配置');manual.value='manual';riskSelect.append(manual);
+        templateCatalog.filter(t=>t.kind==='risk'&&t.metrics.includes(metric)).forEach(t=>{const option=element('option',t.name+' · v'+t.revision);option.value='custom:'+t.id;riskSelect.append(option);});
+        if([...riskSelect.options].some(option=>option.value===riskSelected))riskSelect.value=riskSelected;
         const history=$("labDefinitionMode").value==='backtest';$("labDefinitionStartField").hidden=!history;$("labDefinitionEndField").hidden=!history;
         renderRiskPresets('labDefinitionRisk',metric);updateControls();
     }
@@ -1301,22 +1321,29 @@
         view.mode=mode;view.dirty=false;const config=view.preview.config;
         $("labDeleteForm").hidden=true;$("labDefinitionForm").hidden=false;
         $("labDefinitionTitle").textContent=mode==='fork'?'修改并新建版本':'编辑未启动实验';
-        $("labDefinitionNote").textContent=mode==='fork'?'新版本使用所选条件模板及当前赔率目录，保存后暂停且成绩从零开始。原实验及历史成绩保持。仅按比例调整金额时，可直接在详情中修改“展示每注金额”查看估算。':'保存后按新配置重新生成实验版本，仍保持暂停，并退出当前自动排队；请检查后手动启动。';
+        $("labDefinitionNote").textContent=mode==='fork'?'新版本默认保留原实验冻结条件及赔率；显式选择新模板时才重新生成。保存后为草稿，成绩从零开始。原实验及历史成绩保持。仅按比例调整金额时，可直接在详情中修改“展示每注金额”查看估算。':'保存后按新配置重新生成实验版本，仍保持暂停，并退出当前自动排队；请检查后手动启动。';
         $("labDefinitionSave").textContent=mode==='fork'?'保存为新版本（暂停）':'保存修改（保持暂停）';
         $("labDefinitionName").value=(mode==='fork'?config.name+' · 修改版':config.name).slice(0,80);
         const select=$("labDefinitionPredictor");select.replaceChildren();(state.options?.predictors||[]).forEach(p=>{const option=element('option',p.name);option.value=p.id;select.append(option);});
         if(![...select.options].some(option=>option.value===String(config.predictor_id))){const option=element('option','原来源目前不可用');option.value=config.predictor_id;option.disabled=true;select.append(option);}
         select.value=String(config.predictor_id);$("labDefinitionMetric").value=config.metric;$("labDefinitionStake").value=config.stake_amount;
         $("labDefinitionMode").value=config.mode;$("labDefinitionStart").value=config.start_date||'';$("labDefinitionEnd").value=config.end_date||'';
-        definitionOptions();if([...$("labDefinitionTemplate").options].some(option=>option.value===config.template_pack))$("labDefinitionTemplate").value=config.template_pack;
+        $("labDefinitionRiskTemplate").value='manual';definitionOptions();$("labDefinitionTemplate").value="__snapshot__";
+        request(base+"/templates").then(data=>{if(state.management!==view)return;templateCatalog=data.templates;definitionOptions();}).catch(error=>feedback("labManagementFeedback",error.message,true));
         fillRisk('labDefinitionRisk',config.risk_policy);definitionOptions();$("labDefinitionName").focus();
     }
     function definitionValue() {
-        const mode=$("labDefinitionMode").value;
-        return {name:$("labDefinitionName").value.trim(),mode,predictor_id:Number($("labDefinitionPredictor").value),
-            metric:$("labDefinitionMetric").value,template_pack:$("labDefinitionTemplate").value,
+        const mode=$("labDefinitionMode").value,value=$("labDefinitionTemplate").value,metric=$("labDefinitionMetric").value;
+        const config={name:$("labDefinitionName").value.trim(),mode,predictor_id:Number($("labDefinitionPredictor").value),metric,
             stake_amount:Number($("labDefinitionStake").value),start_date:mode==='backtest'?$("labDefinitionStart").value:null,
             end_date:mode==='backtest'?$("labDefinitionEnd").value:null,risk_policy:riskValue('labDefinitionRisk')};
+        if(value!=='__snapshot__'){
+            const template=templateCatalog.find(t=>t.kind==='condition'&&t.metrics.includes(metric)&&(t.builtin?t.ref.key:'custom:'+t.id)===value);
+            config.condition_selection={template_ref:template?.ref||{kind:'builtin',key:value,metric},expected_revision:template?.revision||(value==='basic_v2'?2:1)};
+        }
+        const riskTemplate=templateCatalog.find(t=>t.kind==='risk'&&t.metrics.includes(metric)&&'custom:'+t.id===$("labDefinitionRiskTemplate").value);
+        if(riskTemplate){delete config.risk_policy;config.risk_selection={template_ref:riskTemplate.ref,expected_revision:riskTemplate.revision};}
+        return config;
     }
     async function showDeletePreview() {
         const view=state.management;if(locked()||!view?.preview)return;state.loading=true;updateControls();
@@ -1371,7 +1398,7 @@
         if(action==='delete'){
             closeManagement(false);if(view.kind==='batch'&&state.selectedId===view.id){state.selectedId=null;state.batch=null;state.experiments=[];}
             if(view.kind==='study'&&state.studyId===view.id){state.studyId=null;state.study=null;state.studyRows=[];}
-            await refresh(false);feedback('statusMessage','已停止该对象的后续计算，后台正在删除。可在上方查看处理与空间回收进度。',false);$("labManagementJobs").scrollIntoView({block:'center',behavior:'smooth'});return;
+            await refresh(false);feedback('statusMessage','已停止该对象的后续计算，后台正在删除。可在“系统”中查看处理与空间回收进度。',false);return;
         }
         $("labDefinitionForm").hidden=true;await refresh(false);
         if(state.management===view)await readManagement();feedback('labManagementFeedback',action==='edit'?'配置已保存，批次保持暂停并退出自动排队；请检查后手动启动。':'名称已保存，策略和成绩保持。',false);
@@ -1433,7 +1460,7 @@
     $("labRefreshButton").addEventListener("click", () => refresh(true));
     $("labEconomyButton").addEventListener('click',()=>changePerformance('economy'));
     $("labFastButton").addEventListener('click',()=>changePerformance('fast'));
-    $("labBatchStateButton").addEventListener("click", () => state.batch && changeState(state.batch.id, state.batch.status));
+    $("labBatchStateButton").addEventListener("click", () => state.batch && changeState(state.batch.id, state.batch.display_status||state.batch.status));
     $("labSort").addEventListener("change", () => {state.resultPage = 0; closeDetail(false); renderResults(); updateControls();});
     $("labResultPrevious").addEventListener("click", () => {if (state.resultPage > 0) {state.resultPage--; closeDetail(false); renderResults(); updateControls();}});
     $("labResultNext").addEventListener("click", () => {if ((state.resultPage + 1) * pageSize < state.resultFilteredCount) {state.resultPage++; closeDetail(false); renderResults(); updateControls();}});
@@ -1460,7 +1487,7 @@
     $("labDisplayStake").addEventListener('input',renderAmountEstimate);
     $("labAmountReset").addEventListener('click',()=>{if(!state.detailResult)return;$("labDisplayStake").value=String(state.monthly?.capital.stake_amount||state.detailContext?.batch?.stake_amount||1);renderAmountEstimate();});
     $("labExportButton").addEventListener("click", exportCsv);
-    $("labCompareButton").addEventListener('click',comparisonPreview);$("labCreateStudyButton").addEventListener('click',createStudy);
+    $("labCompareButton").addEventListener('click',()=>extensions.compare?extensions.compare():comparisonPreview());$("labCreateStudyButton").addEventListener('click',createStudy);
     $("labStudyStateButton").addEventListener('click',changeStudyState);$("labStudyExportButton").addEventListener('click',exportStudy);
     ['labStudyVariant','labStudySettlement','labStudyCondition','labStudySort'].forEach(id=>$(id).addEventListener('change',()=>{state.studyPage=0;renderStudyResults();updateControls();}));
     $("labStudyPrevious").addEventListener('click',()=>{state.studyPage=Math.max(0,state.studyPage-1);renderStudyResults();updateControls();});$("labStudyNext").addEventListener('click',()=>{if((state.studyPage+1)*pageSize<state.studyFilteredCount)state.studyPage++;renderStudyResults();updateControls();});
@@ -1469,8 +1496,10 @@
     $("labManagementClose").addEventListener('click',()=>{if(!state.mutating&&!state.management?.pending)closeManagement(true);});
     $("labRenameForm").addEventListener('submit',event=>{event.preventDefault();const name=$("labManagementName").value.trim();if(!name||name.length>80){feedback('labManagementFeedback','请填写1～80个字符的名称。',true);return;}mutateManagement('rename',{name});});
     $("labManagementEdit").addEventListener('click',()=>editDefinition('edit'));$("labManagementFork").addEventListener('click',()=>editDefinition('fork'));
+    $("labDefinitionRiskTemplate").addEventListener('change',()=>{const template=templateCatalog.find(t=>t.kind==='risk'&&'custom:'+t.id===$("labDefinitionRiskTemplate").value);if(template)fillRisk('labDefinitionRisk',template.definition.policy);});
+    $("labDefinitionRiskEditor").addEventListener('change',()=>{$("labDefinitionRiskTemplate").value='manual';});
     $("labDefinitionForm").addEventListener('change',()=>{if(state.management)state.management.dirty=true;definitionOptions();});
-    $("labDefinitionForm").addEventListener('submit',event=>{event.preventDefault();const config=definitionValue();const issue=riskError(config.risk_policy);if(!config.name||!Number.isFinite(config.stake_amount)||config.stake_amount<.01||config.stake_amount>10000||issue){feedback('labManagementFeedback',issue||'请填写名称及有效的每注金额（0.01～10000）。',true);return;}mutateManagement(state.management?.mode,{config});});
+    $("labDefinitionForm").addEventListener('submit',event=>{event.preventDefault();const config=definitionValue();const issue=riskError(riskValue('labDefinitionRisk'));if(!config.name||!Number.isFinite(config.stake_amount)||config.stake_amount<.01||config.stake_amount>10000||issue){feedback('labManagementFeedback',issue||'请填写名称及有效的每注金额（0.01～10000）。',true);return;}mutateManagement(state.management?.mode,{config});});
     $("labDefinitionCancel").addEventListener('click',()=>{$("labDefinitionForm").hidden=true;if(state.management)state.management.dirty=false;});
     $("labManagementDelete").addEventListener('click',showDeletePreview);$("labDeleteCancel").addEventListener('click',()=>{$("labDeleteForm").hidden=true;});
     $("labDeleteConfirmName").addEventListener('input',updateControls);$("labDeleteForm").addEventListener('submit',event=>{event.preventDefault();if($("labDeleteConfirmName").value!==state.management?.deletePreview?.name)return;mutateManagement('delete',{confirm_name:$("labDeleteConfirmName").value});});
@@ -1486,5 +1515,9 @@
     $("labObservationForm").addEventListener('submit',event=>{event.preventDefault();applyObservation();});
     $("labObservationReset").addEventListener('click',()=>{fillObservationForm(observationDefaults);state.observation.dirty=true;applyObservation();});
     document.querySelectorAll('[data-observation-months]').forEach(button=>button.addEventListener('click',()=>{$("labObservationMonths").value=button.dataset.observationMonths;state.observation.dirty=true;}));
+    window.RuleLabUI={request,refresh,openDrawer,dismissDrawer,closeActiveDrawer,denyAccess,feedback,createRiskEditor,fillRisk,riskValue,riskError,riskSummary,renderRiskPresets,
+        getContext:()=>({options:state.options,batch:state.batch,selectedId:state.selectedId,selectedCondition:state.detailContext?.item?.condition,accessDenied:state.accessDenied,loading:state.loading,mutating:state.mutating}),
+        setBusy:value=>{state.mutating=Boolean(value);updateControls();},register:handlers=>Object.assign(extensions,handlers),selectBatch,openStudy};
     initializeLayout();initializeObservation();updatePreview(); updateControls(); refresh(true);
+    document.dispatchEvent(new CustomEvent('rulelab:ready'));
 }());

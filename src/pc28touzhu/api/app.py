@@ -326,6 +326,7 @@ class PlatformApiApplication:
             "/assets/workbench.css": ("workbench.css", "text/css"),
             "/assets/rule_lab.css": ("rule_lab.css", "text/css"),
             "/assets/rule_lab.js": ("rule_lab.js", "application/javascript"),
+            "/assets/rule_lab_self_service.js": ("rule_lab_self_service.js", "application/javascript"),
         }
         if path in shared_assets:
             if method != "GET":
@@ -1426,15 +1427,23 @@ class PlatformApiApplication:
                 management_match=None
             job_match=re.fullmatch(r"/management-jobs/([1-9][0-9]{0,17})",suffix)
             continuation_match=re.fullmatch(r"/(batches|studies)/([1-9][0-9]{0,17})/(continuation-preview|continuation|append|segments|input-coverage)",suffix)
-            pagination={};observation_options={}
+            queue_match=re.fullmatch(r"/queue/([1-9][0-9]{0,17})/state",suffix)
+            template_match=re.fullmatch(r"/templates/([1-9][0-9]{0,17})(?:/(edit|delete))?",suffix)
+            pagination={};observation_options={};template_filters={};queue_filters={}
             if environ.get("QUERY_STRING"):
                 observation_route=bool(re.fullmatch(r"/(?:batches|studies)/[1-9][0-9]{0,17}",suffix))
                 segment_route=continuation_match and continuation_match.group(3)=='segments'
-                if method!='GET' or not (observation_route or segment_route):
+                if method!='GET' or not (observation_route or segment_route or suffix in ('/templates','/queue')):
                     raise RuleLabError('invalid_input','此接口不接受查询参数')
                 try:query=parse_qs(str(environ['QUERY_STRING']),keep_blank_values=True,strict_parsing=True,max_num_fields=2)
                 except ValueError as exc:raise RuleLabError('invalid_input','查询参数无效') from exc
-                if observation_route:
+                if suffix in ('/templates','/queue'):
+                    allowed={'kind','metric'} if suffix=='/templates' else {'state'}
+                    if not query or set(query)-allowed or any(len(v)!=1 for v in query.values()):raise RuleLabError('invalid_input','查询参数无效')
+                    values={k:v[0] for k,v in query.items()}
+                    if suffix=='/templates':template_filters=values
+                    else:queue_filters=values
+                elif observation_route:
                     if set(query)!={'observation_months','observation_partial'} or any(len(values)!=1 for values in query.values()):
                         raise RuleLabError('invalid_input','观察参数须成对提供月份和月份口径')
                     months=query['observation_months'][0];partial=query['observation_partial'][0]
@@ -1453,6 +1462,11 @@ class PlatformApiApplication:
             study_match=re.fullmatch(r"/studies/([1-9][0-9]{0,17})(?:/(state|export\.csv))?",suffix)
             if suffix in ("", "/options"):
                 expected = "GET"
+            elif suffix=='/queue':expected='GET'
+            elif suffix=='/queue/enqueue' or queue_match:expected='POST'
+            elif suffix=='/templates':expected=method if method in ('GET','POST') else 'GET'
+            elif suffix in ('/templates/preview','/batches/preview','/batches/bulk','/studies/preview'):expected='POST'
+            elif template_match:expected='POST' if template_match.group(2) else 'GET'
             elif suffix=='/performance':expected=method if method in ('GET','POST') else 'GET'
             elif suffix=='/storage':expected='GET'
             elif suffix=='/storage/reclaim':expected='POST'
@@ -1474,8 +1488,9 @@ class PlatformApiApplication:
                     length = int(environ.get("CONTENT_LENGTH") or 0)
                 except (TypeError, ValueError):
                     raise RuleLabError("invalid_input", "请求长度无效")
-                if not 0 <= length <= 16384:
-                    raise RuleLabError("invalid_input", "实验配置请求不能超过16KB")
+                limit=131072 if suffix.startswith("/templates") or suffix in ("/batches/preview","/batches/bulk","/studies/preview","/studies") else 16384
+                if not 0 <= length <= limit:
+                    raise RuleLabError("invalid_input", "实验配置请求超过允许大小")
             if self.rule_lab_service is None:
                 from pc28touzhu.services.rule_lab_service import RuleLabService
                 self.rule_lab_service = RuleLabService(platform_repository=self.repository)
@@ -1484,6 +1499,20 @@ class PlatformApiApplication:
                 payload = service.overview(user_id)
             elif suffix == "/options":
                 payload = service.options(user_id)
+            elif suffix=='/queue':payload=service.list_queue(user_id,**queue_filters)
+            elif suffix=='/queue/enqueue':payload=service.enqueue(user_id,_read_json_body(environ))
+            elif queue_match:payload=service.set_queue_state(user_id,int(queue_match.group(1)),_read_json_body(environ))
+            elif suffix=='/templates':
+                if method=='GET':payload=service.list_templates(user_id,**template_filters)
+                else:
+                    payload=service.save_template(user_id,_read_json_body(environ))
+                    return _json_response(start_response,201 if payload['created'] else 200,payload,headers)
+            elif suffix=='/templates/preview':payload=service.preview_template(user_id,_read_json_body(environ))
+            elif template_match:
+                tid=int(template_match.group(1));action=template_match.group(2)
+                if action=='edit':payload=service.save_template(user_id,_read_json_body(environ),tid=tid)
+                elif action=='delete':payload=service.delete_template(user_id,tid,_read_json_body(environ))
+                else:payload=service.get_template(user_id,tid)
             elif suffix=='/performance':
                 payload=service.set_performance(_read_json_body(environ)) if method=='POST' else service.performance()
             elif suffix=='/storage':payload=service.storage()
@@ -1504,6 +1533,11 @@ class PlatformApiApplication:
                     else:payload=service.request_delete(user_id,kind,owner_id,body)
                     status=202 if action=='delete' and payload['created'] else 201 if action=='fork' and payload['created'] else 200
                     return _json_response(start_response,status,payload,headers)
+            elif suffix=='/batches/preview':payload=service.preview_bulk(user_id,_read_json_body(environ))
+            elif suffix=='/studies/preview':payload=service.preview_study(user_id,_read_json_body(environ))
+            elif suffix=='/batches/bulk':
+                payload=service.create_bulk(user_id,_read_json_body(environ))
+                return _json_response(start_response,201 if payload['created'] else 200,payload,headers)
             elif suffix == "/batches":
                 payload = service.create_batch(user_id, _read_json_body(environ))
                 return _json_response(start_response, 201, payload, headers)

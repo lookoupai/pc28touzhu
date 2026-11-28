@@ -69,6 +69,9 @@ def _owned(store,c,user_id,kind,owner_id):
 
 
 def _control(c,kind,owner_id,user_id,now,*,optout=False,deleted=False):
+    if optout or deleted:
+        from pc28touzhu.services.rule_lab_queue import remove_owner
+        remove_owner(c,kind,owner_id,now)
     c.execute('''INSERT INTO lab_object_controls(owner_kind,owner_id,user_id,generation,queue_optout,deleted,updated_at)
         VALUES(?,?,?,1,?,?,?) ON CONFLICT(owner_kind,owner_id) DO UPDATE SET generation=generation+1,
         queue_optout=MAX(queue_optout,excluded.queue_optout),deleted=MAX(deleted,excluded.deleted),updated_at=excluded.updated_at''',
@@ -197,6 +200,8 @@ def _insert_batch(c,user_id,config,predictor_name,experiments,now):
         created_at,updated_at,risk_policy_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (bid,user_id,config['name'],config['mode'],config['predictor_id'],predictor_name,config['metric'],config['template_pack'],config['stake_cents'],
          config['start_date'],config['end_date'],now,now,_dump(normalize_risk_policy(config['risk_policy']))))
+    from pc28touzhu.services.rule_lab_templates import write_snapshots,check_selections
+    check_selections(c,user_id,config);write_snapshots(c,bid,config)
     insert_experiments(c,bid,experiments);return bid
 
 
@@ -216,6 +221,8 @@ def edit_batch(store,user_id,batch_id,payload,*,predictor_name,experiments,now,r
             start_date=?,end_date=?,risk_policy_json=?,revision=revision+1,updated_at=? WHERE id=?''',
             (config['name'],config['mode'],config['predictor_id'],predictor_name,config['metric'],config['template_pack'],config['stake_cents'],
              config['start_date'],config['end_date'],_dump(normalize_risk_policy(config['risk_policy'])),now,batch_id))
+        from pc28touzhu.services.rule_lab_templates import write_snapshots,check_selections
+        check_selections(c,user_id,config);write_snapshots(c,batch_id,config)
         _control(c,'batch',batch_id,user_id,now,optout=True)
         result=dict(created=True,batch=store._batch(c,store._owned(c,user_id,batch_id)),queue_removed=True)
         _save_receipt(c,user_id,'batch',batch_id,raw,'edit',result,now);return result
@@ -311,6 +318,8 @@ def queue_eligibility(store,user_id,batch_id,configuration_hash):
     with store._connect() as c:
         row=c.execute('SELECT * FROM lab_batches WHERE id=? AND user_id=?',(batch_id,user_id)).fetchone()
         control=c.execute("SELECT queue_optout,deleted FROM lab_object_controls WHERE owner_kind='batch' AND owner_id=? AND user_id=?",(batch_id,user_id)).fetchone()
+        if c.execute("SELECT 1 FROM lab_queue_items WHERE owner_kind='batch' AND owner_id=?",(batch_id,)).fetchone():
+            return dict(eligible=False,removed=True,reason='实验已由数据库队列接管')
         removed=not row or row['status']=='deleting' or bool(control and (control['queue_optout'] or control['deleted'])) or (row is not None and _configuration(c,[row])!=configuration_hash)
         return dict(eligible=not removed,removed=bool(removed),reason='实验已删除或修改，已移出原批准队列' if removed else '')
 
@@ -408,6 +417,8 @@ def start_queued_batch(store,user_id,batch_id,configuration_hash,*,now):
     with store._connect(write=True) as c:
         row=c.execute('SELECT * FROM lab_batches WHERE id=? AND user_id=?',(batch_id,user_id)).fetchone()
         control=c.execute("SELECT queue_optout,deleted FROM lab_object_controls WHERE owner_kind='batch' AND owner_id=? AND user_id=?",(batch_id,user_id)).fetchone()
+        if c.execute("SELECT 1 FROM lab_queue_items WHERE owner_kind='batch' AND owner_id=?",(batch_id,)).fetchone():
+            return dict(started=False,removed=True,reason='实验已由数据库队列接管')
         if not row or row['status']=='deleting' or (control and (control['queue_optout'] or control['deleted'])) or _configuration(c,[row])!=configuration_hash:
             return dict(started=False,removed=True,reason='实验已修改或删除，已移出原批准队列')
         if row['started_at'] is not None or row['status']!='paused':return dict(started=False,removed=False,reason='not_pristine')

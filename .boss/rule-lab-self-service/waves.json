@@ -1,0 +1,301 @@
+{
+  "feature": "rule-lab-self-service",
+  "base_commit": "8a82362",
+  "working_directory": "/www/wwwroot/pc28touzhu-lab-self-service",
+  "waves": [
+    {
+      "id": "W1",
+      "title": "模板与冻结",
+      "scope": "template CRUD and immutable historical definitions",
+      "writeSet": [
+        "src/pc28touzhu/domain/rule_lab_templates.py",
+        "src/pc28touzhu/domain/rule_lab.py",
+        "src/pc28touzhu/services/rule_lab_templates.py",
+        "src/pc28touzhu/services/rule_lab_store.py",
+        "src/pc28touzhu/services/rule_lab_service.py",
+        "src/pc28touzhu/api/app.py",
+        "tests/test_rule_lab_templates.py",
+        "tests/test_rule_lab_self_service_api.py",
+        "tests/test_rule_lab_templates_domain.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_templates_domain",
+          "-q"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_templates",
+          "tests.test_rule_lab_self_service_api",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_templates_domain",
+          "tests.test_rule_lab_templates",
+          "tests.test_rule_lab_self_service_api",
+          "tests.test_rule_lab_domain",
+          "tests.test_rule_lab_risk",
+          "tests.test_rule_lab_management_api",
+          "-q"
+        ]
+      ],
+      "contractRows": [
+        "CM01",
+        "CM02",
+        "CM11"
+      ],
+      "stopCondition": "旧配置hash/成绩改变、未授权访问或非原子迁移时停止",
+      "dependencies": [],
+      "status": "passed",
+      "parallelGroups": [
+        {
+          "owner": "DOMAIN",
+          "writeSet": [
+            "src/pc28touzhu/domain/rule_lab_templates.py",
+            "tests/test_rule_lab_templates_domain.py"
+          ]
+        },
+        {
+          "owner": "Backend",
+          "excludeWriteSet": [
+            "src/pc28touzhu/domain/rule_lab_templates.py",
+            "tests/test_rule_lab_templates_domain.py",
+            "tests/rule_lab_self_service_ui_server.py"
+          ],
+          "dependency": "domain/rule_lab.py integration waits for DOMAIN contract"
+        }
+      ],
+      "evidence": "backend-evidence.md"
+    },
+    {
+      "id": "W2",
+      "title": "自选对比与原子批量",
+      "scope": "selective studies and atomic multi-source creation",
+      "writeSet": [
+        "src/pc28touzhu/domain/rule_lab_comparison.py",
+        "src/pc28touzhu/services/rule_lab_bulk.py",
+        "src/pc28touzhu/services/rule_lab_store.py",
+        "src/pc28touzhu/services/rule_lab_service.py",
+        "src/pc28touzhu/api/app.py",
+        "tests/test_rule_lab_self_service_api.py",
+        "tests/test_rule_lab_comparison.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_self_service_api",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_self_service_api",
+          "tests.test_rule_lab_comparison",
+          "tests.test_rule_lab_api",
+          "-q"
+        ]
+      ],
+      "contractRows": [
+        "CM03",
+        "CM04",
+        "CM05",
+        "CM10"
+      ],
+      "stopCondition": "半组创建、冻结赔率被替换或输入不一致仍显示可比时停止",
+      "dependencies": [
+        "W1"
+      ],
+      "status": "passed",
+      "evidence": "backend-evidence.md"
+    },
+    {
+      "id": "W3",
+      "title": "统一队列与清单接续",
+      "scope": "persistent queue and legacy finite-manifest handoff",
+      "writeSet": [
+        "src/pc28touzhu/services/rule_lab_queue.py",
+        "src/pc28touzhu/rule_lab_worker.py",
+        "src/pc28touzhu/services/rule_lab_store.py",
+        "src/pc28touzhu/services/rule_lab_management.py",
+        "src/pc28touzhu/services/rule_lab_series.py",
+        "scripts/maintenance/run_rule_lab_batch_queue.py",
+        "scripts/maintenance/import_rule_lab_queue.py",
+        "tests/test_rule_lab_queue.py",
+        "tests/test_rule_lab_self_service_migration.py"
+      ],
+      "redTests": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_queue",
+          "tests.test_rule_lab_self_service_migration",
+          "-q"
+        ]
+      ],
+      "greenGates": [
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "tests.test_rule_lab_queue",
+          "tests.test_rule_lab_self_service_migration",
+          "tests.test_rule_lab_batch_queue",
+          "tests.test_rule_lab_series",
+          "tests.test_rule_lab_continuous_worker",
+          "-q"
+        ]
+      ],
+      "contractRows": [
+        "CM06",
+        "CM07",
+        "CM08",
+        "CM09",
+        "CM12"
+      ],
+      "stopCondition": "双启动者、暂停/删除后重启、名额超过100、旧进度倒退或隐式创建schedule时停止",
+      "dependencies": [
+        "W1",
+        "W2"
+      ],
+      "status": "passed",
+      "evidence": "backend-evidence.md"
+    },
+    {
+      "id": "W4",
+      "title": "完整页面与独立验证",
+      "scope": "real API UI flows and regression",
+      "writeSet": [
+        "src/pc28touzhu/ui/rule_lab.html",
+        "src/pc28touzhu/ui/rule_lab.css",
+        "src/pc28touzhu/ui/rule_lab.js",
+        "src/pc28touzhu/ui/rule_lab_self_service.js",
+        "tests/rule_lab_self_service_ui_server.py",
+        "tests/test_rule_lab_self_service_ui.cjs",
+        "tests/test_rule_lab_self_service_browser.cjs"
+      ],
+      "redTests": [
+        [
+          "node",
+          "tests/test_rule_lab_self_service_ui.cjs"
+        ]
+      ],
+      "greenGates": [
+        [
+          "node",
+          "--check",
+          "src/pc28touzhu/ui/rule_lab_self_service.js"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_self_service_ui.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_self_service_browser.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_layout_qa.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_observation_ui.cjs"
+        ],
+        [
+          "node",
+          "tests/test_rule_lab_results_ui.cjs"
+        ],
+        [
+          "env",
+          "PYTHONPATH=src",
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tests",
+          "-q"
+        ],
+        [
+          "git",
+          "diff",
+          "--check"
+        ]
+      ],
+      "contractRows": [
+        "CM01",
+        "CM03",
+        "CM05",
+        "CM06",
+        "CM10",
+        "CM11",
+        "CM12"
+      ],
+      "stopCondition": "任何关键用户流程不可用、结果回归、未解释失败或新依赖变更时停止",
+      "dependencies": [
+        "W1",
+        "W2",
+        "W3"
+      ],
+      "status": "passed",
+      "evidence": "frontend-evidence.md"
+    }
+  ],
+  "owners": {
+    "Backend": "全部Python/API/schema及Python测试，排除下列显式独占文件",
+    "Frontend": [
+      "src/pc28touzhu/ui/rule_lab.html",
+      "src/pc28touzhu/ui/rule_lab.css",
+      "src/pc28touzhu/ui/rule_lab.js",
+      "src/pc28touzhu/ui/rule_lab_self_service.js",
+      "tests/rule_lab_self_service_ui_server.py",
+      "tests/test_rule_lab_self_service_ui.cjs",
+      "tests/test_rule_lab_self_service_browser.cjs"
+    ],
+    "DOMAIN": [
+      "src/pc28touzhu/domain/rule_lab_templates.py",
+      "tests/test_rule_lab_templates_domain.py"
+    ]
+  },
+  "writeSetAdditions": {
+    "Backend": [
+      "scripts/maintenance/migrate_rule_lab_results.py",
+      "tests/test_rule_lab_worker.py"
+    ],
+    "RootFrontend": [
+      "tests/test_rule_lab_continuation_ui.cjs",
+      "tests/test_rule_lab_long_streak_ui.cjs",
+      "tests/test_rule_lab_management_ui.cjs"
+    ]
+  }
+}

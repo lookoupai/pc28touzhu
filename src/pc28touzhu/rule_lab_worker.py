@@ -578,6 +578,8 @@ class RuleLabWorker:
                         self._mark_error(batch['id'], exc.message, resource=True)
                     elif exc.code=='replay_input_unavailable':
                         self._mark_error(batch['id'],exc.message)
+                    elif exc.code=='source_unavailable' and exc.status==403:
+                        self._mark_error(batch['id'],exc.message)
                     elif batch.get('continuation') and exc.code in ('archive_conflict','archive_corrupt','archive_gap'):
                         self._mark_error(batch['id'], exc.message)
                 except (ValueError, TypeError, KeyError):

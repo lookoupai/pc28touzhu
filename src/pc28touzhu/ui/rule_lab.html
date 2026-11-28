@@ -11,7 +11,7 @@ __APP_SHELL__
 <main class="app-page lab-page" id="mainContent" tabindex="-1">
     <header class="app-page-heading lab-layout-heading">
         <div><p>策略研究</p><h1>规则实验室</h1></div>
-        <div class="lab-actions"><button id="labRefreshButton" class="lab-button" type="button">刷新</button><button id="labNewExperiment" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labGenerator">新建实验</button><button id="labSystemToggle" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labSystemPanel">系统</button></div>
+        <div class="lab-actions"><button id="labRefreshButton" class="lab-button" type="button">刷新</button><button id="labNewExperiment" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labSelfServicePanel">新建实验</button><button id="labTemplatesButton" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labSelfServicePanel">模板库</button><button id="labQueueButton" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labSelfServicePanel">运行队列</button><button id="labSystemToggle" class="lab-button" type="button" aria-haspopup="dialog" aria-controls="labSystemPanel">系统</button></div>
     </header>
     <div id="labSelectionBar" class="lab-selection-bar">
         <div id="labBatchSelection" class="lab-field"><label for="labBatchSelect">实验批次</label><select id="labBatchSelect"><option value="">读取批次…</option></select></div>
@@ -150,7 +150,7 @@ __APP_SHELL__
                 <div class="lab-field" id="labDefinitionStartField"><label for="labDefinitionStart">新配置开始日期</label><input id="labDefinitionStart" type="date"></div>
                 <div class="lab-field" id="labDefinitionEndField"><label for="labDefinitionEnd">新配置结束日期</label><input id="labDefinitionEnd" type="date"></div>
             </div>
-            <fieldset class="lab-risk-box"><legend>新配置风控</legend><div id="labDefinitionRiskEditor"></div></fieldset>
+            <fieldset class="lab-risk-box"><legend>新配置风控</legend><div class="lab-field"><label for="labDefinitionRiskTemplate">风控模板</label><select id="labDefinitionRiskTemplate"><option value="manual">原实验风控 / 手动配置</option></select></div><div id="labDefinitionRiskEditor"></div></fieldset>
             <p id="labDefinitionCount" class="lab-muted"></p><div class="lab-actions"><button id="labDefinitionSave" class="lab-button lab-button-primary" type="submit">保存修改</button><button id="labDefinitionCancel" class="lab-button" type="button">取消编辑</button></div>
         </form>
         <form id="labDeleteForm" class="lab-delete-confirm" hidden novalidate><h3>确认删除</h3><p id="labDeleteExplanation"></p><dl id="labDeleteCounts" class="lab-summary"></dl><p id="labDeleteShared" class="lab-muted"></p><div id="labDeleteBlockers" class="lab-feedback is-error"></div><label for="labDeleteConfirmName">输入完整名称确认删除</label><input id="labDeleteConfirmName" autocomplete="off"><div class="lab-actions"><button id="labDeleteConfirm" class="lab-button lab-button-danger" type="submit">确认删除，不能撤销</button><button id="labDeleteCancel" class="lab-button" type="button">取消删除</button></div></form>
@@ -222,9 +222,14 @@ __APP_SHELL__
         <h3>最近每日成绩</h3><div class="lab-table-scroll" role="region" aria-label="每日成绩表，可横向滚动" tabindex="0"><table class="lab-table"><caption>最多显示最近 90 天；未显示的日期不等于没有记录。</caption><thead><tr><th scope="col">日期</th><th scope="col">结算数</th><th scope="col">实赔 / 退本 / 全亏</th><th scope="col">投注额</th><th scope="col">净收益</th></tr></thead><tbody id="labDailyBody"></tbody></table></div>
         </div>
     </section>
+<section id="labSelfServicePanel" class="lab-panel lab-drawer lab-self-service" hidden role="dialog" aria-modal="true" aria-labelledby="labSelfTitle" tabindex="-1">
+<div class="lab-drawer-heading"><div><p class="lab-kicker">自助实验</p><h2 id="labSelfTitle">模板库</h2></div><button id="labSelfClose" class="lab-button" type="button">关闭</button></div>
+<div id="labSelfLeave" class="lab-note" hidden role="alert"><p>有尚未保存的修改。可以保留页面草稿，稍后继续。</p><div class="lab-actions"><button id="labSelfKeep" class="lab-button" type="button">保留页面草稿并关闭</button><button id="labSelfDiscard" class="lab-button" type="button">放弃修改并关闭</button><button id="labSelfStay" class="lab-button" type="button">继续编辑</button></div></div>
+<p id="labSelfFeedback" class="lab-feedback" role="status" tabindex="-1"></p><div id="labSelfBody"></div>
+</section>
 </main>
 <div id="labDrawerBackdrop" class="lab-drawer-backdrop" hidden></div>
 __ACCOUNT_DIALOG__
-<script src="/assets/ui-text.js"></script><script src="/assets/auth-panel.js"></script><script src="/assets/account-menu.js"></script><script src="/assets/auth-guard.js"></script><script src="/assets/rule_lab.js"></script>
+<script src="/assets/ui-text.js"></script><script src="/assets/auth-panel.js"></script><script src="/assets/account-menu.js"></script><script src="/assets/auth-guard.js"></script><script src="/assets/rule_lab.js"></script><script src="/assets/rule_lab_self_service.js"></script>
 </body>
 </html>

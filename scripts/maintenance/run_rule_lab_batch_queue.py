@@ -17,6 +17,7 @@ from pathlib import Path
 
 from pc28touzhu.services.rule_lab_service import RuleLabService
 from pc28touzhu.services.rule_lab_store import RuleLabError
+from pc28touzhu.services.rule_lab_templates import fingerprint
 
 
 def timestamp():
@@ -25,6 +26,12 @@ def timestamp():
 
 def queue_step(service, manifest, *, now):
     user_id = manifest['user_id']
+    if isinstance(manifest.get('request_prefix'),str) and manifest['request_prefix']:
+        handoff_key='queue_handoff:'+fingerprint(dict(user_id=user_id,request_prefix=manifest['request_prefix']))[:24]
+        with service.store._connect() as connection:
+            if connection.execute('SELECT 1 FROM lab_runtime WHERE key=?',(handoff_key,)).fetchone():
+                return dict(complete=True,transferred=True,
+                    batches=[dict(batch_id=item['batch_id'],state='database_queue') for item in manifest['batches']])
     reports = []
     for item in manifest['batches']:
         batch_id = item['batch_id']

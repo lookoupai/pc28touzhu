@@ -358,6 +358,49 @@ class RuleLabWorkerTests(unittest.TestCase):
         self.worker.tick(now=stamp(self.now + timedelta(seconds=15)))
         self.assertGreaterEqual(len(self.store.get_pending_decisions(batch['id'])), 2)
 
+    def test_permanent_source_revocation_frees_finite_queue_until_explicit_retry(self):
+        from pc28touzhu.services.rule_lab_queue import list_queue,set_state
+        batch=self.batch(mode='backtest');bid=batch['id'];now=stamp(self.now)
+        self.fixture.draw(1099,self.opened-timedelta(seconds=210))
+        self.fixture.draw(1100,self.opened);self.fixture.prediction(1100,self.opened)
+        with sqlite3.connect(self.store.db_path) as c:
+            c.execute("UPDATE lab_batches SET processed_issues=7,cursor_json=? WHERE id=?",(
+                '{"last_issue_no":"1099","scan_after_issue":"1099","replay_max_issue":"1100","replay_require_coverage":true}',bid))
+        self.store.retention_maintenance(now=now,limit=500)
+        before=self.store.get_work_item(bid)
+        predictions=self.source.get_predictions
+        def revoke_between_reads(*args,**kwargs):
+            self.fixture.execute('UPDATE predictors SET share_predictions=0 WHERE id=1')
+            return predictions(*args,**kwargs)
+        # Initial get_predictor succeeds; the real source raises 403 when its
+        # page validation observes revocation between independent source reads.
+        with patch.object(self.source,'get_predictions',side_effect=revoke_between_reads):
+            self.worker.tick(now=now)
+        actual=self.store.get_work_item(bid)
+        self.assertEqual(actual['batch']['status'],'error')
+        self.assertEqual(actual['batch']['processed_issues'],7)
+        self.assertEqual(actual['batch']['cursor'],before['batch']['cursor'])
+        self.assertEqual(actual['experiments'],before['experiments'])
+        self.assertEqual(self.store.capacity()['running'],0)
+        item=list_queue(self.store,1,now=now)['items'][0]
+        self.assertEqual(item['state'],'error');self.assertIn('retry',item['actions'])
+        self.assertIn('来源已停用',item['error'])
+        self.store.advance_studies(now=now)
+        self.assertEqual(self.store.get_batch(1,bid)['status'],'error')
+        self.fixture.execute('UPDATE predictors SET share_predictions=1 WHERE id=1')
+        set_state(self.store,1,item['id'],dict(request_id='source-restored-retry',expected_revision=item['expected_revision'],action='retry'),now=now)
+        self.store.advance_studies(now=now)
+        self.assertEqual(self.store.get_batch(1,bid)['status'],'running')
+        self.assertEqual(self.store.get_batch(1,bid)['processed_issues'],7)
+
+    def test_temporary_source_failure_keeps_finite_batch_retryable_without_user_action(self):
+        from pc28touzhu.services.rule_lab_store import RuleLabError
+        batch=self.batch(mode='backtest');now=stamp(self.now)
+        with patch.object(self.source,'get_predictor',side_effect=RuleLabError('source_unavailable','来源临时读取超时',503)):
+            self.worker.tick(now=now)
+        actual=self.store.get_batch(1,batch['id'])
+        self.assertEqual(actual['status'],'running');self.assertEqual(actual['queue_state'],'running')
+
     def test_pending_settlement_uses_reserve_under_soft_disk_limit(self):
         self.prepare_live()
         batch = self.batch()

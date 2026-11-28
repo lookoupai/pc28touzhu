@@ -157,7 +157,7 @@ class RuleLabStore:
             connection.execute('PRAGMA journal_mode=WAL')
         with self._connect(write=True) as c:
             version = c.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2, 3, 4, 5, 6):
+            if version not in (0, 1, 2, 3, 4, 5, 6, 7):
                 raise RuleLabError('store_unavailable', '模拟账本版本不兼容', 503)
             statements = [
                 '''CREATE TABLE IF NOT EXISTS lab_batches (
@@ -246,7 +246,11 @@ class RuleLabStore:
             management_schema(c)
             from pc28touzhu.services.rule_lab_retention import init_schema as retention_schema
             retention_schema(c)
-            c.execute('PRAGMA user_version=6')
+            from pc28touzhu.services.rule_lab_templates import init_schema as template_schema
+            template_schema(c)
+            from pc28touzhu.services.rule_lab_queue import init_schema as queue_schema
+            queue_schema(c)
+            c.execute('PRAGMA user_version=7')
 
     def storage_status(self):
         from pc28touzhu.services.rule_lab_storage import storage_status
@@ -289,6 +293,9 @@ class RuleLabStore:
                     study_id=relation['study_id'] if relation else None,variant_key=relation['variant_key'] if relation else None)
         from pc28touzhu.services.rule_lab_series import public_summary
         result['continuation']=public_summary(c,row)
+        from pc28touzhu.services.rule_lab_queue import batch_fields
+        result.update(batch_fields(c,row,result['continuation']))
+        result.update(template_snapshot=_load(row['template_snapshot_json']),risk_template_snapshot=_load(row['risk_template_snapshot_json']),creation_request_id=row['creation_request_id'])
         return result
 
     @staticmethod
@@ -306,7 +313,9 @@ class RuleLabStore:
                 raise RuleLabError('study_managed','比较组子批次由比较队列统一管理，不能单独修改',409)
             if not self._risk_editable(c,row):
                 raise RuleLabError('risk_policy_locked','只有尚未启动且无模拟记录的暂停批次可以修改风控，请新建批次比较其他口径',409)
-            c.execute('UPDATE lab_batches SET risk_policy_json=?,revision=revision+1,updated_at=? WHERE id=?',(_dump(policy),now,batch_id))
+            c.execute("UPDATE lab_batches SET risk_policy_json=?,risk_template_snapshot_json='{}',revision=revision+1,updated_at=? WHERE id=?",(_dump(policy),now,batch_id))
+            from pc28touzhu.services.rule_lab_management import _control
+            _control(c,'batch',batch_id,user_id,now,optout=True)
             return self._batch(c,self._owned(c,user_id,batch_id))
 
     @staticmethod
@@ -362,7 +371,7 @@ class RuleLabStore:
     def _experiment(c,row):
         stats = _load(row['stats_json'])
         snapshot = _load(row['settlement_snapshot_json'])
-        return dict(id=row['id'],batch_id=row['batch_id'],name=row['name'],condition=_load(row['condition_json']),
+        return dict(id=row['id'],batch_id=row['batch_id'],name=row['name'],condition_key=row['condition_key'],condition=_load(row['condition_json']),
                     settlement_rule_id=row['settlement_rule_id'],settlement_rule_name=snapshot['rule']['name'],
                     settlement_odds=snapshot.get('resolved_odds') or snapshot.get('implemented_odds') or {},
                     legacy_odds=RuleLabStore._legacy_netdisk_odds(snapshot),
@@ -391,6 +400,9 @@ class RuleLabStore:
             c.execute('''INSERT INTO lab_batches (id,user_id,name,mode,predictor_id,predictor_name,metric,template_pack,
                 stake_cents,start_date,end_date,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',[bid]+params)
             c.execute('UPDATE lab_batches SET risk_policy_json=? WHERE id=?',(_dump(normalize_risk_policy(config.get('risk_policy'))),bid))
+            from pc28touzhu.services.rule_lab_templates import write_snapshots,check_selections
+            check_selections(c,user_id,config)
+            write_snapshots(c,bid,config)
             if replay_input_basis is not None:
                 c.execute('UPDATE lab_batches SET cursor_json=? WHERE id=?',
                     (_dump(dict(replay_input_basis=replay_input_basis,replay_require_coverage=True)),bid))
@@ -414,6 +426,10 @@ class RuleLabStore:
             series=series_for_batch(c,batch_id)
             if series:
                 set_active_state(self,c,series,state,now)
+                return self._batch(c,self._owned(c,user_id,batch_id))
+            if row['mode']=='backtest':
+                from pc28touzhu.services.rule_lab_queue import legacy_state
+                legacy_state(self,c,user_id,'batch',batch_id,state,now)
                 return self._batch(c,self._owned(c,user_id,batch_id))
             if row['status']==state:
                 return self._batch(c,row)
@@ -458,8 +474,8 @@ class RuleLabStore:
         if not experiments or len(experiments)>100:raise RuleLabError('invalid_input','原批次实验数量无效')
         pairs={}
         for e in experiments:pairs.setdefault(e['condition_key'],set()).add(e['settlement_rule_id'])
-        if any(rules!=set(ALLOWED_SETTLEMENT_RULE_IDS) for rules in pairs.values()) or len(experiments)!=2*len(pairs):
-            raise RuleLabError('invalid_input','原批次必须包含每个条件的两套OK冻结结算')
+        if any(not rules or not rules<=set(ALLOWED_SETTLEMENT_RULE_IDS) for rules in pairs.values()):
+            raise RuleLabError('invalid_input','原批次包含不支持的结算规则')
         return batch,experiments
 
     def comparison_preview(self,user_id,batch_id):
@@ -468,7 +484,10 @@ class RuleLabStore:
             variants=risk_variants(_load(batch['risk_policy_json']),metric=batch['metric'])
             count=sum(v['available'] for v in variants)
             return dict(source_batch_id=batch_id,variants=variants,candidate_count=count,new_experiments=count*len(experiments),
-                        capacity=self._capacity(c),source_name=batch['name'])
+                        capacity=self._capacity(c),source_name=batch['name'],
+                        conditions=list({e['condition_key']:_load(e['condition_json']) for e in experiments}.values()),
+                        settlement_rules=list({e['settlement_rule_id']:dict(id=e['settlement_rule_id'],name=_load(e['settlement_snapshot_json'])['rule']['name']) for e in experiments}.values()),
+                        source_revision=__import__('pc28touzhu.services.rule_lab_series',fromlist=['_configuration'])._configuration(c,[batch]))
 
     @staticmethod
     def _owned_study(c,user_id,study_id):
@@ -541,6 +560,8 @@ class RuleLabStore:
                     start_date,end_date,created_at,updated_at,risk_policy_json) VALUES(?,?,?,'backtest',?,?,?,?,?,?,?,?,?,?)''',
                     (bid,user_id,(name+' · '+variant['label'])[:80],batch['predictor_id'],batch['predictor_name'],batch['metric'],batch['template_pack'],
                      batch['stake_cents'],batch['start_date'],batch['end_date'],now,now,_dump(variant['policy'])))
+                c.execute('UPDATE lab_batches SET template_snapshot_json=?,risk_template_snapshot_json=?,creation_request_id=? WHERE id=?',
+                    (batch['template_snapshot_json'],batch['risk_template_snapshot_json'] if variant['key']=='baseline' else '{}',request_id,bid))
                 for experiment in experiments:
                     c.execute('''INSERT INTO lab_experiments(id,batch_id,condition_key,name,condition_json,settlement_rule_id,
                         settlement_snapshot_json,stats_json) VALUES(?,?,?,?,?,?,?,?)''',(allocate_id(c,'lab_experiments'),bid,experiment['condition_key'],experiment['name'],
@@ -599,46 +620,16 @@ class RuleLabStore:
             if series:
                 set_active_state(self,c,series,state,now)
                 return self._study(c,self._owned_study(c,user_id,study_id))
-            if study['status']=='completed':raise RuleLabError('invalid_transition','比较组已完成，不能重置成绩',409)
-            if state=='paused':
-                c.execute("UPDATE lab_studies SET status='paused',updated_at=? WHERE id=?",(now,study_id))
-                c.execute("UPDATE lab_batches SET status='paused',revision=revision+1,updated_at=? WHERE status='running' AND id IN (SELECT batch_id FROM lab_study_batches WHERE study_id=?)",(now,study_id))
-            elif study['status'] not in ('queued','running'):
-                self._require_space();self._enqueue(c,study_id,now)
+            from pc28touzhu.services.rule_lab_queue import legacy_state
+            legacy_state(self,c,user_id,'study',study_id,state,now)
             return self._study(c,self._owned_study(c,user_id,study_id))
 
     def studies_need_cutoff(self):
         with self._connect() as c:return bool(c.execute("SELECT 1 FROM lab_studies WHERE status='queued' AND cutoff_issue IS NULL LIMIT 1").fetchone())
 
     def advance_studies(self,*,now,cutoff=None):
-        with self._connect(write=True) as c:
-            for study in c.execute("SELECT * FROM lab_studies WHERE status='running' AND id NOT IN (SELECT owner_id FROM lab_series WHERE owner_kind='study') ORDER BY id").fetchall():
-                children=c.execute('''SELECT b.* FROM lab_batches b JOIN lab_study_batches s ON s.batch_id=b.id
-                    WHERE s.study_id=? ORDER BY s.position''',(study['id'],)).fetchall()
-                failed=next((b for b in children if b['status'] in ('error','resource_paused')),None)
-                if failed:
-                    c.execute('UPDATE lab_studies SET status=?,error=?,updated_at=? WHERE id=?',(failed['status'],failed['error'],now,study['id']))
-                elif all(b['status']=='completed' for b in children):
-                    c.execute("UPDATE lab_studies SET status='completed',updated_at=? WHERE id=?",(now,study['id']))
-                elif not any(b['status']=='running' for b in children):self._enqueue(c,study['id'],now)
-            for study in c.execute("SELECT * FROM lab_studies WHERE status='queued' AND id NOT IN (SELECT owner_id FROM lab_series WHERE owner_kind='study') ORDER BY queue_order,id").fetchall():
-                child=c.execute('''SELECT b.* FROM lab_study_batches s JOIN lab_batches b ON b.id=s.batch_id
-                    WHERE s.study_id=? AND b.status!='completed' ORDER BY s.position LIMIT 1''',(study['id'],)).fetchone()
-                if child is None:
-                    c.execute("UPDATE lab_studies SET status='completed',updated_at=? WHERE id=?",(now,study['id']));continue
-                count=c.execute('SELECT COUNT(*) FROM lab_experiments WHERE batch_id=?',(child['id'],)).fetchone()[0]
-                if self._capacity(c)['running']+count>MAX_RUNNING_EXPERIMENTS:break
-                if not study['cutoff_issue'] and not cutoff:break
-                try:self._require_space()
-                except RuleLabError as exc:
-                    c.execute("UPDATE lab_studies SET status='resource_paused',error=?,updated_at=? WHERE id=?",(exc.message,now,study['id']));break
-                if not study['cutoff_issue']:
-                    _issue(cutoff['issue_no']);_time(cutoff['at'])
-                    c.execute('UPDATE lab_studies SET cutoff_issue=?,cutoff_at=? WHERE id=?',(cutoff['issue_no'],cutoff['at'],study['id']))
-                if _load(child['cursor_json']).get('input_expired'):
-                    c.execute("UPDATE lab_studies SET status='error',error='所需输入已清理，请在保留区间重新创建比较组',updated_at=? WHERE id=?",(now,study['id']));continue
-                c.execute("UPDATE lab_batches SET status='running',revision=revision+1,started_at=COALESCE(started_at,?),updated_at=?,error='' WHERE id=?",(now,now,child['id']))
-                c.execute("UPDATE lab_studies SET status='running',updated_at=?,error='' WHERE id=?",(now,study['id']))
+        from pc28touzhu.services.rule_lab_queue import advance
+        with self._connect(write=True) as c:advance(self,c,now=now,cutoff=cutoff)
 
     def study_comparison(self,user_id,study_id,*,observation_months=None,observation_partial=None,now=None):
         with self._connect() as c:
@@ -791,9 +782,10 @@ class RuleLabStore:
 
     def list_work_batches(self):
         with self._connect() as c:
-            rows=c.execute('''SELECT b.* FROM lab_batches b WHERE status!='deleting' AND (status='running' OR EXISTS(
+            rows=c.execute("SELECT * FROM lab_batches WHERE status='running' ORDER BY CASE mode WHEN 'live' THEN 0 ELSE 1 END,id LIMIT 100").fetchall()
+            rows+=c.execute("""SELECT b.* FROM lab_batches b WHERE status NOT IN ('deleting','running') AND EXISTS(
                 SELECT 1 FROM lab_experiments e JOIN lab_decisions d ON d.experiment_id=e.id
-                WHERE e.batch_id=b.id AND d.status='pending')) ORDER BY CASE b.mode WHEN 'live' THEN 0 ELSE 1 END,b.id LIMIT 50''').fetchall()
+                WHERE e.batch_id=b.id AND d.status='pending') ORDER BY b.id LIMIT 20""").fetchall()
             from pc28touzhu.services.rule_lab_series import work_context
             result=[]
             for row in rows:

@@ -62,6 +62,7 @@ class ManagementTests(unittest.TestCase):
 
     def test_rename_and_fork_preserve_old_economic_state_and_use_idempotency(self):
         self.store.set_batch_state(1,self.batch['id'],'running',now=NOW)
+        original_hash=self.store.continuation_preview(1,'batch',self.batch['id'],now=NOW)['configuration_hash']
         old=self.store.get_work_item(self.batch['id'])
         payload=self.payload(name='new name')
         first=self.store.rename_owner(1,'batch',self.batch['id'],payload,now=NOW)
@@ -69,7 +70,9 @@ class ManagementTests(unittest.TestCase):
         self.assertFalse(self.store.rename_owner(1,'batch',self.batch['id'],payload,now=NOW)['created'])
         self.assertEqual(self.store.get_work_item(self.batch['id'])['experiments'],old['experiments'])
         current_hash=self.store.continuation_preview(1,'batch',self.batch['id'],now=NOW)['configuration_hash']
-        self.assertFalse(self.store.queue_eligibility(1,self.batch['id'],current_hash)['removed'])
+        self.assertEqual(current_hash,original_hash)
+        self.assertEqual(self.store.get_batch(1,self.batch['id'])['queue_state'],'running')
+        self.assertIn('数据库队列',self.store.queue_eligibility(1,self.batch['id'],current_hash)['reason'])
         config=self.preview()['config'];config.update(name='independent',stake_amount=3)
         fork_payload=self.payload(request_id='fork-request-1',config=normalize_batch_payload(config,now=NOW))
         fork=self.store.fork_batch(1,self.batch['id'],fork_payload,predictor_name='source',experiments=build_experiments('big_small'),now=NOW)

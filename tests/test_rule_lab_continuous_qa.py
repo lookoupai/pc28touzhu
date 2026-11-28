@@ -363,7 +363,7 @@ class ContinuationProductionSnapshotQaTests(unittest.TestCase):
             store.initialize()
             self.assertEqual(original_rows(copy_path, columns,exclude_result_metadata=True)[1], before)
             with sqlite3.connect(copy_path) as connection:
-                self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 6)
+                self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 7)
                 metadata=json.loads(connection.execute("SELECT value_json FROM lab_runtime WHERE key='result_retention'").fetchone()[0])
                 self.assertEqual((metadata['mode'],metadata['removed_rows']),('results_only',0))
                 self.assertEqual(connection.execute('PRAGMA quick_check').fetchone()[0], 'ok')

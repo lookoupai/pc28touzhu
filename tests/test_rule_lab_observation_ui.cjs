@@ -56,7 +56,7 @@ async function until(check,label,timeout=15000){const end=Date.now()+timeout;whi
   assert.match(el('labStudyRows').textContent,/阶段达标/);
   const localRequests=requests.length;
   check('labObservationMatchesOnly',true);await apply();assert.equal(requests.length,localRequests);
-  assert.equal(rows().length,20);assert.match(el('labResultPageInfo').textContent,/共 25/);assert.match(el('labStudyPageInfo').textContent,/共 125/);
+  assert.equal(rows().length,20);assert.match(el('labResultPageInfo').textContent,/共 25/);assert.match(el('labStudyPageInfo').textContent,new RegExp('共 '+25*info.child_ids.length));
   el('labResultNext').click();assert.equal(rows().length,5);assert.equal(el('labResultNext').disabled,true);
   fill('labObservationMaximumSpread',2);await apply();assert.equal(el('labResultPrevious').disabled,true,'Filtering resets pagination');
   assert.match(el('labResultPageInfo').textContent,/共 20/,'2.004pp must fail 2pp despite rounded 2.00');assert.equal(el('labResultNext').disabled,true);

@@ -16,7 +16,7 @@ const root=path.resolve(__dirname,'..'),prefix='/api/platform/rule-lab';
   const idle=()=>page.waitForFunction(()=>!document.getElementById('labRefreshButton').disabled);
   const visible=id=>page.locator('#'+id).waitFor({state:'visible'});
   async function submit(id,suffix){const response=page.waitForResponse(r=>r.url().endsWith(suffix)&&r.request().method()==='POST');await page.locator('#'+id).click();const result=await response;await idle();return {status:result.status(),body:await result.json()};}
-  async function openBatch(id){if(await page.locator('#labManagementPanel').isVisible())await page.locator('#labManagementClose').click();await page.locator('[data-batch-id="'+id+'"]').click();await idle();await page.locator('#labManageBatchButton').click();await idle();await visible('labManagementPanel');}
+  async function openBatch(id){if(await page.locator('#labManagementPanel').isVisible())await page.locator('#labManagementClose').click();if(await page.locator('#labSystemPanel').isVisible())await page.locator('#labSystemClose').click();await page.locator('#labBatchSelect').selectOption(String(id));await idle();if(!await page.locator('#labBatchTools').evaluate(n=>n.open))await page.locator('#labBatchTools summary').click();await page.locator('#labManageBatchButton').click();await idle();await visible('labManagementPanel');}
   async function note(text){await page.waitForFunction(value=>document.getElementById('labManagementFeedback').textContent.includes(value),text);}
   await page.goto(info.url+'/rule-lab');await idle();
   assert.equal(writes.length,0,'Initial reads must not mutate experiments');
@@ -42,7 +42,7 @@ const root=path.resolve(__dirname,'..'),prefix='/api/platform/rule-lab';
   assert.equal(await page.locator('#labManagementRetry').isVisible(),false);
   await page.locator('#labManagementClose').click();assert.equal(await page.locator('#labManageBatchButton').evaluate(n=>n===document.activeElement),true);
   await openBatch(info.existing_id);assert.equal(await page.locator('#labManagementEdit').isVisible(),false);
-  await page.locator('#labManagementFork').click();assert.match(await page.locator('#labDefinitionNote').innerText(),/当前赔率目录/);
+  await page.locator('#labManagementFork').click();assert.match(await page.locator('#labDefinitionNote').innerText(),/冻结条件及赔率/);
   await page.locator('#labDefinitionName').fill('容量拒绝后仍可重试');
   await api('/__fixture/capacity/full',{});const capacity=await submit('labDefinitionSave','/fork');assert.equal(capacity.status,409);await api('/__fixture/capacity/normal',{});
   assert.equal((await api('/__fixture/state')).batches.length,2,'Capacity error must not create a partial batch');
@@ -65,20 +65,20 @@ const root=path.resolve(__dirname,'..'),prefix='/api/platform/rule-lab';
   assert.equal(await page.locator('#labDeleteConfirm').isDisabled(),true);await page.locator('#labDeleteConfirmName').fill('wrong');assert.equal(await page.locator('#labDeleteConfirm').isDisabled(),true);
   const beforeCancel=writes.length;await page.locator('#labDeleteCancel').click();assert.equal(writes.length,beforeCancel);
   await page.locator('#labManagementDelete').click();await visible('labDeleteForm');await idle();await page.locator('#labDeleteConfirmName').fill('独立的新版本');
-  const deleted=await submit('labDeleteConfirm','/delete');assert.equal(deleted.status,202);assert.equal(await page.locator('#labManagementJobs').isVisible(),true);
+  const deleted=await submit('labDeleteConfirm','/delete');assert.equal(deleted.status,202);await page.locator('#labSystemToggle').click();assert.equal(await page.locator('#labManagementJobs').isVisible(),true);await page.locator('#labSystemClose').click();
   const deleting=await api(prefix+'/batches/'+forkId);assert.equal(deleting.batch.status,'deleting');
-  assert.equal(await page.locator('[data-batch-id="'+forkId+'"]').locator('..').getByRole('button',{name:'恢复',exact:true}).count(),0,'Deleting batch cannot be restored');
-  await api('/__fixture/maintenance',{});await page.waitForFunction(id=>!document.querySelector('[data-batch-id="'+id+'"]'),forkId,{timeout:15000});
+  await page.locator('#labBatchSelect').selectOption(String(forkId));await idle();assert.equal(await page.locator('#labBatchStateButton').isDisabled(),true,'Deleting batch cannot be restored');
+  await api('/__fixture/maintenance',{});await page.waitForFunction(id=>![...document.getElementById('labBatchSelect').options].some(option=>option.value===String(id)),forkId,{timeout:15000});
   assert.equal((await api(prefix+'/management-jobs/'+deleted.body.job.id)).job.status,'completed');
   assert.deepEqual((await api('/__fixture/state')).original,afterFork.before);
   // Storage values come from the actual temporary database and a durable reclaim job.
-  await page.locator('#labStoragePanel summary').click();await page.waitForFunction(()=>document.getElementById('labStorageSummary').children.length>0);
-  assert.match(await page.locator('#labStorageExplanation').innerText(),/不是已释放磁盘/);
+  await page.locator('#labSystemToggle').click();await page.locator('#labStoragePanel summary').click();await page.waitForFunction(()=>document.getElementById('labStorageSummary').children.length>0);
+  assert.match(await page.locator('#labStorageExplanation').innerText(),/不等于已释放磁盘/);
   await page.waitForFunction(()=>!document.getElementById('labStorageReclaim').disabled,{timeout:10000});
   const reclaimed=await submit('labStorageReclaim','/storage/reclaim');assert.equal(reclaimed.status,202);await api('/__fixture/maintenance',{});
   assert.equal((await api(prefix+'/management-jobs/'+reclaimed.body.job.id)).job.status,'completed');
   // Dependencies are named, and the management link operates on the entire group.
-  const study=await api('/__fixture/create-study',{});await page.locator('#labRefreshButton').click();await idle();await openBatch(info.existing_id);await page.locator('#labManagementDelete').click();await visible('labDeleteForm');await idle();
+  await page.locator('#labSystemClose').click();const study=await api('/__fixture/create-study',{});await page.locator('#labRefreshButton').click();await idle();await openBatch(info.existing_id);await page.locator('#labManagementDelete').click();await visible('labDeleteForm');await idle();
   assert.equal(await page.locator('#labDeleteConfirmName').isDisabled(),true);assert.match(await page.locator('#labDeleteBlockers').innerText(),/比较组管理样本/);
   await page.locator('#labDeleteBlockers button').click();await idle();assert.match(await page.locator('#labManagementTitle').innerText(),/管理比较组/);
   assert.equal(await page.locator('#labManagementFork').isVisible(),false);await page.locator('#labManagementName').fill('整体删除测试组');assert.equal((await submit('labRenameSave','/rename')).status,200);

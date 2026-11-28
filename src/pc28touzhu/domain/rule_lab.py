@@ -84,22 +84,13 @@ def build_conditions(metric: str, *, template_pack='basic_v2') -> list[dict]:
     if metric not in METRICS:
         raise ValueError('不支持的实验玩法')
     _validate_template(metric,template_pack)
+    from pc28touzhu.domain.rule_lab_templates import normalize_condition
     conditions = {}
 
     def add(kind, threshold=None, value=None, window=None, operator='gte'):
-        if kind == 'draw_absence' and metric != 'combo':
-            kind = 'draw_streak'
-            value = next(v for v in VALUES[metric] if v != value)
-        condition = dict(type=kind, metric=metric, operator=None if kind == 'always' else operator,
-                         threshold=threshold, window_size=window, bet_value=value)
-        key = json.dumps(condition, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
-        labels = {'always':'无条件基准', 'miss_streak':'预测连错', 'hit_streak':'预测连中',
-                  'draw_streak':f'{value or ""}连续开出', 'draw_absence':f'{value or ""}连续不出',
-                  'hit_rate':f'近{window}期命中率'}
-        name = labels[kind]
-        if threshold is not None:
-            name += (' ≥ ' if operator == 'gte' else ' ≤ ') + str(threshold) + ('%' if kind == 'hit_rate' else '期')
-        conditions[key] = {**condition, 'condition_key':hashlib.sha256(key.encode()).hexdigest()[:24], 'name':name}
+        condition=normalize_condition(metric,dict(type=kind,operator=None if kind=='always' else operator,
+            threshold=threshold,bet_value=value,window_size=window))
+        conditions[condition['condition_key']]=condition
 
     add('always')
     if template_pack=='combo_long_miss_v1':
@@ -120,10 +111,16 @@ def build_conditions(metric: str, *, template_pack='basic_v2') -> list[dict]:
 
 
 def build_experiments(metric: str, *, template_pack='basic_v2') -> list[dict]:
+    return build_experiments_from_conditions(metric,build_conditions(metric,template_pack=template_pack))
+
+
+def build_experiments_from_conditions(metric,conditions):
+    from pc28touzhu.domain.rule_lab_templates import compile_conditions
+    conditions=compile_conditions(metric,conditions,require_baseline=False)['conditions']
     result = []
     snapshots = {rid:build_settlement_snapshot(rule_source='subscription_fixed', settlement_rule_id=rid,
                 fallback_profit_ratio=1, resolved_from='rule_lab') for rid in ALLOWED_SETTLEMENT_RULE_IDS}
-    for condition in build_conditions(metric,template_pack=template_pack):
+    for condition in conditions:
         for rule_id in ALLOWED_SETTLEMENT_RULE_IDS:
             snapshot = copy.deepcopy(snapshots[rule_id])
             snapshot['catalog_hash'] = hashlib.sha256(json.dumps(snapshot, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
