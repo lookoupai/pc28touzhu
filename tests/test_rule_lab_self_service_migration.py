@@ -89,10 +89,18 @@ class SelfServiceMigrationTests(unittest.TestCase):
     def test_live_or_unknown_controller_refuses_before_any_mutation(self):
         before=self.snapshot(all_tables=True)
         for stdout,code in [('LoadState=loaded\nActiveState=active\nMainPID=45\n',0),
-                            ('LoadState=not-found\nActiveState=inactive\nMainPID=0\n',0),('',1)]:
+                            ('LoadState=error\nActiveState=inactive\nMainPID=0\n',0),
+                            ('LoadState=not-found\nActiveState=inactive\nMainPID=45\n',0),('',1)]:
             with self.subTest(state=stdout),patch.object(self.module.subprocess,'run',return_value=SimpleNamespace(returncode=code,stdout=stdout)):
                 with self.assertRaises(RuleLabError):self.module.import_queue(self.store.db_path,self.manifest,apply=True)
             self.assertEqual(self.snapshot(all_tables=True),before)
+
+    def test_stopped_transient_controller_can_be_collected_by_systemd(self):
+        self.stopped=SimpleNamespace(returncode=0,stdout='LoadState=not-found\nActiveState=inactive\nMainPID=0\n')
+        before=self.snapshot()
+        result=self.apply()
+        self.assertEqual(result['inserted'],6)
+        self.assertEqual(self.snapshot(),before)
 
     def test_second_insert_failure_rolls_back_queue_and_handoff_record(self):
         second=self.manifest['batches'][1]['batch_id']

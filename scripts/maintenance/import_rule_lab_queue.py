@@ -51,7 +51,9 @@ def check_legacy_stopped(unit):
     except (OSError,subprocess.TimeoutExpired) as error:
         raise RuleLabError('legacy_writer_unknown','无法确认旧启动器已停止，拒绝导入',409) from error
     properties=dict(line.split('=',1) for line in result.stdout.splitlines() if '=' in line)
-    if (result.returncode or properties.get('LoadState')!='loaded'
+    # systemd collects stopped transient units; a successful inspection then
+    # reports not-found/inactive/PID0, which also proves no named writer remains.
+    if (result.returncode or properties.get('LoadState') not in ('loaded','not-found')
             or properties.get('ActiveState') not in ('inactive','failed') or properties.get('MainPID')!='0'):
         raise RuleLabError('legacy_writer_active','旧启动器尚未明确停止，拒绝导入',409)
 
