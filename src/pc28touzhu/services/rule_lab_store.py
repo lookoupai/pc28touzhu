@@ -18,7 +18,8 @@ from pc28touzhu.domain.rule_lab_risk import (
 from pc28touzhu.domain.rule_lab_comparison import risk_variants
 
 SHANGHAI = timezone(timedelta(hours=8))
-MAX_TOTAL_EXPERIMENTS = 1000
+MAX_TOTAL_EXPERIMENTS = 2000
+MAX_BATCHES_PER_USER = 80
 MAX_RUNNING_EXPERIMENTS = 100
 LEGACY_REPLAY_NOTICE = '此成绩由旧版按轮回放生成：时间预算耗尽时可能漏过入场机会，需复核后再用于方案比较。原成绩已保留。'
 LEGACY_ODDS_NOTICE = '本批次OK游戏网盘使用旧赔率1.98 / 3.60 / 4.20；当前已更正为1.998 / 3.71 / 4.32。历史成绩未重算，不能当作当前赔率的结果。'
@@ -381,8 +382,8 @@ class RuleLabStore:
             self._require_space()
             if c.execute('SELECT COUNT(*) FROM lab_experiments').fetchone()[0]+len(experiments)>MAX_TOTAL_EXPERIMENTS:
                 raise RuleLabError('capacity_exceeded',f'全服务最多保存{MAX_TOTAL_EXPERIMENTS}个实验版本',409)
-            if c.execute('SELECT COUNT(*) FROM lab_batches WHERE user_id=?',(user_id,)).fetchone()[0]>=50:
-                raise RuleLabError('capacity_exceeded','每位用户最多保存50个实验批次',409)
+            if c.execute('SELECT COUNT(*) FROM lab_batches WHERE user_id=?',(user_id,)).fetchone()[0]>=MAX_BATCHES_PER_USER:
+                raise RuleLabError('capacity_exceeded',f'每位用户最多保存{MAX_BATCHES_PER_USER}个实验批次',409)
             params = [user_id,config['name'],config['mode'],config['predictor_id'],str(predictor_name),config['metric'],
                       config['template_pack'],config['stake_cents'],config['start_date'],config['end_date'],now,now]
             from pc28touzhu.services.rule_lab_management import allocate_id
@@ -434,7 +435,7 @@ class RuleLabStore:
 
     def list_batches(self,user_id):
         with self._connect() as c:
-            return [self._batch(c,r) for r in c.execute('SELECT * FROM lab_batches WHERE user_id=? ORDER BY id DESC LIMIT 50',(user_id,)).fetchall()]
+            return [self._batch(c,r) for r in c.execute('SELECT * FROM lab_batches WHERE user_id=? ORDER BY id DESC LIMIT ?',(user_id,MAX_BATCHES_PER_USER)).fetchall()]
 
     @staticmethod
     def _capacity(c):
@@ -528,8 +529,8 @@ class RuleLabStore:
             self._require_space()
             if self._capacity(c)['saved']+len(variants)*len(experiments)>MAX_TOTAL_EXPERIMENTS:
                 raise RuleLabError('capacity_exceeded',f'整组创建超过{MAX_TOTAL_EXPERIMENTS}个保存版本上限，未创建任何子批次',409)
-            if c.execute('SELECT COUNT(*) FROM lab_batches WHERE user_id=?',(user_id,)).fetchone()[0]+len(variants)>50:
-                raise RuleLabError('capacity_exceeded','整组创建超过当前账号50个批次上限',409)
+            if c.execute('SELECT COUNT(*) FROM lab_batches WHERE user_id=?',(user_id,)).fetchone()[0]+len(variants)>MAX_BATCHES_PER_USER:
+                raise RuleLabError('capacity_exceeded',f'整组创建超过当前账号{MAX_BATCHES_PER_USER}个批次上限',409)
             from pc28touzhu.services.rule_lab_management import allocate_id
             sid=allocate_id(c,'lab_studies')
             c.execute('''INSERT INTO lab_studies(id,user_id,request_id,name,source_batch_id,request_hash,created_at,updated_at)

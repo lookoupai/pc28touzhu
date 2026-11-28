@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from pc28touzhu.domain.rule_lab import build_experiments, normalize_batch_payload
-from pc28touzhu.services.rule_lab_store import RuleLabError, RuleLabStore
+from pc28touzhu.services.rule_lab_store import MAX_BATCHES_PER_USER, MAX_TOTAL_EXPERIMENTS, RuleLabError, RuleLabStore
 
 NOW='2026-11-26T04:00:00Z'
 
@@ -73,10 +73,21 @@ class RuleLabStoreTests(unittest.TestCase):
         with self.assertRaises(RuleLabError) as cm:
             self.store.set_batch_state(2,third['id'],'running',now=NOW)
         self.assertEqual(cm.exception.code,'capacity_exceeded')
-        for _ in range(17):
+        for _ in range(MAX_TOTAL_EXPERIMENTS//50-3):
             self.create()
         with self.assertRaises(RuleLabError):
             self.create()
+
+    def test_more_than_fifty_batches_are_visible_and_owner_limit_stays_bounded(self):
+        config=normalize_batch_payload(dict(name='外部来源实验',mode='live',predictor_id=15,metric='combo'),now=NOW)
+        experiments=build_experiments('combo')[:2]
+        for _ in range(MAX_BATCHES_PER_USER-1):
+            self.store.create_batch(1,config,'jnd28',experiments,now=NOW)
+        self.assertEqual(len(self.store.list_batches(1)),MAX_BATCHES_PER_USER)
+        self.assertIn(self.batch['id'],[row['id'] for row in self.store.list_batches(1)])
+        with self.assertRaises(RuleLabError) as error:
+            self.store.create_batch(1,config,'jnd28',experiments,now=NOW)
+        self.assertEqual(error.exception.code,'capacity_exceeded')
 
     def test_atomic_commit_replay_and_daily_totals(self):
         work=self.start(); d=self.decision(work); out=self.outcome(d)

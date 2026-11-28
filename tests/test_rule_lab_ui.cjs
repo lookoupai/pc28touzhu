@@ -280,10 +280,10 @@ const root = path.resolve(__dirname, '..');
         assert.equal(await page.locator('#labBatchNotice').isVisible(),true);
         assert.match(await page.locator('#labResultsBody tr').first().innerText(),/—/);
 
-        // Expanded combo grid fits within the 1000-version saved capacity.
+        // Expanded combo grid fits within the 2000-version saved capacity.
         await page.locator('#labCompareButton').click();
         await page.locator('#labComparisonCapacity').filter({hasText:'644'}).waitFor();
-        assert.match(await page.locator('#labComparisonCapacity').innerText(),/836 \/ 1000/);
+        assert.match(await page.locator('#labComparisonCapacity').innerText(),/836 \/ 2000/);
         assert.equal(await page.locator('#labCreateStudyButton').isDisabled(),false);
         // Create a two-way metric source with eight variants.
         const preset=await page.evaluate(async()=>{const data=await(await fetch('/api/platform/rule-lab/options')).json();return data.risk_presets.find(p=>p.metric==='big_small').policy;});

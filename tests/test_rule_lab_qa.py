@@ -17,7 +17,7 @@ from pc28touzhu.domain.rule_lab import build_experiments, normalize_batch_payloa
 from pc28touzhu.rule_lab_worker import RuleLabWorker
 from pc28touzhu.services.rule_lab_service import RuleLabService
 from pc28touzhu.services.rule_lab_source import RuleLabSource
-from pc28touzhu.services.rule_lab_store import RuleLabError, RuleLabStore
+from pc28touzhu.services.rule_lab_store import MAX_TOTAL_EXPERIMENTS, RuleLabError, RuleLabStore
 from tests.test_api import FakeRepository
 from tests.test_rule_lab_source import SourceFixture, UTC, stamp
 
@@ -169,7 +169,7 @@ class RuleLabIndependentQaTests(unittest.TestCase):
 
     def test_total_limit_is_atomic_for_last_two_creations(self):
         store = self.ledger()
-        for _ in range(19):
+        for _ in range(MAX_TOTAL_EXPERIMENTS//50-1):
             self.batch(store, mode='live', start=False)
         barrier = threading.Barrier(2)
         def create(uid):
@@ -183,7 +183,7 @@ class RuleLabIndependentQaTests(unittest.TestCase):
             results = list(executor.map(create, (2, 3)))
         self.assertEqual(sorted(results), ['capacity_exceeded', 'created'])
         with sqlite3.connect(store.db_path) as connection:
-            self.assertEqual(connection.execute('SELECT count(*) FROM lab_experiments').fetchone()[0], 1000)
+            self.assertEqual(connection.execute('SELECT count(*) FROM lab_experiments').fetchone()[0], MAX_TOTAL_EXPERIMENTS)
 
     def test_malformed_json_value_types_are_client_errors_without_partial_batches(self):
         fixture = SourceFixture(self.root / 'source.db')

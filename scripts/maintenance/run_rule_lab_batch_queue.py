@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run an explicitly approved finite list of batches, then enable daily continuation.
+"""Run an approved finite list; enable daily continuation only when requested.
 
 The manifest lists existing batch IDs and frozen configuration hashes. This is a
 one-off operator queue; it never creates experiments or resumes a user pause.
@@ -28,8 +28,8 @@ def queue_step(service, manifest, *, now):
     reports = []
     for item in manifest['batches']:
         batch_id = item['batch_id']
-        if item.get('configured') or item.get('removed'):
-            reports.append(dict(batch_id=batch_id, state='removed' if item.get('removed') else 'configured'))
+        if item.get('configured') or item.get('completed') or item.get('removed'):
+            reports.append(dict(batch_id=batch_id, state='removed' if item.get('removed') else 'completed' if item.get('completed') else 'configured'))
             continue
         try:
             eligibility = service.store.queue_eligibility(user_id,batch_id,item['configuration_hash'])
@@ -42,6 +42,10 @@ def queue_step(service, manifest, *, now):
             if preview['configuration_hash'] != item['configuration_hash']:
                 raise RuleLabError('configuration_changed', '批次配置与已批准的队列不一致', 409)
             if batch['status'] == 'completed':
+                if manifest.get('enable_continuation',True) is False:
+                    item['completed'] = True
+                    reports.append(dict(batch_id=batch_id, state='completed'))
+                    continue
                 continuation = preview['continuation']
                 if continuation['enabled']:
                     # A pre-existing enabled series or an operator change is not
@@ -78,7 +82,7 @@ def queue_step(service, manifest, *, now):
         except RuleLabError as error:
             reports.append(dict(batch_id=batch_id, state='waiting' if error.status == 503 else 'blocked',
                                 code=error.code, error=error.message))
-    return dict(complete=all(item.get('configured') or item.get('removed') for item in manifest['batches']), batches=reports)
+    return dict(complete=all(item.get('configured') or item.get('completed') or item.get('removed') for item in manifest['batches']), batches=reports)
 
 
 def save(path, value):
@@ -107,6 +111,7 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         manifest = json.loads(path.read_text())
         if (manifest.get('version') != 1 or type(manifest.get('user_id')) is not int
+                or type(manifest.get('enable_continuation',True)) is not bool
                 or not isinstance(manifest.get('batches'), list) or not 1 <= len(manifest['batches']) <= 50):
             raise ValueError('队列清单无效')
         service = RuleLabService()

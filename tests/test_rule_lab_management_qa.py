@@ -210,6 +210,19 @@ class ManagementIndependentQaTests(unittest.TestCase):
         self.assertEqual(current['stake_amount'], 2)
         self.assertTrue(original_eligibility(1, batch['id'], original_preview['configuration_hash'])['removed'])
 
+    def test_finite_queue_finishes_without_creating_a_daily_schedule(self):
+        batch=completed_baseline(self.store)
+        preview=self.store.continuation_preview(1,'batch',batch['id'],now=NOW)
+        manifest=dict(user_id=1,enable_continuation=False,batches=[dict(
+            batch_id=batch['id'],configuration_hash=preview['configuration_hash'])])
+        with patch.object(self.service,'set_continuation',side_effect=AssertionError('must not schedule')):
+            result=queue.queue_step(self.service,manifest,now=NOW)
+            self.assertTrue(result['complete'])
+            self.assertEqual(result['batches'][0]['state'],'completed')
+            self.assertTrue(queue.queue_step(self.service,manifest,now=NOW)['complete'])
+        with sqlite3.connect(self.store.db_path) as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM lab_series').fetchone()[0],0)
+
 
 class StorageCliIndependentQaTests(unittest.TestCase):
     def test_unknown_writer_state_cannot_start_offline_conversion(self):

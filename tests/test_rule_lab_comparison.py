@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from datetime import datetime,timedelta,timezone
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 
 from pc28touzhu.domain.rule_lab import build_experiments,normalize_batch_payload
 from pc28touzhu.domain.rule_lab_comparison import risk_variants,evidence_step
@@ -106,7 +107,8 @@ class ComparisonStoreTests(unittest.TestCase):
         first=self.create();again=self.create()
         self.assertEqual(first['study']['id'],again['study']['id']);self.assertFalse(again['created'])
         with self.assertRaises(RuleLabError):self.create(name='different')
-        with self.assertRaises(RuleLabError) as cm:self.create(token='study-request-0002')
+        with patch('pc28touzhu.services.rule_lab_store.MAX_TOTAL_EXPERIMENTS',1000):
+            with self.assertRaises(RuleLabError) as cm:self.create(token='study-request-0002')
         self.assertEqual(cm.exception.code,'capacity_exceeded')
         self.assertEqual(self.store.capacity()['saved'],624)
         self.assertEqual(len(self.store.list_studies(1)),1)

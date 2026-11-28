@@ -7,7 +7,7 @@ import re
 
 from pc28touzhu.domain.rule_lab import ALLOWED_SETTLEMENT_RULE_IDS, empty_stats
 from pc28touzhu.domain.rule_lab_risk import normalize_risk_policy
-from pc28touzhu.services.rule_lab_store import RuleLabError, _dump, _load
+from pc28touzhu.services.rule_lab_store import MAX_BATCHES_PER_USER, RuleLabError, _dump, _load
 
 ID_TABLES = ('lab_batches','lab_experiments','lab_studies','lab_capture_streams','lab_archive_revisions','lab_series')
 
@@ -228,7 +228,7 @@ def fork_batch(store,user_id,batch_id,payload,*,predictor_name,experiments,now,r
         if previous:return previous
         row=_owned(store,c,user_id,'batch',batch_id);_validate_revision(c,'batch',row,payload)
         if c.execute('SELECT 1 FROM lab_study_batches WHERE batch_id=?',(batch_id,)).fetchone():raise RuleLabError('group_action_required','请从独立批次建立新版本',409)
-        if store._capacity(c)['remaining_saved']<len(experiments) or c.execute('SELECT COUNT(*) FROM lab_batches WHERE user_id=?',(user_id,)).fetchone()[0]>=50:
+        if store._capacity(c)['remaining_saved']<len(experiments) or c.execute('SELECT COUNT(*) FROM lab_batches WHERE user_id=?',(user_id,)).fetchone()[0]>=MAX_BATCHES_PER_USER:
             raise RuleLabError('capacity_exceeded','保存版本或批次数量已达上限',409)
         store._require_space();bid=_insert_batch(c,user_id,payload['config'],predictor_name,experiments,now)
         result=dict(created=True,batch=store._batch(c,store._owned(c,user_id,bid)),source_batch_id=batch_id)
