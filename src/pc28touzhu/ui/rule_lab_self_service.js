@@ -50,17 +50,44 @@
         $('labTemplatesButton').addEventListener('click',()=>enter('templates','模板库',$('labTemplatesButton'),v=>run(async()=>{await readTemplates();library(v);})));
         $('labQueueButton').addEventListener('click',()=>enter('queue','运行队列',$('labQueueButton'),buildQueue));
 
+        function copyTemplate(v,t,kind){editor(v,{...clone(t),id:null,builtin:false,name:copyName(t),copy:true},kind);}
+        function confirmTemplateDelete(v,t,kind,container,trigger){
+            if(busy||ui.getContext().mutating)return;
+            const existing=body.querySelector('[data-template-delete-panel]');
+            if(existing){existing.querySelector('[data-template-delete-cancel]').focus();return;}
+            const confirmation=node('section',undefined,'lab-delete-confirm');confirmation.dataset.templateDeletePanel='';
+            confirmation.setAttribute('aria-labelledby','labTemplateDeleteTitle');
+            const title=node('h3','删除模板“'+t.name+'”？');title.id='labTemplateDeleteTitle';
+            confirmation.append(title,note('删除后不再用于新建实验。已经创建的实验、成绩和排队任务会保留。'));
+            if(v.dirty)confirmation.append(note('当前未保存的模板修改也会放弃。'));
+            const cancel=button('取消',()=>{confirmation.remove();trigger.focus();});cancel.dataset.templateDeleteCancel='';
+            const confirm=button('确认删除模板',()=>run(async()=>{
+                await write('/templates/'+t.id+'/delete',{expected_revision:t.revision});
+                // A committed delete should still be visible if refreshing the library fails.
+                templates=templates.filter(item=>item.id!==t.id);v.dirty=false;library(v,kind);
+                message('模板已删除；原实验与成绩保留。');$('labTemplateNew').focus();
+            }));confirm.dataset.templateDeleteConfirm='';confirm.classList.add('lab-button-danger');
+            const actions=node('div',undefined,'lab-actions');actions.append(cancel,confirm);confirmation.append(actions);container.append(confirmation);
+            cancel.focus();confirmation.scrollIntoView({block:'nearest'});
+        }
+        function deleteTemplateButton(v,t,kind,container){
+            const control=button('删除模板',()=>confirmTemplateDelete(v,t,kind,container,control));
+            control.dataset.templateAction='delete';control.classList.add('lab-button-danger');return control;
+        }
         function library(v,kind=v.templateKind||'condition'){
             body.replaceChildren();v.dirty=false;v.templateKind=kind;v.controls=null;
             const tabs=node('div',undefined,'lab-actions'),search=input('labTemplateSearch','search'),metric=select('labTemplateFilter',[['','全部玩法'],...Object.entries(metricNames)]),list=node('div');
             search.placeholder='搜索模板名称';tabs.append(button('条件模板',()=>library(v,'condition')),button('风控模板',()=>library(v,'risk')),button('新建模板',()=>editor(v,null,kind),'labTemplateNew',true));
-            body.append(tabs,field('搜索模板',search),field('适用玩法',metric),note('模板保存后独立使用；编辑或删除模板不会改动已有实验。内置模板可复制。'),list);
+            body.append(tabs,field('搜索模板',search),field('适用玩法',metric),note('自己新建或复制的模板可以编辑、删除。系统预置模板不能删除，可复制后修改。删除模板不影响已有实验和成绩。'),list);
             function render(){list.replaceChildren();const rows=templates.filter(t=>t.kind===kind&&(!metric.value||t.metrics.includes(metric.value))&&t.name.toLowerCase().includes(search.value.toLowerCase()));
-                if(!rows.length)list.append(note('暂无符合条件的模板。可新建模板，或清除筛选后复制内置模板。'));
-                rows.forEach(t=>{const row=node('article',undefined,'lab-self-card');row.dataset.templateRef=key(t);row.append(node('h3',t.name),note(t.metrics.map(m=>metricNames[m]).join(' / ')+' · '+(t.builtin?'内置只读':'自定义')+' · v'+t.revision+(t.condition_count?' · '+t.condition_count+' 条条件':'')));if(t.description)row.append(note(t.description));
+                const own=node('section'),system=node('section');own.append(node('h3','我创建的模板'));list.append(own);
+                const custom=rows.filter(t=>!t.builtin),presets=rows.filter(t=>t.builtin);
+                if(!custom.length)own.append(note(search.value||metric.value?'没有符合筛选的自建模板。':'还没有自建模板。点击“新建模板”，或复制下方系统预置；保存后即可编辑、删除。'));
+                if(presets.length){system.append(node('h3','系统预置模板'),note('系统预置只供查看和复制，不能直接编辑或删除。'));list.append(system);}
+                [...custom,...presets].forEach(t=>{const row=node('article',undefined,'lab-self-card');row.dataset.templateRef=key(t);row.append(node('h3',t.name),note(t.metrics.map(m=>metricNames[m]).join(' / ')+' · '+(t.builtin?'系统预置 · 不能删除':'我创建的 · 可编辑、删除')+' · v'+t.revision+(t.condition_count?' · '+t.condition_count+' 条条件':'')));if(t.description)row.append(note(t.description));
                     const actions=node('div',undefined,'lab-actions');const action=(label,kind,fn)=>{const b=button(label,fn);b.dataset.templateAction=kind;actions.append(b);};
-                    action('查看','view',()=>editor(v,t,kind,true));action('复制','copy',()=>editor(v,{...clone(t),id:null,builtin:false,name:copyName(t),copy:true},kind));
-                    if(!t.builtin){action('编辑','edit',()=>editor(v,t,kind));action('删除','delete',()=>{if(!window.confirm('删除模板“'+t.name+'”？已有实验及成绩会保留。'))return;run(async()=>{await write('/templates/'+t.id+'/delete',{expected_revision:t.revision});await readTemplates();library(v,kind);message('模板已删除；原实验与成绩保留。');});});}row.append(actions);list.append(row);
+                    action('查看','view',()=>editor(v,t,kind,true));action('复制','copy',()=>copyTemplate(v,t,kind));
+                    if(!t.builtin){action('编辑','edit',()=>editor(v,t,kind));actions.append(deleteTemplateButton(v,t,kind,row));}row.append(actions);(t.builtin?system:own).append(row);
                 });}
             search.addEventListener('input',render);metric.addEventListener('change',render);render();
         }
@@ -68,6 +95,7 @@
         function editor(v,template,kind,readonly=false){
             body.replaceChildren();message('');v.dirty=false;v.controls=null;
             const form=node('form');form.id='labTemplateForm';form.noValidate=true;
+            if(template?.builtin)form.append(note('这是系统预置模板，不能直接编辑或删除。可以复制为自己的模板，再修改或删除。'));
             const name=input('labTemplateName','text',template?.name||''),description=node('textarea');name.maxLength=60;description.id='labTemplateDescription';description.maxLength=300;description.value=template?.description||'';
             const metric=select('labTemplateMetric',Object.entries(metricNames),template?.metrics?.[0]||ui.getContext().batch?.metric||'odd_even'),top=node('div',undefined,'lab-form-grid');
             top.append(field('名称（1～60字符）',name),field('玩法',metric));form.append(top,field('说明（最多300字符）',description));
@@ -106,6 +134,13 @@
             form.append(result,actions);body.append(form);form.addEventListener('input',mark);form.addEventListener('change',mark);
             form.addEventListener('submit',event=>{event.preventDefault();if(readonly)return;run(async()=>{const data=payload(),editing=template?.id&&!template.copy;if(editing)delete data.kind;await write(editing?'/templates/'+template.id+'/edit':'/templates',{...data,...(editing?{expected_revision:template.revision}:{})});v.dirty=false;await readTemplates();library(v,kind);message('模板已保存；已有实验保持原冻结配置。');});});
             if(readonly){form.dataset.readonly='true';form.querySelectorAll('input,select,textarea,button').forEach(n=>n.disabled=true);body.append(button('返回模板库',()=>library(v,kind)));}
+            if(template){
+                const controls=node('div',undefined,'lab-actions');
+                if(readonly){controls.append(button('复制为我的模板',()=>copyTemplate(v,template,kind),'labTemplateCopy'));
+                    if(!template.builtin)controls.append(button('编辑模板',()=>editor(v,template,kind),'labTemplateEdit'));}
+                if(template.id&&!template.builtin&&!template.copy)controls.append(deleteTemplateButton(v,template,kind,form));
+                if(controls.childNodes.length)form.append(controls);
+            }
         }
         function capacityText(capacity={}){return '已保存 '+(capacity.saved??'—')+' / '+(capacity.max_saved??'—')+' 版本；剩余 '+(capacity.remaining_saved??'—')+'。当前运行 '+(capacity.running??'—')+' / '+(capacity.max_running??'—')+'；可再建 '+(capacity.remaining_batches??'—')+' 批次。';}
         function buildBulk(v){
