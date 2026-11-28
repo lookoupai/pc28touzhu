@@ -110,14 +110,17 @@
         "L8"
       ],
       "stopCondition": "QA未过或出现Python/API/账本/调度变更不得发布；准确提交GO后仅重载API",
-      "status": "qa_passed_release_pending",
+      "status": "passed",
       "qaPassed": true,
-      "releaseStatus": "awaiting_exact_commit",
+      "releaseStatus": "deployed_verified",
       "evidence": [
         "/tmp/pc28-layout-root-qa.log",
-        "/tmp/pc28-layout-root-api.log"
+        "/tmp/pc28-layout-root-api.log",
+        "/tmp/pc28-layout-release-rollout-20261128T053753Z.json",
+        "/tmp/pc28-layout-release-online.json"
       ],
-      "notes": "All 5 real WSGI/jsdom flows passed. API 6 tests passed in 0.623s. Review findings resolved. No Python/runtime data changes; not deployed yet."
+      "notes": "All 5 real WSGI/jsdom flows and API 6 tests passed. Deployed 60ac9a4 verified: 40 GETs, 0 writes, 6 layout checks, 1 online executor; public JS/CSS byte parity and 638 original configuration/economic hashes preserved.",
+      "deployedCommit": "60ac9a4"
     }
   ]
 }
